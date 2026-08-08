@@ -2,8 +2,8 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>works.earendil.pi</groupId>
-	<artifactId>pi</artifactId>
+	<groupId>com.quaxt.codingagent</groupId>
+	<artifactId>coding-agent</artifactId>
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>jar</packaging>
 
@@ -80,7 +80,7 @@
 							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<transformers>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<mainClass>works.earendil.pi.cli.Main</mainClass>
+									<mainClass>com.quaxt.codingagent.cli.Main</mainClass>
 								</transformer>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
 							</transformers>
@@ -143,11 +143,11 @@
 						</executions>
 						<configuration>
 							<imageName>pi</imageName>
-							<mainClass>works.earendil.pi.cli.Main</mainClass>
+							<mainClass>com.quaxt.codingagent.cli.Main</mainClass>
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>-Os</buildArg>
-								<buildArg>-H:IncludeResources=works/earendil/pi/ai/models/.*\.json</buildArg>
+								<buildArg>-H:IncludeResources=src/quaxt/codingagent/ai/models/.*\.json</buildArg>
 							</buildArgs>
 						</configuration>
 					</plugin>
