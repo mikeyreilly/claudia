@@ -13,6 +13,7 @@ import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
 import com.quaxt.codingagent.cli.session.SessionStore;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
+import com.quaxt.codingagent.mcp.McpManager;
 
 /** Headless command dispatcher. Interactive, JSON, and RPC modes are ported separately. */
 final class Cli {
@@ -73,31 +74,36 @@ final class Cli {
 		}
 		Model model = resolveModel(providers, arguments.provider, arguments.model);
 		Provider provider = providers.require(model.provider);
-		Agent agent = new Agent(arguments.systemPrompt, model, provider::stream);
-		agent.setApiKey(arguments.apiKey);
-		agent.state().tools.addAll(BuiltInTools.create(java.nio.file.Path.of(".")));
-		if (arguments.mode.equals("json")) {
-			agent.subscribe(Cli::printJsonEvent);
-		}
-		SessionRecorder recorder = arguments.noSession
-				? null
-				: SessionRecorder.create(SessionStore.defaultStore(), java.nio.file.Path.of("."), model.provider, model.id);
-		List<Message> messages = agent.prompt(arguments.message);
-		if (recorder != null) {
-			recorder.appendMessages(messages);
-		}
-		if (agent.state().messages.getLast() instanceof AssistantMessage response) {
-			if (response.errorMessage != null) {
-				System.err.println("Error: " + response.errorMessage);
-				return 1;
+		java.nio.file.Path cwd = java.nio.file.Path.of(".").toAbsolutePath().normalize();
+		try (McpManager mcp = McpManager.loadDefault(cwd)) {
+			mcp.awaitReady();
+			Agent agent = new Agent(arguments.systemPrompt, model, provider::stream);
+			agent.setApiKey(arguments.apiKey);
+			agent.state().tools.addAll(BuiltInTools.create(cwd));
+			agent.state().tools.addAll(mcp.tools());
+			if (arguments.mode.equals("json")) {
+				agent.subscribe(Cli::printJsonEvent);
 			}
-			if (!arguments.mode.equals("json")) {
-				System.out.println(response.text());
+			SessionRecorder recorder = arguments.noSession
+					? null
+					: SessionRecorder.create(SessionStore.defaultStore(), cwd, model.provider, model.id);
+			List<Message> messages = agent.prompt(arguments.message);
+			if (recorder != null) {
+				recorder.appendMessages(messages);
 			}
-			return 0;
-		}
+			if (agent.state().messages.getLast() instanceof AssistantMessage response) {
+				if (response.errorMessage != null) {
+					System.err.println("Error: " + response.errorMessage);
+					return 1;
+				}
+				if (!arguments.mode.equals("json")) {
+					System.out.println(response.text());
+				}
+				return 0;
+			}
 
-		throw new IllegalStateException("Agent ended without an assistant response");
+			throw new IllegalStateException("Agent ended without an assistant response");
+		}
 	}
 
 	private static void printJsonEvent(AgentEvent event) {

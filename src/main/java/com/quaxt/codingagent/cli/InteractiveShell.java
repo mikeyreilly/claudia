@@ -39,6 +39,8 @@ import com.quaxt.codingagent.cli.session.SessionSnapshot;
 import com.quaxt.codingagent.cli.session.SessionStore;
 import com.quaxt.codingagent.cli.settings.SettingsStore;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
+import com.quaxt.codingagent.mcp.McpAgentTool;
+import com.quaxt.codingagent.mcp.McpManager;
 import com.quaxt.codingagent.tui.InteractiveTerminal;
 import com.quaxt.codingagent.tui.SelectItem;
 import com.quaxt.codingagent.tui.Selector;
@@ -50,6 +52,7 @@ final class InteractiveShell {
 	private final Cli.Arguments arguments;
 	private final InteractiveTerminal terminal;
 	private final SettingsStore settingsStore;
+	private final McpManager mcp;
 	private SettingsStore.Settings settings;
 	private Agent agent;
 	private SessionRecorder recorder;
@@ -64,11 +67,13 @@ final class InteractiveShell {
 			Cli.Arguments arguments,
 			InteractiveTerminal terminal,
 			SettingsStore settingsStore,
-			SettingsStore.Settings settings) {
+			SettingsStore.Settings settings,
+			McpManager mcp) {
 		this.providers = providers;
 		this.arguments = arguments;
 		this.terminal = terminal;
 		this.settingsStore = settingsStore;
+		this.mcp = mcp;
 		this.settings = settings;
 		this.hideThinkingBlock = settings.hideThinkingBlock();
 		terminal.bindAppAction("expandTools", () -> showLatestTurnDetails(true));
@@ -78,8 +83,10 @@ final class InteractiveShell {
 	static int run(CoreProviders providers, Cli.Arguments arguments) throws IOException, InterruptedException {
 		SettingsStore settingsStore = SettingsStore.defaultStore();
 		SettingsStore.Settings settings = settingsStore.load();
-		try (InteractiveTerminal terminal = new InteractiveTerminal(Cli.APP_NAME)) {
-			InteractiveShell shell = new InteractiveShell(providers, arguments, terminal, settingsStore, settings);
+		Path workspace = Path.of(".").toAbsolutePath().normalize();
+		try (McpManager mcp = McpManager.loadDefault(workspace);
+				InteractiveTerminal terminal = new InteractiveTerminal(Cli.APP_NAME)) {
+			InteractiveShell shell = new InteractiveShell(providers, arguments, terminal, settingsStore, settings, mcp);
 			shell.applySavedTheme();
 			if (arguments.model != null) {
 				// An explicit CLI model overrides the saved default for this session only.
@@ -124,6 +131,8 @@ final class InteractiveShell {
 				terminal.println("No model configured. Run /login to use GitHub Copilot.");
 				continue;
 			}
+			mcp.awaitReady();
+			syncMcpTools();
 			emittedText = false;
 			streamOutput = StreamOutput.NONE;
 			streamedThinkingCharacters = 0;
@@ -141,12 +150,13 @@ final class InteractiveShell {
 				return true;
 			}
 			case "/help" ->
-					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
+					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
 			case "/details" -> showLatestTurnDetails(false);
 			case "/resume" -> resumeSession();
 			case "/login" -> login();
 			case "/logout" -> logout();
 			case "/models" -> selectInteractiveModel();
+			case "/mcp" -> selectMcpServers();
 			case "/settings" -> selectSettings();
 			case "/compact" -> {
 				if (agent == null) {
@@ -372,8 +382,8 @@ final class InteractiveShell {
 		if (model != null) header.append("  ").append(model);
 		header.append('\n');
 		header.append(model == null
-				? "Run /login to use GitHub Copilot. Commands: /help, /resume, /login, /exit"
-				: "Enter a prompt. Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+				? "Run /login to use GitHub Copilot. Commands: /help, /resume, /login, /mcp, /exit"
+				: "Enter a prompt. Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
 	}
@@ -487,6 +497,14 @@ final class InteractiveShell {
 		terminal.println("Using " + model + " in a new agent session.");
 	}
 
+	private void selectMcpServers() throws IOException {
+		if (mcp.isEmpty()) {
+			terminal.println("No MCP servers configured in OpenCode config (opencode.json or opencode.jsonc).");
+			return;
+		}
+		terminal.run(new McpSelector(mcp, this::syncMcpTools));
+	}
+
 	private void selectSettings() throws IOException {
 		if (agent == null) {
 			terminal.println("No model is configured.");
@@ -582,10 +600,17 @@ final class InteractiveShell {
 		configured.setApiKey(arguments.apiKey);
 		configured.state().thinkingLevel = initialThinkingLevel(model, settings.defaultThinkingLevel());
 		configured.state().tools.addAll(BuiltInTools.create(configuredCwd));
+		configured.state().tools.addAll(mcp.tools());
 		configured.subscribe(this::onEvent);
 		cwd = configuredCwd.toAbsolutePath().normalize();
 		agent = configured;
 		recorder = nextRecorder;
+	}
+
+	private void syncMcpTools() {
+		if (agent == null || agent.state().isStreaming) return;
+		agent.state().tools.removeIf(McpAgentTool.class::isInstance);
+		agent.state().tools.addAll(mcp.tools());
 	}
 
 	private GitHubCopilotProvider copilotProvider() {

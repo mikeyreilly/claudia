@@ -19,6 +19,8 @@ import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
 import com.quaxt.codingagent.cli.session.SessionStore;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
+import com.quaxt.codingagent.mcp.McpAgentTool;
+import com.quaxt.codingagent.mcp.McpManager;
 
 /**
  * JSONL stdin/stdout automation protocol. This intentionally implements the
@@ -28,17 +30,26 @@ import com.quaxt.codingagent.cli.tools.BuiltInTools;
 final class RpcServer {
 	private final CoreProviders providers;
 	private final Cli.Arguments arguments;
+	private final McpManager mcp;
 	private Agent agent;
 	private SessionRecorder recorder;
 
 	RpcServer(CoreProviders providers, Cli.Arguments arguments) throws IOException {
 		this.providers = providers;
 		this.arguments = arguments;
-		resetAgent(resolveModel(arguments.provider, arguments.model));
+		Model initialModel = resolveModel(arguments.provider, arguments.model);
+		this.mcp = McpManager.loadDefault(Path.of(".").toAbsolutePath().normalize());
+		try {
+			resetAgent(initialModel);
+		} catch (IOException | RuntimeException error) {
+			mcp.close();
+			throw error;
+		}
 	}
 
 	int run() throws IOException {
-		try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+		try (mcp;
+				BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
 			String line;
 			while ((line = input.readLine()) != null) {
 				handle(line);
@@ -122,6 +133,8 @@ final class RpcServer {
 		if (message == null || !message.isTextual() || message.asText().isBlank()) {
 			throw new IllegalArgumentException("prompt requires a non-empty string message");
 		}
+		mcp.awaitReady();
+		syncMcpTools();
 		List<Message> messages = agent.prompt(message.asText());
 		if (recorder != null) recorder.appendMessages(messages);
 		respond(id, "prompt", true, null, null);
@@ -140,10 +153,16 @@ final class RpcServer {
 		agent = new Agent(arguments.systemPrompt, model, provider::stream);
 		agent.setApiKey(arguments.apiKey);
 		agent.state().tools.addAll(BuiltInTools.create(Path.of(".")));
+		agent.state().tools.addAll(mcp.tools());
 		agent.subscribe(this::event);
 		recorder = arguments.noSession
 				? null
 				: SessionRecorder.create(SessionStore.defaultStore(), Path.of("."), model.provider, model.id);
+	}
+
+	private void syncMcpTools() {
+		agent.state().tools.removeIf(McpAgentTool.class::isInstance);
+		agent.state().tools.addAll(mcp.tools());
 	}
 
 	private Model resolveModel(String providerArg, String modelArg) {

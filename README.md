@@ -84,6 +84,43 @@ model-specific; for example, GitHub Copilot's GPT-5.6 Terra offers `max`. The
 selection becomes the default for future sessions and is clamped when the
 selected model supports fewer levels.
 
+## MCP servers
+
+codingagent reads MCP server definitions from the same OpenCode configuration
+used by OpenCode: global files under `~/.config/opencode`, project
+`opencode.json`/`opencode.jsonc` files, and `.opencode/opencode.json(c)` files.
+JSONC comments, trailing commas, `{env:NAME}`, and `{file:path}` substitutions
+are supported. Local and remote definitions use the OpenCode shape:
+
+```jsonc
+{
+  "mcp": {
+    "local-tools": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-everything"],
+      "environment": { "TOKEN": "{env:LOCAL_TOKEN}" },
+      "enabled": true
+    },
+    "remote-tools": {
+      "type": "remote",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer {env:MCP_TOKEN}" },
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+```
+
+Relative local-server `cwd` values resolve from the workspace. MCP tools are
+exposed as `<server>_<tool>`, matching OpenCode's name sanitization. In the
+interactive shell, `/mcp` opens the configured-server list; Enter connects,
+disconnects, or retries the selected server without editing its config.
+Streamable HTTP and legacy HTTP+SSE servers are supported. Explicit `headers`
+take precedence for remote authentication; codingagent can also reuse a valid
+OAuth bearer token already stored for the same server URL by OpenCode. New or
+expired OAuth sessions still need to be authenticated with OpenCode first.
+
 `--api-key` overrides environment-based credentials. Without `--no-session`,
 codingagent records an append-only transcript in `~/.codingagent/sessions`.
 
@@ -108,6 +145,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Anthropic, OpenAI Responses, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
 | Streaming agent loop and sequential tool calls | Implemented |
 | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` tools | Implemented |
+| OpenCode-compatible local/remote MCP servers and interactive `/mcp` toggles | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |
 | Interactive `/resume` session listing and restoration | Implemented |
