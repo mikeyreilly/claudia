@@ -1,8 +1,8 @@
-# pi Java port
+# codingagent
 
-This repository contains the Java/JDK 25 port of the pi coding-agent CLI. It
-is a single Maven project and can be compiled ahead of time with GraalVM
-native-image.
+This repository contains codingagent, a Java/JDK 25 coding-agent CLI. It is a
+single Maven project and can be compiled ahead of time with GraalVM
+native-image. It started out as a java port of pi.
 
 ## Build and run
 
@@ -11,10 +11,10 @@ Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:
 ```bash
 mvn -B test
 mvn -B package
-java -jar target/pi.jar --list-models
+java -jar target/codingagent.jar --list-models
 `````
 
-`pi.jar` is the runnable uber JAR; `pi-thin.jar` contains only the project's own
+`codingagent.jar` is the runnable uber JAR; `codingagent-thin.jar` contains only the project's own
 classes. Packaging publishes the uber JAR by renaming a completed temporary
 archive, so rebuilding while a prior copy is running does not corrupt that
 JVM's classpath.
@@ -23,39 +23,39 @@ Build a native executable with:
 
 ```bash
 mvn -B -Pnative package
-./target/pi --list-models
+./target/codingagent --list-models
 ```
 
 Run a coding prompt with a core provider:
 
 ```bash
-java -jar target/pi.jar \
+java -jar target/codingagent.jar \
   --model anthropic/claude-haiku-4-5 \
   -p "Summarize the README" \
   --no-session
 ```
 
-Start the interactive pi TUI shell (backed by JLine) with:
+Start the interactive codingagent TUI shell (backed by JLine) with:
 
 ```bash
-java -jar target/pi.jar
+java -jar target/codingagent.jar
 ```
 
 Then run `/login`, open the displayed github.com device-login URL, and enter
 the displayed code. On first login, the shell selects GitHub Copilot's GPT-5.4
 when it is enabled for the account, otherwise it selects the first enabled
-coding model. Credentials are stored separately for this port in
-`~/.pi-java/auth.json`; `/logout` removes them. Use `/models` to open the
+coding model. Credentials are stored in `~/.codingagent/auth.json`; `/logout`
+removes them. Use `/models` to open the
 searchable model selector; type to fuzzy-filter models and use Up/Down and
 Enter to select. Enabled Copilot models are filtered to the signed-in account.
 Model, thinking-level, and theme selections are saved in
-`~/.pi-java/settings.json` and restored when the next interactive session
+`~/.codingagent/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
 model through the interactive selector, including one opened by `--provider`,
 updates the saved default. You can select another provider explicitly:
 
 ```bash
-java -jar target/pi.jar \
+java -jar target/codingagent.jar \
   --model anthropic/claude-haiku-4-5
 ```
 
@@ -69,8 +69,8 @@ The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
 provides standard line editing, with Enter to submit, Ctrl-C to cancel input,
 Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
 After `fg`, the conversation screen, terminal mode, prompt, and partially
-entered input are restored; shell output produced while pi was suspended is
-replaced by the redrawn pi screen.
+entered input are restored; shell output produced while codingagent was
+suspended is replaced by the redrawn codingagent screen.
 
 Reasoning-capable models default to medium thinking, and reasoning summaries
 stream in a muted block before each answer or tool call. Ctrl-T hides or shows
@@ -85,7 +85,7 @@ selection becomes the default for future sessions and is clamped when the
 selected model supports fewer levels.
 
 `--api-key` overrides environment-based credentials. Without `--no-session`,
-the Java port records an append-only transcript in `~/.pi-java/sessions`.
+codingagent records an append-only transcript in `~/.codingagent/sessions`.
 
 ## RPC mode
 
@@ -97,7 +97,7 @@ and agent events on standard output. It currently supports `prompt`, `abort`,
 
 ```bash
 printf '%s\n' '{"id":"state-1","type":"get_state"}' |
-  java -jar target/pi.jar \
+  java -jar target/codingagent.jar \
   --mode rpc --model anthropic/claude-haiku-4-5 --no-session
 ```
 
