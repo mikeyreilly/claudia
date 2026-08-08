@@ -24,7 +24,7 @@ import com.quaxt.codingagent.ai.types.ThinkingLevel;
  * the groups just as {@code flattenModelCatalog()} does in the TypeScript code.
  */
 public final class ModelCatalog {
-	private static final String RESOURCE_ROOT = "/src/quaxt/codingagent/ai/models/";
+	private static final String RESOURCE_ROOT = "/quaxt/codingagent/ai/models/";
 	private static final List<String> RESOURCE_NAMES =
 			List.of("anthropic.json", "openai.json", "google.json", "github-copilot.json");
 

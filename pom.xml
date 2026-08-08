@@ -147,7 +147,7 @@
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>-Os</buildArg>
-								<buildArg>-H:IncludeResources=src/quaxt/codingagent/ai/models/.*\.json</buildArg>
+								<buildArg>-H:IncludeResources=quaxt/codingagent/ai/models/.*\.json</buildArg>
 							</buildArgs>
 						</configuration>
 					</plugin>
