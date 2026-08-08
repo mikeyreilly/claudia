@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import com.quaxt.codingagent.ai.types.Message;
 
-/** Metadata and restored conversation context for one persisted Java pi session. */
+/** Metadata and restored conversation context for one persisted session. */
 public record SessionSnapshot(
 		String id,
 		Path path,

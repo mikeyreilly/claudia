@@ -5,7 +5,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.jline.utils.NonBlockingReader;
 
-/** Escape-sequence parser for the input subset used by pi TUI components. */
+/** Escape-sequence parser for the input subset used by TUI components. */
 final class TuiInputReader {
 	private static final long ESCAPE_TIMEOUT_MS = 25;
 	private static final Pattern SGR_MOUSE = Pattern.compile("<(\\d+);(\\d+);(\\d+)([Mm])");

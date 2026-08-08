@@ -110,7 +110,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 	/** Binds a configured application action while the line editor is active. */
 	public void bindAppAction(String action, Runnable handler) {
 		Objects.requireNonNull(handler, "handler");
-		String widgetName = "pi-" + action;
+		String widgetName = "codingagent-" + action;
 		reader.getWidgets().put(widgetName, () -> {
 			handler.run();
 			return true;

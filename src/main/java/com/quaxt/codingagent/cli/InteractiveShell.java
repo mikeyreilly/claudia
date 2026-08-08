@@ -368,7 +368,7 @@ final class InteractiveShell {
 	}
 
 	private static String screenHeader(Model model) {
-		StringBuilder header = new StringBuilder("pi Java ").append(Cli.VERSION);
+		StringBuilder header = new StringBuilder("codingagent ").append(Cli.VERSION);
 		if (model != null) header.append("  ").append(model);
 		header.append('\n');
 		header.append(model == null

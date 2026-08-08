@@ -3,7 +3,7 @@ package com.quaxt.codingagent.tui;
 import java.io.IOException;
 import java.util.List;
 
-/** Typed facade for searchable pi TUI selectors. */
+/** Typed facade for searchable TUI selectors. */
 public final class Selector {
 	private Selector() {}
 

@@ -43,7 +43,7 @@ public final class FileCredentialStore implements CredentialStore {
 
 	public static FileCredentialStore defaultStore() {
 		Path home = Path.of(System.getProperty("user.home"));
-		return new FileCredentialStore(home.resolve(".pi-java").resolve("auth.json"));
+		return new FileCredentialStore(home.resolve(".codingagent").resolve("auth.json"));
 	}
 
 	@Override

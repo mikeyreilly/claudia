@@ -82,7 +82,7 @@ class InteractiveShellTest {
 		String visible = InteractiveShell.renderSessionScreen(model, messages, false, Theme.PLAIN);
 		String hidden = InteractiveShell.renderSessionScreen(model, messages, true, Theme.PLAIN);
 
-		assertTrue(visible.startsWith("pi Java "));
+		assertTrue(visible.startsWith("codingagent "));
 		assertTrue(visible.contains("\n> Check the project\n"));
 		assertTrue(visible.contains("Thinking:\nInspect the project"));
 		assertTrue(visible.contains("[read] Reading README.md"));

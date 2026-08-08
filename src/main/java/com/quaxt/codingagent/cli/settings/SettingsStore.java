@@ -38,7 +38,7 @@ public final class SettingsStore {
 	}
 
 	public static SettingsStore defaultStore() {
-		return new SettingsStore(Path.of(System.getProperty("user.home"), ".pi-java", "settings.json"));
+		return new SettingsStore(Path.of(System.getProperty("user.home"), ".codingagent", "settings.json"));
 	}
 
 	/** Loads the current settings, or an empty settings object when no file exists. */

@@ -3,7 +3,7 @@ package com.quaxt.codingagent.ai.auth;
 import java.util.Map;
 import java.util.List;
 
-/** One persisted credential for a provider, stored in {@code ~/.pi-java/auth.json}. */
+/** One persisted credential for a provider, stored in {@code ~/.codingagent/auth.json}. */
 public sealed interface Credential permits Credential.ApiKeyCredential, Credential.OAuthCredential {
 	String type();
 

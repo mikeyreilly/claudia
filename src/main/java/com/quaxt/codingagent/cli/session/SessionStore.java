@@ -40,7 +40,7 @@ public final class SessionStore {
 	}
 
 	public static SessionStore defaultStore() {
-		return new SessionStore(Path.of(System.getProperty("user.home"), ".pi-java", "sessions"));
+		return new SessionStore(Path.of(System.getProperty("user.home"), ".codingagent", "sessions"));
 	}
 
 	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
