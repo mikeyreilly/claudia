@@ -6,7 +6,10 @@ import java.util.Map;
 import com.quaxt.codingagent.ai.providers.AnthropicProvider;
 import com.quaxt.codingagent.ai.providers.GoogleProvider;
 import com.quaxt.codingagent.ai.providers.GitHubCopilotProvider;
+import com.quaxt.codingagent.ai.providers.ChatGptProvider;
 import com.quaxt.codingagent.ai.providers.OpenAiCompatibleProvider;
+import com.quaxt.codingagent.ai.auth.ChatGptAuth;
+import com.quaxt.codingagent.ai.auth.FileCredentialStore;
 import com.quaxt.codingagent.ai.providers.OpenAiResponsesProvider;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
@@ -26,6 +29,7 @@ public final class CoreProviders {
 
 	public static CoreProviders loadBundled() {
 		ModelCatalog catalog = ModelCatalog.loadBundled();
+		FileCredentialStore credentials = FileCredentialStore.defaultStore();
 		Map<String, Provider> providers = new LinkedHashMap<>();
 		providers.put(
 				"anthropic",
@@ -36,7 +40,14 @@ public final class CoreProviders {
 				"openai",
 				new OpenAiResponsesProvider(catalog.forProvider("openai").stream()
 						.filter(model -> model.api.equals("openai-responses"))
-						.toList()));
+						.toList(), credentials));
+		providers.put(
+				ChatGptAuth.PROVIDER_ID,
+				new ChatGptProvider(
+						catalog.forProvider("openai").stream()
+								.filter(model -> model.api.equals("openai-responses"))
+								.toList(),
+						new ChatGptAuth(credentials)));
 		providers.put(
 				"google",
 				new GoogleProvider(catalog.forProvider("google").stream()
@@ -47,7 +58,7 @@ public final class CoreProviders {
 				new GitHubCopilotProvider(
 						catalog.forProvider("github-copilot"),
 						new com.quaxt.codingagent.ai.auth.GitHubCopilotAuth(
-								com.quaxt.codingagent.ai.auth.FileCredentialStore.defaultStore())));
+								credentials)));
 		return new CoreProviders(catalog, providers);
 	}
 

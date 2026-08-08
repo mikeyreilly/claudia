@@ -1,0 +1,9 @@
+# name url ref-or-sha256 license
+# Git dependencies pin a commit; archive dependencies (.zip) pin the SHA-256 of the archive.
+sqlite-amalgamation https://sqlite.org/2026/sqlite-amalgamation-3530300.zip 646421e12aac110282ef8cc68f1a62d4bb15fc7b8f09da0b53e29ee690500431 PublicDomain
+tree-sitter https://github.com/tree-sitter/tree-sitter.git a858378ce7f4c124339cf67d8ad37341964fc0ee MIT
+tree-sitter-clojure https://github.com/sogaiu/tree-sitter-clojure.git e43eff80d17cf34852dcd92ca5e6986d23a7040f MIT
+tree-sitter-java https://github.com/tree-sitter/tree-sitter-java.git 94703d5a6bed02b98e438d7cad1136c01a60ba2c MIT
+tree-sitter-c https://github.com/tree-sitter/tree-sitter-c.git 7fa1be1b694b6e763686793d97da01f36a0e5c12 MIT
+libdeflate https://github.com/ebiggers/libdeflate.git c8c56a20f8f621e6a966b716b31f1dedab6a41e3 MIT
+zlib https://github.com/madler/zlib.git 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf Zlib

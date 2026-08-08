@@ -14,6 +14,8 @@ import org.jline.terminal.TerminalBuilder;
 
 /** JLine terminal facade with a retained main-screen document and full-screen component support. */
 public final class InteractiveTerminal implements AutoCloseable {
+	private static final int DEFAULT_COLUMNS = 80;
+	private static final int DEFAULT_ROWS = 24;
 	private static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
 	private static final String END_SYNCHRONIZED_OUTPUT = "\u001b[?2026l";
 	private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
@@ -41,6 +43,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 
 	InteractiveTerminal(Terminal terminal, SuspendAction suspendAction, boolean supportsSuspend) {
 		this.terminal = terminal;
+		ensureUsableSize(terminal);
 		this.suspendAction = suspendAction;
 		this.supportsSuspend = supportsSuspend;
 		shellAttributes = new Attributes(terminal.getAttributes());
@@ -67,12 +70,31 @@ public final class InteractiveTerminal implements AutoCloseable {
 		theme = Theme.DARK;
 	}
 
+	private static void ensureUsableSize(Terminal terminal) {
+		int columns = terminal.getColumns();
+		int rows = terminal.getRows();
+		if (columns <= 0 || rows <= 0) {
+			terminal.setSize(org.jline.terminal.Size.of(
+					columns > 0 ? columns : DEFAULT_COLUMNS,
+					rows > 0 ? rows : DEFAULT_ROWS));
+		}
+	}
+
 	/** Returns null on EOF and an empty string after Ctrl-C. */
 	public String readLine(String prompt) {
+		return readLine(prompt, null);
+	}
+
+	/** Returns null on EOF and an empty string after Ctrl-C without echoing the entered value. */
+	public String readPassword(String prompt) {
+		return readLine(prompt, '*');
+	}
+
+	private String readLine(String prompt, Character mask) {
 		String initialBuffer = null;
 		while (true) {
 			try {
-				String line = reader.readLine(prompt, null, (Character) null, initialBuffer);
+				String line = reader.readLine(prompt, null, mask, initialBuffer);
 				rememberCompletedLine(prompt, line);
 				return line;
 			} catch (SuspendRequested ignored) {

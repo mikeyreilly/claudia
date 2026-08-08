@@ -24,13 +24,23 @@ public sealed interface Credential permits Credential.ApiKeyCredential, Credenti
 	}
 
 	/** OAuth refresh/access tokens, expiry in Unix milliseconds, and optional enabled model ids. */
-	record OAuthCredential(String access, String refresh, long expires, List<String> availableModelIds) implements Credential {
+	record OAuthCredential(
+			String access,
+			String refresh,
+			long expires,
+			List<String> availableModelIds,
+			Map<String, String> metadata) implements Credential {
 		public OAuthCredential {
 			availableModelIds = availableModelIds == null ? null : List.copyOf(availableModelIds);
+			metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
 		}
 
 		public OAuthCredential(String access, String refresh, long expires) {
-			this(access, refresh, expires, null);
+			this(access, refresh, expires, null, Map.of());
+		}
+
+		public OAuthCredential(String access, String refresh, long expires, List<String> availableModelIds) {
+			this(access, refresh, expires, availableModelIds, Map.of());
 		}
 
 		@Override

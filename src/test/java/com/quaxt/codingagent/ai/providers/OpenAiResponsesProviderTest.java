@@ -9,10 +9,14 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.ai.StreamOptions;
+import com.quaxt.codingagent.ai.auth.Credential;
+import com.quaxt.codingagent.ai.auth.FileCredentialStore;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Context;
@@ -26,6 +30,35 @@ import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.UserMessage;
 
 class OpenAiResponsesProviderTest {
+	@TempDir Path tempDir;
+
+	@Test
+	void usesSavedOpenAiApiKeyWhenNoRequestKeyIsSupplied() throws Exception {
+		HttpServer server = server(exchange -> {
+			assertEquals("Bearer saved-key", exchange.getRequestHeaders().getFirst("Authorization"));
+			writeSse(
+					exchange,
+					"""
+					data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+
+					""");
+		});
+		try {
+			FileCredentialStore credentials = new FileCredentialStore(tempDir.resolve("auth.json"));
+			credentials.modify("openai", ignored -> new Credential.ApiKeyCredential("saved-key"));
+			Model model = model(url(server));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(List.of(model), credentials);
+			Context context = new Context();
+			context.messages.add(UserMessage.of("hi"));
+
+			AssistantMessage result = provider.stream(model, context, new StreamOptions()).result();
+
+			assertEquals(StopReason.STOP, result.stopReason);
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	@Test
 	void streamsResponsesTextAndUsage() throws Exception {
 		AtomicReference<String> request = new AtomicReference<>();
@@ -110,6 +143,45 @@ class OpenAiResponsesProviderTest {
 			assertEquals("Inspecting files\n\nChecking tests", result.thinking());
 			assertTrue(((ThinkingContent) result.content.getFirst()).thinkingSignature().contains("opaque"));
 			assertEquals(6, result.usage.reasoning);
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void usesCodexRequestContractForChatGptResponses() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = server(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeSse(
+					exchange,
+					"""
+					data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+
+					""");
+		});
+		try {
+			Model model = reasoningModel(url(server));
+			OpenAiResponsesProvider provider = OpenAiResponsesProvider.codex("chatgpt", "ChatGPT", List.of(model));
+			Context context = new Context();
+			context.messages.add(UserMessage.of("inspect"));
+
+			provider.stream(
+					model,
+					context,
+					new StreamOptions()
+							.apiKey("test-key")
+							.reasoning(ThinkingLevel.MEDIUM)
+							.sessionId("session-1"))
+					.result();
+
+			JsonNode body = Json.MAPPER.readTree(request.get());
+			assertEquals("You are a helpful assistant.", body.path("instructions").asText());
+			assertEquals("low", body.path("text").path("verbosity").asText());
+			assertEquals("auto", body.path("tool_choice").asText());
+			assertTrue(body.path("parallel_tool_calls").asBoolean());
+			assertEquals("session-1", body.path("prompt_cache_key").asText());
+			assertEquals("detailed", body.path("reasoning").path("summary").asText());
 		} finally {
 			server.stop(0);
 		}

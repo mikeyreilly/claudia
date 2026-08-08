@@ -31,6 +31,11 @@
 			<version>${jline.version}</version>
 		</dependency>
 		<dependency>
+			<groupId>org.jline</groupId>
+			<artifactId>jline-terminal-jni</artifactId>
+			<version>${jline.version}</version>
+		</dependency>
+		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter</artifactId>
 			<version>${junit.version}</version>

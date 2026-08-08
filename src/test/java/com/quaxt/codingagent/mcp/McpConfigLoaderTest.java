@@ -15,22 +15,20 @@ class McpConfigLoaderTest {
 	@TempDir Path tempDir;
 
 	@Test
-	void loadsAndMergesOpenCodeJsoncWithVariables() throws Exception {
-		Path home = tempDir.resolve("home");
-		Path global = home.resolve(".config/opencode");
-		Path project = tempDir.resolve("workspace/project");
-		Files.createDirectories(global);
-		Files.createDirectories(project);
-		Files.writeString(global.resolve("secret.txt"), "secret-value\n");
-		Files.writeString(global.resolve("opencode.jsonc"), """
+	void loadsMcpServersFromCodingAgentSettings() throws Exception {
+		Path settingsDirectory = tempDir.resolve("home/.codingagent");
+		Path settingsPath = settingsDirectory.resolve("settings.json");
+		Files.createDirectories(settingsDirectory);
+		Files.writeString(settingsDirectory.resolve("secret.txt"), "secret-value\n");
+		Files.writeString(settingsPath, """
 				{
-				  // The shape is intentionally identical to OpenCode.
+				  "defaultModel": "some-model",
 				  "mcp": {
 				    "local": {
 				      "type": "local",
 				      "command": ["tool", "--token", "{env:TOOL_TOKEN}"],
 				      "environment": { "SECRET": "{file:secret.txt}" },
-				      "enabled": true,
+				      "enabled": false
 				    },
 				    "remote": {
 				      "type": "remote",
@@ -40,11 +38,8 @@ class McpConfigLoaderTest {
 				  }
 				}
 				""");
-		Files.writeString(project.resolve("opencode.json"), """
-				{"mcp":{"local":{"enabled":false}}}
-				""");
 
-		McpConfiguration config = new McpConfigLoader(home, Map.of("TOOL_TOKEN", "abc123")).load(project);
+		McpConfiguration config = new McpConfigLoader(settingsPath, Map.of("TOOL_TOKEN", "abc123")).load();
 
 		assertEquals(2, config.servers().size());
 		McpServerConfig.Local local = assertInstanceOf(McpServerConfig.Local.class, config.servers().get("local"));
@@ -53,7 +48,21 @@ class McpConfigLoaderTest {
 		assertFalse(local.enabled());
 		McpServerConfig.Remote remote = assertInstanceOf(McpServerConfig.Remote.class, config.servers().get("remote"));
 		assertEquals("Bearer abc123", remote.headers().get("Authorization"));
-		assertTrue(config.sources().contains(global.resolve("opencode.jsonc")));
-		assertTrue(config.sources().contains(project.resolve("opencode.json")));
+		assertEquals(java.util.List.of(settingsPath), config.sources());
+	}
+
+	@Test
+	void doesNotDiscoverOpenCodeOrProjectConfiguration() throws Exception {
+		Path settingsPath = tempDir.resolve("home/.codingagent/settings.json");
+		Path projectConfig = tempDir.resolve("workspace/.opencode/opencode.json");
+		Files.createDirectories(projectConfig.getParent());
+		Files.writeString(projectConfig, """
+				{"mcp":{"ignored":{"type":"local","command":["ignored"]}}}
+				""");
+
+		McpConfiguration config = new McpConfigLoader(settingsPath, Map.of()).load();
+
+		assertTrue(config.servers().isEmpty());
+		assertTrue(config.sources().isEmpty());
 	}
 }

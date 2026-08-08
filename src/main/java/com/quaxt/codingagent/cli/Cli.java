@@ -60,10 +60,12 @@ final class Cli {
 
 	private static void listModels(CoreProviders providers, String search) {
 		String needle = search == null ? "" : search.toLowerCase();
-		for (Model model : providers.catalog().all()) {
-			String id = model.provider + "/" + model.id;
-			if (needle.isEmpty() || id.toLowerCase().contains(needle) || model.name.toLowerCase().contains(needle)) {
-				System.out.printf("%-45s %s%n", id, model.name);
+		for (Provider provider : providers.all()) {
+			for (Model model : provider.models()) {
+				String id = model.provider + "/" + model.id;
+				if (needle.isEmpty() || id.toLowerCase().contains(needle) || model.name.toLowerCase().contains(needle)) {
+					System.out.printf("%-45s %s%n", id, model.name);
+				}
 			}
 		}
 	}
@@ -179,7 +181,10 @@ final class Cli {
 			throw new IllegalArgumentException("--print requires --model <provider/model> (for example, anthropic/claude-haiku-4-5)");
 		}
 		providers.require(provider);
-		return providers.catalog().require(provider, model);
+		for (Model candidate : providers.require(provider).models()) {
+			if (candidate.id.equals(model)) return candidate;
+		}
+		throw new IllegalArgumentException("Unknown model: " + provider + "/" + model);
 	}
 
 	private static void printHelp() {
@@ -206,7 +211,7 @@ final class Cli {
 				                 Run a headless coding-agent prompt and print the final answer
 
 				Interactive mode restores the model and settings selected previously.
-				Run /login to authenticate with GitHub Copilot for the first time.
+				Run /login to authenticate with GitHub Copilot, an OpenAI API key, or ChatGPT Plus/Pro.
 				""".formatted(APP_NAME, APP_NAME));
 	}
 
