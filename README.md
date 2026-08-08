@@ -12,7 +12,7 @@ Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:
 mvn -B test
 mvn -B package
 java -jar target/pi.jar --list-models
-```
+`````
 
 `pi.jar` is the runnable uber JAR; `pi-thin.jar` contains only the project's own
 classes. Packaging publishes the uber JAR by renaming a completed temporary

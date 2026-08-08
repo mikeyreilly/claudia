@@ -6,8 +6,7 @@
 	<artifactId>coding-agent</artifactId>
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>jar</packaging>
-
-	<name>pi (Java port)</name>
+	<name>coding-agent</name>
 	<description>Java port of the pi coding agent CLI</description>
 
 	<properties>
@@ -28,13 +27,8 @@
 		</dependency>
 		<dependency>
 			<groupId>org.jline</groupId>
-			<artifactId>jline</artifactId>
+			<artifactId>jline-reader</artifactId>
 			<version>${jline.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>org.commonmark</groupId>
-			<artifactId>commonmark</artifactId>
-			<version>${commonmark.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
@@ -46,7 +40,7 @@
 
 	<build>
 		<!-- Keep the thin JAR away from the runnable JAR's stable path. -->
-		<finalName>pi-thin</finalName>
+		<finalName>codingagent-thin</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -76,7 +70,7 @@
 								execution publishes it with a rename, preserving the inode used
 								by any already-running process.
 							-->
-							<outputFile>${project.build.directory}/pi.next.jar</outputFile>
+							<outputFile>${project.build.directory}/codingagent.next.jar</outputFile>
 							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<transformers>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
@@ -112,8 +106,8 @@
 						<configuration>
 							<target>
 								<move
-									file="${project.build.directory}/pi.next.jar"
-									tofile="${project.build.directory}/pi.jar"/>
+									file="${project.build.directory}/codingagent.next.jar"
+									tofile="${project.build.directory}/codingagent.jar"/>
 							</target>
 						</configuration>
 					</execution>
@@ -142,7 +136,7 @@
 							</execution>
 						</executions>
 						<configuration>
-							<imageName>pi</imageName>
+							<imageName>codingagent</imageName>
 							<mainClass>com.quaxt.codingagent.cli.Main</mainClass>
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>

@@ -16,7 +16,7 @@ import com.quaxt.codingagent.cli.tools.BuiltInTools;
 
 /** Headless command dispatcher. Interactive, JSON, and RPC modes are ported separately. */
 final class Cli {
-	static final String APP_NAME = "pi";
+	static final String APP_NAME = "codingagent";
 	static final String VERSION = "0.1.0-java";
 
 	private Cli() {}
