@@ -1,35 +1,35 @@
 # pi Java port
 
-This directory contains the Java/JDK 25 port of the pi coding-agent CLI. It
-uses Maven and can be compiled ahead of time with GraalVM native-image.
+This repository contains the Java/JDK 25 port of the pi coding-agent CLI. It
+is a single Maven project and can be compiled ahead of time with GraalVM
+native-image.
 
 ## Build and run
 
 Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:
 
 ```bash
-cd java
-mvn -B -pl pi-cli -am test
-mvn -B -pl pi-cli -am package
-java -jar pi-cli/target/pi-cli.jar --list-models
+mvn -B test
+mvn -B package
+java -jar target/pi.jar --list-models
 ```
 
-`pi-cli.jar` is the runnable uber JAR; `pi-cli-thin.jar` contains only the CLI
-module's own classes. Packaging publishes the uber JAR by renaming a completed
-temporary archive, so rebuilding while a prior copy is running does not corrupt
-that JVM's classpath.
+`pi.jar` is the runnable uber JAR; `pi-thin.jar` contains only the project's own
+classes. Packaging publishes the uber JAR by renaming a completed temporary
+archive, so rebuilding while a prior copy is running does not corrupt that
+JVM's classpath.
 
 Build a native executable with:
 
 ```bash
-mvn -B -Pnative -pl pi-cli -am package
-./pi-cli/target/pi --list-models
+mvn -B -Pnative package
+./target/pi --list-models
 ```
 
 Run a coding prompt with a core provider:
 
 ```bash
-java -jar pi-cli/target/pi-cli.jar \
+java -jar target/pi.jar \
   --model anthropic/claude-haiku-4-5 \
   -p "Summarize the README" \
   --no-session
@@ -38,7 +38,7 @@ java -jar pi-cli/target/pi-cli.jar \
 Start the interactive pi TUI shell (backed by JLine) with:
 
 ```bash
-java -jar pi-cli/target/pi-cli.jar
+java -jar target/pi.jar
 ```
 
 Then run `/login`, open the displayed github.com device-login URL, and enter
@@ -55,7 +55,7 @@ model through the interactive selector, including one opened by `--provider`,
 updates the saved default. You can select another provider explicitly:
 
 ```bash
-java -jar pi-cli/target/pi-cli.jar \
+java -jar target/pi.jar \
   --model anthropic/claude-haiku-4-5
 ```
 
@@ -97,7 +97,7 @@ and agent events on standard output. It currently supports `prompt`, `abort`,
 
 ```bash
 printf '%s\n' '{"id":"state-1","type":"get_state"}' |
-  java -jar pi-cli/target/pi-cli.jar \
+  java -jar target/pi.jar \
   --mode rpc --model anthropic/claude-haiku-4-5 --no-session
 ```
 
