@@ -1,0 +1,158 @@
+code-lens
+==========
+
+Native ISO C23 MCP server and CLI for querying indexed Clojure, Java, and C codebases.
+
+Initial command surface:
+
+  code-lens help
+  code-lens version
+  code-lens index --repo <path>
+  code-lens remove --repo <path>
+  code-lens list
+  code-lens query --repo <path> [--exclude-tests] [--kind <kind>]
+                   [--path <substring>] [--limit <n>] "<terms>"
+  code-lens context --repo <path> --name <symbol> [--exclude-tests]
+                     [--namespace <namespace>] [--path <substring>]
+  code-lens sql --repo <path> "<query>"
+  code-lens mcp
+
+Explicit CLI commands and public APIs identify a repository by path alone —
+there are no repo names. Their paths are canonicalized (with `~/` expansion);
+they retain support for plain directories, and any path inside an indexed
+repository resolves to that repository, so `--repo` accepts the repo root or
+any file or directory within it. Supported source extensions are .clj, .cljc,
+.cljs, .bb, .java, .c, and .h; mixed-language repositories are supported.
+
+MCP tool surface:
+
+  list_repos()
+  query(repo, query, limit?, excludeTests?, kind?, path?)
+  context(repo, name, excludeTests?, namespace?, path?)
+  sql(repo, query)
+  remove_repo(repo)
+
+  MCP query, context, and sql require `repo` to be the exact root of a Git
+  worktree. They build a missing index, repair an unreadable or obsolete index,
+  and refresh a stale index before reading. list_repos is observational and
+  never builds, repairs, or refreshes an index. remove_repo can evict an
+  orphaned index by its stored repo path.
+
+Build and setup:
+
+  scripts/vendor-deps.sh
+  make release
+  make debug
+  make test-release
+  make test-debug
+
+  `make`, `make all`, and `make release` build the performance-oriented
+  release binary. `make debug` builds with `-O0 -g` and no link-time
+  optimization. Both modes copy the active binary to `build/code-lens`,
+  while mode-specific objects and vendor builds live under `build/release/`
+  and `build/debug/`.
+  Override OPTFLAGS, LTOFLAGS, or VENDOR_CFLAGS if you need custom flags
+  beyond the release/debug presets.
+
+Example smoke test (run from this repository's root; it indexes a repository
+checked out next to this repository):
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens index \
+      --repo ../big-repo
+
+  Indexing writes each repo's index as a single SQLite database published
+  atomically at CODE_LENS_HOME/repos/<dir>/index.sqlite (where <dir> is
+  derived from the canonical repo path), so re-indexing a repo replaces only
+  that repo and other indexed repos stay intact. Indexing, automatic refresh,
+  and removal take a per-repository advisory lock under
+  CODE_LENS_HOME/repos/.locks/, so concurrent processes serialize and a
+  waiter rechecks the index after the active writer publishes. Lock files
+  persist safely; process exit automatically releases the lock itself.
+  `code-lens remove --repo <path>` deletes a repo's index. Explicit CLI
+  `query`, `context`, and `sql` run against the chosen repo's database; `query`
+  searches symbol definitions with full-text search (FTS5) ranked with BM25
+  and keyword usages with keyword-name prefix matching. Results match on words
+  and word prefixes rather than arbitrary mid-word substrings. Multi-term
+  queries require every term to match; when that yields nothing the search
+  relaxes to any-term matches and prefixes the output with a notice line.
+  Use `--exclude-tests` to drop test symbols and files below `test/` or
+  `tests/`, `--kind <kind>` to restrict symbol rows (for example `function`,
+  `class`, `method`, `field`, or `test`), and `--path <substring>` to restrict
+  rows by file path. Symbol kinds apply only to symbols and suppress keyword
+  rows; `--kind keyword` returns Clojure keyword rows only. Valid kinds are:
+  function, var, macro, multimethod, method, protocol, record, type, test,
+  class, interface, enum, annotation, constructor, field, enum_constant,
+  module, variable, struct, union, typedef, and keyword.
+  `context` lists a symbol's definitions, reference call sites, and lazy
+  source snippets. Clojure aliases and referred symbols are resolved. Java
+  normal/static imports, enclosing types, and declared receiver types are
+  resolved without invoking a compiler; receiver types requiring whole-program
+  inference can remain unresolved. C global/static linkage, declared receiver
+  types, and aggregate member accesses are resolved syntax-first. Qualifiers in
+  Clojure `alias/name` and Java `Type.member`, `Type#member`, and fully qualified
+  type spellings are ignored for lookup when no exact dotted definition exists. Its `--namespace <namespace>`/MCP `namespace` and
+  `--path <substring>`/MCP `path` filters select matching definition
+  candidates, and therefore show only references resolving to those candidates
+  rather than merely filtering reference-site output. `list`, `query`, and
+  `context` compare the index's recorded
+  file size/mtime snapshot with the current repo and report how long that
+  staleness check took. CLI/public-API reads only report staleness. In MCP,
+  query, context, and sql require the exact Git-worktree root and atomically
+  build missing indexes, repair unreadable or obsolete indexes, or refresh
+  stale indexes before reading; list_repos only observes indexes. Indexing
+  parallelizes read/parse/extract work by default, capped at 8 workers. Set
+  CODE_LENS_INDEX_THREADS=<n> to override the worker count; values 0 and 1
+  keep the sequential path.
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens query \
+      --repo ../big-repo \
+      "audit report athena cdc transaction lines refunds"
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens context \
+      --repo ../big-repo \
+      --name refund-date-type-enabled?
+
+  # Java examples (the namespace filter, when used, is the fully qualified
+  # enclosing type):
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens query --repo /path/to/java-repo --kind class Service
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens context --repo /path/to/java-repo --name Service.execute
+
+  # C examples:
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens query --repo /path/to/c-repo --kind struct Widget
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens context --repo /path/to/c-repo --name widget_get
+
+Copilot CLI MCP command:
+
+  env CODE_LENS_HOME=/path/to/code-lens/.code-lens \
+    /path/to/code-lens/build/code-lens mcp
+
+Copilot CLI registration (run from this repository's root so $PWD expands to
+absolute paths before they are stored):
+
+  copilot mcp add code-lens -- \
+    env CODE_LENS_HOME="$PWD/.code-lens" \
+    "$PWD/build/code-lens" mcp
+
+Set CODE_LENS_HOME in the registered MCP command if you want the server to use
+an index outside the default ~/.code-lens directory. A shell export made before
+`copilot mcp add` is not stored in the MCP configuration.
+
+Implementation notes:
+
+  - Project-owned C sources are compiled as ISO C23 with pedantic diagnostics.
+  - Run scripts/vendor-deps.sh to fetch the pinned SQLite amalgamation and
+    clone tree-sitter, tree-sitter-clojure, tree-sitter-java, and tree-sitter-c into vendor/. The source trees
+    are local artifacts and are ignored by git; scripts plus pinned refs and
+    hashes are committed instead.
+  - The toolchain is pure C end to end: SQLite is vendored as the C
+    amalgamation and compiled with the project, and the final binary links
+    with the C compiler.

@@ -54,7 +54,7 @@ class BuiltInToolsTest {
 		String listing = run(tools, "ls", Json.object());
 		assertTrue(listing.contains("README.md"));
 		assertTrue(listing.contains("src/"));
-		assertEquals("ok", run(tools, "bash", Json.object().put("command", "printf ok")));
+		assertEquals("ok", run(tools, "shell", Json.object().put("command", shellCommandThatPrintsOk())));
 	}
 
 	@Test
@@ -72,5 +72,9 @@ class BuiltInToolsTest {
 	private static String run(List<AgentTool> tools, String name, ObjectNode arguments) throws Exception {
 		AgentTool.ToolResult result = tool(tools, name).execute("id", arguments, new AbortSignal(), ignored -> {});
 		return ((TextContent) result.content().getFirst()).text();
+	}
+
+	private static String shellCommandThatPrintsOk() {
+		return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win") ? "[Console]::Write('ok')" : "printf ok";
 	}
 }

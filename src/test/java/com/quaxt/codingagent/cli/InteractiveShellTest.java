@@ -32,6 +32,15 @@ class InteractiveShellTest {
 	}
 
 	@Test
+	void prefersTerraWhenRestoringChatGptWithoutSavedSettings() {
+		Model fallback = model("gpt-5.4");
+		Model terra = model("gpt-5.6-terra");
+
+		assertEquals(terra, InteractiveShell.preferredChatGptModel(List.of(fallback, terra)));
+		assertEquals(fallback, InteractiveShell.preferredChatGptModel(List.of(fallback)));
+	}
+
+	@Test
 	void defaultsReasoningModelsToMediumThinking() {
 		Model reasoning = model("gpt-5.4", true);
 
@@ -97,19 +106,19 @@ class InteractiveShellTest {
 				.put("path", "src/main/java/com.quaxt.codingagent/cli/Main.java")
 				.put("offset", 10)
 				.put("limit", 20);
-		var bash = Json.object().put("command", "mvn test");
+		var shell = Json.object().put("command", "mvn test");
 
 		assertEquals(
 				"Reading src/main/java/com.quaxt.codingagent/cli/Main.java (lines 10-29)",
 				InteractiveShell.toolDescription("read", read));
-		assertEquals("mvn test", InteractiveShell.toolDescription("bash", bash));
+		assertEquals("mvn test", InteractiveShell.toolDescription("shell", shell));
 		assertEquals(
 				"Read 2 line(s).",
 				InteractiveShell.toolResultSummary(
 						"read", AgentTool.ToolResult.text("package works.earendil;\npublic final class Main {}")));
 		assertEquals(
 				"Build completed successfully.",
-				InteractiveShell.toolResultSummary("bash", AgentTool.ToolResult.text("Build completed successfully.")));
+				InteractiveShell.toolResultSummary("shell", AgentTool.ToolResult.text("Build completed successfully.")));
 	}
 
 	private static Model model(String id) {

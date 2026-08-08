@@ -8,6 +8,8 @@ import org.jline.utils.InfoCmp.Capability;
 
 /** Alternate-screen host with resize, mouse, and suspend/resume lifecycle management. */
 final class TuiRuntime {
+	private static final int DEFAULT_COLUMNS = 80;
+	private static final int DEFAULT_ROWS = 24;
 	private final Terminal terminal;
 	private final Theme theme;
 	private final SuspendAction suspendAction;
@@ -24,16 +26,16 @@ final class TuiRuntime {
 	}
 
 	<T> T run(TuiComponent<T> component) throws IOException {
-		int width = terminal.getColumns();
-		int height = terminal.getRows();
+		int width = terminalWidth();
+		int height = terminalHeight();
 		try {
 			start();
 			component.handle(new TuiInput.Resize(width, height));
 			render(component, width, height);
 			while (!component.isComplete()) {
 				TuiInput input = TuiInputReader.read(terminal.reader(), 100);
-				int nextWidth = terminal.getColumns();
-				int nextHeight = terminal.getRows();
+				int nextWidth = terminalWidth();
+				int nextHeight = terminalHeight();
 				if (nextWidth != width || nextHeight != height) {
 					width = nextWidth;
 					height = nextHeight;
@@ -52,8 +54,8 @@ final class TuiRuntime {
 					suspendAction.suspend();
 					resumeMainScreen.run();
 					start();
-					width = terminal.getColumns();
-					height = terminal.getRows();
+					width = terminalWidth();
+					height = terminalHeight();
 					component.handle(new TuiInput.Resize(width, height));
 					renderer.reset();
 					render(component, width, height);
@@ -66,6 +68,16 @@ final class TuiRuntime {
 		} finally {
 			stop();
 		}
+	}
+
+	private int terminalWidth() {
+		int columns = terminal.getColumns();
+		return columns > 0 ? columns : DEFAULT_COLUMNS;
+	}
+
+	private int terminalHeight() {
+		int rows = terminal.getRows();
+		return rows > 0 ? rows : DEFAULT_ROWS;
 	}
 
 	private void start() {

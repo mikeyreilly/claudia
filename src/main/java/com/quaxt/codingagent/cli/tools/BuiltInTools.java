@@ -39,7 +39,7 @@ public final class BuiltInTools {
 				new ReadTool(resolvedCwd),
 				new WriteTool(resolvedCwd),
 				new EditTool(resolvedCwd),
-				new BashTool(resolvedCwd),
+				new ShellTool(resolvedCwd),
 				new GrepTool(resolvedCwd),
 				new FindTool(resolvedCwd),
 				new LsTool(resolvedCwd));
@@ -198,9 +198,16 @@ public final class BuiltInTools {
 		private record Replacement(int start, int end, String newText) {}
 	}
 
-	private static final class BashTool extends LocalTool {
-		BashTool(Path cwd) {
-			super(cwd, "bash", "Execute a bash command in the current working directory. Output is bounded to 2,000 lines or 50KB.", schema("command", string("Bash command"), "timeout", optional(number("Optional timeout in seconds"))));
+	private static final class ShellTool extends LocalTool {
+		private final Shell shell;
+
+		ShellTool(Path cwd) {
+			this(cwd, Shell.current());
+		}
+
+		private ShellTool(Path cwd, Shell shell) {
+			super(cwd, "shell", "Execute a " + shell.displayName + " command in the current working directory. Output is bounded to 2,000 lines or 50KB.", schema("command", string(shell.displayName + " command"), "timeout", optional(number("Optional timeout in seconds"))));
+			this.shell = shell;
 		}
 
 		@Override
@@ -208,7 +215,7 @@ public final class BuiltInTools {
 				throws Exception {
 			String command = requiredText(arguments, "command");
 			double timeoutSeconds = optionalPositiveNumber(arguments, "timeout", 0);
-			Process process = new ProcessBuilder("/bin/bash", "-lc", command).directory(cwd.toFile()).redirectErrorStream(true).start();
+			Process process = new ProcessBuilder(shell.command(command)).directory(cwd.toFile()).redirectErrorStream(true).start();
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 			Thread reader = Thread.ofVirtual().start(() -> {
 				try (var input = process.getInputStream()) {
@@ -235,6 +242,33 @@ public final class BuiltInTools {
 				throw new IllegalStateException((output.isBlank() ? "" : output + "\n\n") + "Command exited with code " + process.exitValue());
 			}
 			return ToolResult.text(output.isBlank() ? "(no output)" : output);
+		}
+	}
+
+	private enum Shell {
+		BASH("bash") {
+			@Override
+			List<String> command(String command) {
+				return List.of("/bin/bash", "-lc", command);
+			}
+		},
+		POWERSHELL("PowerShell") {
+			@Override
+			List<String> command(String command) {
+				return List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command);
+			}
+		};
+
+		final String displayName;
+
+		Shell(String displayName) {
+			this.displayName = displayName;
+		}
+
+		abstract List<String> command(String command);
+
+		static Shell current() {
+			return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win") ? POWERSHELL : BASH;
 		}
 	}
 

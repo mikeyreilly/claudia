@@ -41,13 +41,16 @@ Start the interactive codingagent TUI shell (backed by JLine) with:
 java -jar target/codingagent.jar
 ```
 
-Then run `/login`, open the displayed github.com device-login URL, and enter
-the displayed code. On first login, the shell selects GitHub Copilot's GPT-5.4
-when it is enabled for the account, otherwise it selects the first enabled
-coding model. Credentials are stored in `~/.codingagent/auth.json`; `/logout`
-removes them. Use `/models` to open the
-searchable model selector; type to fuzzy-filter models and use Up/Down and
-Enter to select. Enabled Copilot models are filtered to the signed-in account.
+Then run `/login` and choose GitHub Copilot, OpenAI API key, or ChatGPT
+Plus/Pro. GitHub Copilot and ChatGPT Plus/Pro display a device-login URL and
+code; the latter uses OpenAI's Codex authorization and your ChatGPT plan's
+included Codex usage. The OpenAI API-key option is separate and uses Platform
+API billing. GitHub Copilot selects GPT-5.4 when it is enabled for the account,
+otherwise it selects the first enabled coding model. Credentials are stored in
+`~/.codingagent/auth.json`; `/logout` removes the credential for the active model.
+Use `/models` to open the searchable model selector; type to fuzzy-filter
+models and use Up/Down and Enter to select. Enabled Copilot models are filtered
+to the signed-in account.
 Model, thinking-level, and theme selections are saved in
 `~/.codingagent/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
@@ -86,13 +89,12 @@ selected model supports fewer levels.
 
 ## MCP servers
 
-codingagent reads MCP server definitions from the same OpenCode configuration
-used by OpenCode: global files under `~/.config/opencode`, project
-`opencode.json`/`opencode.jsonc` files, and `.opencode/opencode.json(c)` files.
-JSONC comments, trailing commas, `{env:NAME}`, and `{file:path}` substitutions
-are supported. Local and remote definitions use the OpenCode shape:
+codingagent reads MCP server definitions from the `mcp` object in
+`~/.codingagent/settings.json`. Local and remote definitions use the same
+shape as OpenCode, and `{env:NAME}` and `{file:path}` substitutions are
+supported:
 
-```jsonc
+```json
 {
   "mcp": {
     "local-tools": {
@@ -142,9 +144,9 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 
 | Area | Status |
 | --- | --- |
-| Anthropic, OpenAI Responses, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
+| Anthropic, OpenAI Responses, ChatGPT Plus/Pro, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
 | Streaming agent loop and sequential tool calls | Implemented |
-| `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` tools | Implemented |
+| `read`, `write`, `edit`, `shell`, `grep`, `find`, `ls` tools | Implemented |
 | OpenCode-compatible local/remote MCP servers and interactive `/mcp` toggles | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |

@@ -19,6 +19,17 @@ import org.junit.jupiter.api.Test;
 
 class InteractiveTerminalTest {
 	@Test
+	void suppliesFallbackDimensionsWhenTheTerminalReportsZeroSize() throws Exception {
+		TerminalFixture fixture = terminal();
+		fixture.terminal().setSize(org.jline.terminal.Size.of(0, 0));
+
+		try (InteractiveTerminal ignored = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			assertEquals(80, fixture.terminal().getColumns());
+			assertEquals(24, fixture.terminal().getRows());
+		}
+	}
+
+	@Test
 	void restoresLineEditorScreenAndInputBufferAfterSuspend() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();

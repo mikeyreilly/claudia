@@ -1,0 +1,9 @@
+5. The banked emit headroom — the plan's out-of-scope item
+(worker-side block encoding with pre-assigned rowid ranges). Emit
+gates only marginally now (0.087 vs 0.075 collect), so the ceiling is
+~-15% total. A cheaper variant exists: seed the term interner from the
+previous build's dictionary so workers pre-resolve ~99% of the 2.34M
+intern calls — but that makes Term ids history-dependent, weakening
+the byte-determinism contract our dump-hash verification relies on
+(readers wouldn't care; our testing methodology would). That trade is
+yours to make.

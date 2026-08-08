@@ -38,7 +38,7 @@ public final class McpManager implements AutoCloseable {
 	}
 
 	public static McpManager loadDefault(Path workspace) throws IOException {
-		return new McpManager(McpConfigLoader.loadDefault(workspace), workspace);
+		return new McpManager(McpConfigLoader.loadDefault(), workspace);
 	}
 
 	public boolean isEmpty() {

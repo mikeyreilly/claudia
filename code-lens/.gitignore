@@ -1,0 +1,17 @@
+build/
+vendor/sqlite/
+vendor/tree-sitter/
+vendor/tree-sitter-clojure/
+vendor/tree-sitter-java/
+vendor/tree-sitter-c/
+vendor/libdeflate/
+vendor/zlib/
+.code-lens/
+*.o
+*.d
+*.dSYM/
+.idea
+.opencode/
+.vscode/launch.json
+.vscode/settings.json
+.vscode/tasks.json

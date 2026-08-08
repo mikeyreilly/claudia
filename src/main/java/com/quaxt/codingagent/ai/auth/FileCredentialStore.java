@@ -35,15 +35,23 @@ public final class FileCredentialStore implements CredentialStore {
 
 	private final Path authPath;
 	private final Path lockPath;
+	private final Path fallbackAuthPath;
 
 	public FileCredentialStore(Path authPath) {
+		this(authPath, null);
+	}
+
+	FileCredentialStore(Path authPath, Path fallbackAuthPath) {
 		this.authPath = authPath.toAbsolutePath().normalize();
 		this.lockPath = this.authPath.resolveSibling(this.authPath.getFileName() + ".lock");
+		this.fallbackAuthPath = fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize();
 	}
 
 	public static FileCredentialStore defaultStore() {
 		Path home = Path.of(System.getProperty("user.home"));
-		return new FileCredentialStore(home.resolve(".codingagent").resolve("auth.json"));
+		return new FileCredentialStore(
+				home.resolve(".codingagent").resolve("auth.json"),
+				home.resolve(".pi-java").resolve("auth.json"));
 	}
 
 	@Override
@@ -83,17 +91,18 @@ public final class FileCredentialStore implements CredentialStore {
 	}
 
 	private Map<String, Credential> readAll() throws IOException {
-		if (!Files.exists(authPath)) {
+		Path source = Files.exists(authPath) ? authPath : fallbackAuthPath;
+		if (source == null || !Files.exists(source)) {
 			return new LinkedHashMap<>();
 		}
 		JsonNode root;
 		try {
-			root = Json.MAPPER.readTree(Files.readString(authPath, StandardCharsets.UTF_8));
+			root = Json.MAPPER.readTree(Files.readString(source, StandardCharsets.UTF_8));
 		} catch (IOException e) {
-			throw new IOException("Failed to read credential file " + authPath + ": " + e.getMessage(), e);
+			throw new IOException("Failed to read credential file " + source + ": " + e.getMessage(), e);
 		}
 		if (root == null || !root.isObject()) {
-			throw new IOException("Invalid credential file " + authPath + ": expected a JSON object");
+			throw new IOException("Invalid credential file " + source + ": expected a JSON object");
 		}
 		Map<String, Credential> result = new LinkedHashMap<>();
 		for (Map.Entry<String, JsonNode> entry : root.properties()) {
@@ -141,7 +150,8 @@ public final class FileCredentialStore implements CredentialStore {
 						node.path("access").asText(),
 						node.path("refresh").asText(),
 						node.path("expires").asLong(),
-						parseAvailableModelIds(providerId, node.get("availableModelIds")));
+						parseAvailableModelIds(providerId, node.get("availableModelIds")),
+						parseEnv(providerId, node.get("metadata")));
 			}
 			default -> throw invalidCredential(providerId);
 		};
@@ -168,6 +178,10 @@ public final class FileCredentialStore implements CredentialStore {
 				if (oauth.availableModelIds() != null) {
 					var ids = node.putArray("availableModelIds");
 					oauth.availableModelIds().forEach(ids::add);
+				}
+				if (!oauth.metadata().isEmpty()) {
+					ObjectNode metadata = node.putObject("metadata");
+					oauth.metadata().forEach(metadata::put);
 				}
 			}
 		}

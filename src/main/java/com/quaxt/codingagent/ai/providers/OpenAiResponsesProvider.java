@@ -11,6 +11,8 @@ import java.util.Map;
 import com.quaxt.codingagent.ai.Models;
 import com.quaxt.codingagent.ai.Provider;
 import com.quaxt.codingagent.ai.StreamOptions;
+import com.quaxt.codingagent.ai.auth.Credential;
+import com.quaxt.codingagent.ai.auth.CredentialStore;
 import com.quaxt.codingagent.ai.auth.EnvApiKeys;
 import com.quaxt.codingagent.ai.http.HttpTransport;
 import com.quaxt.codingagent.ai.http.SseReader;
@@ -40,16 +42,43 @@ public final class OpenAiResponsesProvider implements Provider {
 	private final String name;
 	private final List<String> apiKeyEnvVars;
 	private final List<Model> models;
+	private final CredentialStore credentials;
+	private final RequestProfile requestProfile;
 
 	public OpenAiResponsesProvider(List<Model> models) {
-		this("openai", "OpenAI", models, List.of("OPENAI_API_KEY"));
+		this("openai", "OpenAI", models, List.of("OPENAI_API_KEY"), null, RequestProfile.STANDARD);
+	}
+
+	public OpenAiResponsesProvider(List<Model> models, CredentialStore credentials) {
+		this("openai", "OpenAI", models, List.of("OPENAI_API_KEY"), credentials, RequestProfile.STANDARD);
 	}
 
 	public OpenAiResponsesProvider(String id, String name, List<Model> models, List<String> apiKeyEnvVars) {
+		this(id, name, models, apiKeyEnvVars, null, RequestProfile.STANDARD);
+	}
+
+	public OpenAiResponsesProvider(
+			String id, String name, List<Model> models, List<String> apiKeyEnvVars, CredentialStore credentials) {
+		this(id, name, models, apiKeyEnvVars, credentials, RequestProfile.STANDARD);
+	}
+
+	static OpenAiResponsesProvider codex(String id, String name, List<Model> models) {
+		return new OpenAiResponsesProvider(id, name, models, List.of(), null, RequestProfile.CODEX);
+	}
+
+	private OpenAiResponsesProvider(
+			String id,
+			String name,
+			List<Model> models,
+			List<String> apiKeyEnvVars,
+			CredentialStore credentials,
+			RequestProfile requestProfile) {
 		this.id = id;
 		this.name = name;
 		this.models = List.copyOf(models);
 		this.apiKeyEnvVars = List.copyOf(apiKeyEnvVars);
+		this.credentials = credentials;
+		this.requestProfile = requestProfile;
 	}
 
 	@Override
@@ -110,11 +139,18 @@ public final class OpenAiResponsesProvider implements Provider {
 		}
 	}
 
-	private Map<String, String> requestHeaders(Model model, StreamOptions options) {
+	private Map<String, String> requestHeaders(Model model, StreamOptions options) throws IOException {
 		Map<String, String> headers = new LinkedHashMap<>(model.headers);
 		headers.putAll(options.headers);
 		if (!headers.containsKey("Authorization") && !headers.containsKey("authorization")) {
 			String key = options.apiKey;
+			if ((key == null || key.isBlank()) && credentials != null) {
+				key = credentials.read(id)
+						.filter(Credential.ApiKeyCredential.class::isInstance)
+						.map(Credential.ApiKeyCredential.class::cast)
+						.map(Credential.ApiKeyCredential::key)
+						.orElse(null);
+			}
 			if (key == null || key.isBlank()) {
 				key = EnvApiKeys.resolveSystem(id).orElse(null);
 			}
@@ -130,13 +166,23 @@ public final class OpenAiResponsesProvider implements Provider {
 		return options.baseUrl == null || options.baseUrl.isBlank() ? model.baseUrl : options.baseUrl;
 	}
 
-	private static ObjectNode requestBody(Model model, Context context, StreamOptions options) {
+	private ObjectNode requestBody(Model model, Context context, StreamOptions options) {
 		ObjectNode request = Json.object();
 		request.put("model", model.id);
 		request.put("stream", true);
 		request.put("store", false);
 		if (context.systemPrompt != null && !context.systemPrompt.isBlank()) {
 			request.put("instructions", context.systemPrompt);
+		} else if (requestProfile == RequestProfile.CODEX) {
+			request.put("instructions", "You are a helpful assistant.");
+		}
+		if (requestProfile == RequestProfile.CODEX) {
+			request.putObject("text").put("verbosity", "low");
+			request.put("tool_choice", "auto");
+			request.put("parallel_tool_calls", true);
+			if (options.sessionId != null && !options.sessionId.isBlank()) {
+				request.put("prompt_cache_key", options.sessionId);
+			}
 		}
 		if (options.maxTokens != null) {
 			request.put("max_output_tokens", Math.max(16, options.maxTokens));
@@ -146,7 +192,8 @@ public final class OpenAiResponsesProvider implements Provider {
 		}
 		String reasoning = Models.providerThinkingLevel(model, options.reasoning);
 		if (reasoning != null) {
-			request.putObject("reasoning").put("effort", reasoning).put("summary", "auto");
+			String summary = requestProfile == RequestProfile.CODEX ? "detailed" : "auto";
+			request.putObject("reasoning").put("effort", reasoning).put("summary", summary);
 			request.putArray("include").add("reasoning.encrypted_content");
 		}
 		ArrayNode input = request.putArray("input");
@@ -500,6 +547,11 @@ public final class OpenAiResponsesProvider implements Provider {
 
 	private static String displayError(Exception error) {
 		return error.getMessage() == null ? error.toString() : error.getMessage();
+	}
+
+	private enum RequestProfile {
+		STANDARD,
+		CODEX
 	}
 
 	private static final class OutputItem {

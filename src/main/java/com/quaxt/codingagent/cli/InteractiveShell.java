@@ -19,8 +19,12 @@ import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.CoreProviders;
 import com.quaxt.codingagent.ai.Models;
 import com.quaxt.codingagent.ai.Provider;
+import com.quaxt.codingagent.ai.auth.Credential;
+import com.quaxt.codingagent.ai.auth.ChatGptAuth;
+import com.quaxt.codingagent.ai.auth.FileCredentialStore;
 import com.quaxt.codingagent.ai.auth.GitHubCopilotAuth;
 import com.quaxt.codingagent.ai.providers.GitHubCopilotProvider;
+import com.quaxt.codingagent.ai.providers.ChatGptProvider;
 import com.quaxt.codingagent.ai.types.AssistantContent;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
@@ -95,7 +99,7 @@ final class InteractiveShell {
 				Model model = selectModel(providers, arguments.provider, terminal);
 				if (model == null) return 0;
 				shell.configure(model, true);
-			} else if (!shell.configureSavedModel()) {
+			} else if (!shell.configureSavedModel() && !shell.configureSavedChatGpt()) {
 				shell.configureSavedCopilot();
 			}
 			return shell.loop();
@@ -104,9 +108,9 @@ final class InteractiveShell {
 
 	private static Model selectModel(CoreProviders providers, String providerId, InteractiveTerminal terminal)
 			throws IOException {
-		List<Model> models = providers.catalog().all().stream()
-				.filter(model -> providerId == null || model.provider.equals(providerId))
-				.toList();
+		List<Model> models = providerId == null
+				? providers.catalog().all()
+				: providers.require(providerId).models();
 		if (models.isEmpty()) {
 			throw new IllegalArgumentException("No bundled models for provider: " + providerId);
 		}
@@ -128,7 +132,7 @@ final class InteractiveShell {
 				continue;
 			}
 			if (agent == null) {
-				terminal.println("No model configured. Run /login to use GitHub Copilot.");
+				terminal.println("No model configured. Run /login to choose a provider.");
 				continue;
 			}
 			mcp.awaitReady();
@@ -194,7 +198,12 @@ final class InteractiveShell {
 		if (settings.defaultProvider() == null || settings.defaultModel() == null) {
 			return false;
 		}
-		Model model = providers.catalog().find(settings.defaultProvider(), settings.defaultModel());
+		Model model;
+		try {
+			model = findModel(providers.require(settings.defaultProvider()).models(), settings.defaultProvider(), settings.defaultModel());
+		} catch (IllegalArgumentException error) {
+			model = null;
+		}
 		if (model == null) {
 			terminal.println("Saved model " + settings.defaultProvider() + "/" + settings.defaultModel()
 					+ " is unavailable; selecting a fallback.");
@@ -211,6 +220,14 @@ final class InteractiveShell {
 				}
 			} catch (IOException error) {
 				terminal.println("Could not restore the saved GitHub Copilot model: " + error.getMessage());
+				return false;
+			}
+		}
+		if (model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+			try {
+				if (!chatGptProvider().hasCredential()) return false;
+			} catch (IOException error) {
+				terminal.println("Could not restore the saved ChatGPT model: " + error.getMessage());
 				return false;
 			}
 		}
@@ -236,7 +253,41 @@ final class InteractiveShell {
 		}
 	}
 
+	/** Restores a valid ChatGPT login even when an earlier model selection was not persisted. */
+	private boolean configureSavedChatGpt() {
+		ChatGptProvider chatGpt = chatGptProvider();
+		try {
+			if (!chatGpt.hasCredential() || chatGpt.models().isEmpty()) {
+				return false;
+			}
+			Model model = preferredChatGptModel(chatGpt.models());
+			configure(model, true);
+			return true;
+		} catch (IOException error) {
+			terminal.println("ChatGPT login needs attention: " + error.getMessage());
+			return false;
+		}
+	}
+
 	private void login() throws IOException, InterruptedException {
+		terminal.println("Log in to a provider:");
+		terminal.println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+		terminal.println("  2. OpenAI API key — use separately billed Platform API credits");
+		terminal.println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+		String choice = terminal.readLine("Select provider [1-3]: ");
+		if (choice == null || choice.isBlank()) {
+			terminal.println("Login cancelled.");
+			return;
+		}
+		switch (choice.trim().toLowerCase(java.util.Locale.ROOT)) {
+			case "1", "github", "github copilot", "copilot" -> loginCopilot();
+			case "2", "openai", "open ai", "openai api", "openai api key" -> loginOpenAi();
+			case "3", "chatgpt", "chatgpt plus", "chatgpt pro", "chatgpt plus/pro" -> loginChatGpt();
+			default -> terminal.println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+		}
+	}
+
+	private void loginCopilot() throws IOException, InterruptedException {
 		GitHubCopilotProvider copilot = copilotProvider();
 		GitHubCopilotAuth.DeviceCode device = copilot.auth().beginLogin();
 		terminal.println("Open " + device.verificationUri() + " and enter code " + device.userCode() + ".");
@@ -258,7 +309,68 @@ final class InteractiveShell {
 		terminal.println("GitHub Copilot is ready with " + model + ".");
 	}
 
+	private void loginOpenAi() throws IOException {
+		String apiKey = terminal.readPassword("OpenAI API key: ");
+		if (apiKey == null || apiKey.isBlank()) {
+			terminal.println("OpenAI login cancelled.");
+			return;
+		}
+		FileCredentialStore.defaultStore().modify("openai", ignored -> new Credential.ApiKeyCredential(apiKey.trim()));
+		List<Model> models = providers.require("openai").models();
+		Model model = savedModelIn(models);
+		if (model == null) {
+			model = Selector.select(
+					terminal,
+					"Select an OpenAI model",
+					models.stream().map(InteractiveShell::modelItem).toList(),
+					-1,
+					true);
+		}
+		if (model == null) {
+			terminal.println("OpenAI API key saved. Run /models when you are ready to select a model.");
+			return;
+		}
+		configure(model, true);
+		terminal.println("OpenAI is ready with " + model + ".");
+	}
+
+	private void loginChatGpt() throws IOException, InterruptedException {
+		ChatGptProvider chatGpt = chatGptProvider();
+		ChatGptAuth.DeviceCode device = chatGpt.auth().beginLogin();
+		terminal.println("Open " + device.verificationUri() + " and enter code " + device.userCode() + ".");
+		terminal.println("Waiting for ChatGPT authorization...");
+		chatGpt.auth().completeLogin(device);
+		List<Model> models = chatGpt.models();
+		Model model = savedModelIn(models);
+		if (model == null) {
+			model = Selector.select(
+					terminal,
+					"Select a ChatGPT model",
+					models.stream().map(InteractiveShell::modelItem).toList(),
+					-1,
+					true);
+		}
+		if (model == null) {
+			terminal.println("ChatGPT login saved. Run /models when you are ready to select a model.");
+			return;
+		}
+		configure(model, true);
+		terminal.println("ChatGPT Plus/Pro is ready with " + model + ".");
+	}
+
 	private void logout() throws IOException {
+		if (agent != null && agent.state().model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+			chatGptProvider().logout();
+			agent = null;
+			terminal.println("ChatGPT credentials removed. Run /login or /resume to continue.");
+			return;
+		}
+		if (agent != null && agent.state().model.provider.equals("openai")) {
+			FileCredentialStore.defaultStore().delete("openai");
+			agent = null;
+			terminal.println("OpenAI API key removed. Run /login or /resume to continue.");
+			return;
+		}
 		copilotProvider().logout();
 		if (agent != null && agent.state().model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
 			agent = null;
@@ -309,7 +421,12 @@ final class InteractiveShell {
 			terminal.println("Cannot resume session because its working directory is unavailable: " + session.cwd());
 			return;
 		}
-		Model model = providers.catalog().find(session.provider(), session.model());
+		Model model;
+		try {
+			model = findModel(providers.require(session.provider()).models(), session.provider(), session.model());
+		} catch (IllegalArgumentException error) {
+			model = null;
+		}
 		if (model == null) {
 			if (agent == null) {
 				terminal.println("Cannot restore model " + session.provider() + "/" + session.model()
@@ -382,7 +499,7 @@ final class InteractiveShell {
 		if (model != null) header.append("  ").append(model);
 		header.append('\n');
 		header.append(model == null
-				? "Run /login to use GitHub Copilot. Commands: /help, /resume, /login, /mcp, /exit"
+				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
 				: "Enter a prompt. Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
@@ -499,7 +616,7 @@ final class InteractiveShell {
 
 	private void selectMcpServers() throws IOException {
 		if (mcp.isEmpty()) {
-			terminal.println("No MCP servers configured in OpenCode config (opencode.json or opencode.jsonc).");
+			terminal.println("No MCP servers configured in ~/.codingagent/settings.json.");
 			return;
 		}
 		terminal.run(new McpSelector(mcp, this::syncMcpTools));
@@ -575,14 +692,20 @@ final class InteractiveShell {
 			terminal.println("Could not refresh GitHub Copilot model access: " + error.getMessage());
 			models.addAll(copilot.models());
 		}
+		models.addAll(chatGptProvider().models());
 		return List.copyOf(models);
 	}
 
 	private void configure(Model model, boolean persistModel) throws IOException {
 		Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
-		SessionRecorder nextRecorder = arguments.noSession
-				? null
-				: SessionRecorder.create(SessionStore.defaultStore(), configuredCwd, model.provider, model.id);
+		SessionRecorder nextRecorder = null;
+		if (!arguments.noSession) {
+			try {
+				nextRecorder = SessionRecorder.create(SessionStore.defaultStore(), configuredCwd, model.provider, model.id);
+			} catch (IOException error) {
+				terminal.println("Model configured, but session persistence is unavailable: " + error.getMessage());
+			}
+		}
 		configureAgent(model, configuredCwd, nextRecorder);
 		if (persistModel) {
 			settings = settings.withDefaultModel(model.provider, model.id);
@@ -617,6 +740,10 @@ final class InteractiveShell {
 		return (GitHubCopilotProvider) providers.require(GitHubCopilotAuth.PROVIDER_ID);
 	}
 
+	private ChatGptProvider chatGptProvider() {
+		return (ChatGptProvider) providers.require(ChatGptAuth.PROVIDER_ID);
+	}
+
 	private Model savedModelIn(List<Model> models) {
 		if (settings.defaultProvider() == null || settings.defaultModel() == null) return null;
 		return findModel(models, settings.defaultProvider(), settings.defaultModel());
@@ -631,6 +758,15 @@ final class InteractiveShell {
 		for (Model model : models) {
 			if (model.id.equals("gpt-5.4")) {
 				return model;
+			}
+		}
+		return models.isEmpty() ? null : models.getFirst();
+	}
+
+	static Model preferredChatGptModel(List<Model> models) {
+		for (String preferred : List.of("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4")) {
+			for (Model model : models) {
+				if (model.id.equals(preferred)) return model;
 			}
 		}
 		return models.isEmpty() ? null : models.getFirst();
@@ -789,7 +925,7 @@ final class InteractiveShell {
 			}
 			case "write" -> "Writing " + textArgument(arguments, "path", ".") + " (" + textArgument(arguments, "content", "").length() + " characters)";
 			case "edit" -> "Editing " + textArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
-			case "bash" -> abbreviate(textArgument(arguments, "command", ""), 240);
+			case "shell" -> abbreviate(textArgument(arguments, "command", ""), 240);
 			case "grep" -> "Searching for " + textArgument(arguments, "pattern", "") + " in " + textArgument(arguments, "path", ".");
 			case "find" -> "Finding " + textArgument(arguments, "pattern", "") + " in " + textArgument(arguments, "path", ".");
 			case "ls" -> "Listing " + textArgument(arguments, "path", ".");
@@ -839,4 +975,5 @@ final class InteractiveShell {
 		THINKING,
 		TEXT
 	}
+
 }
