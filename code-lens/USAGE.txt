@@ -11,7 +11,8 @@ Initial command surface:
   code-lens remove --repo <path>
   code-lens list
   code-lens query --repo <path> [--exclude-tests] [--kind <kind>]
-                   [--path <substring>] [--limit <n>] "<terms>"
+                   [--path <substring>] [--scope workspace|dependencies|all]
+                   [--dependency <gav-glob>] [--limit <n>] "<terms>"
   code-lens context --repo <path> --name <symbol> [--exclude-tests]
                      [--namespace <namespace>] [--path <substring>]
   code-lens sql --repo <path> "<query>"
@@ -27,7 +28,7 @@ any file or directory within it. Supported source extensions are .clj, .cljc,
 MCP tool surface:
 
   list_repos()
-  query(repo, query, limit?, excludeTests?, kind?, path?)
+  query(repo, query, limit?, excludeTests?, kind?, path?, scope?, dependency?)
   context(repo, name, excludeTests?, namespace?, path?)
   sql(repo, query)
   remove_repo(repo)
@@ -37,6 +38,21 @@ MCP tool surface:
   and refresh a stale index before reading. list_repos is observational and
   never builds, repairs, or refreshes an index. remove_repo can evict an
   orphaned index by its stored repo path.
+
+Maven dependency sources:
+
+  A root pom.xml activates transparent source resolution through mvnw/mvnw.cmd
+  or Maven on PATH. Source artifacts are cached under CODE_LENS_HOME and indexed
+  with their coordinates. query defaults to scope=workspace; use
+  --scope dependencies/`scope: "dependencies"` or --scope all, optionally with
+  --dependency/`dependency` set to a GAV glob such as org.jline:*. context falls
+  back to dependency definitions automatically and returns stable source paths
+  that normal file-reading tools can open. Maven is rerun only when pom.xml,
+  local parent POM, wrapper, or .mvn inputs change, when the source cache is
+  stale, or to retry a prior failure. Multi-module resolution is currently a
+  reactor-wide test-classpath union. Set CODE_LENS_MAVEN=0 to disable execution;
+  CODE_LENS_MAVEN_TIMEOUT_MS defaults to 120000. Maven can
+  execute project build extensions and plugins, so index only trusted projects.
 
 Build and setup:
 
@@ -84,6 +100,12 @@ checked out next to this repository):
   function, var, macro, multimethod, method, protocol, record, type, test,
   class, interface, enum, annotation, constructor, field, enum_constant,
   module, variable, struct, union, typedef, and keyword.
+  Workspace symbols are the default query scope. `--scope dependencies` searches
+  only resolved Maven source artifacts, `--scope all` combines both with workspace
+  rows ranked first, and `--dependency <gav-glob>` narrows dependency rows by
+  coordinate. Dependency rows include their GAV and stable materialized file path.
+  `context` performs this dependency fallback without a scope flag and separates
+  workspace call sites from dependency-internal references.
   `context` lists a symbol's definitions, reference call sites, and lazy
   source snippets. Clojure aliases and referred symbols are resolved. Java
   normal/static imports, enclosing types, and declared receiver types are

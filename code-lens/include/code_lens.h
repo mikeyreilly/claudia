@@ -244,6 +244,10 @@ typedef struct {
     bool exclude_tests;
     const char *kind;
     const char *path;
+    /* workspace (default), dependencies, or all; dependency is an optional
+     * Maven GAV glob. */
+    const char *scope;
+    const char *dependency;
 } CodeLensQueryOptions;
 
 char *code_lens_query_symbols_ex(const char *repo_name,

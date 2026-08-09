@@ -19,8 +19,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -598,10 +600,11 @@ void code_lens_mapped_file_free(CodeLensMappedFile *file)
 static bool should_skip_dir(const char *name)
 {
     return (strcmp(name, ".git") == 0) || (strcmp(name, "node_modules") == 0) ||
-           (strcmp(name, "vendor") == 0) || (strcmp(name, "target") == 0) || (strcmp(name, "build") == 0) ||
-           (strcmp(name, ".shadow-cljs") == 0) || (strcmp(name, ".cpcache") == 0) ||
-           (strcmp(name, ".idea") == 0) || (strcmp(name, ".vscode") == 0) ||
-           (strcmp(name, ".lsp") == 0);
+           (strcmp(name, "vendor") == 0) || (strcmp(name, "target") == 0) ||
+           (strcmp(name, "build") == 0) || (strcmp(name, ".shadow-cljs") == 0) ||
+           (strcmp(name, ".cpcache") == 0) || (strcmp(name, ".idea") == 0) ||
+           (strcmp(name, ".vscode") == 0) || (strcmp(name, ".lsp") == 0) ||
+           (strcmp(name, ".code-lens") == 0);
 }
 
 typedef bool (*SourceExtensionPredicate)(const char *path);
@@ -681,9 +684,15 @@ static bool dirent_is_directory_at(int parent_fd, const struct dirent *entry)
 
 typedef struct {
     char *path;
+    char *excluded_path;
+    bool include_ignored_dirs;
     size_t len;
     size_t capacity;
 } PathBuffer;
+
+static _Thread_local char path_buffer_home_input[PATH_MAX];
+static _Thread_local char path_buffer_home_resolved[PATH_MAX];
+static _Thread_local bool path_buffer_home_valid;
 
 static int path_buffer_init(PathBuffer *buffer, const char *root)
 {
@@ -708,6 +717,32 @@ static int path_buffer_init(PathBuffer *buffer, const char *root)
     buffer->path[len] = '\0';
     buffer->len = len;
     buffer->capacity = len + 1U;
+    buffer->excluded_path = nullptr;
+    {
+        char *home = code_lens_default_home();
+        size_t home_len = home == nullptr ? 0U : strlen(home);
+
+        if ((home_len > 0U) && (home_len < (size_t)PATH_MAX)) {
+            if ((strcmp(home, path_buffer_home_input) != 0) || !path_buffer_home_valid) {
+                char resolved[PATH_MAX];
+
+                (void)memcpy(path_buffer_home_input, home, home_len + 1U);
+                path_buffer_home_valid = realpath(home, resolved) != nullptr;
+                if (path_buffer_home_valid) {
+                    (void)snprintf(path_buffer_home_resolved,
+                                   sizeof(path_buffer_home_resolved),
+                                   "%s",
+                                   resolved);
+                } else {
+                    path_buffer_home_resolved[0] = '\0';
+                }
+            }
+            if (path_buffer_home_valid) {
+                buffer->excluded_path = copy_bytes(path_buffer_home_resolved,
+                                                   strlen(path_buffer_home_resolved));
+            }
+        }
+    }
     return 0;
 }
 
@@ -780,6 +815,12 @@ static void path_buffer_restore(PathBuffer *buffer, size_t mark)
     buffer->path[mark] = '\0';
 }
 
+static bool path_buffer_is_excluded(const PathBuffer *buffer)
+{
+    return (buffer != nullptr) && (buffer->excluded_path != nullptr) &&
+           (strcmp(buffer->path, buffer->excluded_path) == 0);
+}
+
 #ifndef _WIN32
 /* Walks one directory from an already-open fd, which fdopendir takes
  * ownership of. Directory descent uses openat/fstatat against the parent
@@ -817,7 +858,8 @@ static int walk_path(int dir_fd,
         }
 
         if (dirent_is_directory_at(dir_fd, entry)) {
-            if (!should_skip_dir(entry->d_name)) {
+            if ((buffer->include_ignored_dirs || !should_skip_dir(entry->d_name)) &&
+                !path_buffer_is_excluded(buffer)) {
                 int child_fd = openat(dir_fd, entry->d_name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 
                 rc = (child_fd < 0)
@@ -878,7 +920,8 @@ static int walk_path(int unused_dir_fd,
             return -1;
         }
         if ((stat(buffer->path, &st) == 0) && S_ISDIR(st.st_mode)) {
-            if (!should_skip_dir(entry->d_name)) {
+            if ((buffer->include_ignored_dirs || !should_skip_dir(entry->d_name)) &&
+                !path_buffer_is_excluded(buffer)) {
                 rc = walk_path(-1, buffer, accepts, callback, ctx);
             }
         } else if (accepts(entry->d_name)) {
@@ -921,12 +964,13 @@ static int collect_path_callback(const char *path, void *ctx)
     return path_list_append(ctx, path);
 }
 
-static int code_lens_walk_files(const char *root,
+static int code_lens_walk_files_mode(const char *root,
                                  SourceExtensionPredicate accepts,
                                  CodeLensFileCallback callback,
-                                 void *ctx)
+                                 void *ctx,
+                                 bool include_ignored_dirs)
 {
-    PathBuffer buffer = {0};
+    PathBuffer buffer = {.include_ignored_dirs = include_ignored_dirs};
     int root_fd;
 
     if ((root == nullptr) || (accepts == nullptr) || (callback == nullptr) ||
@@ -946,6 +990,22 @@ static int code_lens_walk_files(const char *root,
     }
 #endif
     return walk_path(root_fd, &buffer, accepts, callback, ctx);
+}
+
+static int code_lens_walk_files(const char *root,
+                                SourceExtensionPredicate accepts,
+                                CodeLensFileCallback callback,
+                                void *ctx)
+{
+    return code_lens_walk_files_mode(root, accepts, callback, ctx, false);
+}
+
+static int code_lens_walk_all_files(const char *root,
+                                    SourceExtensionPredicate accepts,
+                                    CodeLensFileCallback callback,
+                                    void *ctx)
+{
+    return code_lens_walk_files_mode(root, accepts, callback, ctx, true);
 }
 
 int code_lens_walk_clojure_files(const char *root, CodeLensFileCallback callback, void *ctx)
@@ -973,6 +1033,20 @@ static int code_lens_collect_files(const char *root,
         return -1;
     }
 
+    *out_files = files;
+    return 0;
+}
+
+static int code_lens_collect_all_files(const char *root,
+                                        SourceExtensionPredicate accepts,
+                                        CodeLensPathList *out_files)
+{
+    CodeLensPathList files = {0};
+
+    if ((out_files == nullptr) ||
+        (code_lens_walk_all_files(root, accepts, collect_path_callback, &files) != 0)) {
+        return -1;
+    }
     *out_files = files;
     return 0;
 }
@@ -2395,7 +2469,7 @@ uint32_t code_lens_c_language_symbol_count(void)
 #define QUERY_TIMEOUT_MS 30000
 #define QUERY_TIMEOUT_SECONDS 30.0
 #define QUERY_PROGRESS_OPS 10000
-#define CODE_LENS_INDEX_FORMAT_VERSION 12
+#define CODE_LENS_INDEX_FORMAT_VERSION 13
 
 static double profile_now_seconds(void);
 
@@ -2458,18 +2532,31 @@ static int db_open_common(CodeLensDb *db, const char *path, int flags)
     return 0;
 }
 
+static int db_open_read_any_format(CodeLensDb *db,
+                                   const char *path,
+                                   int *out_format_version)
+{
+    if ((out_format_version == nullptr) ||
+        (db_open_common(db, path, SQLITE_OPEN_READONLY) != 0)) {
+        return -1;
+    }
+    if (db_read_format_version(db, out_format_version) != 0) {
+        code_lens_db_close(db);
+        return -1;
+    }
+    db->deadline_seconds = profile_now_seconds() + QUERY_TIMEOUT_SECONDS;
+    sqlite3_progress_handler(db->handle, QUERY_PROGRESS_OPS, query_deadline_expired, db);
+    return 0;
+}
+
 int code_lens_db_open_read(CodeLensDb *db, const char *path)
 {
     int format_version = 0;
 
-    if (db_open_common(db, path, SQLITE_OPEN_READONLY) != 0) {
+    if (db_open_read_any_format(db, path, &format_version) != 0) {
         return -1;
     }
 
-    if (db_read_format_version(db, &format_version) != 0) {
-        code_lens_db_close(db);
-        return -1;
-    }
     if (format_version != CODE_LENS_INDEX_FORMAT_VERSION) {
         (void)fprintf(stderr,
                       "code-lens: index %s has format version %d, expected %d; "
@@ -2481,8 +2568,6 @@ int code_lens_db_open_read(CodeLensDb *db, const char *path)
         return -1;
     }
 
-    db->deadline_seconds = profile_now_seconds() + QUERY_TIMEOUT_SECONDS;
-    sqlite3_progress_handler(db->handle, QUERY_PROGRESS_OPS, query_deadline_expired, db);
     return 0;
 }
 
@@ -8493,6 +8578,8 @@ typedef struct {
     size_t missing_files;
     size_t changed_files;
     size_t new_files;
+    bool maven_changed;
+    bool dependency_sources_changed;
     double elapsed_seconds;
     double refresh_elapsed_seconds;
 } StalenessStatus;
@@ -8856,6 +8943,23 @@ static const char index_schema_sql[] =
      * by context's unqualified-reference filter. */
     "CREATE TABLE Referred (id TEXT PRIMARY KEY, repo TEXT, filePath TEXT,"
     " namespace TEXT, symbol TEXT);"
+    /* Maven dependency-source metadata is deliberately separate from the hot
+     * File/Symbol/Ref tables. Dependency source files use the same parser and
+     * index rows as workspace files; these tables identify their origin and
+     * retain the build-input snapshot used to decide when Maven must run again. */
+    "CREATE TABLE MavenProject (repo TEXT PRIMARY KEY, rootPom TEXT, status TEXT,"
+    " resolvedAt TEXT, message TEXT);"
+    "CREATE TABLE MavenInput (id TEXT PRIMARY KEY, repo TEXT, path TEXT, size INTEGER,"
+    " mtimeSec INTEGER, mtimeNsec INTEGER);"
+    "CREATE TABLE DependencyArtifact (id TEXT PRIMARY KEY, repo TEXT, coordinate TEXT,"
+    " groupId TEXT, artifactId TEXT, version TEXT, scope TEXT, direct INTEGER,"
+    " sourceJar TEXT, sourceRoot TEXT, checksum TEXT);"
+    "CREATE TABLE DependencyFile (id TEXT PRIMARY KEY, repo TEXT, filePath TEXT,"
+    " artifactId TEXT, sourcePath TEXT, modulePath TEXT);"
+    "CREATE INDEX idx_maven_input_repo_path ON MavenInput(repo, path);"
+    "CREATE INDEX idx_dependency_artifact_coordinate ON DependencyArtifact(repo, coordinate);"
+    "CREATE INDEX idx_dependency_file_path ON DependencyFile(repo, filePath);"
+    "CREATE INDEX idx_dependency_file_artifact ON DependencyFile(artifactId);"
     /* Secondary indexes on Symbol/Ref/Keyword are created after the bulk
      * load (see index_secondary_indexes_sql): one sort-based build beats
      * incremental b-tree maintenance across ~700k streamed inserts. */
@@ -13424,6 +13528,1465 @@ static char *repo_db_path(const char *repo_name)
     return code_lens_join_path(dir, "index.sqlite");
 }
 
+/* Maven dependency-source support --------------------------------------- */
+
+#define MAVEN_DEPENDENCY_PLUGIN_VERSION "3.8.1"
+#define MAVEN_DEFAULT_TIMEOUT_MS 120000U
+#define MAVEN_SOURCE_JAR_MAX_UNCOMPRESSED_BYTES (1024ULL * 1024ULL * 1024ULL)
+
+typedef struct {
+    char *path;
+    int64_t size;
+    int64_t mtime_sec;
+    int64_t mtime_nsec;
+} MavenInputSnapshot;
+
+typedef struct {
+    char *id;
+    char *coordinate;
+    char *group_id;
+    char *artifact_id;
+    char *version;
+    char *scope;
+    int direct;
+    char *source_jar;
+    char *source_root;
+    char *checksum;
+    CodeLensPathList files;
+} MavenSourceArtifact;
+
+typedef struct {
+    bool active;
+    bool reused;
+    const char *repo_path;
+    char *root_pom;
+    char *status;
+    char *message;
+    MavenInputSnapshot *inputs;
+    size_t input_count;
+    size_t input_capacity;
+    MavenSourceArtifact *artifacts;
+    size_t artifact_count;
+    size_t artifact_capacity;
+    size_t skipped_artifacts;
+} MavenDependencySet;
+
+static bool maven_enabled(void)
+{
+    const char *value = getenv("CODE_LENS_MAVEN");
+
+    return (value == nullptr) || (value[0] == '\0') || (strcmp(value, "0") != 0);
+}
+
+static uint32_t maven_timeout_ms(void)
+{
+    const char *value = getenv("CODE_LENS_MAVEN_TIMEOUT_MS");
+    char *end = nullptr;
+    unsigned long parsed;
+
+    if ((value == nullptr) || (value[0] == '\0') || (value[0] == '-')) {
+        return MAVEN_DEFAULT_TIMEOUT_MS;
+    }
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if ((errno == ERANGE) || (end == value) || (end == nullptr) || (*end != '\0') ||
+        (parsed == 0UL) || (parsed > (unsigned long)UINT32_MAX)) {
+        return MAVEN_DEFAULT_TIMEOUT_MS;
+    }
+    return (uint32_t)parsed;
+}
+
+static int run_process_with_timeout(const char *cwd,
+                                    const char *const argv[],
+                                    uint32_t timeout_ms)
+{
+#ifdef _WIN32
+    return cp_run_process(cwd, argv, timeout_ms);
+#else
+    pid_t child;
+    double deadline;
+    int status = 0;
+
+    if ((argv == nullptr) || (argv[0] == nullptr) || (argv[0][0] == '\0')) {
+        return -1;
+    }
+    child = fork();
+    if (child < 0) {
+        return -1;
+    }
+    if (child == 0) {
+        /* MCP owns stdout for JSON-RPC framing; build-tool chatter belongs on stderr. */
+        if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
+            _exit(127);
+        }
+        if ((cwd != nullptr) && (chdir(cwd) != 0)) {
+            _exit(127);
+        }
+        if (strchr(argv[0], '/') != nullptr) {
+            execv(argv[0], (char *const *)argv);
+        } else {
+            execvp(argv[0], (char *const *)argv);
+        }
+        _exit(127);
+    }
+
+    deadline = profile_now_seconds() + ((double)timeout_ms / 1000.0);
+    for (;;) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+
+        if (waited == child) {
+            if (WIFEXITED(status)) {
+                return WEXITSTATUS(status);
+            }
+            return 1;
+        }
+        if (waited < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if ((timeout_ms > 0U) && (profile_now_seconds() >= deadline)) {
+            (void)kill(child, SIGTERM);
+            {
+                struct timespec grace = {.tv_sec = 0, .tv_nsec = 100000000L};
+
+                (void)nanosleep(&grace, nullptr);
+            }
+            if (waitpid(child, &status, WNOHANG) == 0) {
+                (void)kill(child, SIGKILL);
+            }
+            (void)waitpid(child, &status, 0);
+            return 124;
+        }
+        {
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000L};
+
+            (void)nanosleep(&pause, nullptr);
+        }
+    }
+#endif
+}
+
+static bool has_maven_input_name(const char *path)
+{
+    const char *name = strrchr(path, '/');
+
+    name = name == nullptr ? path : name + 1;
+    return (strcmp(name, "pom.xml") == 0) || (strcmp(name, "mvnw") == 0) ||
+           (strcmp(name, "mvnw.cmd") == 0);
+}
+
+static bool accepts_every_file(const char *path)
+{
+    (void)path;
+    return true;
+}
+
+static int maven_input_callback(const char *path, void *ctx)
+{
+    MavenDependencySet *set = ctx;
+    MavenInputSnapshot *input;
+
+    if ((set->input_count == set->input_capacity) &&
+        !grow_array((void **)&set->inputs,
+                    &set->input_capacity,
+                    sizeof(*set->inputs),
+                    16U)) {
+        return -1;
+    }
+    input = &set->inputs[set->input_count];
+    (void)memset(input, 0, sizeof(*input));
+    input->path = copy_bytes(path, strlen(path));
+    if ((input->path == nullptr) ||
+        (stat_regular_file(path,
+                           &input->size,
+                           &input->mtime_sec,
+                           &input->mtime_nsec) != 0)) {
+        return -1;
+    }
+    set->input_count++;
+    return 0;
+}
+
+static int maven_input_compare(const void *left, const void *right)
+{
+    const MavenInputSnapshot *a = left;
+    const MavenInputSnapshot *b = right;
+
+    return strcmp(a->path, b->path);
+}
+
+static bool maven_input_already_collected(const MavenDependencySet *set, const char *path)
+{
+    for (size_t i = 0U; i < set->input_count; i++) {
+        if (strcmp(set->inputs[i].path, path) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static char *maven_parent_relative_path(const CodeLensMappedFile *pom)
+{
+    char *xml = copy_bytes(pom->data, pom->len);
+    char *parent;
+    char *parent_end;
+    char *relative;
+    char *tag_end;
+    char *close;
+    char *start;
+    char *end;
+
+    if (xml == nullptr) {
+        return nullptr;
+    }
+    parent = strstr(xml, "<parent");
+    if (parent == nullptr) {
+        return nullptr;
+    }
+    parent = strchr(parent, '>');
+    parent_end = parent == nullptr ? nullptr : strstr(parent + 1, "</parent>");
+    if (parent_end == nullptr) {
+        return nullptr;
+    }
+    relative = strstr(parent + 1, "<relativePath");
+    if ((relative == nullptr) || (relative >= parent_end)) {
+        return copy_bytes("../pom.xml", strlen("../pom.xml"));
+    }
+    tag_end = strchr(relative, '>');
+    if ((tag_end == nullptr) || (tag_end >= parent_end) ||
+        ((tag_end > relative) && (tag_end[-1] == '/'))) {
+        return nullptr;
+    }
+    close = strstr(tag_end + 1, "</relativePath>");
+    if ((close == nullptr) || (close > parent_end)) {
+        return nullptr;
+    }
+    start = tag_end + 1;
+    end = close;
+    while ((start < end) && isspace((unsigned char)*start)) start++;
+    while ((end > start) && isspace((unsigned char)end[-1])) end--;
+    return end == start ? nullptr : copy_bytes(start, (size_t)(end - start));
+}
+
+static int maven_collect_parent_poms(MavenDependencySet *set)
+{
+    for (size_t i = 0U; i < set->input_count; i++) {
+        MavenInputSnapshot *input = &set->inputs[i];
+        const char *slash = strrchr(input->path, '/');
+        const char *name = slash == nullptr ? input->path : slash + 1;
+        CodeLensMappedFile pom = {0};
+        char *relative;
+        char *directory;
+        char *candidate;
+        char resolved[PATH_MAX];
+        size_t directory_len;
+
+        if ((slash == nullptr) || (strcmp(name, "pom.xml") != 0)) {
+            continue;
+        }
+        if (code_lens_map_file(input->path, &pom) != 0) {
+            return -1;
+        }
+        relative = maven_parent_relative_path(&pom);
+        code_lens_mapped_file_free(&pom);
+        if (relative == nullptr) {
+            continue;
+        }
+        directory_len = (size_t)(slash - input->path);
+        directory = copy_bytes(input->path, directory_len);
+        candidate = directory == nullptr ? nullptr : code_lens_join_path(directory, relative);
+        if ((candidate == nullptr) || (realpath(candidate, resolved) == nullptr) ||
+            maven_input_already_collected(set, resolved)) {
+            continue;
+        }
+        if (maven_input_callback(resolved, set) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int maven_collect_inputs(const char *repo_path, MavenDependencySet *set)
+{
+    char *maven_dir;
+
+    if (code_lens_walk_files(repo_path,
+                             has_maven_input_name,
+                             maven_input_callback,
+                             set) != 0) {
+        return -1;
+    }
+    maven_dir = code_lens_join_path(repo_path, ".mvn");
+    if ((maven_dir != nullptr) && code_lens_is_directory(maven_dir) &&
+        (code_lens_walk_all_files(maven_dir,
+                              accepts_every_file,
+                              maven_input_callback,
+                              set) != 0)) {
+        return -1;
+    }
+    if (maven_collect_parent_poms(set) != 0) {
+        return -1;
+    }
+    if (set->input_count > 1U) {
+        size_t unique = 1U;
+        qsort(set->inputs,
+              set->input_count,
+              sizeof(*set->inputs),
+              maven_input_compare);
+        for (size_t i = 1U; i < set->input_count; i++) {
+            if (strcmp(set->inputs[i].path, set->inputs[unique - 1U].path) != 0) {
+                set->inputs[unique++] = set->inputs[i];
+            }
+        }
+        set->input_count = unique;
+    }
+    return 0;
+}
+
+static bool has_source_jar_suffix(const char *path)
+{
+    static const char suffix[] = "-sources.jar";
+    size_t len = strlen(path);
+
+    return (len >= sizeof(suffix) - 1U) &&
+           (strcmp(path + len - (sizeof(suffix) - 1U), suffix) == 0);
+}
+
+static uint16_t zip_u16(const uint8_t *value)
+{
+    return (uint16_t)((uint16_t)value[0] | ((uint16_t)value[1] << 8U));
+}
+
+static uint32_t zip_u32(const uint8_t *value)
+{
+    return (uint32_t)value[0] | ((uint32_t)value[1] << 8U) |
+           ((uint32_t)value[2] << 16U) | ((uint32_t)value[3] << 24U);
+}
+
+static bool zip_java_path_safe(const char *name, size_t len)
+{
+    size_t segment_start = 0U;
+
+    if ((len < 5U) || (name[0] == '/') || (name[0] == '\\') ||
+        (memcmp(name + len - 5U, ".java", 5U) != 0)) {
+        return false;
+    }
+    for (size_t i = 0U; i <= len; i++) {
+        if ((i < len) && ((name[i] == '\\') || (name[i] == ':') ||
+                          ((unsigned char)name[i] < 32U))) {
+            return false;
+        }
+        if ((i == len) || (name[i] == '/')) {
+            size_t segment_len = i - segment_start;
+
+            if ((segment_len == 0U) ||
+                ((segment_len == 1U) && (name[segment_start] == '.')) ||
+                ((segment_len == 2U) && (name[segment_start] == '.') &&
+                 (name[segment_start + 1U] == '.'))) {
+                return false;
+            }
+            segment_start = i + 1U;
+        }
+    }
+    return true;
+}
+
+static int mkdir_parent_for_file(char *path)
+{
+    char *slash = strrchr(path, '/');
+
+    if (slash == nullptr) {
+        return 0;
+    }
+    *slash = '\0';
+    if (code_lens_mkdir_p(path) != 0) {
+        *slash = '/';
+        return -1;
+    }
+    *slash = '/';
+    return 0;
+}
+
+static uint32_t zip_crc32(const uint8_t *data, size_t len)
+{
+    uLong crc = crc32(0L, Z_NULL, 0);
+    size_t offset = 0U;
+
+    while (offset < len) {
+        size_t remaining = len - offset;
+        uInt chunk = remaining > (size_t)UINT_MAX ? UINT_MAX : (uInt)remaining;
+
+        crc = crc32(crc, data + offset, chunk);
+        offset += (size_t)chunk;
+    }
+    return (uint32_t)crc;
+}
+
+static int zip_write_java_entry(const CodeLensMappedFile *jar,
+                                const uint8_t *central,
+                                const char *entry_name,
+                                size_t entry_name_len,
+                                const char *source_root)
+{
+    uint16_t flags = zip_u16(central + 8U);
+    uint16_t method = zip_u16(central + 10U);
+    uint32_t expected_crc = zip_u32(central + 16U);
+    uint32_t compressed_size = zip_u32(central + 20U);
+    uint32_t uncompressed_size = zip_u32(central + 24U);
+    uint32_t local_offset = zip_u32(central + 42U);
+    const uint8_t *local;
+    size_t data_offset;
+    uint8_t *content = nullptr;
+    char *relative = nullptr;
+    char *output_path = nullptr;
+    FILE *output = nullptr;
+    int rc = -1;
+
+    if (((flags & 1U) != 0U) || ((method != 0U) && (method != 8U)) ||
+        (compressed_size == UINT32_MAX) || (uncompressed_size == UINT32_MAX) ||
+        (uncompressed_size > 64U * 1024U * 1024U) ||
+        ((uint64_t)local_offset + 30U > (uint64_t)jar->len)) {
+        return -1;
+    }
+    local = (const uint8_t *)jar->data + local_offset;
+    if (zip_u32(local) != 0x04034b50U) {
+        return -1;
+    }
+    data_offset = (size_t)local_offset + 30U + (size_t)zip_u16(local + 26U) +
+                  (size_t)zip_u16(local + 28U);
+    if ((data_offset > jar->len) ||
+        ((size_t)compressed_size > jar->len - data_offset)) {
+        return -1;
+    }
+
+    content = malloc(uncompressed_size == 0U ? 1U : (size_t)uncompressed_size);
+    if (content == nullptr) {
+        return -1;
+    }
+    if (method == 0U) {
+        if (compressed_size != uncompressed_size) {
+            goto done;
+        }
+        if (uncompressed_size > 0U) {
+            (void)memcpy(content, (const uint8_t *)jar->data + data_offset, uncompressed_size);
+        }
+    } else {
+        struct libdeflate_decompressor *decompressor = libdeflate_alloc_decompressor();
+        size_t actual = 0U;
+        enum libdeflate_result result;
+
+        if (decompressor == nullptr) {
+            goto done;
+        }
+        result = libdeflate_deflate_decompress(decompressor,
+                                               (const uint8_t *)jar->data + data_offset,
+                                               compressed_size,
+                                               content,
+                                               uncompressed_size,
+                                               &actual);
+        libdeflate_free_decompressor(decompressor);
+        if ((result != LIBDEFLATE_SUCCESS) || (actual != (size_t)uncompressed_size)) {
+            goto done;
+        }
+    }
+    if (zip_crc32(content, uncompressed_size) != expected_crc) {
+        goto done;
+    }
+
+    relative = copy_bytes(entry_name, entry_name_len);
+    output_path = relative == nullptr ? nullptr : code_lens_join_path(source_root, relative);
+    if ((output_path == nullptr) || (mkdir_parent_for_file(output_path) != 0)) {
+        goto done;
+    }
+    output = fopen(output_path, "wb");
+    if (output == nullptr) {
+        goto done;
+    }
+    if ((uncompressed_size > 0U) &&
+        (fwrite(content, 1U, uncompressed_size, output) != uncompressed_size)) {
+        goto done;
+    }
+    if (fclose(output) != 0) {
+        output = nullptr;
+        goto done;
+    }
+    output = nullptr;
+    rc = 0;
+
+done:
+    if (output != nullptr) {
+        (void)fclose(output);
+    }
+    free(content);
+    return rc;
+}
+
+static int zip_extract_java_sources(const char *jar_path,
+                                    const char *source_root,
+                                    size_t *out_file_count)
+{
+    CodeLensMappedFile jar = {0};
+    const uint8_t *bytes;
+    size_t search_start;
+    size_t eocd = SIZE_MAX;
+    uint16_t entry_count;
+    uint32_t central_size;
+    uint32_t central_offset;
+    size_t position;
+    size_t extracted = 0U;
+    uint64_t total_uncompressed = 0U;
+    int rc = -1;
+
+    if ((code_lens_map_file(jar_path, &jar) != 0) || (jar.len < 22U)) {
+        return -1;
+    }
+    bytes = (const uint8_t *)jar.data;
+    search_start = jar.len > 65557U ? jar.len - 65557U : 0U;
+    for (size_t pos = jar.len - 22U;; pos--) {
+        if (zip_u32(bytes + pos) == 0x06054b50U) {
+            eocd = pos;
+            break;
+        }
+        if (pos == search_start) {
+            break;
+        }
+    }
+    if ((eocd == SIZE_MAX) || (zip_u16(bytes + eocd + 4U) != 0U) ||
+        (zip_u16(bytes + eocd + 6U) != 0U) ||
+        (zip_u16(bytes + eocd + 8U) != zip_u16(bytes + eocd + 10U)) ||
+        (eocd + 22U + (size_t)zip_u16(bytes + eocd + 20U) != jar.len)) {
+        goto done;
+    }
+    entry_count = zip_u16(bytes + eocd + 10U);
+    central_size = zip_u32(bytes + eocd + 12U);
+    central_offset = zip_u32(bytes + eocd + 16U);
+    if ((central_offset == UINT32_MAX) || (central_size == UINT32_MAX) ||
+        ((uint64_t)central_offset + central_size > (uint64_t)jar.len)) {
+        goto done;
+    }
+
+    position = central_offset;
+    for (uint32_t i = 0U; i < (uint32_t)entry_count; i++) {
+        const uint8_t *central;
+        uint16_t name_len;
+        uint16_t extra_len;
+        uint16_t comment_len;
+        size_t next;
+
+        if ((position > jar.len) || (jar.len - position < 46U)) {
+            goto done;
+        }
+        central = bytes + position;
+        if (zip_u32(central) != 0x02014b50U) {
+            goto done;
+        }
+        name_len = zip_u16(central + 28U);
+        extra_len = zip_u16(central + 30U);
+        comment_len = zip_u16(central + 32U);
+        next = position + 46U + (size_t)name_len + (size_t)extra_len + (size_t)comment_len;
+        if ((next < position) || (next > jar.len)) {
+            goto done;
+        }
+        if (zip_java_path_safe((const char *)central + 46U, name_len)) {
+            uint32_t entry_size = zip_u32(central + 24U);
+
+            if ((entry_size == UINT32_MAX) ||
+                ((uint64_t)entry_size >
+                 MAVEN_SOURCE_JAR_MAX_UNCOMPRESSED_BYTES - total_uncompressed)) {
+                goto done;
+            }
+            total_uncompressed += (uint64_t)entry_size;
+            if (zip_write_java_entry(&jar,
+                                     central,
+                                     (const char *)central + 46U,
+                                     name_len,
+                                     source_root) != 0) {
+                goto done;
+            }
+            extracted++;
+        }
+        position = next;
+    }
+    if (out_file_count != nullptr) {
+        *out_file_count = extracted;
+    }
+    rc = 0;
+
+done:
+    code_lens_mapped_file_free(&jar);
+    return rc;
+}
+
+static uint64_t file_fnv1a64(const CodeLensMappedFile *file)
+{
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    for (size_t i = 0U; i < file->len; i++) {
+        hash ^= (uint64_t)(unsigned char)file->data[i];
+        hash *= 0x00000100000001b3ULL;
+    }
+    return hash;
+}
+
+static bool maven_path_component_safe(const char *value)
+{
+    if ((value == nullptr) || (value[0] == '\0') || (strcmp(value, ".") == 0) ||
+        (strcmp(value, "..") == 0)) {
+        return false;
+    }
+    for (size_t i = 0U; value[i] != '\0'; i++) {
+        unsigned char ch = (unsigned char)value[i];
+
+        if (!isalnum(ch) && (ch != '.') && (ch != '-') && (ch != '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static char *maven_group_path(const char *group_id)
+{
+    char *path = copy_bytes(group_id, strlen(group_id));
+
+    if (path != nullptr) {
+        for (size_t i = 0U; path[i] != '\0'; i++) {
+            if (path[i] == '.') {
+                path[i] = '/';
+            }
+        }
+    }
+    return path;
+}
+
+static int maven_cache_lock_acquire(uint64_t checksum, int *out_fd)
+{
+    char *home = code_lens_default_home();
+    char *lock_dir = home == nullptr ? nullptr : code_lens_join_path(home, "dependencies/.locks");
+    char *lock_path = lock_dir == nullptr
+                          ? nullptr
+                          : alloc_printf("%s/%016llx.lock",
+                                         lock_dir,
+                                         (unsigned long long)checksum);
+    int fd;
+#ifdef _WIN32
+    int rc;
+#else
+    struct flock request = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+    int rc;
+#endif
+
+    if ((lock_path == nullptr) || (code_lens_mkdir_p(lock_dir) != 0)) {
+        return -1;
+    }
+    fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return -1;
+    }
+#ifdef _WIN32
+    rc = cp_lock_fd(fd);
+#else
+    do {
+        rc = fcntl(fd, F_SETLKW, &request);
+    } while ((rc != 0) && (errno == EINTR));
+#endif
+    if (rc != 0) {
+        (void)close(fd);
+        return -1;
+    }
+    *out_fd = fd;
+    return 0;
+}
+
+static void maven_cache_lock_release(int fd)
+{
+#ifdef _WIN32
+    (void)cp_unlock_fd(fd);
+#else
+    struct flock request = {
+        .l_type = F_UNLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0,
+    };
+
+    (void)fcntl(fd, F_SETLK, &request);
+#endif
+    (void)close(fd);
+}
+
+static bool maven_source_cache_valid(const char *source_root,
+                                      const char *marker,
+                                      uint64_t checksum)
+{
+    FILE *file;
+    char line[256];
+    unsigned long long expected_hash;
+    size_t expected_count;
+    CodeLensPathList sources = {0};
+    int64_t marker_size = 0;
+    int64_t marker_sec = 0;
+    int64_t marker_nsec = 0;
+
+    if (!code_lens_path_exists(marker) ||
+        (stat_regular_file(marker, &marker_size, &marker_sec, &marker_nsec) != 0)) {
+        return false;
+    }
+    file = fopen(marker, "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    if ((fgets(line, sizeof(line), file) == nullptr) ||
+        (fscanf(file, "%llx\n%zu", &expected_hash, &expected_count) != 2)) {
+        (void)fclose(file);
+        return false;
+    }
+    (void)fclose(file);
+    if (expected_hash != (unsigned long long)checksum) {
+        return false;
+    }
+    if ((code_lens_collect_all_files(source_root, has_java_extension, &sources) != 0) ||
+        (sources.count != expected_count)) {
+        return false;
+    }
+    for (size_t i = 0U; i < sources.count; i++) {
+        int64_t size = 0;
+        int64_t sec = 0;
+        int64_t nsec = 0;
+
+        if ((stat_regular_file(sources.paths[i], &size, &sec, &nsec) != 0) ||
+            (sec > marker_sec) || ((sec == marker_sec) && (nsec > marker_nsec))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int maven_materialize_source_jar(const char *jar_path,
+                                        const char *group_id,
+                                        const char *artifact_id,
+                                        const char *version,
+                                        char **out_root,
+                                        char **out_checksum)
+{
+    CodeLensMappedFile jar = {0};
+    char *home;
+    char *group_path;
+    uint64_t checksum;
+    char *root;
+    char *marker;
+    int lock_fd = -1;
+    size_t extracted_count = 0U;
+    int rc = -1;
+
+    if (code_lens_map_file(jar_path, &jar) != 0) {
+        return -1;
+    }
+    checksum = file_fnv1a64(&jar);
+    code_lens_mapped_file_free(&jar);
+    home = code_lens_default_home();
+    group_path = maven_group_path(group_id);
+    root = (home == nullptr) || (group_path == nullptr)
+               ? nullptr
+               : alloc_printf("%s/dependencies/sources/%s/%s/%s/%016llx",
+                              home,
+                              group_path,
+                              artifact_id,
+                              version,
+                              (unsigned long long)checksum);
+    marker = root == nullptr ? nullptr : code_lens_join_path(root, ".complete");
+    if ((root == nullptr) || (marker == nullptr) ||
+        (maven_cache_lock_acquire(checksum, &lock_fd) != 0)) {
+        return -1;
+    }
+    if (!maven_source_cache_valid(root, marker, checksum)) {
+        FILE *complete;
+
+        if ((code_lens_remove_tree(root) != 0) || (code_lens_mkdir_p(root) != 0) ||
+            (zip_extract_java_sources(jar_path, root, &extracted_count) != 0)) {
+            (void)code_lens_remove_tree(root);
+            goto done;
+        }
+        complete = fopen(marker, "wb");
+        if (complete == nullptr) {
+            (void)code_lens_remove_tree(root);
+            goto done;
+        }
+        (void)fprintf(complete,
+                      "%s:%s:%s\n%016llx\n%zu\n",
+                      group_id,
+                      artifact_id,
+                      version,
+                      (unsigned long long)checksum,
+                      extracted_count);
+        if (fclose(complete) != 0) {
+            (void)code_lens_remove_tree(root);
+            goto done;
+        }
+    }
+    {
+        char resolved[PATH_MAX];
+
+        if (realpath(root, resolved) != nullptr) {
+            root = alloc_printf("%s", resolved);
+        }
+    }
+    *out_root = root;
+    *out_checksum = alloc_printf("%016llx", (unsigned long long)checksum);
+    rc = (*out_root == nullptr) || (*out_checksum == nullptr) ? -1 : 0;
+
+done:
+    maven_cache_lock_release(lock_fd);
+    return rc;
+}
+
+static int maven_path_ptr_compare(const void *left, const void *right)
+{
+    const char *const *a = left;
+    const char *const *b = right;
+
+    return strcmp(*a, *b);
+}
+
+static int maven_artifact_push(MavenDependencySet *set,
+                               const char *coordinate,
+                               const char *group_id,
+                               const char *artifact_id,
+                               const char *version,
+                               const char *scope,
+                               int direct,
+                               const char *source_jar,
+                               const char *source_root,
+                               const char *checksum,
+                               const char *existing_id)
+{
+    MavenSourceArtifact *artifact;
+
+    if ((set->artifact_count == set->artifact_capacity) &&
+        !grow_array((void **)&set->artifacts,
+                    &set->artifact_capacity,
+                    sizeof(*set->artifacts),
+                    16U)) {
+        return -1;
+    }
+    artifact = &set->artifacts[set->artifact_count];
+    (void)memset(artifact, 0, sizeof(*artifact));
+    artifact->coordinate = copy_bytes(coordinate, strlen(coordinate));
+    artifact->group_id = copy_bytes(group_id, strlen(group_id));
+    artifact->artifact_id = copy_bytes(artifact_id, strlen(artifact_id));
+    artifact->version = copy_bytes(version, strlen(version));
+    artifact->scope = copy_bytes(scope, strlen(scope));
+    artifact->source_jar = copy_bytes(source_jar, strlen(source_jar));
+    artifact->source_root = copy_bytes(source_root, strlen(source_root));
+    artifact->checksum = copy_bytes(checksum, strlen(checksum));
+    artifact->direct = direct;
+    artifact->id = existing_id == nullptr
+                       ? alloc_printf("%s|dependency|%s|%s",
+                                      set->repo_path,
+                                      coordinate,
+                                      checksum)
+                       : copy_bytes(existing_id, strlen(existing_id));
+    if ((artifact->coordinate == nullptr) || (artifact->group_id == nullptr) ||
+        (artifact->artifact_id == nullptr) || (artifact->version == nullptr) ||
+        (artifact->scope == nullptr) || (artifact->source_jar == nullptr) ||
+        (artifact->source_root == nullptr) || (artifact->checksum == nullptr) ||
+        (artifact->id == nullptr) || !code_lens_is_directory(artifact->source_root) ||
+        (code_lens_collect_all_files(artifact->source_root,
+                                 has_java_extension,
+                                 &artifact->files) != 0)) {
+        return -1;
+    }
+    if (artifact->files.count > 1U) {
+        qsort(artifact->files.paths,
+              artifact->files.count,
+              sizeof(*artifact->files.paths),
+              maven_path_ptr_compare);
+    }
+    set->artifact_count++;
+    return 0;
+}
+
+static int maven_artifact_compare(const void *left, const void *right)
+{
+    const MavenSourceArtifact *a = left;
+    const MavenSourceArtifact *b = right;
+    int coordinate = strcmp(a->coordinate, b->coordinate);
+
+    return coordinate != 0 ? coordinate : strcmp(a->checksum, b->checksum);
+}
+
+typedef struct {
+    MavenDependencySet *set;
+    const char *output_root;
+} MavenJarCollectContext;
+
+static int maven_source_jar_callback(const char *jar_path, void *ctx)
+{
+    MavenJarCollectContext *collect = ctx;
+    MavenDependencySet *set = collect->set;
+    size_t root_len = strlen(collect->output_root);
+    const char *relative;
+    char *copy;
+    char *parts[128];
+    size_t part_count = 0U;
+    char *scan;
+    StringBuilder group = {0};
+    char *coordinate = nullptr;
+    char *source_root = nullptr;
+    char *checksum = nullptr;
+    int rc = 0;
+
+    if ((strncmp(jar_path, collect->output_root, root_len) != 0) ||
+        (jar_path[root_len] != '/')) {
+        return -1;
+    }
+    relative = jar_path + root_len + 1U;
+    copy = copy_bytes(relative, strlen(relative));
+    if (copy == nullptr) {
+        return -1;
+    }
+    scan = copy;
+    while ((part_count < sizeof(parts) / sizeof(parts[0])) && (scan[0] != '\0')) {
+        char *slash;
+
+        parts[part_count++] = scan;
+        slash = strchr(scan, '/');
+        if (slash == nullptr) {
+            break;
+        }
+        *slash = '\0';
+        scan = slash + 1;
+    }
+    if ((part_count < 4U) || !has_source_jar_suffix(parts[part_count - 1U]) ||
+        !maven_path_component_safe(parts[part_count - 3U]) ||
+        !maven_path_component_safe(parts[part_count - 2U])) {
+        set->skipped_artifacts++;
+        return 0;
+    }
+    for (size_t i = 0U; i + 3U < part_count; i++) {
+        if (!maven_path_component_safe(parts[i]) ||
+            ((i > 0U) && !sb_append(&group, ".")) || !sb_append(&group, parts[i])) {
+            sb_free(&group);
+            set->skipped_artifacts++;
+            return 0;
+        }
+    }
+    coordinate = alloc_printf("%s:%s:%s",
+                              group.data,
+                              parts[part_count - 3U],
+                              parts[part_count - 2U]);
+    if ((coordinate == nullptr) ||
+        (maven_materialize_source_jar(jar_path,
+                                     group.data,
+                                     parts[part_count - 3U],
+                                     parts[part_count - 2U],
+                                     &source_root,
+                                     &checksum) != 0) ||
+        (maven_artifact_push(set,
+                             coordinate,
+                             group.data,
+                             parts[part_count - 3U],
+                             parts[part_count - 2U],
+                             "test-classpath",
+                             -1,
+                             jar_path,
+                             source_root,
+                             checksum,
+                             nullptr) != 0)) {
+        set->skipped_artifacts++;
+        rc = 0; /* one bad/missing source artifact must not fail workspace indexing */
+    }
+    sb_free(&group);
+    return rc;
+}
+
+static char *maven_resolution_output(const char *repo_path)
+{
+    char *home = code_lens_default_home();
+    char *component = repo_dir_component(repo_path);
+
+    return (home == nullptr) || (component == nullptr)
+               ? nullptr
+               : alloc_printf("%s/dependencies/projects/%s/artifacts", home, component);
+}
+
+static const char *maven_command(const char *repo_path)
+{
+    const char *configured = getenv("CODE_LENS_MAVEN_COMMAND");
+    char *wrapper;
+
+    if ((configured != nullptr) && (configured[0] != '\0')) {
+        return configured;
+    }
+#ifdef _WIN32
+    wrapper = code_lens_join_path(repo_path, "mvnw.cmd");
+    return (wrapper != nullptr) && code_lens_path_exists(wrapper) ? wrapper : "mvn.cmd";
+#else
+    wrapper = code_lens_join_path(repo_path, "mvnw");
+    return (wrapper != nullptr) && code_lens_path_exists(wrapper) ? wrapper : "mvn";
+#endif
+}
+
+static int maven_resolve_sources(MavenDependencySet *set)
+{
+    char *output = maven_resolution_output(set->repo_path);
+    char *output_arg;
+    const char *command = maven_command(set->repo_path);
+    const char *argv[12];
+    MavenJarCollectContext collect;
+    char resolved_output[PATH_MAX];
+    int process_rc;
+
+    if ((output == nullptr) || (command == nullptr) ||
+        (code_lens_remove_tree(output) != 0) || (code_lens_mkdir_p(output) != 0) ||
+        (realpath(output, resolved_output) == nullptr)) {
+        return -1;
+    }
+    output = copy_bytes(resolved_output, strlen(resolved_output));
+    output_arg = output == nullptr ? nullptr : alloc_printf("-DoutputDirectory=%s", output);
+    if (output_arg == nullptr) {
+        return -1;
+    }
+    argv[0] = command;
+    argv[1] = "-B";
+    argv[2] = "-ntp";
+    argv[3] = "org.apache.maven.plugins:maven-dependency-plugin:"
+              MAVEN_DEPENDENCY_PLUGIN_VERSION ":copy-dependencies";
+    argv[4] = "-Dclassifier=sources";
+    argv[5] = "-DincludeScope=test";
+    argv[6] = "-DexcludeReactor=true";
+    argv[7] = "-Dmdep.failOnMissingClassifierArtifact=false";
+    argv[8] = "-Dmdep.useRepositoryLayout=true";
+    argv[9] = output_arg;
+    argv[10] = nullptr;
+    process_rc = run_process_with_timeout(set->repo_path, argv, maven_timeout_ms());
+    if (process_rc != 0) {
+        set->message = alloc_printf("Maven source resolution failed with exit code %d", process_rc);
+        return -1;
+    }
+
+    collect.set = set;
+    collect.output_root = output;
+    if (code_lens_walk_all_files(output,
+                             has_source_jar_suffix,
+                             maven_source_jar_callback,
+                             &collect) != 0) {
+        set->message = alloc_printf("Maven resolved sources, but the artifact cache could not be read");
+        return -1;
+    }
+    if (set->artifact_count > 1U) {
+        qsort(set->artifacts,
+              set->artifact_count,
+              sizeof(*set->artifacts),
+              maven_artifact_compare);
+    }
+    set->status = copy_bytes(set->artifact_count == 0U ? "empty" : "resolved",
+                             set->artifact_count == 0U ? strlen("empty") : strlen("resolved"));
+    set->message = set->skipped_artifacts == 0U
+                       ? alloc_printf("resolved %zu source artifacts", set->artifact_count)
+                       : alloc_printf("resolved %zu source artifacts; %zu skipped",
+                                      set->artifact_count,
+                                      set->skipped_artifacts);
+    return set->status == nullptr || set->message == nullptr ? -1 : 0;
+}
+
+static bool maven_inputs_match_db(CodeLensDb *db, MavenDependencySet *set)
+{
+    sqlite3_stmt *count_stmt = nullptr;
+    sqlite3_stmt *input_stmt = nullptr;
+    bool match = false;
+
+    if ((db_prepare(db,
+                    "SELECT COUNT(*) FROM MavenInput WHERE repo = ?1",
+                    &count_stmt) != 0) ||
+        (bind_text(count_stmt, 1, set->repo_path) != 0) ||
+        (sqlite3_step(count_stmt) != SQLITE_ROW) ||
+        ((size_t)sqlite3_column_int64(count_stmt, 0) != set->input_count) ||
+        (db_prepare(db,
+                    "SELECT size, mtimeSec, mtimeNsec FROM MavenInput"
+                    " WHERE repo = ?1 AND path = ?2",
+                    &input_stmt) != 0)) {
+        goto done;
+    }
+    for (size_t i = 0U; i < set->input_count; i++) {
+        MavenInputSnapshot *input = &set->inputs[i];
+
+        (void)sqlite3_reset(input_stmt);
+        (void)sqlite3_clear_bindings(input_stmt);
+        if ((bind_text(input_stmt, 1, set->repo_path) != 0) ||
+            (bind_text(input_stmt, 2, input->path) != 0) ||
+            (sqlite3_step(input_stmt) != SQLITE_ROW) ||
+            (sqlite3_column_int64(input_stmt, 0) != input->size) ||
+            (sqlite3_column_int64(input_stmt, 1) != input->mtime_sec) ||
+            (sqlite3_column_int64(input_stmt, 2) != input->mtime_nsec)) {
+            goto done;
+        }
+    }
+    match = true;
+
+done:
+    (void)sqlite3_finalize(count_stmt);
+    (void)sqlite3_finalize(input_stmt);
+    return match;
+}
+
+static int maven_load_existing_artifacts(CodeLensDb *db, MavenDependencySet *set)
+{
+    sqlite3_stmt *project = nullptr;
+    sqlite3_stmt *artifacts = nullptr;
+    sqlite3_stmt *file_stat = nullptr;
+    int step;
+    int rc = -1;
+
+    if ((db_prepare(db,
+                    "SELECT rootPom, status, message FROM MavenProject WHERE repo = ?1",
+                    &project) != 0) || (bind_text(project, 1, set->repo_path) != 0) ||
+        (sqlite3_step(project) != SQLITE_ROW)) {
+        goto done;
+    }
+    {
+        const unsigned char *root_pom = sqlite3_column_text(project, 0);
+        const unsigned char *status = sqlite3_column_text(project, 1);
+        const unsigned char *message = sqlite3_column_text(project, 2);
+
+        if ((root_pom == nullptr) || (status == nullptr) || (message == nullptr)) {
+            goto done;
+        }
+        /* A transient first-index failure must not become a permanent cached
+         * result. A disabled result is reusable only while execution remains
+         * disabled; enabling Maven later should resolve without requiring a
+         * POM edit. Resolved and genuinely empty source sets are stable. */
+        if ((strcmp((const char *)status, "resolved") != 0) &&
+            (strcmp((const char *)status, "empty") != 0) &&
+            !((strcmp((const char *)status, "disabled") == 0) && !maven_enabled())) {
+            goto done;
+        }
+        set->root_pom = copy_bytes((const char *)root_pom,
+                                   (size_t)sqlite3_column_bytes(project, 0));
+        set->status = copy_bytes((const char *)status,
+                                 (size_t)sqlite3_column_bytes(project, 1));
+        set->message = copy_bytes((const char *)message,
+                                  (size_t)sqlite3_column_bytes(project, 2));
+    }
+    if ((set->root_pom == nullptr) || (set->status == nullptr) || (set->message == nullptr) ||
+        (db_prepare(db,
+                    "SELECT a.id, a.coordinate, a.groupId, a.artifactId, a.version, a.scope,"
+                    " a.direct, a.sourceJar, a.sourceRoot, a.checksum,"
+                    " (SELECT COUNT(*) FROM DependencyFile df WHERE df.artifactId = a.id)"
+                    " FROM DependencyArtifact a WHERE a.repo = ?1"
+                    " ORDER BY a.coordinate, a.checksum",
+                    &artifacts) != 0) || (bind_text(artifacts, 1, set->repo_path) != 0) ||
+        (db_prepare(db,
+                    "SELECT f.size, f.mtimeSec, f.mtimeNsec FROM File f "
+                    "JOIN DependencyFile df ON df.repo = f.repo AND df.filePath = f.path "
+                    "WHERE df.artifactId = ?1 AND f.path = ?2",
+                    &file_stat) != 0)) {
+        goto done;
+    }
+    while ((step = sqlite3_step(artifacts)) == SQLITE_ROW) {
+        const char *values[9];
+
+        for (size_t i = 0U; i < 6U; i++) {
+            values[i] = (const char *)sqlite3_column_text(artifacts, (int)i);
+        }
+        values[6] = (const char *)sqlite3_column_text(artifacts, 7);
+        values[7] = (const char *)sqlite3_column_text(artifacts, 8);
+        values[8] = (const char *)sqlite3_column_text(artifacts, 9);
+        for (size_t i = 0U; i < 9U; i++) {
+            if (values[i] == nullptr) {
+                goto done;
+            }
+        }
+        if (maven_artifact_push(set,
+                                values[1],
+                                values[2],
+                                values[3],
+                                values[4],
+                                values[5],
+                                sqlite3_column_int(artifacts, 6),
+                                values[6],
+                                values[7],
+                                values[8],
+                                values[0]) != 0) {
+            goto done;
+        }
+        if ((set->artifact_count == 0U) ||
+            (set->artifacts[set->artifact_count - 1U].files.count !=
+             (size_t)sqlite3_column_int64(artifacts, 10))) {
+            goto done;
+        }
+        {
+            const MavenSourceArtifact *loaded = &set->artifacts[set->artifact_count - 1U];
+
+            for (size_t f = 0U; f < loaded->files.count; f++) {
+                int64_t size = 0;
+                int64_t mtime_sec = 0;
+                int64_t mtime_nsec = 0;
+
+                (void)sqlite3_reset(file_stat);
+                (void)sqlite3_clear_bindings(file_stat);
+                if ((stat_regular_file(loaded->files.paths[f],
+                                       &size,
+                                       &mtime_sec,
+                                       &mtime_nsec) != 0) ||
+                    (bind_text(file_stat, 1, loaded->id) != 0) ||
+                    (bind_text(file_stat, 2, loaded->files.paths[f]) != 0) ||
+                    (sqlite3_step(file_stat) != SQLITE_ROW) ||
+                    (sqlite3_column_int64(file_stat, 0) != size) ||
+                    (sqlite3_column_int64(file_stat, 1) != mtime_sec) ||
+                    (sqlite3_column_int64(file_stat, 2) != mtime_nsec)) {
+                    goto done;
+                }
+            }
+        }
+    }
+    if (step != SQLITE_DONE) {
+        goto done;
+    }
+    set->reused = true;
+    rc = 0;
+
+done:
+    (void)sqlite3_finalize(project);
+    (void)sqlite3_finalize(artifacts);
+    (void)sqlite3_finalize(file_stat);
+    return rc;
+}
+
+static int maven_try_reuse(const char *db_path, MavenDependencySet *set)
+{
+    CodeLensDb db = {0};
+    int rc = -1;
+
+    if ((db_path == nullptr) || !code_lens_path_exists(db_path) ||
+        (code_lens_db_open_read(&db, db_path) != 0)) {
+        return -1;
+    }
+    if (maven_inputs_match_db(&db, set)) {
+        rc = maven_load_existing_artifacts(&db, set);
+    }
+    code_lens_db_close(&db);
+    if (rc != 0) {
+        set->artifact_count = 0U;
+        set->status = nullptr;
+        set->message = nullptr;
+    }
+    return rc;
+}
+
+/* Prepares the exact source artifacts for a full rebuild. A matching Maven
+ * input snapshot reuses the prior materialized sources without running Maven.
+ * If a refresh fails while an older index exists, the caller leaves that
+ * published index untouched; a first index still succeeds with workspace-only
+ * data and records the partial-index warning. */
+static size_t maven_dependency_file_count(const MavenDependencySet *set);
+
+static int maven_dependencies_prepare(const char *repo_path, MavenDependencySet *set)
+{
+    char *db_path;
+    bool had_index;
+
+    (void)memset(set, 0, sizeof(*set));
+    set->repo_path = repo_path;
+    set->root_pom = code_lens_join_path(repo_path, "pom.xml");
+    if ((set->root_pom == nullptr) || !code_lens_path_exists(set->root_pom)) {
+        set->root_pom = nullptr;
+        return 0;
+    }
+    set->active = true;
+    if (maven_collect_inputs(repo_path, set) != 0) {
+        return -1;
+    }
+    db_path = repo_db_path(repo_path);
+    had_index = (db_path != nullptr) && code_lens_path_exists(db_path);
+    if (had_index && (maven_try_reuse(db_path, set) == 0)) {
+        return 0;
+    }
+    if (!maven_enabled()) {
+        set->status = copy_bytes("disabled", strlen("disabled"));
+        set->message = copy_bytes("Maven dependency indexing disabled by CODE_LENS_MAVEN=0",
+                                  strlen("Maven dependency indexing disabled by CODE_LENS_MAVEN=0"));
+        return (set->status == nullptr) || (set->message == nullptr) ? -1 : 0;
+    }
+
+    (void)fprintf(stderr,
+                  "code-lens: resolving Maven dependency sources for %s\n",
+                  repo_path);
+    if (maven_resolve_sources(set) == 0) {
+        if (set->artifact_count == 0U) {
+            (void)fprintf(stderr,
+                          "code-lens: warning: Maven resolved no dependency source artifacts; "
+                          "continuing with a workspace-only partial index\n");
+        } else {
+            (void)fprintf(stderr,
+                          "code-lens: Maven dependency sources: %zu artifacts, %zu Java files\n",
+                          set->artifact_count,
+                          maven_dependency_file_count(set));
+        }
+        return 0;
+    }
+    (void)fprintf(stderr,
+                  "code-lens: warning: %s\n",
+                  set->message == nullptr ? "Maven source resolution failed" : set->message);
+    if (had_index) {
+        return -1;
+    }
+    set->artifact_count = 0U;
+    set->status = copy_bytes("failed", strlen("failed"));
+    if (set->message == nullptr) {
+        set->message = copy_bytes("Maven source resolution failed", strlen("Maven source resolution failed"));
+    }
+    return (set->status == nullptr) || (set->message == nullptr) ? -1 : 0;
+}
+
+static int insert_maven_metadata(CodeLensDb *db,
+                                 const char *repo_path,
+                                 const MavenDependencySet *set)
+{
+    sqlite3_stmt *project = nullptr;
+    sqlite3_stmt *input = nullptr;
+    sqlite3_stmt *artifact = nullptr;
+    sqlite3_stmt *file = nullptr;
+    char *resolved_at;
+    int rc = -1;
+
+    if ((set == nullptr) || !set->active) {
+        return 0;
+    }
+    resolved_at = timestamp_now();
+    if ((resolved_at == nullptr) ||
+        (db_prepare(db,
+                    "INSERT INTO MavenProject (repo, rootPom, status, resolvedAt, message)"
+                    " VALUES (?1, ?2, ?3, ?4, ?5)",
+                    &project) != 0) ||
+        (db_prepare(db,
+                    "INSERT INTO MavenInput (id, repo, path, size, mtimeSec, mtimeNsec)"
+                    " VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    &input) != 0) ||
+        (db_prepare(db,
+                    "INSERT INTO DependencyArtifact (id, repo, coordinate, groupId, artifactId,"
+                    " version, scope, direct, sourceJar, sourceRoot, checksum)"
+                    " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    &artifact) != 0) ||
+        (db_prepare(db,
+                    "INSERT INTO DependencyFile (id, repo, filePath, artifactId, sourcePath,"
+                    " modulePath) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    &file) != 0)) {
+        goto done;
+    }
+    if ((bind_text(project, 1, repo_path) != 0) ||
+        (bind_text(project, 2, set->root_pom) != 0) ||
+        (bind_text(project, 3, set->status == nullptr ? "failed" : set->status) != 0) ||
+        (bind_text(project, 4, resolved_at) != 0) ||
+        (bind_text(project, 5, set->message == nullptr ? "" : set->message) != 0) ||
+        (writer_step(project) != 0)) {
+        goto done;
+    }
+    for (size_t i = 0U; i < set->input_count; i++) {
+        const MavenInputSnapshot *value = &set->inputs[i];
+        char *id = alloc_printf("%s|maven-input|%s", repo_path, value->path);
+
+        if ((id == nullptr) || (bind_text(input, 1, id) != 0) ||
+            (bind_text(input, 2, repo_path) != 0) ||
+            (bind_text(input, 3, value->path) != 0) ||
+            (sqlite3_bind_int64(input, 4, value->size) != SQLITE_OK) ||
+            (sqlite3_bind_int64(input, 5, value->mtime_sec) != SQLITE_OK) ||
+            (sqlite3_bind_int64(input, 6, value->mtime_nsec) != SQLITE_OK) ||
+            (writer_step(input) != 0)) {
+            goto done;
+        }
+    }
+    for (size_t i = 0U; i < set->artifact_count; i++) {
+        const MavenSourceArtifact *value = &set->artifacts[i];
+
+        if ((bind_text(artifact, 1, value->id) != 0) ||
+            (bind_text(artifact, 2, repo_path) != 0) ||
+            (bind_text(artifact, 3, value->coordinate) != 0) ||
+            (bind_text(artifact, 4, value->group_id) != 0) ||
+            (bind_text(artifact, 5, value->artifact_id) != 0) ||
+            (bind_text(artifact, 6, value->version) != 0) ||
+            (bind_text(artifact, 7, value->scope) != 0) ||
+            (sqlite3_bind_int(artifact, 8, value->direct) != SQLITE_OK) ||
+            (bind_text(artifact, 9, value->source_jar) != 0) ||
+            (bind_text(artifact, 10, value->source_root) != 0) ||
+            (bind_text(artifact, 11, value->checksum) != 0) ||
+            (writer_step(artifact) != 0)) {
+            goto done;
+        }
+        for (size_t f = 0U; f < value->files.count; f++) {
+            const char *path = value->files.paths[f];
+            size_t root_len = strlen(value->source_root);
+            const char *relative = path;
+            char *id;
+
+            if ((strncmp(path, value->source_root, root_len) == 0) &&
+                (path[root_len] == '/')) {
+                relative = path + root_len + 1U;
+            }
+            id = alloc_printf("%s|dependency-file|%s", repo_path, path);
+            if ((id == nullptr) || (bind_text(file, 1, id) != 0) ||
+                (bind_text(file, 2, repo_path) != 0) ||
+                (bind_text(file, 3, path) != 0) ||
+                (bind_text(file, 4, value->id) != 0) ||
+                (bind_text(file, 5, relative) != 0) ||
+                (bind_text(file, 6, repo_path) != 0) || (writer_step(file) != 0)) {
+                goto done;
+            }
+        }
+    }
+    rc = 0;
+
+done:
+    (void)sqlite3_finalize(project);
+    (void)sqlite3_finalize(input);
+    (void)sqlite3_finalize(artifact);
+    (void)sqlite3_finalize(file);
+    return rc;
+}
+
+static size_t maven_dependency_file_count(const MavenDependencySet *set)
+{
+    size_t count = 0U;
+
+    if (set != nullptr) {
+        for (size_t i = 0U; i < set->artifact_count; i++) {
+            count += set->artifacts[i].files.count;
+        }
+    }
+    return count;
+}
+
+static int index_maven_dependency_files(IndexContext *index,
+                                        const MavenDependencySet *set)
+{
+    if ((set == nullptr) || (set->artifact_count == 0U)) {
+        return 0;
+    }
+    if (index->parser == nullptr) {
+        index->parser = code_lens_source_parser_new();
+        if (index->parser == nullptr) {
+            return -1;
+        }
+    }
+    for (size_t i = 0U; i < set->artifact_count; i++) {
+        const MavenSourceArtifact *artifact = &set->artifacts[i];
+
+        for (size_t f = 0U; f < artifact->files.count; f++) {
+            if (index_file_callback(artifact->files.paths[f], index) != 0) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+
 typedef struct {
     int fd;
 } RepoWriteLock;
@@ -14004,6 +15567,10 @@ static int index_repository_incremental(const char *repo_path,
     }
     profile_add(&profile, &profile.collect_seconds, start);
 
+    if (status.maven_changed || status.dependency_sources_changed) {
+        goto fallback;
+    }
+
     if (!status.stale) {
         /* Already current: report the stored totals without rebuilding. */
         if (out_stats != nullptr) {
@@ -14267,6 +15834,7 @@ fallback:
  * public wrapper can simply retry with the classic emitter. */
 static int index_repository_attempt(const char *repo_path,
                                     GitBlobSource *git_source,
+                                    const MavenDependencySet *maven_dependencies,
                                     CodeLensIndexStats *out_stats,
                                     bool raw_emitter)
 {
@@ -14374,6 +15942,9 @@ static int index_repository_attempt(const char *repo_path,
     } else {
         rc = index_source_files_parallel(&ctx, repo_path, thread_count);
     }
+    if (rc == 0) {
+        rc = index_maven_dependency_files(&ctx, maven_dependencies);
+    }
     profile_add(&profile, &profile.walk_seconds, start);
     if (rc != 0) {
         goto cleanup;
@@ -14391,6 +15962,9 @@ static int index_repository_attempt(const char *repo_path,
 
     start = profile_start(&profile);
     rc = insert_repo_row(&ctx);
+    if (rc == 0) {
+        rc = insert_maven_metadata(&index_db, repo_path, maven_dependencies);
+    }
     profile_add(&profile, &profile.repo_write_seconds, start);
     if (rc != 0) {
         goto cleanup;
@@ -14550,6 +16124,7 @@ cleanup:
 int code_lens_index_repository(const char *repo_path, CodeLensIndexStats *out_stats)
 {
     GitBlobSource git_source;
+    MavenDependencySet maven_dependencies;
     RepoWriteLock write_lock = {.fd = -1};
     double start;
     uint64_t blob_reads_start;
@@ -14566,13 +16141,19 @@ int code_lens_index_repository(const char *repo_path, CodeLensIndexStats *out_st
     }
     blob_reads_start = code_lens_git_blob_read_count();
     git_blob_source_init(&git_source, canonical);
+    (void)memset(&maven_dependencies, 0, sizeof(maven_dependencies));
     rc = -1;
     if (incremental_enabled() &&
         (index_repository_incremental(canonical, &git_source, out_stats) == 1)) {
         rc = 0;
     }
+    if ((rc != 0) &&
+        (maven_dependencies_prepare(canonical, &maven_dependencies) != 0)) {
+        goto done;
+    }
     if ((rc != 0) && raw_emitter_enabled()) {
-        rc = index_repository_attempt(canonical, &git_source, out_stats, true);
+        rc = index_repository_attempt(
+            canonical, &git_source, &maven_dependencies, out_stats, true);
         if (rc != 0) {
             /* A failed attempt unlinked its staging file, so a clean classic
              * retry is always possible. */
@@ -14581,8 +16162,10 @@ int code_lens_index_repository(const char *repo_path, CodeLensIndexStats *out_st
         }
     }
     if (rc != 0) {
-        rc = index_repository_attempt(canonical, &git_source, out_stats, false);
+        rc = index_repository_attempt(
+            canonical, &git_source, &maven_dependencies, out_stats, false);
     }
+done:
     git_blob_source_destroy(&git_source);
     if ((rc == 0) && (out_stats != nullptr)) {
         out_stats->elapsed_seconds = profile_now_seconds() - start;
@@ -15019,6 +16602,63 @@ static char *read_repo_path(CodeLensDb *db)
     return repo_path;
 }
 
+static int check_maven_inputs_changed(CodeLensDb *db,
+                                      const char *repo_path,
+                                      bool *out_changed)
+{
+    MavenDependencySet current;
+    sqlite3_stmt *stmt = nullptr;
+    bool indexed_maven = false;
+    bool has_pom;
+    int step;
+
+    if ((db == nullptr) || (repo_path == nullptr) || (out_changed == nullptr)) {
+        return -1;
+    }
+    (void)memset(&current, 0, sizeof(current));
+    current.repo_path = repo_path;
+    current.root_pom = code_lens_join_path(repo_path, "pom.xml");
+    has_pom = (current.root_pom != nullptr) && code_lens_path_exists(current.root_pom);
+    if ((db_prepare(db,
+                    "SELECT status FROM MavenProject WHERE repo = ?1 LIMIT 1",
+                    &stmt) != 0) || (bind_text(stmt, 1, repo_path) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    step = sqlite3_step(stmt);
+    indexed_maven = step == SQLITE_ROW;
+    if (indexed_maven && maven_enabled()) {
+        const char *status = (const char *)sqlite3_column_text(stmt, 0);
+
+        /* Failed and disabled first generations are retryable. Marking them
+         * stale makes both explicit indexing and MCP maintenance self-heal
+         * after a transient failure, even when no build input changed. */
+        if ((status == nullptr) ||
+            ((strcmp(status, "resolved") != 0) && (strcmp(status, "empty") != 0))) {
+            *out_changed = true;
+            (void)sqlite3_finalize(stmt);
+            return 0;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    if ((step != SQLITE_ROW) && (step != SQLITE_DONE)) {
+        return -1;
+    }
+    if (has_pom != indexed_maven) {
+        *out_changed = true;
+        return 0;
+    }
+    if (!has_pom) {
+        *out_changed = false;
+        return 0;
+    }
+    if (maven_collect_inputs(repo_path, &current) != 0) {
+        return -1;
+    }
+    *out_changed = !maven_inputs_match_db(db, &current);
+    return 0;
+}
+
 static const char *relative_repo_path(const char *repo_path, const char *path)
 {
     size_t repo_len;
@@ -15044,6 +16684,7 @@ typedef struct {
     int64_t size;
     int64_t mtime_sec;
     int64_t mtime_nsec;
+    bool dependency;
     uint8_t verdict;
 } StaleCheckEntry;
 
@@ -15241,7 +16882,10 @@ static int read_indexed_file_entries(CodeLensDb *db,
                                      size_t *out_count)
 {
     static const char sql[] =
-        "SELECT path, size, mtimeSec, mtimeNsec FROM File WHERE repo = ?1";
+        "SELECT f.path, f.size, f.mtimeSec, f.mtimeNsec,"
+        " EXISTS (SELECT 1 FROM DependencyFile d WHERE d.repo = f.repo"
+        " AND d.filePath = f.path)"
+        " FROM File f WHERE f.repo = ?1";
     sqlite3_stmt *stmt = nullptr;
     StaleCheckEntry *entries = nullptr;
     size_t count = 0U;
@@ -15285,6 +16929,7 @@ static int read_indexed_file_entries(CodeLensDb *db,
                                              .size = sqlite3_column_int64(stmt, 1),
                                              .mtime_sec = sqlite3_column_int64(stmt, 2),
                                              .mtime_nsec = sqlite3_column_int64(stmt, 3),
+                                             .dependency = sqlite3_column_int(stmt, 4) != 0,
                                              .verdict = STALE_VERDICT_OK};
         if (path_list_append(indexed_paths, path) != 0) {
             (void)sqlite3_finalize(stmt);
@@ -15317,6 +16962,9 @@ static int fold_stale_entries(StalenessStatus *status,
         StaleCheckEntry *entry = &entries[i];
 
         status->checked_files++;
+        if (entry->dependency && (entry->verdict != STALE_VERDICT_OK)) {
+            status->dependency_sources_changed = true;
+        }
         if (entry->verdict == STALE_VERDICT_MISSING) {
             status->missing_files++;
             if ((diff != nullptr) && (path_list_append(&diff->missing, entry->path) != 0)) {
@@ -15459,7 +17107,8 @@ static int stale_walk_expand(StaleWalk *walk, int dir_fd, PathBuffer *buffer, in
             return -1;
         }
         if (dirent_is_directory_at(dirfd(dir), entry)) {
-            if (!should_skip_dir(entry->d_name)) {
+            if ((buffer->include_ignored_dirs || !should_skip_dir(entry->d_name)) &&
+                !path_buffer_is_excluded(buffer)) {
                 if (depth > 0) {
                     int child_fd =
                         openat(dirfd(dir), entry->d_name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -15632,7 +17281,8 @@ static int check_repo_staleness_diff(CodeLensDb *db,
         stale_stat_all(entries, entry_count);
         if ((check_new_files_current(db, repo_name, repo_path, &indexed_paths, &status, diff) ==
              0) &&
-            (fold_stale_entries(&status, diff, entries, entry_count) == 0)) {
+            (fold_stale_entries(&status, diff, entries, entry_count) == 0) &&
+            (check_maven_inputs_changed(db, repo_path, &status.maven_changed) == 0)) {
             /* The parallel walk finds new files in nondeterministic order;
              * sort so downstream consumers (the incremental re-parse) stay
              * deterministic per machine. */
@@ -15648,7 +17298,8 @@ static int check_repo_staleness_diff(CodeLensDb *db,
 
     status.checked = rc == 0;
     status.stale = (status.missing_files > 0U) || (status.changed_files > 0U) ||
-                   (status.new_files > 0U);
+                   (status.new_files > 0U) || status.maven_changed ||
+                   status.dependency_sources_changed;
     status.elapsed_seconds = profile_now_seconds() - start;
     *out_status = status;
     return rc;
@@ -15663,8 +17314,19 @@ static int check_repo_staleness(CodeLensDb *db,
 
 static char *staleness_note(const char *repo_name, const StalenessStatus *status)
 {
+    const char *dependency_detail;
+
     if ((repo_name == nullptr) || (status == nullptr)) {
         return nullptr;
+    }
+    if (status->maven_changed && status->dependency_sources_changed) {
+        dependency_detail = ", Maven dependency state and source cache changed";
+    } else if (status->maven_changed) {
+        dependency_detail = ", Maven dependency state changed";
+    } else if (status->dependency_sources_changed) {
+        dependency_detail = ", dependency source cache changed";
+    } else {
+        dependency_detail = "";
     }
     if (!status->checked) {
         return alloc_printf("warning: repo \"%s\" staleness check failed after %.6fs\n",
@@ -15673,24 +17335,26 @@ static char *staleness_note(const char *repo_name, const StalenessStatus *status
     }
     if (status->refreshed) {
         return alloc_printf("note: repo \"%s\" auto-refreshed its stale index in %.6fs after "
-                            "checking %zu files in %.6fs (%zu missing, %zu changed, %zu new)\n",
+                            "checking %zu files in %.6fs (%zu missing, %zu changed, %zu new%s)\n",
                             repo_name,
                             status->refresh_elapsed_seconds,
                             status->checked_files,
                             status->elapsed_seconds,
                             status->missing_files,
                             status->changed_files,
-                            status->new_files);
+                            status->new_files,
+                            dependency_detail);
     }
     if (status->stale) {
         return alloc_printf("warning: repo \"%s\" index is stale; checked %zu files in %.6fs "
-                            "(%zu missing, %zu changed, %zu new); %s\n",
+                            "(%zu missing, %zu changed, %zu new%s); %s\n",
                             repo_name,
                             status->checked_files,
                             status->elapsed_seconds,
                             status->missing_files,
                             status->changed_files,
                             status->new_files,
+                            dependency_detail,
                             status->refresh_attempted
                                 ? "automatic refresh failed; run code-lens index --repo <path> "
                                   "to retry"
@@ -15865,15 +17529,51 @@ static char *mcp_repo_session_note(const McpRepoSession *session)
     return alloc_printf("note: repo \"%s\" index is current\n", session->repo_id);
 }
 
-static char *mcp_join_session_note(const McpRepoSession *session, char *result, bool prepend)
+static char *maven_project_status_note(CodeLensDb *db, const char *repo_name)
+{
+    sqlite3_stmt *stmt = nullptr;
+    char *note = nullptr;
+
+    if ((db == nullptr) || (repo_name == nullptr) ||
+        (db_prepare(db,
+                    "SELECT status, message FROM MavenProject WHERE repo = ?1",
+                    &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return nullptr;
+    }
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *status = (const char *)sqlite3_column_text(stmt, 0);
+        const char *message = (const char *)sqlite3_column_text(stmt, 1);
+
+        if ((status != nullptr) && (strcmp(status, "resolved") != 0)) {
+            note = alloc_printf("%s: Maven dependency sources for repo \"%s\" are %s%s%s\n",
+                                strcmp(status, "failed") == 0 ? "warning" : "note",
+                                repo_name,
+                                status,
+                                (message != nullptr) && (message[0] != '\0') ? ": " : "",
+                                message == nullptr ? "" : message);
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    return note;
+}
+
+static char *mcp_join_session_note(McpRepoSession *session, char *result, bool prepend)
 {
     char *note;
+    char *maven_note;
     size_t len;
 
     if (result == nullptr) {
         return nullptr;
     }
     note = mcp_repo_session_note(session);
+    maven_note = (session == nullptr) || !session->db.is_open
+                     ? nullptr
+                     : maven_project_status_note(&session->db, session->repo_id);
+    if (maven_note != nullptr) {
+        note = note == nullptr ? maven_note : alloc_printf("%s%s", note, maven_note);
+    }
     if (note == nullptr) {
         return result;
     }
@@ -15977,30 +17677,32 @@ static char *query_reference_snippets(CodeLensDb *db,
                                       const char *symbol_base,
                                       const char *namespace_filter,
                                       const char *path_filter,
+                                      const char *definition_scope,
                                       int exclude_tests)
 {
     static const char references_sql[] =
+        "WITH candidates(namespace) AS ("
+        "SELECT DISTINCT s.namespace FROM Symbol s "
+        "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath "
+        "WHERE s.repo = ?1 AND s.name = ?2 "
+        "AND (?3 = '' OR s.namespace = ?3) "
+        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
+        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
+        "AND (?6 = 0 OR (s.kind != 'test' "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0))) "
         "SELECT f.path, r.lineNumber, r.columnNumber, r.startByte, r.endByte, "
-        "r.symbol, r.targetNamespace "
-        "FROM Ref r JOIN File f ON f.rowid = r.fileId "
+        "r.symbol, r.targetNamespace FROM Ref r JOIN File f ON f.rowid = r.fileId "
+        "LEFT JOIN DependencyFile rdf ON rdf.repo = f.repo AND rdf.filePath = f.path "
         "WHERE f.repo = ?1 AND r.symbolBase = ?2 "
         "AND (CASE WHEN r.targetNamespace = '' THEN "
-        "(f.namespace IN (SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)) "
-        "OR EXISTS (SELECT 1 FROM Referred rf WHERE rf.repo = ?1 "
-        "AND rf.filePath = f.path AND (rf.symbol = ?2 OR rf.symbol = ':all') "
-        "AND rf.namespace IN "
-        "(SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)))) "
-        "ELSE r.targetNamespace IN "
-        "(SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)) END) "
-        "AND (?5 = 0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/') = 0 "
+        "(f.namespace IN candidates OR EXISTS (SELECT 1 FROM Referred rf "
+        "WHERE rf.repo = ?1 AND rf.filePath = f.path "
+        "AND (rf.symbol = ?2 OR rf.symbol = ':all') AND rf.namespace IN candidates)) "
+        "ELSE r.targetNamespace IN candidates END) "
+        "AND (?6 = 0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/') = 0 "
         "AND instr(lower(replace(f.path, '\\', '/')), '/tests/') = 0)) "
-        "ORDER BY f.path, r.lineNumber LIMIT 25";
+        "ORDER BY CASE WHEN rdf.id IS NULL THEN 0 ELSE 1 END, f.path, r.lineNumber LIMIT 25";
     sqlite3_stmt *stmt = nullptr;
     StringBuilder out = {0};
     CodeLensMappedFile mapped = {0};
@@ -16016,7 +17718,8 @@ static char *query_reference_snippets(CodeLensDb *db,
     }
     if ((bind_text(stmt, 1, repo_name) != 0) || (bind_text(stmt, 2, symbol_base) != 0) ||
         (bind_text(stmt, 3, namespace_filter) != 0) || (bind_text(stmt, 4, path_filter) != 0) ||
-        (sqlite3_bind_int(stmt, 5, exclude_tests) != SQLITE_OK)) {
+        (bind_text(stmt, 5, definition_scope) != 0) ||
+        (sqlite3_bind_int(stmt, 6, exclude_tests) != SQLITE_OK)) {
         (void)sqlite3_finalize(stmt);
         return nullptr;
     }
@@ -16099,8 +17802,17 @@ char *code_lens_list_repos(void)
         "SELECT path AS path, indexedAt AS indexedAt, "
         "fileCount AS filesAtIndexTime, symbolCount AS symbolsAtIndexTime, "
         "referenceCount AS referencesAtIndexTime, keywordCount AS keywordsAtIndexTime, "
-        "aliasCount AS aliasesAtIndexTime "
-        "FROM Repo ORDER BY path";
+        "aliasCount AS aliasesAtIndexTime, "
+        "(SELECT COUNT(*) FROM DependencyArtifact d WHERE d.repo = Repo.path) "
+        "AS dependencyArtifactsAtIndexTime, "
+        "(SELECT COUNT(*) FROM DependencyFile f WHERE f.repo = Repo.path) "
+        "AS dependencyFilesAtIndexTime FROM Repo ORDER BY path";
+    static const char legacy_list_query[] =
+        "SELECT path AS path, indexedAt AS indexedAt, "
+        "fileCount AS filesAtIndexTime, symbolCount AS symbolsAtIndexTime, "
+        "referenceCount AS referencesAtIndexTime, keywordCount AS keywordsAtIndexTime, "
+        "aliasCount AS aliasesAtIndexTime, 0 AS dependencyArtifactsAtIndexTime, "
+        "0 AS dependencyFilesAtIndexTime FROM Repo ORDER BY path";
     CodeLensPathList repos = {0};
     StringBuilder output = {0};
     StringBuilder notes = {0};
@@ -16118,14 +17830,18 @@ char *code_lens_list_repos(void)
         char *repo_name = nullptr;
         StalenessStatus staleness = {0};
         char *note = nullptr;
+        int format_version;
+        bool current_format;
 
-        if (code_lens_db_open_read(&db, repos.paths[i]) != 0) {
+        if (db_open_read_any_format(&db, repos.paths[i], &format_version) != 0) {
             (void)fprintf(stderr,
                           "code-lens: skipping unreadable repo index %s\n",
                           repos.paths[i]);
             continue;
         }
-        rows = code_lens_db_query_to_string(&db, list_query);
+        current_format = format_version == CODE_LENS_INDEX_FORMAT_VERSION;
+        rows = code_lens_db_query_to_string(
+            &db, current_format ? list_query : legacy_list_query);
         if (rows == nullptr) {
             (void)fprintf(stderr,
                           "code-lens: skipping unreadable repo index %s\n",
@@ -16149,7 +17865,18 @@ char *code_lens_list_repos(void)
             goto done;
         }
         repo_name = read_repo_path(&db);
-        if ((repo_name != nullptr) && (check_repo_staleness(&db, repo_name, &staleness) == 0)) {
+        if ((repo_name != nullptr) && !current_format) {
+            note = alloc_printf("warning: repo \"%s\" index format version %d"
+                                ", expected %d; re-index required\n",
+                                repo_name,
+                                format_version,
+                                CODE_LENS_INDEX_FORMAT_VERSION);
+            if ((note != nullptr) && !sb_append(&notes, note)) {
+                code_lens_db_close(&db);
+                goto done;
+            }
+        } else if ((repo_name != nullptr) &&
+                   (check_repo_staleness(&db, repo_name, &staleness) == 0)) {
             note = staleness_note(repo_name, &staleness);
             if ((note != nullptr) && !sb_append(&notes, note)) {
                 code_lens_db_close(&db);
@@ -16209,6 +17936,13 @@ char *code_lens_remove_repo(const char *repo_name)
     } else if (code_lens_remove_tree(dir) != 0) {
         (void)fprintf(stderr, "code-lens: failed to remove repo index directory %s\n", dir);
     } else {
+        char *maven_output = maven_resolution_output(repo_id);
+
+        if ((maven_output != nullptr) && (code_lens_remove_tree(maven_output) != 0)) {
+            (void)fprintf(stderr,
+                          "code-lens: warning: failed to remove Maven resolution cache %s\n",
+                          maven_output);
+        }
         result = alloc_printf("removed repo \"%s\"\n", repo_id);
     }
 
@@ -16314,13 +18048,17 @@ static char *query_keyword_rows(CodeLensDb *db,
         "SELECT tk.text AS \"k.keyword\", f.namespace AS \"k.sourceNamespace\", "
         "f.path AS \"k.filePath\", k.lineNumber AS \"k.lineNumber\", "
         "k.columnNumber AS \"k.columnNumber\", tb.text AS \"k.keywordBase\", "
-        "tq.text AS \"k.qualifier\", tn.text AS \"k.targetNamespace\" "
-        "FROM KeywordData k JOIN File f ON f.rowid = k.fileId "
-        "JOIN Term tk ON tk.id = k.keywordTerm "
-        "JOIN Term tb ON tb.id = k.keywordBaseTerm "
-        "JOIN Term tq ON tq.id = k.qualifierTerm "
-        "JOIN Term tn ON tn.id = k.targetNamespaceTerm "
-        "WHERE f.repo = ?1 "
+        "tq.text AS \"k.qualifier\", tn.text AS \"k.targetNamespace\", "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"k.scope\", "
+        "COALESCE(da.coordinate,'') AS \"k.dependency\" "
+        "FROM KeywordData k JOIN File f ON f.rowid=k.fileId "
+        "JOIN Term tk ON tk.id=k.keywordTerm "
+        "JOIN Term tb ON tb.id=k.keywordBaseTerm "
+        "JOIN Term tq ON tq.id=k.qualifierTerm "
+        "JOIN Term tn ON tn.id=k.targetNamespaceTerm "
+        "LEFT JOIN DependencyFile df ON df.repo=f.repo AND df.filePath=f.path "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE f.repo=?1 "
         "AND (?2 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?2 ESCAPE '\\') OR ?18 = 'OR') "
         "AND (?3 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?3 ESCAPE '\\') OR ?18 = 'OR') "
         "AND (?4 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?4 ESCAPE '\\') OR ?18 = 'OR') "
@@ -16361,7 +18099,10 @@ static char *query_keyword_rows(CodeLensDb *db,
         "AND (?19 = 0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/') = 0 "
         "AND instr(lower(replace(f.path, '\\', '/')), '/tests/') = 0)) "
         "AND (?20 = '' OR instr(lower(f.path), lower(?20)) > 0) "
-        "ORDER BY f.path, k.lineNumber LIMIT ?21";
+        "AND (?21 = 'all' OR (?21 = 'workspace' AND df.id IS NULL) "
+        "OR (?21 = 'dependencies' AND df.id IS NOT NULL)) "
+        "AND (?22 = '' OR (da.coordinate IS NOT NULL AND da.coordinate GLOB ?22)) "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, f.path, k.lineNumber LIMIT ?23";
     sqlite3_stmt *stmt = nullptr;
     char *patterns[MAX_QUERY_TERMS] = {nullptr};
     char *result = nullptr;
@@ -16369,6 +18110,14 @@ static char *query_keyword_rows(CodeLensDb *db,
     size_t used = 0U;
     int exclude_tests = options->exclude_tests ? 1 : 0;
     const char *path_filter = options->path == nullptr ? "" : options->path;
+    const char *scope_filter = ((options->scope != nullptr) &&
+                                ((strcmp(options->scope, "workspace") == 0) ||
+                                 (strcmp(options->scope, "dependencies") == 0) ||
+                                 (strcmp(options->scope, "all") == 0)))
+                                   ? options->scope
+                                   : "workspace";
+    const char *dependency_filter =
+        options->dependency == nullptr ? "" : options->dependency;
 
     if (out_row_count != nullptr) {
         *out_row_count = 0U;
@@ -16406,7 +18155,13 @@ static char *query_keyword_rows(CodeLensDb *db,
     if (bound && (bind_text(stmt, 20, path_filter) != 0)) {
         bound = false;
     }
-    if (bound && (sqlite3_bind_int(stmt, 21, options->limit) != SQLITE_OK)) {
+    if (bound && (bind_text(stmt, 21, scope_filter) != 0)) {
+        bound = false;
+    }
+    if (bound && (bind_text(stmt, 22, dependency_filter) != 0)) {
+        bound = false;
+    }
+    if (bound && (sqlite3_bind_int(stmt, 23, options->limit) != SQLITE_OK)) {
         bound = false;
     }
 
@@ -16447,6 +18202,18 @@ static void normalize_query_options(const CodeLensQueryOptions *options,
     if ((out_options->path != nullptr) && (out_options->path[0] == '\0')) {
         out_options->path = nullptr;
     }
+    if ((out_options->scope == nullptr) || (out_options->scope[0] == '\0')) {
+        out_options->scope = "workspace";
+    }
+    if ((out_options->dependency != nullptr) && (out_options->dependency[0] == '\0')) {
+        out_options->dependency = nullptr;
+    }
+}
+
+static bool query_scope_known(const char *scope)
+{
+    return (strcmp(scope, "workspace") == 0) || (strcmp(scope, "dependencies") == 0) ||
+           (strcmp(scope, "all") == 0);
 }
 
 /* Symbol kinds assigned by the Clojure, Java, and C extractors, plus the
@@ -16500,15 +18267,23 @@ static char *query_symbols_ex_internal(const char *repo_name,
         "SELECT s.name AS \"s.name\", s.kind AS \"s.kind\", "
         "s.namespace AS \"s.namespace\", s.filePath AS \"s.filePath\", "
         "s.startLine AS \"s.startLine\", s.endLine AS \"s.endLine\", "
-        "CAST(-bm25(SymbolFts) * 100 AS INTEGER) AS score, s.doc AS \"s.doc\" "
+        "CAST(-bm25(SymbolFts) * 100 AS INTEGER) AS score, s.doc AS \"s.doc\", "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"s.scope\", "
+        "COALESCE(da.coordinate, '') AS \"s.dependency\", "
+        "COALESCE(da.scope, '') AS \"s.dependencyScope\" "
         "FROM SymbolFts JOIN Symbol s ON s.rowid = SymbolFts.rowid "
+        "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id = df.artifactId "
         "WHERE SymbolFts MATCH ?1 AND s.repo = ?2 "
         "AND (?3 = 0 OR (s.kind != 'test' "
         "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
         "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) "
         "AND (?4 = '' OR s.kind = ?4) "
         "AND (?5 = '' OR instr(lower(s.filePath), lower(?5)) > 0) "
-        "ORDER BY bm25(SymbolFts), s.name LIMIT ?6";
+        "AND (?6 = 'all' OR (?6 = 'workspace' AND df.id IS NULL) "
+        "OR (?6 = 'dependencies' AND df.id IS NOT NULL)) "
+        "AND (?7 = '' OR (da.coordinate IS NOT NULL AND da.coordinate GLOB ?7)) "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, bm25(SymbolFts), s.name LIMIT ?8";
     char *terms[MAX_QUERY_TERMS] = {nullptr};
     size_t term_count;
     size_t used_terms = 0U;
@@ -16523,10 +18298,14 @@ static char *query_symbols_ex_internal(const char *repo_name,
     CodeLensQueryOptions query_options;
     bool keyword_kind;
     bool unknown_kind;
+    bool unknown_scope;
     const char *kind_filter;
     const char *path_filter;
+    const char *scope_filter;
+    const char *dependency_filter;
     int exclude_tests;
     bool owns_db = false;
+    char *maven_note = nullptr;
     char *result;
 
     if ((repo_name == nullptr) || (query_text == nullptr)) {
@@ -16561,8 +18340,11 @@ static char *query_symbols_ex_internal(const char *repo_name,
     keyword_kind = (query_options.kind != nullptr) && (strcmp(query_options.kind, "keyword") == 0);
     unknown_kind = (query_options.kind != nullptr) && !keyword_kind &&
                    !is_known_symbol_kind(query_options.kind);
+    unknown_scope = !query_scope_known(query_options.scope);
     kind_filter = query_options.kind == nullptr ? "" : query_options.kind;
     path_filter = query_options.path == nullptr ? "" : query_options.path;
+    scope_filter = unknown_scope ? "workspace" : query_options.scope;
+    dependency_filter = query_options.dependency == nullptr ? "" : query_options.dependency;
     exclude_tests = query_options.exclude_tests ? 1 : 0;
 
     if (prepared_db == nullptr) {
@@ -16584,7 +18366,9 @@ static char *query_symbols_ex_internal(const char *repo_name,
                      (sqlite3_bind_int(stmt, 3, exclude_tests) == SQLITE_OK) &&
                      (bind_text(stmt, 4, kind_filter) == 0) &&
                      (bind_text(stmt, 5, path_filter) == 0) &&
-                     (sqlite3_bind_int(stmt, 6, query_options.limit) == SQLITE_OK);
+                     (bind_text(stmt, 6, scope_filter) == 0) &&
+                     (bind_text(stmt, 7, dependency_filter) == 0) &&
+                     (sqlite3_bind_int(stmt, 8, query_options.limit) == SQLITE_OK);
 
         if (!bound) {
             (void)report_sqlite_error(db->handle, "bind query parameter");
@@ -16605,7 +18389,7 @@ static char *query_symbols_ex_internal(const char *repo_name,
                                                       &keyword_row_count)
                                  : alloc_printf("k.keyword|k.sourceNamespace|k.filePath|k.lineNumber|"
                                                 "k.columnNumber|k.keywordBase|k.qualifier|"
-                                                "k.targetNamespace\n");
+                                                "k.targetNamespace|k.scope|k.dependency\n");
         if (keyword_rows == nullptr) {
             result = nullptr;
         } else {
@@ -16635,7 +18419,9 @@ static char *query_symbols_ex_internal(const char *repo_name,
                              (sqlite3_bind_int(stmt, 3, exclude_tests) == SQLITE_OK) &&
                              (bind_text(stmt, 4, kind_filter) == 0) &&
                              (bind_text(stmt, 5, path_filter) == 0) &&
-                             (sqlite3_bind_int(stmt, 6, query_options.limit) == SQLITE_OK);
+                             (bind_text(stmt, 6, scope_filter) == 0) &&
+                             (bind_text(stmt, 7, dependency_filter) == 0) &&
+                             (sqlite3_bind_int(stmt, 8, query_options.limit) == SQLITE_OK);
 
                 if (!bound) {
                     (void)report_sqlite_error(db->handle, "bind query parameter");
@@ -16655,7 +18441,7 @@ static char *query_symbols_ex_internal(const char *repo_name,
                                                        &or_keyword_row_count)
                                   : alloc_printf("k.keyword|k.sourceNamespace|k.filePath|"
                                                  "k.lineNumber|k.columnNumber|k.keywordBase|"
-                                                 "k.qualifier|k.targetNamespace\n");
+                                                 "k.qualifier|k.targetNamespace|k.scope|k.dependency\n");
             if ((or_symbol_rows != nullptr) && (or_keyword_rows != nullptr) &&
                 ((or_symbol_row_count > 0U) || (or_keyword_row_count > 0U))) {
                 char *or_result = render_query_sections(or_symbol_rows, or_keyword_rows);
@@ -16672,6 +18458,7 @@ static char *query_symbols_ex_internal(const char *repo_name,
     }
 
     if (owns_db) {
+        maven_note = maven_project_status_note(db, repo_name);
         code_lens_db_close(db);
     }
 
@@ -16690,10 +18477,18 @@ static char *query_symbols_ex_internal(const char *repo_name,
     if (prepared_db == nullptr) {
         result = prepend_staleness_note(repo_name, &staleness, result);
     }
+    if ((result != nullptr) && (maven_note != nullptr)) {
+        result = alloc_printf("%s\n%s", maven_note, result);
+    }
     if ((result != nullptr) && unknown_kind) {
         result = alloc_printf("note: unknown kind \"%s\"; valid kinds: %s\n%s",
                               query_options.kind,
                               query_kind_list,
+                              result);
+    }
+    if ((result != nullptr) && unknown_scope) {
+        result = alloc_printf("note: unknown scope \"%s\"; valid scopes: workspace, dependencies, all\n%s",
+                              query_options.scope,
                               result);
     }
     return result;
@@ -16758,63 +18553,171 @@ static const char *context_base_name(CodeLensDb *db,
     return base;
 }
 
-static char *context_symbol_ex_internal(const char *repo_name,
-                                         const char *symbol_name,
-                                         const CodeLensContextOptions *options,
-                                        CodeLensDb *prepared_db)
+static bool context_has_workspace_definition(CodeLensDb *db,
+                                             const char *repo_name,
+                                             const char *symbol_base,
+                                             const char *namespace_filter,
+                                             const char *path_filter,
+                                             int exclude_tests)
 {
-    /* Substring fallback rows return name/kind/location but no content:
-     * returning whole definition bodies for every near-miss buried the
-     * exact answer under pages of unrelated source in field use. */
-    static const char definitions_sql[] =
-        "SELECT s.name AS \"s.name\", s.kind AS \"s.kind\", "
-        "s.namespace AS \"s.namespace\", s.filePath AS \"s.filePath\", "
-        "s.startLine AS \"s.startLine\", s.endLine AS \"s.endLine\", "
-        "s.doc AS \"s.doc\", "
-        "CASE WHEN s.name = ?2 THEN s.content ELSE '' END AS \"s.content\" "
-        "FROM Symbol s "
-        "WHERE s.repo = ?1 AND (s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0) "
+    static const char sql[] =
+        "SELECT 1 FROM Symbol s WHERE s.repo = ?1 "
+        "AND (s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0) "
         "AND (?3 = '' OR s.namespace = ?3) "
         "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
         "AND (?5 = 0 OR (s.kind != 'test' "
         "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
         "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) "
+        "AND NOT EXISTS (SELECT 1 FROM DependencyFile df WHERE df.repo = s.repo "
+        "AND df.filePath = s.filePath) LIMIT 1";
+    sqlite3_stmt *stmt = nullptr;
+    bool found = false;
+
+    if ((db_prepare(db, sql, &stmt) == 0) &&
+        (bind_text(stmt, 1, repo_name) == 0) &&
+        (bind_text(stmt, 2, symbol_base) == 0) &&
+        (bind_text(stmt, 3, namespace_filter) == 0) &&
+        (bind_text(stmt, 4, path_filter) == 0) &&
+        (sqlite3_bind_int(stmt, 5, exclude_tests) == SQLITE_OK)) {
+        found = sqlite3_step(stmt) == SQLITE_ROW;
+    }
+    (void)sqlite3_finalize(stmt);
+    return found;
+}
+
+static const char *context_infer_java_namespace(CodeLensDb *db,
+                                                const char *repo_name,
+                                                const char *symbol_name,
+                                                const char *symbol_base)
+{
+    sqlite3_stmt *stmt = nullptr;
+    const char *separator;
+    char *qualifier;
+    char *found = nullptr;
+    int step;
+
+    if ((db == nullptr) || (repo_name == nullptr) || (symbol_name == nullptr) ||
+        (symbol_base == nullptr) || (symbol_base == symbol_name) ||
+        (strchr(symbol_name, '/') != nullptr) || (strstr(symbol_name, "->") != nullptr)) {
+        return nullptr;
+    }
+    separator = strrchr(symbol_name, '#');
+    if (separator == nullptr) {
+        separator = strrchr(symbol_name, '.');
+    }
+    if ((separator == nullptr) || (separator == symbol_name) ||
+        (strcmp(separator + 1, symbol_base) != 0)) {
+        return nullptr;
+    }
+    qualifier = copy_bytes(symbol_name, (size_t)(separator - symbol_name));
+    if ((qualifier == nullptr) ||
+        (db_prepare(db,
+                    "SELECT DISTINCT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
+                    "AND (namespace = ?3 OR namespace LIKE '%.' || ?3) "
+                    "ORDER BY namespace LIMIT 2",
+                    &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, symbol_base) != 0) || (bind_text(stmt, 3, qualifier) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return nullptr;
+    }
+    step = sqlite3_step(stmt);
+    if (step == SQLITE_ROW) {
+        const unsigned char *value = sqlite3_column_text(stmt, 0);
+        int bytes = sqlite3_column_bytes(stmt, 0);
+
+        if ((value != nullptr) && (bytes > 0)) {
+            found = copy_bytes((const char *)value, (size_t)bytes);
+        }
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            found = nullptr;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    return found;
+}
+
+static bool context_path_is_workspace_file(CodeLensDb *db,
+                                           const char *repo_name,
+                                           const char *path_filter)
+{
+    static const char sql[] =
+        "SELECT 1 FROM File f WHERE f.repo = ?1 "
+        "AND instr(lower(f.path), lower(?2)) > 0 "
+        "AND NOT EXISTS (SELECT 1 FROM DependencyFile df WHERE df.repo = f.repo "
+        "AND df.filePath = f.path) LIMIT 1";
+    sqlite3_stmt *stmt = nullptr;
+    bool found = false;
+
+    if ((path_filter == nullptr) || (path_filter[0] == '\0')) {
+        return false;
+    }
+    if ((db_prepare(db, sql, &stmt) == 0) && (bind_text(stmt, 1, repo_name) == 0) &&
+        (bind_text(stmt, 2, path_filter) == 0)) {
+        found = sqlite3_step(stmt) == SQLITE_ROW;
+    }
+    (void)sqlite3_finalize(stmt);
+    return found;
+}
+
+static char *context_symbol_ex_internal(const char *repo_name,
+                                         const char *symbol_name,
+                                         const CodeLensContextOptions *options,
+                                        CodeLensDb *prepared_db)
+{
+    /* Substring fallback rows return location but only exact definitions carry content. */
+    static const char definitions_sql[] =
+        "SELECT s.name AS \"s.name\", s.kind AS \"s.kind\", "
+        "s.namespace AS \"s.namespace\", s.filePath AS \"s.filePath\", "
+        "s.startLine AS \"s.startLine\", s.endLine AS \"s.endLine\", "
+        "s.doc AS \"s.doc\", CASE WHEN s.name = ?2 THEN s.content ELSE '' END AS \"s.content\", "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"s.scope\", "
+        "COALESCE(da.coordinate, '') AS \"s.dependency\", "
+        "COALESCE(da.scope, '') AS \"s.dependencyScope\" "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo = s.repo AND df.filePath = s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id = df.artifactId "
+        "WHERE s.repo = ?1 AND (s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0) "
+        "AND (?3 = '' OR s.namespace = ?3) "
+        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
+        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
+        "AND (?6 = 0 OR (s.kind != 'test' "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) "
         "ORDER BY CASE WHEN s.name = ?2 THEN 0 ELSE 1 END, s.name LIMIT 5";
-    /* Matches on the alias-agnostic base name. Unqualified references count
-     * only where they can resolve: the file's own namespace defines the
-     * symbol, or the file refers it in via :refer / :refer :all / (:use ...)
-     * (Referred rows; ':all' is the whole-namespace sentinel). Qualified
-     * references count only when their resolved target namespace actually
-     * defines the symbol, which filters out same-name definitions in
-     * unrelated namespaces. :rename is not tracked. */
     static const char references_sql[] =
+        "WITH candidates(namespace) AS ("
+        "SELECT DISTINCT s.namespace FROM Symbol s "
+        "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath "
+        "WHERE s.repo = ?1 AND s.name = ?2 "
+        "AND (?3 = '' OR s.namespace = ?3) "
+        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
+        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
+        "AND (?6 = 0 OR (s.kind != 'test' "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0))) "
         "SELECT f.path AS \"r.filePath\", r.lineNumber AS \"r.lineNumber\", "
         "r.columnNumber AS \"r.columnNumber\", r.startByte AS \"r.startByte\", "
         "r.endByte AS \"r.endByte\", r.symbol AS \"r.symbol\", "
-        "r.targetNamespace AS \"r.targetNamespace\" "
+        "r.targetNamespace AS \"r.targetNamespace\", "
+        "CASE WHEN rdf.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"r.scope\", "
+        "COALESCE(rda.coordinate, '') AS \"r.dependency\" "
         "FROM Ref r JOIN File f ON f.rowid = r.fileId "
+        "LEFT JOIN DependencyFile rdf ON rdf.repo = f.repo AND rdf.filePath = f.path "
+        "LEFT JOIN DependencyArtifact rda ON rda.id = rdf.artifactId "
         "WHERE f.repo = ?1 AND r.symbolBase = ?2 "
         "AND (CASE WHEN r.targetNamespace = '' THEN "
-        "(f.namespace IN (SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)) "
-        "OR EXISTS (SELECT 1 FROM Referred rf WHERE rf.repo = ?1 "
-        "AND rf.filePath = f.path AND (rf.symbol = ?2 OR rf.symbol = ':all') "
-        "AND rf.namespace IN "
-        "(SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)))) "
-        "ELSE r.targetNamespace IN "
-        "(SELECT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-        "AND (?3 = '' OR namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(filePath), lower(?4)) > 0)) END) "
-        "AND (?5 = 0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/') = 0 "
+        "(f.namespace IN candidates OR EXISTS (SELECT 1 FROM Referred rf "
+        "WHERE rf.repo = ?1 AND rf.filePath = f.path "
+        "AND (rf.symbol = ?2 OR rf.symbol = ':all') AND rf.namespace IN candidates)) "
+        "ELSE r.targetNamespace IN candidates END) "
+        "AND (?6 = 0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/') = 0 "
         "AND instr(lower(replace(f.path, '\\', '/')), '/tests/') = 0)) "
-        "ORDER BY f.path, r.lineNumber LIMIT 25";
+        "ORDER BY CASE WHEN rdf.id IS NULL THEN 0 ELSE 1 END, f.path, r.lineNumber LIMIT 25";
     CodeLensDb owned_db;
     CodeLensDb *db = prepared_db;
     char *db_path;
-    const char *params[4];
+    const char *params[5];
+    const char *definition_scope;
     const char *symbol_base;
     int exclude_tests = (options != nullptr) && options->exclude_tests ? 1 : 0;
     const char *namespace_filter =
@@ -16830,6 +18733,7 @@ static char *context_symbol_ex_internal(const char *repo_name,
     StalenessStatus staleness = {0};
     StringBuilder output = {0};
     bool owns_db = false;
+    char *maven_note = nullptr;
     char *result;
 
     if ((repo_name == nullptr) || (symbol_name == nullptr)) {
@@ -16858,26 +18762,59 @@ static char *context_symbol_ex_internal(const char *repo_name,
      * Clojure alias/name, Java Type.member/package.Type/Type#member, or C
      * ptr->field spellings and run the lookup on the final name component. */
     symbol_base = context_base_name(db, repo_name, symbol_name);
+    if (((options == nullptr) || (options->namespace_name == nullptr) ||
+         (options->namespace_name[0] == '\0'))) {
+        const char *inferred =
+            context_infer_java_namespace(db, repo_name, symbol_name, symbol_base);
+
+        if (inferred != nullptr) {
+            namespace_filter = inferred;
+        }
+    }
+    definition_scope = context_has_workspace_definition(db,
+                                                        repo_name,
+                                                        symbol_base,
+                                                        namespace_filter,
+                                                        path_filter,
+                                                        exclude_tests)
+                           ? "workspace"
+                           : "dependencies";
+
+    if ((strcmp(definition_scope, "dependencies") == 0) &&
+        context_path_is_workspace_file(db, repo_name, path_filter)) {
+        /* With no definition in the selected workspace file, interpret path as
+         * the calling source context and let dependency fallback search its
+         * materialized source set. */
+        path_filter = "";
+    }
 
     params[0] = repo_name;
     params[1] = symbol_base;
     params[2] = namespace_filter;
     params[3] = path_filter;
+    params[4] = definition_scope;
     symbol_rows =
-        db_render_query(db, definitions_sql, params, 4U, &exclude_tests, &symbol_row_count);
+        db_render_query(db, definitions_sql, params, 5U, &exclude_tests, &symbol_row_count);
     if (symbol_rows != nullptr) {
         ref_rows = db_render_query(db,
                                    references_sql,
                                    params,
-                                   4U,
+                                   5U,
                                    &exclude_tests,
                                    &ref_row_count);
     }
     if (ref_rows != nullptr) {
         snippet_rows = query_reference_snippets(
-            db, repo_name, symbol_base, namespace_filter, path_filter, exclude_tests);
+            db,
+            repo_name,
+            symbol_base,
+            namespace_filter,
+            path_filter,
+            definition_scope,
+            exclude_tests);
     }
     if (owns_db) {
+        maven_note = maven_project_status_note(db, repo_name);
         code_lens_db_close(db);
     }
 
@@ -16893,10 +18830,24 @@ static char *context_symbol_ex_internal(const char *repo_name,
                      : alloc_printf("no symbols or references matching \"%s\" in repo \"%s\"\n",
                                     symbol_name,
                                     repo_name);
+        if (maven_note != nullptr) {
+            result = alloc_printf("%s\n%s", maven_note, result);
+        }
         return prepared_db == nullptr ? prepend_staleness_note(repo_name, &staleness, result)
                                       : result;
     }
 
+    if ((maven_note != nullptr) &&
+        (!sb_append(&output, maven_note) || !sb_append(&output, "\n"))) {
+        sb_free(&output);
+        return nullptr;
+    }
+    if ((strcmp(definition_scope, "dependencies") == 0) && (symbol_row_count > 0U) &&
+        !sb_append(&output,
+                   "note: no workspace definition matched; showing Maven dependency definitions\n\n")) {
+        sb_free(&output);
+        return nullptr;
+    }
     if (!sb_append(&output, "Definitions\n===========\n") || !sb_append(&output, symbol_rows) ||
         !sb_append(&output, "\n\nReferences\n==========\n") || !sb_append(&output, ref_rows) ||
         !sb_append(&output, "\n\n") || !sb_append(&output, snippet_rows)) {
@@ -17441,14 +19392,15 @@ static void respond_initialize(const char *id)
 
 static void respond_tools_list(const char *id)
 {
-    static const char tools[] =
+    static const char tools_prefix[] =
         "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":["
         "{\"name\":\"list_repos\",\"description\":\"List indexed repositories with row"
         " counts and staleness notes; never builds an index.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{},\"required\":[]}},"
         "{\"name\":\"query\",\"description\":\"Ranked prefix search over definitions and"
-        " Clojure keywords. repo must be an exact Git worktree root; its"
-        " index is maintained automatically.\","
+        " Clojure keywords. Workspace is the default; scope can opt into resolved Maven"
+        " dependency sources. repo must be an exact Git worktree root; its index is"
+        " maintained automatically.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
         "\"description\":\"Exact non-bare Git worktree root path.\"},"
         "\"query\":{\"type\":\"string\"},\"limit\":{\"type\":\"number\",\"default\":10},"
@@ -17459,11 +19411,16 @@ static void respond_tools_list(const char *id)
         "\"variable\",\"struct\",\"union\",\"typedef\",\"keyword\"],"
         "\"description\":\"Restrict results to one kind. Symbol kinds filter the Symbols section"
         " and suppress the Keywords section; 'keyword' returns Clojure keyword usages only.\"},"
+        "\"scope\":{\"type\":\"string\",\"enum\":[\"workspace\",\"dependencies\",\"all\"],"
+        "\"default\":\"workspace\",\"description\":\"Search workspace definitions by default; dependency sources are opt-in.\"},"
+        "\"dependency\":{\"type\":\"string\",\"description\":\"Optional Maven GAV glob, for example org.jline:*.\"},"
         "\"path\":{\"type\":\"string\"}},"
-        "\"required\":[\"repo\",\"query\"]}},"
+        "\"required\":[\"repo\",\"query\"]}},";
+    static const char tools_suffix[] =
         "{\"name\":\"context\",\"description\":\"Show definitions and resolved call sites"
         " with snippets. Resolves Clojure :as/:refer, Java imports/receiver types, and C"
-        " linkage/aggregate members. Accepts str/join, Type.member, Type#member, package.Type,"
+        " linkage/aggregate members. Maven dependency definitions are an automatic fallback;"
+        " workspace call sites rank first. Accepts str/join, Type.member, Type#member, package.Type,"
         " and ptr->field qualifiers. repo must be an exact Git worktree root;"
         " its index is maintained automatically. namespace and path narrow candidate"
         " definitions and their references.\","
@@ -17474,7 +19431,8 @@ static void respond_tools_list(const char *id)
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
         " definitions (Java enclosing type; C file/type scope).\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
-        " matching definition file paths.\"},"
+        " matching definition file paths. A workspace calling file is also accepted as"
+        " dependency-resolution context.\"},"
         "\"excludeTests\":{\"type\":\"boolean\",\"default\":false,"
         "\"description\":\"Drop definitions, references, and snippets in test files"
         " (paths containing /test/ or /tests/) and test-kind definitions.\"}},"
@@ -17490,7 +19448,12 @@ static void respond_tools_list(const char *id)
         " namespace, size), Alias(repo, filePath, namespace, alias), Referred(repo, filePath,"
         " namespace, symbol; ':all' = Clojure whole-namespace referral or Java static"
         " wildcard import), Repo(path,"
-        " indexedAt). For Java, Symbol.namespace is the fully qualified enclosing type,"
+        " indexedAt), MavenProject(repo, rootPom, status, resolvedAt, message),"
+        " MavenInput(repo, path, size, mtimeSec, mtimeNsec),"
+        " DependencyArtifact(repo, coordinate, groupId, artifactId, version, scope, direct,"
+        " sourceJar, sourceRoot, checksum), DependencyFile(repo, filePath, artifactId,"
+        " sourcePath, modulePath)."
+        " For Java, Symbol.namespace is the fully qualified enclosing type,"
         " File.namespace is the package, Alias rows are normal imports, and Referred rows"
         " are static imports. For C, global namespaces are empty, static namespaces are file"
         " paths, and field namespaces are aggregate names. Join File via File.rowid = fileId; File.id is an unrelated"
@@ -17504,13 +19467,24 @@ static void respond_tools_list(const char *id)
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
         "\"description\":\"Repository path recorded in the cached index.\"}},"
         "\"required\":[\"repo\"]}}]}}";
-    int needed = snprintf(nullptr, 0, tools, id == nullptr ? "null" : id);
-    char *response = code_lens_alloc((size_t)needed + 1U);
+    int prefix_needed = snprintf(nullptr, 0, tools_prefix, id == nullptr ? "null" : id);
+    size_t suffix_len = strlen(tools_suffix);
+    char *response;
+
+    if ((prefix_needed < 0) || ((size_t)prefix_needed > SIZE_MAX - suffix_len - 1U)) {
+        respond_error(id, -32603, "out of memory");
+        return;
+    }
+    response = code_lens_alloc((size_t)prefix_needed + suffix_len + 1U);
     if (response == nullptr) {
         respond_error(id, -32603, "out of memory");
         return;
     }
-    (void)snprintf(response, (size_t)needed + 1U, tools, id == nullptr ? "null" : id);
+    (void)snprintf(response,
+                   (size_t)prefix_needed + 1U,
+                   tools_prefix,
+                   id == nullptr ? "null" : id);
+    (void)memcpy(response + (size_t)prefix_needed, tools_suffix, suffix_len + 1U);
     write_message(response);
 }
 
@@ -17521,6 +19495,8 @@ static char *call_tool(const char *tool_name, const char *args)
     char *name = json_get_string(args, "name");
     char *kind = json_get_string(args, "kind");
     char *path = json_get_string(args, "path");
+    char *scope = json_get_string(args, "scope");
+    char *dependency = json_get_string(args, "dependency");
     char *namespace_name = json_get_string(args, "namespace");
     int limit = json_get_int(args, "limit", 10);
     char *result = nullptr;
@@ -17533,6 +19509,8 @@ static char *call_tool(const char *tool_name, const char *args)
             .exclude_tests = json_get_bool(args, "excludeTests", false),
             .kind = kind,
             .path = path,
+            .scope = scope,
+            .dependency = dependency,
         };
         McpRepoSession session;
         char *error = mcp_repo_session_open(&session, repo);
@@ -17726,7 +19704,8 @@ static void print_usage(FILE *stream)
                   "  code-lens remove --repo <path>\n"
                   "  code-lens list\n"
                   "  code-lens query --repo <path> [--exclude-tests] [--kind <kind>] "
-                  "[--path <substring>] [--limit <n>] \"<terms>\"\n"
+                  "[--path <substring>] [--scope workspace|dependencies|all] "
+                  "[--dependency <gav-glob>] [--limit <n>] \"<terms>\"\n"
                   "  code-lens context --repo <path> --name <symbol> [--namespace <namespace>] "
                   "[--path <substring>] [--exclude-tests]\n"
                   "  code-lens sql --repo <path> \"<query>\"\n"
@@ -17779,7 +19758,8 @@ static bool arg_consumes_value(const char *arg)
 {
     return (strcmp(arg, "--repo") == 0) || (strcmp(arg, "--name") == 0) ||
            (strcmp(arg, "--limit") == 0) || (strcmp(arg, "--kind") == 0) ||
-           (strcmp(arg, "--path") == 0) || (strcmp(arg, "--namespace") == 0);
+           (strcmp(arg, "--path") == 0) || (strcmp(arg, "--namespace") == 0) ||
+           (strcmp(arg, "--scope") == 0) || (strcmp(arg, "--dependency") == 0);
 }
 
 static bool arg_is_standalone_flag(const char *arg)
@@ -17918,6 +19898,8 @@ static int run_query_like(int argc, char **argv, const char *command)
             .exclude_tests = arg_present(argc, argv, "--exclude-tests"),
             .kind = arg_value(argc, argv, "--kind"),
             .path = arg_value(argc, argv, "--path"),
+            .scope = arg_value(argc, argv, "--scope"),
+            .dependency = arg_value(argc, argv, "--dependency"),
         };
 
         result = code_lens_query_symbols_ex(repo, text, &options);

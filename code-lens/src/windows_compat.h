@@ -78,6 +78,9 @@ long cp_processor_count(void);
 int cp_lock_fd(int fd);
 int cp_unlock_fd(int fd);
 void cp_set_binary_stdio(void);
+/* Spawn argv[0] in cwd and wait up to timeout_ms. Returns the child exit
+ * code, 124 on timeout, or -1 when the process could not be started. */
+int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_ms);
 
 #define mkdir cp_mkdir
 #define mkstemp cp_mkstemp
