@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <string.h>
 
 static void cp_set_errno_from_win32(DWORD error)
@@ -486,4 +487,61 @@ static BOOL CALLBACK cp_once_callback(PINIT_ONCE once, PVOID parameter, PVOID *c
 int pthread_once(pthread_once_t *once, void (*routine)(void))
 {
     return InitOnceExecuteOnce(once, cp_once_callback, (PVOID)routine, NULL) != 0 ? 0 : EINVAL;
+}
+
+int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_ms)
+{
+    char previous[PATH_MAX];
+    intptr_t child;
+    DWORD wait_result;
+    DWORD exit_code = 1U;
+    bool changed_directory = false;
+    int saved_stdout = -1;
+
+    if ((argv == NULL) || (argv[0] == NULL) || (argv[0][0] == '\0')) {
+        return -1;
+    }
+    if ((cwd != NULL) && (cwd[0] != '\0')) {
+        if ((_getcwd(previous, sizeof(previous)) == NULL) || (_chdir(cwd) != 0)) {
+            return -1;
+        }
+        changed_directory = true;
+    }
+    (void)fflush(stdout);
+    saved_stdout = _dup(_fileno(stdout));
+    if ((saved_stdout < 0) || (_dup2(_fileno(stderr), _fileno(stdout)) != 0)) {
+        if (saved_stdout >= 0) {
+            (void)_close(saved_stdout);
+        }
+        if (changed_directory) {
+            (void)_chdir(previous);
+        }
+        return -1;
+    }
+    child = _spawnvp(_P_NOWAIT, argv[0], argv);
+    (void)fflush(stdout);
+    (void)_dup2(saved_stdout, _fileno(stdout));
+    (void)_close(saved_stdout);
+    if (changed_directory) {
+        (void)_chdir(previous);
+    }
+    if (child == (intptr_t)-1) {
+        return -1;
+    }
+
+    wait_result = WaitForSingleObject((HANDLE)child,
+                                      timeout_ms == 0U ? INFINITE : (DWORD)timeout_ms);
+    if (wait_result == WAIT_TIMEOUT) {
+        (void)TerminateProcess((HANDLE)child, 124U);
+        (void)WaitForSingleObject((HANDLE)child, INFINITE);
+        (void)CloseHandle((HANDLE)child);
+        return 124;
+    }
+    if ((wait_result != WAIT_OBJECT_0) ||
+        (GetExitCodeProcess((HANDLE)child, &exit_code) == 0)) {
+        (void)CloseHandle((HANDLE)child);
+        return -1;
+    }
+    (void)CloseHandle((HANDLE)child);
+    return exit_code <= (DWORD)INT_MAX ? (int)exit_code : 1;
 }

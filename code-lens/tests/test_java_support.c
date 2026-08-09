@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int java_assert(bool condition, const char *message)
@@ -367,12 +368,403 @@ done:
     return failed == 0 ? 0 : 1;
 }
 
+static void java_zip_write_u16(FILE *file, uint16_t value)
+{
+    unsigned char bytes[2] = {(unsigned char)(value & 0xffU),
+                              (unsigned char)((value >> 8U) & 0xffU)};
+    (void)fwrite(bytes, 1U, sizeof(bytes), file);
+}
+
+static void java_zip_write_u32(FILE *file, uint32_t value)
+{
+    unsigned char bytes[4] = {(unsigned char)(value & 0xffU),
+                              (unsigned char)((value >> 8U) & 0xffU),
+                              (unsigned char)((value >> 16U) & 0xffU),
+                              (unsigned char)((value >> 24U) & 0xffU)};
+    (void)fwrite(bytes, 1U, sizeof(bytes), file);
+}
+
+static uint32_t java_zip_crc32(const char *data, size_t len)
+{
+    uint32_t crc = UINT32_MAX;
+
+    for (size_t i = 0U; i < len; i++) {
+        crc ^= (uint32_t)(unsigned char)data[i];
+        for (unsigned int bit = 0U; bit < 8U; bit++) {
+            crc = (crc >> 1U) ^ ((crc & 1U) != 0U ? 0xedb88320U : 0U);
+        }
+    }
+    return ~crc;
+}
+
+static int java_write_source_jar(const char *path)
+{
+    /* Dependency archives are not workspace trees: package paths that happen
+     * to use an ignored workspace directory name must still be indexed. */
+    static const char entry_name[] = "vendor/org/example/lib/ExternalService.java";
+    static const char source[] =
+        "package org.example.lib;\n"
+        "/** Dependency service. */\n"
+        "public class ExternalService {\n"
+        "  /** Executes dependency work. */\n"
+        "  public String execute(int value) { return String.valueOf(value); }\n"
+        "}\n";
+    FILE *file = fopen(path, "wb");
+    uint32_t crc = java_zip_crc32(source, sizeof(source) - 1U);
+    long central_offset;
+    long end_offset;
+
+    if (file == nullptr) {
+        return -1;
+    }
+    java_zip_write_u32(file, 0x04034b50U);
+    java_zip_write_u16(file, 20U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U); /* stored */
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u32(file, crc);
+    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
+    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
+    java_zip_write_u16(file, (uint16_t)(sizeof(entry_name) - 1U));
+    java_zip_write_u16(file, 0U);
+    (void)fwrite(entry_name, 1U, sizeof(entry_name) - 1U, file);
+    (void)fwrite(source, 1U, sizeof(source) - 1U, file);
+
+    central_offset = ftell(file);
+    if (central_offset < 0L) {
+        (void)fclose(file);
+        return -1;
+    }
+    java_zip_write_u32(file, 0x02014b50U);
+    java_zip_write_u16(file, 20U);
+    java_zip_write_u16(file, 20U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u32(file, crc);
+    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
+    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
+    java_zip_write_u16(file, (uint16_t)(sizeof(entry_name) - 1U));
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u32(file, 0U);
+    java_zip_write_u32(file, 0U);
+    (void)fwrite(entry_name, 1U, sizeof(entry_name) - 1U, file);
+
+    end_offset = ftell(file);
+    if (end_offset < central_offset) {
+        (void)fclose(file);
+        return -1;
+    }
+    java_zip_write_u32(file, 0x06054b50U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 0U);
+    java_zip_write_u16(file, 1U);
+    java_zip_write_u16(file, 1U);
+    java_zip_write_u32(file, (uint32_t)(end_offset - central_offset));
+    java_zip_write_u32(file, (uint32_t)central_offset);
+    java_zip_write_u16(file, 0U);
+    {
+        int io_error = ferror(file);
+        int close_error = fclose(file);
+
+        return (io_error == 0) && (close_error == 0) ? 0 : -1;
+    }
+}
+
+static int java_count_lines(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    int count = 0;
+    int ch;
+
+    if (file == nullptr) {
+        return -1;
+    }
+    while ((ch = fgetc(file)) != EOF) {
+        if (ch == '\n') {
+            count++;
+        }
+    }
+    (void)fclose(file);
+    return count;
+}
+
+static char *java_first_row_value(const char *rows)
+{
+    const char *start = rows == nullptr ? nullptr : strchr(rows, '\n');
+    const char *end;
+    char *value;
+    size_t len;
+
+    if ((start == nullptr) || (start[1] == '\0')) {
+        return nullptr;
+    }
+    start++;
+    end = strchr(start, '\n');
+    len = end == nullptr ? strlen(start) : (size_t)(end - start);
+    value = code_lens_alloc(len + 1U);
+    if (value == nullptr) {
+        return nullptr;
+    }
+    (void)memcpy(value, start, len);
+    value[len] = '\0';
+    return value;
+}
+
+static int test_maven_dependency_sources(void)
+{
+    static const char wrapper[] =
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "echo run >> maven-invocations.txt\n"
+        "if [ -f fail-maven ]; then exit 42; fi\n"
+        "out=\n"
+        "for arg in \"$@\"; do\n"
+        "  case \"$arg\" in -DoutputDirectory=*) out=${arg#*=} ;; esac\n"
+        "done\n"
+        "test -n \"$out\"\n"
+        "dest=\"$out/org/example/demo-lib/1.0\"\n"
+        "mkdir -p \"$dest\"\n"
+        "cp fixture-sources.jar \"$dest/demo-lib-1.0-sources.jar\"\n";
+    static const char app_source[] =
+        "package demo.app;\n"
+        "import org.example.lib.ExternalService;\n"
+        "public class App {\n"
+        "  private final ExternalService service;\n"
+        "  public App(ExternalService service) { this.service = service; }\n"
+        "  public String run(int value) { return service.execute(value); }\n"
+        "}\n";
+    char template_buffer[PATH_MAX];
+    char resolved[PATH_MAX];
+    const char *tmp = getenv("TMPDIR");
+    const char *old_home = getenv("CODE_LENS_HOME");
+    const char *old_incremental = getenv("CODE_LENS_INCREMENTAL");
+    const char *old_maven = getenv("CODE_LENS_MAVEN");
+    const char *old_command = getenv("CODE_LENS_MAVEN_COMMAND");
+    char saved_home[PATH_MAX] = {0};
+    char saved_incremental[PATH_MAX] = {0};
+    char saved_maven[PATH_MAX] = {0};
+    char saved_command[PATH_MAX] = {0};
+    bool had_home = old_home != nullptr;
+    bool had_incremental = old_incremental != nullptr;
+    bool had_maven = old_maven != nullptr;
+    bool had_command = old_command != nullptr;
+    char *root;
+    char *repo;
+    char *home;
+    char *src;
+    char *wrapper_path;
+    char *jar_path;
+    char *pom_path;
+    char *count_path;
+    char *fail_path;
+    CodeLensIndexStats stats = {0};
+    CodeLensQueryOptions dependency_options = {
+        .limit = 10,
+        .kind = "method",
+        .scope = "dependencies",
+        .dependency = "org.example:*",
+    };
+    CodeLensQueryOptions wrong_dependency_options = {
+        .limit = 10,
+        .scope = "dependencies",
+        .dependency = "org.other:*",
+    };
+    char *workspace_query;
+    char *dependency_query;
+    char *wrong_dependency_query;
+    char *context;
+    char *rows;
+    int failed = 0;
+
+    if (had_home) (void)snprintf(saved_home, sizeof(saved_home), "%s", old_home);
+    if (had_incremental) {
+        (void)snprintf(saved_incremental, sizeof(saved_incremental), "%s", old_incremental);
+    }
+    if (had_maven) (void)snprintf(saved_maven, sizeof(saved_maven), "%s", old_maven);
+    if (had_command) (void)snprintf(saved_command, sizeof(saved_command), "%s", old_command);
+    if ((tmp == nullptr) || (tmp[0] == '\0')) tmp = "/tmp";
+    (void)snprintf(template_buffer,
+                   sizeof(template_buffer),
+                   "%s/code-lens-maven-java-XXXXXX",
+                   tmp);
+    root = mkdtemp(template_buffer);
+    if ((root == nullptr) || (realpath(root, resolved) == nullptr)) {
+        return 1;
+    }
+    root = resolved;
+    repo = code_lens_join_path(root, "repo");
+    home = code_lens_join_path(root, "home");
+    src = repo == nullptr ? nullptr : code_lens_join_path(repo, "src/demo/app");
+    wrapper_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "mvnw");
+    jar_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "fixture-sources.jar");
+    pom_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "pom.xml");
+    count_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "maven-invocations.txt");
+    fail_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "fail-maven");
+    if ((repo == nullptr) || (home == nullptr) || (src == nullptr) ||
+        (wrapper_path == nullptr) || (jar_path == nullptr) || (pom_path == nullptr) ||
+        (count_path == nullptr) || (fail_path == nullptr) ||
+        (code_lens_mkdir_p(src) != 0) ||
+        (code_lens_mkdir_p(home) != 0) ||
+        (java_write_file(src, "App.java", app_source) != 0) ||
+        (java_write_file(repo, "pom.xml", "<project/>\n") != 0) ||
+        (java_write_file(repo, "mvnw", wrapper) != 0) || (chmod(wrapper_path, 0755) != 0) ||
+        (java_write_file(repo, "fail-maven", "transient failure\n") != 0) ||
+        (java_write_source_jar(jar_path) != 0) ||
+        (setenv("CODE_LENS_HOME", home, 1) != 0) ||
+        (setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
+        (unsetenv("CODE_LENS_MAVEN_COMMAND") != 0) ||
+        (unsetenv("CODE_LENS_INCREMENTAL") != 0)) {
+        failed = 1;
+        goto done;
+    }
+
+    if (code_lens_index_repository(repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(stats.file_count == 1U,
+                          "first Maven failure publishes a workspace-only partial index");
+    failed |= java_assert(java_count_lines(count_path) == 1,
+                          "Maven wrapper invoked on first index");
+    rows = code_lens_run_sql(repo,
+                             "SELECT status FROM MavenProject WHERE repo = "
+                             "(SELECT path FROM Repo LIMIT 1)");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "\nfailed\n") != nullptr),
+                          "first Maven failure records retryable status metadata");
+
+    if ((unlink(fail_path) != 0) || (code_lens_index_repository(repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(stats.file_count == 2U,
+                          "failed Maven status retries without an input edit");
+    failed |= java_assert(java_count_lines(count_path) == 2,
+                          "retry invokes Maven and indexes dependency sources");
+
+    workspace_query = code_lens_query_symbols(repo, "execute", 10);
+    failed |= java_assert((workspace_query != nullptr) &&
+                              (strstr(workspace_query, "ExternalService") == nullptr),
+                          "dependency symbols stay out of default workspace query");
+    dependency_query =
+        code_lens_query_symbols_ex(repo, "execute", &dependency_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "execute|method|") != nullptr) &&
+                              (strstr(dependency_query, "org.example:demo-lib:1.0") != nullptr) &&
+                              (strstr(dependency_query, "|dependency|") != nullptr),
+                          "dependency-scoped query returns coordinate and origin");
+    wrong_dependency_query =
+        code_lens_query_symbols_ex(repo, "execute", &wrong_dependency_options);
+    failed |= java_assert((wrong_dependency_query != nullptr) &&
+                              (strstr(wrong_dependency_query, "execute|method|") == nullptr),
+                          "dependency coordinate glob filters results");
+
+    {
+        CodeLensContextOptions context_options = {.path = src};
+
+        context = code_lens_context_symbol_ex(
+            repo, "ExternalService#execute", &context_options);
+    }
+    failed |= java_assert((context != nullptr) &&
+                              (strstr(context, "showing Maven dependency definitions") != nullptr) &&
+                              (strstr(context, "org.example.lib.ExternalService") != nullptr) &&
+                              (strstr(context, "org.example:demo-lib:1.0") != nullptr) &&
+                              (strstr(context, "service.execute") != nullptr) &&
+                              (strstr(context, "|workspace|") != nullptr) &&
+                              (strstr(context, "Executes dependency work.") != nullptr),
+                          "context falls back to dependency definition and ranks workspace call");
+    rows = code_lens_run_sql(repo,
+                             "SELECT COUNT(*) FROM DependencyArtifact WHERE coordinate = "
+                             "'org.example:demo-lib:1.0'");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "\n1\n") != nullptr),
+                          "dependency metadata is exposed through SQL");
+
+    {
+        char *dependency_file;
+
+        rows = code_lens_run_sql(repo, "SELECT filePath FROM DependencyFile LIMIT 1");
+        dependency_file = java_first_row_value(rows);
+        if ((dependency_file == nullptr) || (unlink(dependency_file) != 0) ||
+            (code_lens_index_repository(repo, &stats) != 0)) {
+            failed = 1;
+            goto done;
+        }
+        failed |= java_assert(java_count_lines(count_path) == 3,
+                              "missing dependency cache file reruns Maven");
+        dependency_query =
+            code_lens_query_symbols_ex(repo, "execute", &dependency_options);
+        failed |= java_assert((dependency_query != nullptr) &&
+                                  (strstr(dependency_query, "execute|method|") != nullptr),
+                              "Maven refresh repairs a missing materialized source");
+    }
+
+    if ((java_write_file(src,
+                         "Extra.java",
+                         "package demo.app; public class Extra {}\n") != 0) ||
+        (setenv("CODE_LENS_INCREMENTAL", "force", 1) != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(count_path) == 3,
+                          "ordinary Java refresh reuses dependency sources without Maven");
+
+    if ((java_write_file(repo, "fail-maven", "refresh failure\n") != 0) ||
+        (java_write_file(repo, "pom.xml", "<project><!-- changed --></project>\n") != 0)) {
+        failed = 1;
+        goto done;
+    }
+    if (code_lens_index_repository(repo, &stats) == 0) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(count_path) == 4,
+                          "failed Maven refresh invokes the wrapper once");
+    dependency_query =
+        code_lens_query_symbols_ex(repo, "execute", &dependency_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "org.example:demo-lib:1.0") != nullptr),
+                          "failed Maven refresh leaves the published dependency index readable");
+
+    if ((unlink(fail_path) != 0) || (code_lens_index_repository(repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(count_path) == 5,
+                          "Maven input change refreshes dependency sources after retry");
+    dependency_query =
+        code_lens_query_symbols_ex(repo, "execute", &dependency_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "org.example:demo-lib:1.0") != nullptr),
+                          "dependency remains queryable after Maven refresh");
+
+done:
+    if (had_command) (void)setenv("CODE_LENS_MAVEN_COMMAND", saved_command, 1);
+    else (void)unsetenv("CODE_LENS_MAVEN_COMMAND");
+    if (had_maven) (void)setenv("CODE_LENS_MAVEN", saved_maven, 1);
+    else (void)unsetenv("CODE_LENS_MAVEN");
+    if (had_incremental) (void)setenv("CODE_LENS_INCREMENTAL", saved_incremental, 1);
+    else (void)unsetenv("CODE_LENS_INCREMENTAL");
+    if (had_home) (void)setenv("CODE_LENS_HOME", saved_home, 1);
+    else (void)unsetenv("CODE_LENS_HOME");
+    if ((root != nullptr) && (code_lens_remove_tree(root) != 0)) {
+        (void)fprintf(stderr, "Maven dependency test warning: failed to remove %s\n", root);
+    }
+    return failed == 0 ? 0 : 1;
+}
+
 int test_java_support(void)
 {
     int failed = 0;
 
     failed |= test_java_parser();
     failed |= test_java_index();
+    failed |= test_maven_dependency_sources();
     if (failed == 0) {
         (void)fprintf(stderr, "Java parser and indexing tests passed\n");
     }

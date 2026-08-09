@@ -528,7 +528,7 @@ Java type and member symbols use the fully qualified enclosing type as their
 use `com.example.Service`). `File.namespace` remains the Java package. This
 lets the existing context query match a reference's resolved target directly
 to candidate definitions. Resolution is deliberately syntax-driven: code-lens
-does not load classpaths or run javac, so dynamic/chained receiver types that
+does not run javac or perform compiler attribution, so dynamic/chained receiver types that
 require compiler attribution may retain an empty target and are not claimed as
 resolved call sites.
 
@@ -537,6 +537,53 @@ Entry points are `code_lens_java_parser_new` / `_delete`,
 `code_lens_parse_java_source`. `tests/test_java_support.c` covers extraction,
 imports, target resolution, walking, indexing, kind filters, SQL, and dotted
 Java context lookup.
+
+### Maven dependency source sets
+
+A root `pom.xml` activates `maven_dependencies_prepare` before a full index
+attempt. It snapshots every reactor POM, recursively discovered local parent
+POM, `mvnw`/`mvnw.cmd`, and every file below `.mvn`. When that snapshot still
+matches `MavenInput`, the prior `DependencyArtifact` rows and checksum-keyed
+materialized source roots are reused. The staleness engine checks the same
+inputs and marks any changed/missing dependency source file as a dependency
+change, forcing a full rebuild rather than incrementally deleting external
+rows. A stored `failed` status (or `disabled` after Maven is enabled) is
+intentionally non-reusable and marks the index stale, so transient first-index
+failures retry without requiring an input edit.
+
+On a cache miss, `run_process_with_timeout` invokes the wrapper or Maven in
+batch/no-transfer-progress mode and runs the pinned Maven Dependency Plugin's
+`copy-dependencies` goal with the `sources` classifier, test classpath scope,
+reactor exclusion, and repository-layout output. The current resolution model
+is deliberately repository-wide: artifacts are the union of reactor modules,
+`DependencyFile.modulePath` is the repository root, `scope` is
+`test-classpath`, and `direct` is `-1` because `copy-dependencies` does not expose
+module membership or graph depth. Per-module attribution can be added later
+without changing the hot source tables. The 120-second default is
+overridden by `CODE_LENS_MAVEN_TIMEOUT_MS`; `CODE_LENS_MAVEN=0` disables the
+feature. POSIX uses `fork`/`exec` plus timed `waitpid`; Windows uses the CRT
+spawn API plus `WaitForSingleObject`, terminating a timed-out process.
+
+The copied repository layout supplies GAV metadata without filename guessing.
+The built-in ZIP reader validates central/local bounds, rejects encrypted,
+ZIP64, unsafe, and unsupported entries, verifies CRC-32, and extracts only
+stored/deflated `.java` entries. Extracted roots live at
+`dependencies/sources/<group>/<artifact>/<version>/<FNV-1a checksum>` below
+`CODE_LENS_HOME`; persistent per-checksum advisory locks make publication safe
+across repositories and processes. The complete source is therefore available
+to ordinary file tools, not only as database snippets.
+
+Dependency Java files pass through the normal parser/emitter and hot index
+tables. `DependencyFile` links those rows to `DependencyArtifact` without
+adding origin columns to `File`, `Symbol`, or `RefData`, which keeps the raw
+emitter's high-volume layouts unchanged. Query defaults to rows with no
+`DependencyFile`; `scope=dependencies|all` and the GAV glob opt in. Context
+selects workspace candidates first, falls back to dependency candidates, and
+orders workspace reference sites before dependency-internal references. Maven
+metadata is written with ordinary prepared statements inside the same staging
+transaction, so raw-table grafting and atomic publication retain their normal
+failure guarantees. A Maven refresh failure with an existing index aborts
+before staging and leaves that generation readable.
 
 ### C
 
@@ -617,19 +664,31 @@ so headers stay stable regardless of SQLite's default column naming.
 ### Schema
 
 The schema is created by one DDL block (`index_schema_sql`), stamped with
-`PRAGMA user_version = 11` (`CODE_LENS_INDEX_FORMAT_VERSION`). Eight row
+`PRAGMA user_version = 13` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
 tables plus one FTS5 index table and two compatibility views:
 
 | Table | Primary key | Columns |
 | --- | --- | --- |
 | `Repo` | `path` | `path`, `indexedAt` (TEXT); `fileCount`, `symbolCount`, `referenceCount`, `keywordCount`, `aliasCount` (INTEGER) |
-| `File` | `id` | `id`, `repo`, `path`, `namespace` (TEXT); `size`, `mtimeSec`, `mtimeNsec` (INTEGER) |
+| `File` | `id` | `id`, `repo`, `path`, `namespace` (TEXT); stat snapshot and per-file Ref/Keyword/Symbol range columns (INTEGER) |
 | `Symbol` | `id` | `id`, `repo`, `name`, `kind`, `namespace`, `filePath` (TEXT); `startLine`, `endLine` (INTEGER); `content`, `doc` (TEXT) |
 | `Term` | `id` | `id` (INTEGER); `text` (TEXT, unique) |
 | `RefData` | `id` | `id`, `fileId`, `symbolTerm`, `lineNumber`, `columnNumber`, `startByte`, `endByte`, `symbolBaseTerm`, `targetNamespaceTerm` (all INTEGER) |
 | `KeywordData` | `id` | `id`, `fileId`, `keywordTerm`, `lineNumber`, `columnNumber`, `keywordBaseTerm`, `qualifierTerm`, `targetNamespaceTerm` (all INTEGER) |
 | `Alias` | `id` | `id`, `repo`, `filePath`, `namespace`, `alias` (TEXT) |
 | `Referred` | `id` | `id`, `repo`, `filePath`, `namespace`, `symbol` (TEXT) |
+| `MavenProject` | `repo` | `repo`, `rootPom`, `status`, `resolvedAt`, `message` (TEXT) |
+| `MavenInput` | `id` | `id`, `repo`, `path` (TEXT); `size`, `mtimeSec`, `mtimeNsec` (INTEGER) |
+| `DependencyArtifact` | `id` | `id`, `repo`, `coordinate`, `groupId`, `artifactId`, `version`, `scope`, `sourceJar`, `sourceRoot`, `checksum` (TEXT); `direct` (INTEGER, `-1` when Maven did not expose directness) |
+| `DependencyFile` | `id` | `id`, `repo`, `filePath`, `artifactId`, `sourcePath`, `modulePath` (TEXT) |
+
+Maven rows are low-volume metadata. `DependencyArtifact` records the resolved
+GAV, copied source JAR, checksum-keyed extraction root, and classpath scope.
+`DependencyFile.artifactId` links each external `File.path` to that artifact;
+absence of a mapping is the definition of workspace scope. `MavenInput` is the
+stat snapshot used to avoid invoking Maven on ordinary source-only refreshes.
+These tables and their lookup indexes are populated through SQLite even when
+the hot source tables use the raw page emitter.
 
 `RefData` and `KeywordData` are the two high-volume tables (hundreds of
 thousands of rows on large repos), so they are kept deliberately narrow and
@@ -945,6 +1004,11 @@ orphaned index by its stored repo path.
     section only, and an unrecognized kind prepends a note naming the valid
     values (see `query_kind_list`). `path` is a case-insensitive substring
     match on `filePath` for both symbol and keyword rows.
+  - Scope filtering joins `DependencyFile`/`DependencyArtifact` only after the
+    FTS match. `workspace` is the default and requires no dependency mapping;
+    `dependencies` requires one; `all` allows both and orders workspace rows
+    first. `dependency` is a bound SQLite `GLOB` against the Maven GAV. Symbol
+    and keyword rows expose their origin and coordinate.
   - Matching is word- and prefix-based, not substring-based: `alid` does not
     match `validator`. This is a deliberate FTS trade-off; the tokenizer's
     extra separators make Clojure name parts (`refund`, `date`, `type`, ...)
@@ -973,6 +1037,14 @@ orphaned index by its stored repo path.
     Context also appends a `Reference snippets` section rendered lazily from
     the current source files by mapping each referenced file and scanning
     around the stored byte span; snippets are not stored in SQLite.
+  - candidate scope is workspace-first. If no workspace definition survives
+    the name/namespace/path/test filters, context reruns against dependency
+    candidates and prepends an explicit fallback note. A Java type qualifier
+    is used to infer a unique fully qualified enclosing type. References from
+    the workspace and from dependency sources remain visible, carry separate
+    origin/coordinate columns, and sort workspace-first. If `path` names a
+    workspace calling file with no definition, dependency fallback treats it
+    as source context rather than filtering external definition paths.
   - `exclude_tests` (MCP `excludeTests`, CLI `--exclude-tests`) applies
     query's test-path predicate (`/test/`, `/tests/`) to all three queries
     and additionally drops `test`-kind definition rows.
@@ -996,10 +1068,6 @@ orphaned index by its stored repo path.
   statement of a multi-statement string runs (prepare stops at `;`). The
   progress-handler deadline backstops runaway queries.
 
-Known quirk (documented deliberately): the CLI strips `--limit <n>` out of
-the free query text (`free_arg_text`) but never parses it; the CLI query
-limit is hardcoded to 10. Only the MCP `query` tool has a working `limit`.
-
 ## 14. CLI reference
 
 Dispatcher: `code_lens_cli_main`. Usage text (`print_usage`):
@@ -1013,7 +1081,8 @@ Usage:
   code-lens index --repo <path>
   code-lens remove --repo <path>
   code-lens list
-  code-lens query --repo <path> "<terms>"
+  code-lens query --repo <path> [--scope workspace|dependencies|all]
+                  [--dependency <gav-glob>] "<terms>"
   code-lens context --repo <path> --name <symbol> [--exclude-tests]
                      [--namespace <namespace>] [--path <substring>]
   code-lens sql --repo <path> "<query>"
