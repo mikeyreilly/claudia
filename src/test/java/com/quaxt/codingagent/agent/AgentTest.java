@@ -7,10 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.ai.Retry;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
+import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
+import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.UserMessage;
@@ -65,6 +69,59 @@ class AgentTest {
 		assertTrue(events.stream().anyMatch(AgentEvent.ToolExecutionUpdate.class::isInstance));
 		assertTrue(events.stream().anyMatch(AgentEvent.ToolExecutionEnd.class::isInstance));
 		assertInstanceOf(AgentEvent.AgentEnd.class, events.getLast());
+	}
+
+	@Test
+	void retriesATransientFailureWithoutRepeatingCompletedTools() throws Exception {
+		FauxProvider provider = new FauxProvider();
+		AssistantMessage transientFailure = new AssistantMessage("faux", "faux", "faux-1");
+		transientFailure.stopReason = StopReason.ERROR;
+		transientFailure.errorMessage =
+				"503: upstream connect error or disconnect/reset before headers. reset reason: connection termination";
+		provider.setResponses(List.of(
+				new FauxProvider.ResponseStep.Message(FauxProvider.toolCall("read", Json.object().put("path", "README.md"))),
+				new FauxProvider.ResponseStep.Message(transientFailure),
+				new FauxProvider.ResponseStep.Factory(request -> {
+					assertEquals(3, request.context().messages.size());
+					assertInstanceOf(ToolResultMessage.class, request.context().messages.getLast());
+					return FauxProvider.text("Recovered and finished.");
+				})));
+		Agent agent = new Agent("", provider.models().getFirst(), provider::stream);
+		agent.setRetryPolicy(new Retry.Policy(true, 2, 0));
+		AtomicInteger toolCalls = new AtomicInteger();
+		agent.state().tools.add(new AgentTool() {
+			@Override public String name() { return "read"; }
+			@Override public String description() { return "Read a file"; }
+			@Override public ObjectNode parameters() { return Json.object().put("type", "object"); }
+			@Override
+			public ToolResult execute(
+					String toolCallId,
+					ObjectNode arguments,
+					com.quaxt.codingagent.ai.util.AbortSignal signal,
+					java.util.function.Consumer<ToolResult> onUpdate) {
+				toolCalls.incrementAndGet();
+				return ToolResult.text("contents");
+			}
+		});
+		List<AgentEvent> events = new ArrayList<>();
+		agent.subscribe(events::add);
+
+		List<Message> created = agent.prompt("Finish the task");
+
+		assertEquals(3, provider.state().callCount());
+		assertEquals(1, toolCalls.get());
+		assertEquals(4, created.size());
+		assertEquals(4, agent.state().messages.size());
+		assertEquals("Recovered and finished.", ((AssistantMessage) agent.state().messages.getLast()).text());
+		AgentEvent.AutoRetryStart retry = assertInstanceOf(
+				AgentEvent.AutoRetryStart.class,
+				events.stream().filter(AgentEvent.AutoRetryStart.class::isInstance).findFirst().orElseThrow());
+		assertEquals(1, retry.attempt());
+		assertEquals(2, retry.maxAttempts());
+		assertTrue(events.stream()
+				.filter(AgentEvent.AutoRetryEnd.class::isInstance)
+				.map(AgentEvent.AutoRetryEnd.class::cast)
+				.anyMatch(AgentEvent.AutoRetryEnd::success));
 	}
 
 	@Test

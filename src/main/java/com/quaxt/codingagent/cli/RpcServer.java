@@ -215,6 +215,19 @@ final class RpcServer {
 				node.put("type", "turn_end");
 				node.put("toolResultCount", end.toolResults().size());
 			}
+			case AgentEvent.AutoRetryStart retry -> {
+				node.put("type", "auto_retry_start");
+				node.put("attempt", retry.attempt());
+				node.put("maxAttempts", retry.maxAttempts());
+				node.put("delayMs", retry.delayMs());
+				node.put("error", retry.errorMessage());
+			}
+			case AgentEvent.AutoRetryEnd retry -> {
+				node.put("type", "auto_retry_end");
+				node.put("success", retry.success());
+				node.put("attempt", retry.attempt());
+				if (retry.finalError() != null) node.put("error", retry.finalError());
+			}
 			case AgentEvent.MessageStart start -> {
 				node.put("type", "message_start");
 				node.put("role", start.message().role());

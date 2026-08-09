@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.tui;
 
+import java.util.List;
 import java.util.Map;
 import org.jline.keymap.KeyMap;
 
@@ -7,6 +8,7 @@ import org.jline.keymap.KeyMap;
 public final class Keybindings {
 	public static final Map<String, String> DEFAULT_EDITOR_KEYBINDINGS = Map.of(
 			"submit", "enter",
+			"newline", "ctrl-enter",
 			"cancel", "ctrl-c",
 			"deletePreviousWord", "alt-backspace");
 	public static final Map<String, String> DEFAULT_APP_KEYBINDINGS = Map.of(
@@ -17,6 +19,22 @@ public final class Keybindings {
 			"toggleThinking", "ctrl-t");
 
 	private Keybindings() {}
+
+	/**
+	 * Ctrl+Enter is LF while unmodified Enter is CR in raw mode on Windows and
+	 * many Unix terminals. The CSI variants cover terminals which report key
+	 * modifiers explicitly.
+	 */
+	static List<String> editorSequences(String action) {
+		String binding = DEFAULT_EDITOR_KEYBINDINGS.get(action);
+		if ("ctrl-enter".equals(binding)) {
+			return List.of(KeyMap.ctrl('J'), "\u001b[13;5u", "\u001b[27;5;13~");
+		}
+		if ("enter".equals(binding)) {
+			return List.of(KeyMap.ctrl('M'));
+		}
+		throw new IllegalArgumentException("Unsupported editor keybinding: " + action + "=" + binding);
+	}
 
 	static String appSequence(String action) {
 		String binding = DEFAULT_APP_KEYBINDINGS.get(action);
