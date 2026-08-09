@@ -18,6 +18,12 @@ public sealed interface AgentEvent {
 
 	record TurnEnd(Message assistant, java.util.List<ToolResultMessage> toolResults) implements AgentEvent {}
 
+	/** A transient provider failure will be retried after the indicated delay. */
+	record AutoRetryStart(int attempt, int maxAttempts, long delayMs, String errorMessage) implements AgentEvent {}
+
+	/** The retry sequence either recovered or reached a terminal failure. */
+	record AutoRetryEnd(boolean success, int attempt, String finalError) implements AgentEvent {}
+
 	record MessageStart(Message message) implements AgentEvent {}
 
 	record MessageUpdate(AssistantMessageEvent providerEvent) implements AgentEvent {}

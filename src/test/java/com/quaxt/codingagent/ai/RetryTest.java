@@ -24,6 +24,9 @@ class RetryTest {
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "429 Too Many Requests")));
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "socket hang up")));
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "Overloaded")));
+		assertTrue(Retry.isRetryableAssistantError(message(
+				StopReason.ERROR,
+				"503: upstream connect error or disconnect/reset before headers. reset reason: connection termination")));
 	}
 
 	@Test

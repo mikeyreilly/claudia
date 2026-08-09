@@ -51,6 +51,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 		this.supportsSuspend = supportsSuspend;
 		shellAttributes = new Attributes(terminal.getAttributes());
 		reader = LineReaderBuilder.builder().terminal(terminal).build();
+		installEditorBindings();
 		previousContinueHandler = supportsSuspend
 				? terminal.handle(Terminal.Signal.CONT, this::handleContinue)
 				: null;
@@ -80,6 +81,19 @@ public final class InteractiveTerminal implements AutoCloseable {
 			terminal.setSize(org.jline.terminal.Size.of(
 					columns > 0 ? columns : DEFAULT_COLUMNS,
 					rows > 0 ? rows : DEFAULT_ROWS));
+		}
+	}
+
+	private void installEditorBindings() {
+		String widgetName = "codingagent-insert-newline";
+		reader.getWidgets().put(widgetName, () -> {
+			reader.getBuffer().write('\n');
+			return true;
+		});
+		Reference insertNewline = new Reference(widgetName);
+		String[] sequences = Keybindings.editorSequences("newline").toArray(String[]::new);
+		for (var keyMap : reader.getKeyMaps().values()) {
+			keyMap.bind(insertNewline, sequences);
 		}
 	}
 

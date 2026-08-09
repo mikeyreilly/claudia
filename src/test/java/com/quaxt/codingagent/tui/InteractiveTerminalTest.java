@@ -27,6 +27,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		CountDownLatch started = new CountDownLatch(1);
 		CountDownLatch interrupted = new CountDownLatch(1);
+		CountDownLatch inputMayFinish = new CountDownLatch(1);
 
 		try (InteractiveTerminal interactive = new InteractiveTerminal(terminal, () -> {}, false)) {
 			Thread input = Thread.ofVirtual().start(() -> {
@@ -34,21 +35,27 @@ class InteractiveTerminalTest {
 					started.await();
 					fixture.input().write(0x1b);
 					fixture.input().flush();
+					inputMayFinish.await();
 				} catch (Exception error) {
 					throw new AssertionError(error);
 				}
 			});
 
-			String result = assertTimeoutPreemptively(
-					Duration.ofSeconds(5),
-					() -> interactive.runInterruptibly(
-							() -> {
-								assertFalse(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
-								started.countDown();
-								assertTrue(interrupted.await(5, TimeUnit.SECONDS));
-								return "stopped";
-							},
-							interrupted::countDown));
+			String result;
+			try {
+				result = assertTimeoutPreemptively(
+						Duration.ofSeconds(5),
+						() -> interactive.runInterruptibly(
+								() -> {
+									assertFalse(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
+									started.countDown();
+									assertTrue(interrupted.await(5, TimeUnit.SECONDS));
+									return "stopped";
+								},
+								interrupted::countDown));
+			} finally {
+				inputMayFinish.countDown();
+			}
 			input.join();
 
 			assertEquals("stopped", result);
@@ -69,6 +76,20 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
+	void ctrlEnterInsertsANewlineAndEnterSubmitsThePrompt() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write("first\nsecond\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+
+			assertEquals("first\nsecond", line);
+		}
+	}
+
+	@Test
 	void restoresLineEditorScreenAndInputBufferAfterSuspend() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
@@ -82,7 +103,7 @@ class InteractiveTerminalTest {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
 					suspended.set(true);
 					fixture.output().writeBytes("shell activity\n".getBytes(StandardCharsets.UTF_8));
-					fixture.input().write("d\n".getBytes(StandardCharsets.UTF_8));
+					fixture.input().write("d\r".getBytes(StandardCharsets.UTF_8));
 					fixture.input().flush();
 				},
 				true)) {
@@ -127,7 +148,7 @@ class InteractiveTerminalTest {
 		try (InteractiveTerminal interactive = new InteractiveTerminal(
 				fixture.terminal(),
 				() -> {
-					fixture.input().write('\n');
+					fixture.input().write('\r');
 					fixture.input().flush();
 				},
 				true)) {
@@ -160,7 +181,7 @@ class InteractiveTerminalTest {
 				}
 				interactive.printAbove("details opened");
 			});
-			fixture.input().write("ab\u000fcd\n".getBytes(StandardCharsets.UTF_8));
+			fixture.input().write("ab\u000fcd\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
@@ -185,7 +206,7 @@ class InteractiveTerminalTest {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
 					suspended.set(true);
 					fixture.output().writeBytes("nested shell activity\n".getBytes(StandardCharsets.UTF_8));
-					fixture.input().write("\rcd\n".getBytes(StandardCharsets.UTF_8));
+					fixture.input().write("\rcd\r".getBytes(StandardCharsets.UTF_8));
 					fixture.input().flush();
 				},
 				true)) {

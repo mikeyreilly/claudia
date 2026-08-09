@@ -164,7 +164,7 @@ final class InteractiveShell {
 				return true;
 			}
 			case "/help" ->
-					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Esc interrupt the active turn; Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
+					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Ctrl-Enter insert a newline; Esc interrupt the active turn; Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
 			case "/details" -> showLatestTurnDetails(false);
 			case "/resume" -> resumeSession();
 			case "/login" -> login();
@@ -510,7 +510,7 @@ final class InteractiveShell {
 		header.append('\n');
 		header.append(model == null
 				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-				: "Enter a prompt. Esc interrupts; Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+				: "Enter submits; Ctrl-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
 	}
@@ -597,6 +597,12 @@ final class InteractiveShell {
 				description,
 				session.id() + " " + session.provider() + " " + session.model() + " "
 						+ session.firstMessage() + " " + session.allMessagesText());
+	}
+
+	private static String formatRetryDelay(long delayMs) {
+		if (delayMs < 1_000) return delayMs + "ms";
+		if (delayMs % 1_000 == 0) return delayMs / 1_000 + "s";
+		return String.format(java.util.Locale.ROOT, "%.1fs", delayMs / 1_000.0);
 	}
 
 	private static String formatAge(Instant instant) {
@@ -855,6 +861,13 @@ final class InteractiveShell {
 			case AgentEvent.MessageUpdate update -> onMessageUpdate(update.providerEvent());
 			case AgentEvent.MessageEnd end -> {
 				if (end.message() instanceof AssistantMessage) finishStreamOutput();
+			}
+			case AgentEvent.AutoRetryStart retry -> {
+				finishStreamOutput();
+				terminal.println("\nTransient provider error; retrying in "
+						+ formatRetryDelay(retry.delayMs())
+						+ " (" + retry.attempt() + "/" + retry.maxAttempts() + "): "
+						+ retry.errorMessage());
 			}
 			case AgentEvent.ToolExecutionStart start -> {
 				finishStreamOutput();

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import com.quaxt.codingagent.ai.Retry;
 import com.quaxt.codingagent.ai.StreamOptions;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
@@ -34,6 +35,7 @@ public final class Agent {
 	private final List<Consumer<AgentEvent>> listeners = new CopyOnWriteArrayList<>();
 	private volatile AbortSignal activeSignal;
 	private String apiKey;
+	private Retry.Policy retryPolicy = Retry.Policy.DEFAULT;
 
 	public Agent(String systemPrompt, com.quaxt.codingagent.ai.types.Model model, StreamFunction streamFunction) {
 		this.state = new AgentState(systemPrompt, model);
@@ -47,6 +49,11 @@ public final class Agent {
 	/** Overrides environment-based provider authentication for future requests. */
 	public void setApiKey(String apiKey) {
 		this.apiKey = apiKey;
+	}
+
+	/** Configures automatic retries for transient provider and transport failures. */
+	public void setRetryPolicy(Retry.Policy retryPolicy) {
+		this.retryPolicy = java.util.Objects.requireNonNull(retryPolicy, "retryPolicy");
 	}
 
 	public AutoCloseable subscribe(Consumer<AgentEvent> listener) {
@@ -114,6 +121,7 @@ public final class Agent {
 			throw new IllegalStateException("Agent is already processing");
 		}
 		activeSignal = new AbortSignal();
+		state.errorMessage = null;
 		state.isStreaming = true;
 		List<Message> newMessages = new ArrayList<>();
 		try {
@@ -156,8 +164,22 @@ public final class Agent {
 	}
 
 	private AssistantMessage streamAssistant() throws InterruptedException {
+		AssistantMessage[] lastAttempt = new AssistantMessage[1];
+		return Retry.retryAssistantCall(
+				() -> lastAttempt[0] = streamAssistantOnce(),
+				retryPolicy,
+				activeSignal,
+				retryCallbacks(() -> discardAssistantAttempt(lastAttempt[0])));
+	}
+
+	private AssistantMessage streamAssistantOnce() throws InterruptedException {
 		Context context = new Context(state.systemPrompt);
-		context.messages.addAll(state.messages);
+		for (Message message : state.messages) {
+			if (!(message instanceof AssistantMessage assistant)
+					|| (assistant.stopReason != StopReason.ERROR && assistant.stopReason != StopReason.ABORTED)) {
+				context.messages.add(message);
+			}
+		}
 		for (AgentTool tool : state.tools) {
 			context.tools.add(new Tool(tool.name(), tool.description(), tool.parameters()));
 		}
@@ -191,6 +213,37 @@ public final class Agent {
 		return finalMessage;
 	}
 
+	private void discardAssistantAttempt(AssistantMessage attempt) {
+		state.streamingMessage = null;
+		if (attempt == null) return;
+		for (int index = state.messages.size() - 1; index >= 0; index--) {
+			if (state.messages.get(index) == attempt) {
+				state.messages.remove(index);
+				return;
+			}
+		}
+	}
+
+	private Retry.Callbacks retryCallbacks(Runnable beforeRetryAttempt) {
+		return new Retry.Callbacks() {
+			@Override
+			public void onRetryScheduled(
+					int attempt, int maxAttempts, long delayMs, String errorMessage) {
+				emit(new AgentEvent.AutoRetryStart(attempt, maxAttempts, delayMs, errorMessage));
+			}
+
+			@Override
+			public void onRetryAttemptStart() {
+				if (beforeRetryAttempt != null) beforeRetryAttempt.run();
+			}
+
+			@Override
+			public void onRetryFinished(boolean success, int attempt, String finalError) {
+				emit(new AgentEvent.AutoRetryEnd(success, attempt, finalError));
+			}
+		};
+	}
+
 	private void compactInternal() throws InterruptedException {
 		long tokensBefore = estimateTokens(state.messages);
 		state.isCompacting = true;
@@ -215,6 +268,11 @@ public final class Agent {
 	}
 
 	private AssistantMessage complete(Context context, AbortSignal signal) throws InterruptedException {
+		return Retry.retryAssistantCall(
+				() -> completeOnce(context, signal), retryPolicy, signal, retryCallbacks(null));
+	}
+
+	private AssistantMessage completeOnce(Context context, AbortSignal signal) throws InterruptedException {
 		AssistantMessageEventStream stream = streamFunction.stream(
 				state.model, context, new StreamOptions().signal(signal).reasoning(state.thinkingLevel).apiKey(apiKey).maxTokens(4_096));
 		AssistantMessage response = null;
