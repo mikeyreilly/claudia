@@ -164,7 +164,7 @@ final class InteractiveShell {
 				return true;
 			}
 			case "/help" ->
-					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Ctrl-Enter insert a newline; Esc interrupt the active turn; Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
+					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
 			case "/details" -> showLatestTurnDetails(false);
 			case "/resume" -> resumeSession();
 			case "/login" -> login();
@@ -493,7 +493,7 @@ final class InteractiveShell {
 		Set<String> renderedToolResults = new HashSet<>();
 		for (Message message : messages) {
 			switch (message) {
-				case UserMessage user -> screen.append("\n> ").append(user.text()).append('\n');
+				case UserMessage user -> screen.append('\n').append(theme.promptArea("> " + user.text())).append('\n');
 				case AssistantMessage assistant -> appendAssistant(
 						screen, assistant, hideThinking, theme, toolResults, renderedToolResults);
 				case ToolResultMessage result -> {
@@ -510,7 +510,7 @@ final class InteractiveShell {
 		header.append('\n');
 		header.append(model == null
 				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-				: "Enter submits; Ctrl-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+				: "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
 	}

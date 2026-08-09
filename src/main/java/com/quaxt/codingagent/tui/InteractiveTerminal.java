@@ -22,6 +22,8 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
 	private static final String END_SYNCHRONIZED_OUTPUT = "\u001b[?2026l";
 	private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
+	private static final String CLEAR_TO_END_OF_LINE = "\u001b[K";
+	private static final String SECONDARY_PROMPT = "%M> ";
 
 	private final Terminal terminal;
 	private final LineReader reader;
@@ -110,9 +112,10 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private String readLine(String prompt, Character mask) {
 		String initialBuffer = null;
 		while (true) {
+			Theme promptTheme = theme;
 			try {
-				String line = reader.readLine(prompt, null, mask, initialBuffer);
-				rememberCompletedLine(prompt, line);
+				String line = readEditorLine(prompt, mask, initialBuffer, promptTheme);
+				rememberCompletedLine(prompt, line, mask, promptTheme);
 				return line;
 			} catch (SuspendRequested ignored) {
 				initialBuffer = suspendedBuffer;
@@ -127,16 +130,50 @@ public final class InteractiveTerminal implements AutoCloseable {
 					managedSuspend = false;
 				}
 			} catch (UserInterruptException ignored) {
-				rememberCompletedLine(prompt, "");
+				rememberCompletedLine(prompt, "", mask, promptTheme);
 				return "";
 			} catch (EndOfFileException ignored) {
-				remember(prompt);
+				rememberPrompt(prompt, promptTheme);
 				return null;
 			}
 		}
 	}
 
+	/** Keeps the background active so JLine's erase/edit operations preserve the full-width prompt bar. */
+	private String readEditorLine(String prompt, Character mask, String initialBuffer, Theme promptTheme) {
+		String background = promptTheme.promptBackground();
+		reader.setVariable(
+				LineReader.SECONDARY_PROMPT_PATTERN,
+				background.isEmpty()
+						? SECONDARY_PROMPT
+						: hiddenForJLine(background + CLEAR_TO_END_OF_LINE) + SECONDARY_PROMPT);
+		String editorPrompt = background.isEmpty()
+				? prompt
+				: styleActivePromptLine(prompt, background);
+		try {
+			return reader.readLine(editorPrompt, null, mask, initialBuffer);
+		} finally {
+			resetPromptBackground(promptTheme);
+		}
+	}
+
+	private static String styleActivePromptLine(String prompt, String background) {
+		int activeLineOffset = activePromptLineOffset(prompt);
+		return prompt.substring(0, activeLineOffset)
+				+ hiddenForJLine(background + CLEAR_TO_END_OF_LINE)
+				+ prompt.substring(activeLineOffset);
+	}
+
+	private static String hiddenForJLine(String value) {
+		return "%{" + value + "%}";
+	}
+
+	private static int activePromptLineOffset(String prompt) {
+		return Math.max(prompt.lastIndexOf('\n'), prompt.lastIndexOf('\r')) + 1;
+	}
+
 	public <T> T run(TuiComponent<T> component) throws IOException {
+		if (reader.isReading()) resetPromptBackground(theme);
 		try {
 			return new TuiRuntime(
 					terminal, theme, supportsSuspend ? this::suspendFullScreen : null, this::resumeMainScreen)
@@ -214,7 +251,12 @@ public final class InteractiveTerminal implements AutoCloseable {
 		Objects.requireNonNull(handler, "handler");
 		String widgetName = "codingagent-" + action;
 		reader.getWidgets().put(widgetName, () -> {
-			handler.run();
+			resetPromptBackground(theme);
+			try {
+				handler.run();
+			} finally {
+				reader.callWidget(LineReader.REDRAW_LINE);
+			}
 			return true;
 		});
 		Reference reference = new Reference(widgetName);
@@ -225,6 +267,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 
 	/** Prints a status line without losing the active line-editor buffer. */
 	public synchronized void printAbove(String text) {
+		if (reader.isReading()) resetPromptBackground(theme);
 		reader.printAbove(text);
 		remember(text + System.lineSeparator());
 	}
@@ -276,8 +319,22 @@ public final class InteractiveTerminal implements AutoCloseable {
 		}
 	}
 
-	private synchronized void rememberCompletedLine(String prompt, String line) {
-		remember(prompt + line + System.lineSeparator());
+	private synchronized void rememberCompletedLine(
+			String prompt, String line, Character mask, Theme promptTheme) {
+		String displayedLine = line;
+		if (mask != null) {
+			displayedLine = mask.charValue() == 0 ? "" : String.valueOf(mask).repeat(line.length());
+		}
+		int activeLineOffset = activePromptLineOffset(prompt);
+		remember(prompt.substring(0, activeLineOffset));
+		remember(promptTheme.promptArea(prompt.substring(activeLineOffset) + displayedLine));
+		remember(System.lineSeparator());
+	}
+
+	private synchronized void rememberPrompt(String prompt, Theme promptTheme) {
+		int activeLineOffset = activePromptLineOffset(prompt);
+		remember(prompt.substring(0, activeLineOffset));
+		remember(promptTheme.promptArea(prompt.substring(activeLineOffset)));
 	}
 
 	private synchronized void remember(String text) {
@@ -313,7 +370,14 @@ public final class InteractiveTerminal implements AutoCloseable {
 		}
 	}
 
+	private void resetPromptBackground(Theme promptTheme) {
+		if (promptTheme.promptBackground().isEmpty()) return;
+		terminal.writer().print(promptTheme.reset());
+		terminal.writer().flush();
+	}
+
 	private synchronized void repaintScreen() {
+		terminal.writer().print(theme.reset());
 		terminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
 		terminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
 		terminal.writer().print(screenDocument);

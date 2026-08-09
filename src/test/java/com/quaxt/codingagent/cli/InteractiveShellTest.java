@@ -90,6 +90,7 @@ class InteractiveShellTest {
 
 		String visible = InteractiveShell.renderSessionScreen(model, messages, false, Theme.PLAIN);
 		String hidden = InteractiveShell.renderSessionScreen(model, messages, true, Theme.PLAIN);
+		String dark = InteractiveShell.renderSessionScreen(model, messages, true, Theme.DARK);
 
 		assertTrue(visible.startsWith("codingagent "));
 		assertTrue(visible.contains("\n> Check the project\n"));
@@ -98,6 +99,7 @@ class InteractiveShellTest {
 		assertTrue(visible.contains("Done: Read 2 line(s)."));
 		assertTrue(visible.contains("The project is ready."));
 		assertFalse(hidden.contains("Inspect the project"));
+		assertTrue(dark.contains("\u001b[48;5;236m\u001b[K> Check the project\u001b[0m"));
 	}
 
 	@Test
