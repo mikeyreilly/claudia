@@ -172,7 +172,8 @@ class OpenAiResponsesProviderTest {
 					new StreamOptions()
 							.apiKey("test-key")
 							.reasoning(ThinkingLevel.MEDIUM)
-							.sessionId("session-1"))
+							.sessionId("session-1")
+							.maxTokens(4_096))
 					.result();
 
 			JsonNode body = Json.MAPPER.readTree(request.get());
@@ -182,6 +183,7 @@ class OpenAiResponsesProviderTest {
 			assertTrue(body.path("parallel_tool_calls").asBoolean());
 			assertEquals("session-1", body.path("prompt_cache_key").asText());
 			assertEquals("detailed", body.path("reasoning").path("summary").asText());
+			assertFalse(body.has("max_output_tokens"));
 		} finally {
 			server.stop(0);
 		}

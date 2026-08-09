@@ -177,8 +177,12 @@ final class InteractiveShell {
 					terminal.println("No model is configured.");
 					return false;
 				}
-				var result = agent.compact(null);
-				terminal.println("Context compacted: " + result.tokensBefore() + " -> " + result.estimatedTokensAfter() + " tokens.");
+				try {
+					var result = agent.compact(null);
+					terminal.println("Context compacted: " + result.tokensBefore() + " -> " + result.estimatedTokensAfter() + " tokens.");
+				} catch (IllegalStateException error) {
+					terminal.println("Error: " + error.getMessage());
+				}
 			}
 			default -> {
 				if (input.startsWith("/theme ")) {

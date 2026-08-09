@@ -184,7 +184,7 @@ public final class OpenAiResponsesProvider implements Provider {
 				request.put("prompt_cache_key", options.sessionId);
 			}
 		}
-		if (options.maxTokens != null) {
+		if (options.maxTokens != null && requestProfile != RequestProfile.CODEX) {
 			request.put("max_output_tokens", Math.max(16, options.maxTokens));
 		}
 		if (options.temperature != null) {

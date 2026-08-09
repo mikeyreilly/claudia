@@ -12,7 +12,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import com.quaxt.codingagent.ai.json.Json;
@@ -34,13 +36,29 @@ public final class SessionStore {
 			EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
 
 	private final Path directory;
+	private final List<Path> legacyDirectories;
 
 	public SessionStore(Path directory) {
+		this(directory, List.of());
+	}
+
+	private SessionStore(Path directory, List<Path> legacyDirectories) {
 		this.directory = directory.toAbsolutePath().normalize();
+		this.legacyDirectories = legacyDirectories.stream()
+				.map(path -> path.toAbsolutePath().normalize())
+				.filter(path -> !path.equals(this.directory))
+				.toList();
 	}
 
 	public static SessionStore defaultStore() {
-		return new SessionStore(Path.of(System.getProperty("user.home"), ".codingagent", "sessions"));
+		return defaultStore(Path.of(System.getProperty("user.home")));
+	}
+
+	/** Keeps sessions written before the application-data directory was renamed resumable. */
+	static SessionStore defaultStore(Path home) {
+		return new SessionStore(
+				home.resolve(".codingagent").resolve("sessions"),
+				List.of(home.resolve(".pi-java").resolve("sessions")));
 	}
 
 	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
@@ -62,8 +80,8 @@ public final class SessionStore {
 		if (payload == null) {
 			throw new IllegalArgumentException("Session entry payload must not be null");
 		}
-		Path file = pathFor(sessionId);
-		if (!Files.isRegularFile(file)) {
+		Path file = existingPathFor(sessionId);
+		if (file == null) {
 			throw new IOException("Unknown session: " + sessionId);
 		}
 		var entry = Json.object();
@@ -80,8 +98,8 @@ public final class SessionStore {
 	/** Reads and validates all complete entries in file order. */
 	public List<Entry> read(String sessionId) throws IOException {
 		validateId(sessionId);
-		Path file = pathFor(sessionId);
-		if (!Files.isRegularFile(file)) {
+		Path file = existingPathFor(sessionId);
+		if (file == null) {
 			throw new IOException("Unknown session: " + sessionId);
 		}
 		List<Entry> entries = new ArrayList<>();
@@ -111,16 +129,10 @@ public final class SessionStore {
 
 	/** Lists session ids newest first. */
 	public List<String> list() throws IOException {
-		if (!Files.isDirectory(directory)) {
-			return List.of();
-		}
-		try (Stream<Path> files = Files.list(directory)) {
-			return files.filter(Files::isRegularFile)
-					.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-					.map(path -> idFor(path.getFileName()))
-					.sorted(Comparator.reverseOrder())
-					.toList();
-		}
+		return sessionFiles().stream()
+				.map(path -> idFor(path.getFileName()))
+				.sorted(Comparator.reverseOrder())
+				.toList();
 	}
 
 	/** Lists resumable sessions newest first, optionally limited to one working directory. */
@@ -173,7 +185,8 @@ public final class SessionStore {
 				if (firstMessage.isEmpty() && message instanceof UserMessage) firstMessage = text;
 			}
 		}
-		Path file = pathFor(sessionId);
+		Path file = existingPathFor(sessionId);
+		if (file == null) throw new IOException("Unknown session: " + sessionId);
 		Path sessionCwd;
 		try {
 			sessionCwd = Path.of(cwdText).toAbsolutePath().normalize();
@@ -195,18 +208,37 @@ public final class SessionStore {
 	}
 
 	private List<Path> sessionFiles() throws IOException {
-		if (!Files.isDirectory(directory)) {
-			return List.of();
+		Map<String, Path> filesById = new LinkedHashMap<>();
+		for (Path candidateDirectory : allDirectories()) {
+			if (!Files.isDirectory(candidateDirectory)) continue;
+			try (Stream<Path> files = Files.list(candidateDirectory)) {
+				files.filter(Files::isRegularFile)
+						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
+						.forEach(path -> filesById.putIfAbsent(idFor(path.getFileName()), path));
+			}
 		}
-		try (Stream<Path> files = Files.list(directory)) {
-			return files.filter(Files::isRegularFile)
-					.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-					.toList();
-		}
+		return List.copyOf(filesById.values());
+	}
+
+	private List<Path> allDirectories() {
+		List<Path> directories = new ArrayList<>(legacyDirectories.size() + 1);
+		directories.add(directory);
+		directories.addAll(legacyDirectories);
+		return directories;
 	}
 
 	private Path pathFor(String sessionId) {
 		return directory.resolve(sessionId + ".jsonl");
+	}
+
+	private Path existingPathFor(String sessionId) {
+		Path current = pathFor(sessionId);
+		if (Files.isRegularFile(current)) return current;
+		for (Path legacyDirectory : legacyDirectories) {
+			Path legacy = legacyDirectory.resolve(sessionId + ".jsonl");
+			if (Files.isRegularFile(legacy)) return legacy;
+		}
+		return null;
 	}
 
 	private void ensureDirectory() throws IOException {

@@ -51,6 +51,28 @@ class SessionStoreTest {
 	}
 
 	@Test
+	void defaultStoreContinuesToDiscoverAndResumeLegacySessions() throws Exception {
+		Path cwd = tempDir.resolve("workspace");
+		Files.createDirectories(cwd);
+		SessionStore legacy = new SessionStore(tempDir.resolve(".pi-java").resolve("sessions"));
+		SessionRecorder oldRecorder = SessionRecorder.create(legacy, cwd, "faux", "legacy");
+		oldRecorder.appendMessages(List.of(UserMessage.of("saved before rename")));
+
+		SessionStore store = SessionStore.defaultStore(tempDir);
+		var snapshots = store.listSnapshots(cwd);
+
+		assertEquals(1, snapshots.size());
+		assertEquals(oldRecorder.sessionId(), snapshots.getFirst().id());
+		assertEquals("saved before rename", snapshots.getFirst().firstMessage());
+		SessionRecorder.resume(store, oldRecorder.sessionId())
+				.appendMessages(List.of(UserMessage.of("continued after rename")));
+		assertEquals(2, store.snapshot(oldRecorder.sessionId()).messageCount());
+
+		String newId = store.create();
+		assertTrue(Files.isRegularFile(tempDir.resolve(".codingagent").resolve("sessions").resolve(newId + ".jsonl")));
+	}
+
+	@Test
 	void listsSnapshotsForTheCurrentFolderAndSkipsCorruptSessions() throws Exception {
 		SessionStore store = new SessionStore(tempDir.resolve("sessions"));
 		Path firstCwd = tempDir.resolve("first");
