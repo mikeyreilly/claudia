@@ -107,6 +107,35 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
+	void bracketedPasteKeepsMultilineTextUntilEnter() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write(
+					"\u001b[200~first\r\nsecond\u001b[201~\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+
+			assertEquals("first\nsecond", line);
+		}
+	}
+
+	@Test
+	void unbracketedCrLfPasteDoesNotSubmitAtTheLineBreak() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write("first\r\nsecond\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+
+			assertEquals("first\nsecond", line);
+		}
+	}
+
+	@Test
 	void restoresLineEditorScreenAndInputBufferAfterSuspend() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
