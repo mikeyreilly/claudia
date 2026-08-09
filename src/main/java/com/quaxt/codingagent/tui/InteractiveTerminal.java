@@ -11,6 +11,7 @@ import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.Reference;
 import org.jline.reader.UserInterruptException;
 import org.jline.reader.Widget;
+import org.jline.reader.impl.LineReaderImpl;
 import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
@@ -24,9 +25,11 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
 	private static final String CLEAR_TO_END_OF_LINE = "\u001b[K";
 	private static final String SECONDARY_PROMPT = "%M> ";
+	private static final String BRACKETED_PASTE_END = "\u001b[201~";
+	private static final long PASTE_LOOKAHEAD_MILLIS = 10;
 
 	private final Terminal terminal;
-	private final LineReader reader;
+	private final LineReaderImpl reader;
 	private final SuspendAction suspendAction;
 	private final boolean supportsSuspend;
 	private final Attributes shellAttributes;
@@ -52,7 +55,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 		this.suspendAction = suspendAction;
 		this.supportsSuspend = supportsSuspend;
 		shellAttributes = new Attributes(terminal.getAttributes());
-		reader = LineReaderBuilder.builder().terminal(terminal).build();
+		reader = (LineReaderImpl) LineReaderBuilder.builder().terminal(terminal).build();
 		installEditorBindings();
 		previousContinueHandler = supportsSuspend
 				? terminal.handle(Terminal.Signal.CONT, this::handleContinue)
@@ -87,16 +90,68 @@ public final class InteractiveTerminal implements AutoCloseable {
 	}
 
 	private void installEditorBindings() {
-		String widgetName = "codingagent-insert-newline";
-		reader.getWidgets().put(widgetName, () -> {
+		String newlineWidgetName = "codingagent-insert-newline";
+		reader.getWidgets().put(newlineWidgetName, () -> {
 			reader.getBuffer().write('\n');
 			return true;
 		});
-		Reference insertNewline = new Reference(widgetName);
-		String[] sequences = Keybindings.editorSequences("newline").toArray(String[]::new);
+		Reference insertNewline = new Reference(newlineWidgetName);
+		String[] newlineSequences = Keybindings.editorSequences("newline").toArray(String[]::new);
+
+		String submitWidgetName = "codingagent-submit-or-insert-pasted-newline";
+		reader.getWidgets().put(submitWidgetName, this::submitOrInsertPastedNewline);
+		Reference submit = new Reference(submitWidgetName);
+		String[] submitSequences = Keybindings.editorSequences("submit").toArray(String[]::new);
+
+		reader.getWidgets().put(LineReader.BEGIN_PASTE, this::insertBracketedPaste);
 		for (var keyMap : reader.getKeyMaps().values()) {
-			keyMap.bind(insertNewline, sequences);
+			keyMap.bind(insertNewline, newlineSequences);
+			keyMap.bind(submit, submitSequences);
 		}
+	}
+
+	/**
+	 * Some consoles send pasted text without bracketed-paste markers. A pasted
+	 * line ending is followed immediately by more input, unlike a submit key.
+	 */
+	private boolean submitOrInsertPastedNewline() {
+		int next = reader.peekCharacter(PASTE_LOOKAHEAD_MILLIS);
+		if (next >= 0) {
+			if (next == '\n') reader.readCharacter();
+			reader.getBuffer().write('\n');
+			return true;
+		}
+		reader.callWidget(LineReader.ACCEPT_LINE);
+		return true;
+	}
+
+	/** JLine maps every CR in a bracketed paste to LF, doubling CRLF input. */
+	private boolean insertBracketedPaste() {
+		StringBuilder content = new StringBuilder();
+		while (true) {
+			int value = reader.readCharacter();
+			if (value < 0) break;
+			content.append((char) value);
+			if (endsWith(content, BRACKETED_PASTE_END)) {
+				content.setLength(content.length() - BRACKETED_PASTE_END.length());
+				break;
+			}
+		}
+		reader.getBuffer().write(normalizeLineEndings(content.toString()));
+		return true;
+	}
+
+	private static boolean endsWith(StringBuilder value, String suffix) {
+		if (value.length() < suffix.length()) return false;
+		int offset = value.length() - suffix.length();
+		for (int index = 0; index < suffix.length(); index++) {
+			if (value.charAt(offset + index) != suffix.charAt(index)) return false;
+		}
+		return true;
+	}
+
+	private static String normalizeLineEndings(String value) {
+		return value.replace("\r\n", "\n").replace('\r', '\n');
 	}
 
 	/** Returns null on EOF and an empty string after Ctrl-C. */
