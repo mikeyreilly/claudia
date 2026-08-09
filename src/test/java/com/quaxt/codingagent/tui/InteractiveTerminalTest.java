@@ -76,16 +76,33 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
-	void ctrlEnterInsertsANewlineAndEnterSubmitsThePrompt() throws Exception {
+	void darkThemeFillsThePromptLineWithADarkGreyBackground() throws Exception {
 		TerminalFixture fixture = terminal();
 
 		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
-			fixture.input().write("first\nsecond\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().write("hello\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("\n> "));
+
+			assertEquals("hello", line);
+			assertTrue(fixture.output().toString(StandardCharsets.UTF_8)
+					.contains("\u001b[48;5;236m\u001b[K> hello"));
+		}
+	}
+
+	@Test
+	void shiftEnterVariantsInsertNewlinesAndEnterSubmitsThePrompt() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write(
+					"first\u001b[13;2usecond\u001b[27;2;13~third\nfourth\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
 
-			assertEquals("first\nsecond", line);
+			assertEquals("first\nsecond\nthird\nfourth", line);
 		}
 	}
 

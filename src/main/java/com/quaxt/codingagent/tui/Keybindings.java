@@ -8,7 +8,7 @@ import org.jline.keymap.KeyMap;
 public final class Keybindings {
 	public static final Map<String, String> DEFAULT_EDITOR_KEYBINDINGS = Map.of(
 			"submit", "enter",
-			"newline", "ctrl-enter",
+			"newline", "shift-enter",
 			"cancel", "ctrl-c",
 			"deletePreviousWord", "alt-backspace");
 	public static final Map<String, String> DEFAULT_APP_KEYBINDINGS = Map.of(
@@ -21,14 +21,18 @@ public final class Keybindings {
 	private Keybindings() {}
 
 	/**
-	 * Ctrl+Enter is LF while unmodified Enter is CR in raw mode on Windows and
-	 * many Unix terminals. The CSI variants cover terminals which report key
-	 * modifiers explicitly.
+	 * Shift+Enter is commonly LF, CSI-u, or xterm modifyOtherKeys depending on
+	 * the terminal. Keep Ctrl+Enter variants as aliases for compatibility.
 	 */
 	static List<String> editorSequences(String action) {
 		String binding = DEFAULT_EDITOR_KEYBINDINGS.get(action);
-		if ("ctrl-enter".equals(binding)) {
-			return List.of(KeyMap.ctrl('J'), "\u001b[13;5u", "\u001b[27;5;13~");
+		if ("shift-enter".equals(binding)) {
+			return List.of(
+					KeyMap.ctrl('J'),
+					"\u001b[13;2u",
+					"\u001b[27;2;13~",
+					"\u001b[13;5u",
+					"\u001b[27;5;13~");
 		}
 		if ("enter".equals(binding)) {
 			return List.of(KeyMap.ctrl('M'));

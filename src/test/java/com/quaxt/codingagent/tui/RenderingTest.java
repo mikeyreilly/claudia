@@ -27,6 +27,14 @@ class RenderingTest {
 	}
 
 	@Test
+	void givesPromptLinesAContrastingBackground() {
+		assertEquals(
+				"\u001b[48;5;236m\u001b[K> first\u001b[0m\n\u001b[48;5;236m\u001b[Ksecond\u001b[0m",
+				Theme.DARK.promptArea("> first\nsecond"));
+		assertEquals("> first", Theme.PLAIN.promptArea("> first"));
+	}
+
+	@Test
 	void measuresWrapsAndLinksTerminalText() {
 		assertEquals(4, TerminalText.visibleWidth("A\u754cB"));
 		assertEquals("ab...", TerminalText.truncatePlain("abcdefgh", 5));

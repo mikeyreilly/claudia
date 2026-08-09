@@ -69,7 +69,7 @@ session is excluded from the selector. If a saved model is unavailable, the
 currently configured model is used as a fallback.
 
 The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
-provides standard line editing, with Enter to submit, Ctrl-Enter to insert a
+provides standard line editing, with Enter to submit, Shift-Enter to insert a
 newline, Ctrl-C to cancel input, Escape to interrupt an active agent turn,
 Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
 Transient provider and connection failures (including HTTP 503 responses) are
