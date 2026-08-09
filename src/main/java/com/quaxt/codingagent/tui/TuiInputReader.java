@@ -146,6 +146,7 @@ final class TuiInputReader {
 			return new TuiInput.Key(applicationType);
 		}
 		return switch (value) {
+			case 3 -> new TuiInput.Key(TuiInput.KeyType.CANCEL);
 			case 8, 127 -> new TuiInput.Key(TuiInput.KeyType.BACKSPACE);
 			case 9 -> new TuiInput.Key(TuiInput.KeyType.TAB);
 			case 10, 13 -> new TuiInput.Key(TuiInput.KeyType.ENTER);

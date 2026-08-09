@@ -32,7 +32,7 @@ public final class Agent {
 	private final AgentState state;
 	private final StreamFunction streamFunction;
 	private final List<Consumer<AgentEvent>> listeners = new CopyOnWriteArrayList<>();
-	private AbortSignal activeSignal;
+	private volatile AbortSignal activeSignal;
 	private String apiKey;
 
 	public Agent(String systemPrompt, com.quaxt.codingagent.ai.types.Model model, StreamFunction streamFunction) {

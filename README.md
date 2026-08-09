@@ -70,7 +70,8 @@ currently configured model is used as a fallback.
 
 The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
 provides standard line editing, with Enter to submit, Ctrl-C to cancel input,
-Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
+Escape to interrupt an active agent turn, Ctrl-D to close the shell, and Ctrl-Z
+to suspend the foreground job on Unix.
 After `fg`, the conversation screen, terminal mode, prompt, and partially
 entered input are restored; shell output produced while codingagent was
 suspended is replaced by the redrawn codingagent screen.

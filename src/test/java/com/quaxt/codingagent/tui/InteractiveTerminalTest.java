@@ -11,6 +11,8 @@ import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jline.terminal.Attributes.LocalFlag;
 import org.jline.terminal.Terminal;
@@ -18,6 +20,43 @@ import org.jline.terminal.impl.DumbTerminal;
 import org.junit.jupiter.api.Test;
 
 class InteractiveTerminalTest {
+	@Test
+	void escapeInterruptsARunningOperationAndRestoresTerminalMode() throws Exception {
+		TerminalFixture fixture = terminal();
+		Terminal terminal = fixture.terminal();
+		setCanonicalAttributes(terminal);
+		CountDownLatch started = new CountDownLatch(1);
+		CountDownLatch interrupted = new CountDownLatch(1);
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(terminal, () -> {}, false)) {
+			Thread input = Thread.ofVirtual().start(() -> {
+				try {
+					started.await();
+					fixture.input().write(0x1b);
+					fixture.input().flush();
+				} catch (Exception error) {
+					throw new AssertionError(error);
+				}
+			});
+
+			String result = assertTimeoutPreemptively(
+					Duration.ofSeconds(5),
+					() -> interactive.runInterruptibly(
+							() -> {
+								assertFalse(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
+								started.countDown();
+								assertTrue(interrupted.await(5, TimeUnit.SECONDS));
+								return "stopped";
+							},
+							interrupted::countDown));
+			input.join();
+
+			assertEquals("stopped", result);
+			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
+			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+		}
+	}
+
 	@Test
 	void suppliesFallbackDimensionsWhenTheTerminalReportsZeroSize() throws Exception {
 		TerminalFixture fixture = terminal();

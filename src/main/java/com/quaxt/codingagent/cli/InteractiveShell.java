@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
 import com.quaxt.codingagent.agent.AgentTool;
@@ -140,9 +141,18 @@ final class InteractiveShell {
 			emittedText = false;
 			streamOutput = StreamOutput.NONE;
 			streamedThinkingCharacters = 0;
-			List<Message> messages = agent.prompt(input);
+			AtomicBoolean interrupted = new AtomicBoolean();
+			List<Message> messages = terminal.runInterruptibly(
+					() -> agent.prompt(input),
+					() -> {
+						interrupted.set(true);
+						agent.abort();
+					});
 			if (recorder != null) recorder.appendMessages(messages);
-			if (!emittedText && agent.state().messages.getLast() instanceof AssistantMessage response) {
+			if (interrupted.get()) {
+				finishStreamOutput();
+				terminal.println("Interrupted.");
+			} else if (!emittedText && agent.state().messages.getLast() instanceof AssistantMessage response) {
 				terminal.println(response.errorMessage == null ? response.text() : "Error: " + response.errorMessage);
 			}
 		}
@@ -154,7 +164,7 @@ final class InteractiveShell {
 				return true;
 			}
 			case "/help" ->
-					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
+					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Esc interrupt the active turn; Ctrl-O inspect reasoning/tool steps; Ctrl-T show or hide streamed thinking.");
 			case "/details" -> showLatestTurnDetails(false);
 			case "/resume" -> resumeSession();
 			case "/login" -> login();
@@ -500,7 +510,7 @@ final class InteractiveShell {
 		header.append('\n');
 		header.append(model == null
 				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-				: "Enter a prompt. Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+				: "Enter a prompt. Esc interrupts; Ctrl-O inspects reasoning/tool steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
 	}
