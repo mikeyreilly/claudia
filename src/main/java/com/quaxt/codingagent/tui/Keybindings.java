@@ -11,7 +11,7 @@ public final class Keybindings {
 			"deletePreviousWord", "alt-backspace");
 	public static final Map<String, String> DEFAULT_APP_KEYBINDINGS = Map.of(
 			"exit", "ctrl-d",
-			"interrupt", "ctrl-c",
+			"interrupt", "escape",
 			"suspend", "ctrl-z",
 			"expandTools", "ctrl-o",
 			"toggleThinking", "ctrl-t");
@@ -22,6 +22,9 @@ public final class Keybindings {
 		String binding = DEFAULT_APP_KEYBINDINGS.get(action);
 		if (binding != null && binding.startsWith("ctrl-") && binding.length() == 6) {
 			return KeyMap.ctrl(binding.charAt(5));
+		}
+		if (binding != null && binding.equals("escape")) {
+			return "\u001b";
 		}
 		throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
 	}

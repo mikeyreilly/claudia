@@ -7,6 +7,13 @@ import org.junit.jupiter.api.Test;
 class TuiInputReaderTest {
 	@Test
 	void parsesNavigationControlAndMouseSequences() {
+		assertEquals("escape", Keybindings.DEFAULT_APP_KEYBINDINGS.get("interrupt"));
+		assertEquals(
+				new TuiInput.Key(TuiInput.KeyType.ESCAPE),
+				TuiInputReader.parseSequence("\u001b"));
+		assertEquals(
+				new TuiInput.Key(TuiInput.KeyType.CANCEL),
+				TuiInputReader.parseSequence("\u0003"));
 		assertEquals(
 				new TuiInput.Key(TuiInput.KeyType.UP),
 				TuiInputReader.parseSequence("\u001b[A"));

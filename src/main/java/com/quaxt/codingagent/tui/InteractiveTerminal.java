@@ -2,6 +2,9 @@ package com.quaxt.codingagent.tui;
 
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -126,6 +129,69 @@ public final class InteractiveTerminal implements AutoCloseable {
 					.run(component);
 		} finally {
 			if (reader.isReading()) reader.callWidget(LineReader.REDRAW_LINE);
+		}
+	}
+
+	/**
+	 * Runs an operation while listening for an interrupt key. The operation uses
+	 * a virtual thread so Escape can be read even while it is blocked on a model
+	 * response or tool. Ctrl-C remains an interrupt alias outside the line editor.
+	 */
+	public <T> T runInterruptibly(Callable<T> operation, Runnable interruptHandler)
+			throws IOException, InterruptedException {
+		Objects.requireNonNull(operation, "operation");
+		Objects.requireNonNull(interruptHandler, "interruptHandler");
+		Attributes originalAttributes = terminal.enterRawMode();
+		FutureTask<T> task = new FutureTask<>(operation);
+		Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
+		boolean interruptRequested = false;
+		try {
+			while (!task.isDone()) {
+				TuiInput input = TuiInputReader.read(terminal.reader(), 50);
+				if (input instanceof TuiInput.Key key
+						&& (key.type() == TuiInput.KeyType.ESCAPE || key.type() == TuiInput.KeyType.CANCEL)
+						&& !interruptRequested
+						&& !task.isDone()) {
+					interruptRequested = true;
+					interruptHandler.run();
+				} else if (input instanceof TuiInput.Key key
+						&& key.type() == TuiInput.KeyType.SUSPEND
+						&& supportsSuspend) {
+					terminal.setAttributes(originalAttributes);
+					managedSuspend = true;
+					try {
+						suspendAction.suspend();
+					} catch (IOException error) {
+						println("Could not suspend process: " + error.getMessage());
+					} finally {
+						repaintScreen();
+						managedSuspend = false;
+						terminal.enterRawMode();
+					}
+				}
+			}
+			return completedTask(task);
+		} catch (IOException | RuntimeException | Error error) {
+			if (!task.isDone()) {
+				interruptHandler.run();
+				worker.interrupt();
+			}
+			throw error;
+		} finally {
+			terminal.setAttributes(originalAttributes);
+		}
+	}
+
+	private static <T> T completedTask(FutureTask<T> task) throws IOException, InterruptedException {
+		try {
+			return task.get();
+		} catch (ExecutionException error) {
+			Throwable cause = error.getCause();
+			if (cause instanceof InterruptedException interrupted) throw interrupted;
+			if (cause instanceof IOException io) throw io;
+			if (cause instanceof RuntimeException runtime) throw runtime;
+			if (cause instanceof Error fatal) throw fatal;
+			throw new IllegalStateException(cause);
 		}
 	}
 
