@@ -18056,14 +18056,23 @@ static char *query_keyword_rows(CodeLensDb *db,
     /* Filters run on integer term ids: each LIKE resolves once against the
      * small Term dictionary (vocabulary, not occurrences) and the 245k-row
      * KeywordData scan then tests set membership; Term joins only decorate
-     * qualifying rows. */
-    static const char keyword_sql[] =
-        "SELECT tk.text AS \"k.keyword\", f.namespace AS \"k.sourceNamespace\", "
-        "f.path AS \"k.filePath\", k.lineNumber AS \"k.lineNumber\", "
-        "k.columnNumber AS \"k.columnNumber\", tb.text AS \"k.keywordBase\", "
-        "tq.text AS \"k.qualifier\", tn.text AS \"k.targetNamespace\", "
-        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"k.scope\", "
-        "COALESCE(da.coordinate,'') AS \"k.dependency\" "
+     * qualifying rows. ROW_NUMBER ranks matching occurrences within each
+     * file so the outer query returns one hit per file within each scope
+     * before second hits, preventing a single noisy file from consuming a
+     * small result limit.
+     * Keep the SQL in two literals below C's portable 4095-character limit;
+     * it is joined immediately before prepare. */
+    static const char keyword_sql_head[] =
+        "WITH matching_keywords AS ("
+        "SELECT tk.text AS keywordText, f.namespace AS sourceNamespace, "
+        "f.path AS filePath, k.lineNumber AS lineNumber, "
+        "k.columnNumber AS columnNumber, tb.text AS keywordBase, "
+        "tq.text AS qualifier, tn.text AS targetNamespace, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS resultScope, "
+        "COALESCE(da.coordinate,'') AS dependencyCoordinate, "
+        "CASE WHEN df.id IS NULL THEN 0 ELSE 1 END AS scopeRank, "
+        "ROW_NUMBER() OVER (PARTITION BY k.fileId "
+        "ORDER BY k.lineNumber, k.columnNumber, k.id) AS occurrenceRound "
         "FROM KeywordData k JOIN File f ON f.rowid=k.fileId "
         "JOIN Term tk ON tk.id=k.keywordTerm "
         "JOIN Term tb ON tb.id=k.keywordBaseTerm "
@@ -18087,7 +18096,8 @@ static char *query_keyword_rows(CodeLensDb *db,
         "AND (?14 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?14 ESCAPE '\\') OR ?18 = 'OR') "
         "AND (?15 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?15 ESCAPE '\\') OR ?18 = 'OR') "
         "AND (?16 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?16 ESCAPE '\\') OR ?18 = 'OR') "
-        "AND (?17 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?17 ESCAPE '\\') OR ?18 = 'OR') "
+        "AND (?17 = '' OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?17 ESCAPE '\\') OR ?18 = 'OR') ";
+    static const char keyword_sql_tail[] =
         "AND (?18 = 'AND' "
         "OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?2 ESCAPE "
         "'\\') OR k.keywordBaseTerm IN (SELECT id FROM Term WHERE text LIKE ?3 "
@@ -18115,11 +18125,20 @@ static char *query_keyword_rows(CodeLensDb *db,
         "AND (?21 = 'all' OR (?21 = 'workspace' AND df.id IS NULL) "
         "OR (?21 = 'dependencies' AND df.id IS NOT NULL)) "
         "AND (?22 = '' OR (da.coordinate IS NOT NULL AND da.coordinate GLOB ?22)) "
-        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, f.path, k.lineNumber LIMIT ?23";
+        ") "
+        "SELECT keywordText AS \"k.keyword\", sourceNamespace AS \"k.sourceNamespace\", "
+        "filePath AS \"k.filePath\", lineNumber AS \"k.lineNumber\", "
+        "columnNumber AS \"k.columnNumber\", keywordBase AS \"k.keywordBase\", "
+        "qualifier AS \"k.qualifier\", targetNamespace AS \"k.targetNamespace\", "
+        "resultScope AS \"k.scope\", dependencyCoordinate AS \"k.dependency\" "
+        "FROM matching_keywords "
+        "ORDER BY scopeRank, occurrenceRound, filePath, lineNumber, columnNumber LIMIT ?23";
+    StringBuilder keyword_sql = {0};
     sqlite3_stmt *stmt = nullptr;
     char *patterns[MAX_QUERY_TERMS] = {nullptr};
     char *result = nullptr;
     bool bound = true;
+    bool capped = false;
     size_t used = 0U;
     int exclude_tests = options->exclude_tests ? 1 : 0;
     const char *path_filter = options->path == nullptr ? "" : options->path;
@@ -18135,9 +18154,17 @@ static char *query_keyword_rows(CodeLensDb *db,
     if (out_row_count != nullptr) {
         *out_row_count = 0U;
     }
-    if (db_prepare(db, keyword_sql, &stmt) != 0) {
+    if (!sb_append(&keyword_sql, keyword_sql_head) ||
+        !sb_append(&keyword_sql, keyword_sql_tail)) {
+        sb_free(&keyword_sql);
         return nullptr;
     }
+    if (db_prepare(db, keyword_sql.data, &stmt) != 0) {
+        sb_free(&keyword_sql);
+        return nullptr;
+    }
+    /* sqlite3_prepare_v2 has copied the statement text into stmt. */
+    sb_free(&keyword_sql);
 
     if (bind_text(stmt, 1, repo_name) != 0) {
         bound = false;
@@ -18174,14 +18201,21 @@ static char *query_keyword_rows(CodeLensDb *db,
     if (bound && (bind_text(stmt, 22, dependency_filter) != 0)) {
         bound = false;
     }
-    if (bound && (sqlite3_bind_int(stmt, 23, options->limit) != SQLITE_OK)) {
+    if (bound &&
+        (sqlite3_bind_int64(stmt, 23, (sqlite3_int64)options->limit + 1) != SQLITE_OK)) {
         bound = false;
     }
 
     if (!bound) {
         (void)report_sqlite_error(db->handle, "bind keyword query parameter");
     } else {
-        result = render_stmt_result(stmt, out_row_count);
+        result = render_stmt_result_capped(
+            stmt, (size_t)options->limit, out_row_count, &capped);
+        if ((result != nullptr) && capped) {
+            result = alloc_printf("%snote: additional keyword matches were omitted; "
+                                  "narrow with path/--path or increase limit\n",
+                                  result);
+        }
     }
     (void)sqlite3_finalize(stmt);
     return result;
@@ -19411,9 +19445,10 @@ static void respond_tools_list(const char *id)
         " counts and staleness notes; never builds an index.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{},\"required\":[]}},"
         "{\"name\":\"query\",\"description\":\"Ranked prefix search over definitions and"
-        " Clojure keywords. Workspace is the default; scope can opt into resolved Maven"
-        " dependency sources. repo must be an exact Git worktree root; its index is"
-        " maintained automatically.\","
+        " Clojure keywords. Keyword results cover distinct files before repeated uses from"
+        " one file. Workspace is the default; scope can opt into resolved Maven dependency"
+        " sources. repo must be an exact Git worktree root; its index is maintained"
+        " automatically.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
         "\"description\":\"Exact non-bare Git worktree root path.\"},"
         "\"query\":{\"type\":\"string\"},\"limit\":{\"type\":\"number\",\"default\":10},"
@@ -19427,7 +19462,8 @@ static void respond_tools_list(const char *id)
         "\"scope\":{\"type\":\"string\",\"enum\":[\"workspace\",\"dependencies\",\"all\"],"
         "\"default\":\"workspace\",\"description\":\"Search workspace definitions by default; dependency sources are opt-in.\"},"
         "\"dependency\":{\"type\":\"string\",\"description\":\"Optional Maven GAV glob, for example org.jline:*.\"},"
-        "\"path\":{\"type\":\"string\"}},"
+        "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
+        " result file paths; use it to narrow common keywords to a component or directory.\"}},"
         "\"required\":[\"repo\",\"query\"]}},";
     static const char tools_suffix[] =
         "{\"name\":\"context\",\"description\":\"Show definitions and resolved call sites"

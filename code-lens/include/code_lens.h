@@ -243,6 +243,7 @@ typedef struct {
     int limit;
     bool exclude_tests;
     const char *kind;
+    /* Case-insensitive substring of result file paths. */
     const char *path;
     /* workspace (default), dependencies, or all; dependency is an optional
      * Maven GAV glob. */

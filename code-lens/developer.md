@@ -993,9 +993,14 @@ orphaned index by its stored repo path.
     BM25: `ORDER BY bm25(SymbolFts), s.name`, exposing
     `CAST(-bm25(SymbolFts) * 100 AS INTEGER) AS score` (higher is better).
     A second query searches `Keyword.keywordBase` by prefix and returns usage
-    locations. Results are rendered as separate `Symbols` and `Keywords`
-    sections; the limit applies independently to each section. The CLI and MCP
-    tool both honor `limit`.
+    locations. Its filtered rows receive `ROW_NUMBER()` within each file and
+    are ordered by workspace/dependency scope and then occurrence number, so
+    within each scope the first match from every file precedes second matches
+    from any file. The query fetches one row beyond `limit`; when that row
+    exists, rendering stops at `limit` and adds an actionable note to narrow
+    with `path`/`--path` or increase `limit`. Results are rendered as separate
+    `Symbols` and `Keywords` sections; the limit applies independently to each
+    section. The CLI and MCP tool both honor `limit`.
   - `CodeLensQueryOptions` drives optional filtering. `exclude_tests` removes
     `Symbol.kind = 'test'` rows and rows whose normalized path contains
     `/test/` or `/tests/`; keyword rows use only the path part. Symbol kinds
