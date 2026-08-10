@@ -1970,10 +1970,15 @@ static int test_mcp_on_demand_indexing(void)
         goto done;
     }
     text = code_lens_test_mcp_call_tool("list_repos", "{}");
-    failed |= mcp_on_demand_assert((text != nullptr) &&
-                                       (strstr(text, "No readable repositories indexed") != nullptr) &&
-                                       (mcp_single_index_db_path(empty_home) == nullptr),
-                                   "MCP list_repos does not build an index");
+    failed |= mcp_on_demand_assert(
+        (text != nullptr) &&
+            (strcmp(text,
+                    "No readable repositories are indexed yet. `list_repos` only reports "
+                    "existing indexes. To create one automatically, call `query`, `context`, "
+                    "or `sql` with `repo` set to the exact root of a non-bare Git worktree. "
+                    "That call will build the index before returning results.\n") == 0) &&
+            (mcp_single_index_db_path(empty_home) == nullptr),
+        "MCP list_repos explains automatic indexing without building an index");
 
     /* First calls must build from a valid exact Git root and return their
      * requested result, rather than telling the client to make a second call. */

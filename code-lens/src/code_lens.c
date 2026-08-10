@@ -17796,7 +17796,7 @@ fail:
     return nullptr;
 }
 
-char *code_lens_list_repos(void)
+static char *list_repos_internal(bool mcp_guidance)
 {
     static const char list_query[] =
         "SELECT path AS path, indexedAt AS indexedAt, "
@@ -17888,8 +17888,16 @@ char *code_lens_list_repos(void)
     }
 
     if (emitted == 0U) {
-        result = alloc_printf("No readable repositories indexed. Run code-lens index --repo "
-                              "<path> before direct query, context, or sql reads.\n");
+        if (mcp_guidance) {
+            result = alloc_printf(
+                "No readable repositories are indexed yet. `list_repos` only reports "
+                "existing indexes. To create one automatically, call `query`, `context`, "
+                "or `sql` with `repo` set to the exact root of a non-bare Git worktree. "
+                "That call will build the index before returning results.\n");
+        } else {
+            result = alloc_printf("No readable repositories indexed. Run code-lens index "
+                                  "--repo <path> before direct query, context, or sql reads.\n");
+        }
         goto done;
     }
 
@@ -17904,6 +17912,11 @@ done:
     sb_free(&notes);
     sb_free(&output);
     return result;
+}
+
+char *code_lens_list_repos(void)
+{
+    return list_repos_internal(false);
 }
 
 char *code_lens_remove_repo(const char *repo_name)
@@ -19502,7 +19515,7 @@ static char *call_tool(const char *tool_name, const char *args)
     char *result = nullptr;
 
     if (strcmp(tool_name, "list_repos") == 0) {
-        result = code_lens_list_repos();
+        result = list_repos_internal(true);
     } else if (strcmp(tool_name, "query") == 0) {
         CodeLensQueryOptions options = {
             .limit = limit,
