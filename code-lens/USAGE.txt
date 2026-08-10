@@ -88,14 +88,19 @@ checked out next to this repository):
   `code-lens remove --repo <path>` deletes a repo's index. Explicit CLI
   `query`, `context`, and `sql` run against the chosen repo's database; `query`
   searches symbol definitions with full-text search (FTS5) ranked with BM25
-  and keyword usages with keyword-name prefix matching. Results match on words
-  and word prefixes rather than arbitrary mid-word substrings. Multi-term
-  queries require every term to match; when that yields nothing the search
-  relaxes to any-term matches and prefixes the output with a notice line.
+  and keyword usages with keyword-name prefix matching. Keyword locations are
+  distributed across matching files before repeated occurrences from one file.
+  When a limit omits additional keyword matches, the output suggests narrowing
+  with path/--path or increasing limit. Results match on words and word prefixes
+  rather than arbitrary mid-word substrings. Multi-term queries require every
+  term to match; when that yields nothing the search relaxes to any-term matches
+  and prefixes the output with a notice line.
   Use `--exclude-tests` to drop test symbols and files below `test/` or
   `tests/`, `--kind <kind>` to restrict symbol rows (for example `function`,
   `class`, `method`, `field`, or `test`), and `--path <substring>` to restrict
-  rows by file path. Symbol kinds apply only to symbols and suppress keyword
+  rows by a case-insensitive file-path substring. Path filtering is especially
+  useful for common keywords in large repositories. Symbol kinds apply only to
+  symbols and suppress keyword
   rows; `--kind keyword` returns Clojure keyword rows only. Valid kinds are:
   function, var, macro, multimethod, method, protocol, record, type, test,
   class, interface, enum, annotation, constructor, field, enum_constant,

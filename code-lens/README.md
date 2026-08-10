@@ -157,14 +157,20 @@ repo path. See `USAGE.txt` for client registration examples.
 `query` searches Clojure, Java, and C symbol definitions plus Clojure keyword
 usage locations. Symbol results match whole words and word prefixes (names are split
 on `- . / _`), ranked by BM25; keyword results match keyword-name prefixes such
-as `:report!-fn`. It does not match arbitrary mid-word substrings. Java kinds
+as `:report!-fn`. Keyword locations are distributed across matching files before
+repeated occurrences from one file, so a noisy file cannot consume a small result
+limit. When additional keyword matches are omitted, the output suggests narrowing
+with `path`/`--path` or increasing `limit`. It does not match arbitrary mid-word
+substrings. Java kinds
 include `class`, `interface`, `enum`, `annotation`, `record`, `constructor`,
 `method`, `field`, `enum_constant`, and `test`; C adds `struct`, `union`,
 `typedef`, and `variable` while sharing `function`, `macro`, and related kinds.
 Multi-term queries require every term to match; when that finds nothing the search relaxes
 to any-term matches and flags the result with a notice line. Use
 `--exclude-tests`, `--kind <kind>`, and `--path <substring>` to cut irrelevant
-matches; symbol kinds filter symbols only and suppress keyword rows, while
+matches; `path` is a case-insensitive substring of result file paths and is especially
+useful for common keywords in large repositories. Symbol kinds filter symbols only
+and suppress keyword rows, while
 `--kind keyword` returns keyword rows only. `context` shows
 definitions, reference call sites, and lazy source snippets for a symbol name;
 references include alias-qualified and fully-qualified uses resolved through

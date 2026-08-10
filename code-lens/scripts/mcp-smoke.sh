@@ -94,7 +94,7 @@ done
 if response_line 2 | grep -qF '"name":"index_repo"'; then
     fail "tools/list still exposes index_repo"
 fi
-assert_response_contains 3 'No readable repositories indexed' "list_repos empty cache"
+assert_response_contains 3 'No readable repositories are indexed yet' "list_repos empty cache"
 assert_response_contains 4 'format-greeting|function|smoke.util' "first query indexes and returns symbol"
 assert_response_contains 4 'src/smoke/util.clj' "first query file path"
 assert_response_contains 5 "${worktree}|" "list_repos after first query"
@@ -111,7 +111,7 @@ assert_response_contains 15 'counter->value -> Counter' "C member call site"
 assert_response_contains 7 'COUNT(*)\n16' "mixed-language sql count"
 assert_response_contains 10 'format-greeting|function|smoke.util' "arguments-before-name dispatch"
 assert_response_contains 8 'removed repo' "remove_repo"
-assert_response_contains 9 'No readable repositories indexed' "list_repos after remove"
+assert_response_contains 9 'No readable repositories are indexed yet' "list_repos after remove"
 
 if [ "$failures" -gt 0 ]; then
     printf 'mcp-smoke: %d assertion(s) failed\n' "$failures" >&2

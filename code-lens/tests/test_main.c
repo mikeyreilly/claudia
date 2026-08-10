@@ -993,6 +993,8 @@ static int test_query_filters(void)
     char *function_text;
     char *test_text;
     char *keyword_text;
+    char *diverse_keyword_text;
+    char *single_file_keyword_text;
     char *unknown_kind_text;
     char *path_text;
     int failed = 0;
@@ -1027,7 +1029,15 @@ static int test_query_filters(void)
     if ((write_text_file(src_dir,
                          "payment_report.clj",
                          "(ns filter.prod)\n\n"
-                         "(defn report-target [] :report-key)\n") != 0) ||
+                         "(defn report-target []\n"
+                         "  [:report-key-a\n"
+                         "   :report-key-b\n"
+                         "   :report-key-c\n"
+                         "   :report-key-d])\n") != 0) ||
+        (write_text_file(src_dir,
+                         "payment_report_helper.clj",
+                         "(ns filter.helper)\n\n"
+                         "(def helper-report-key :report-key)\n") != 0) ||
         (write_text_file(test_dir,
                          "payment_report_test.clj",
                          "(ns filter.prod-test)\n\n"
@@ -1046,7 +1056,7 @@ static int test_query_filters(void)
         failed = 1;
         goto done;
     }
-    failed |= readback_assert(stats.file_count == 2U, "query filter fixture file count");
+    failed |= readback_assert(stats.file_count == 3U, "query filter fixture file count");
 
     default_text = code_lens_query_symbols(repo_dir, "report target", 20);
     failed |= readback_assert((default_text != nullptr) &&
@@ -1083,8 +1093,48 @@ static int test_query_filters(void)
     failed |= readback_assert((keyword_text != nullptr) &&
                                   (strstr(keyword_text, ":report-key") != nullptr) &&
                                   (strstr(keyword_text, "report-target|function") == nullptr) &&
-                                  (strstr(keyword_text, "unknown kind") == nullptr),
+                                  (strstr(keyword_text, "unknown kind") == nullptr) &&
+                                  (strstr(keyword_text,
+                                          "additional keyword matches were omitted") == nullptr),
                               "kind=keyword returns keyword rows and no symbol rows");
+
+    /* Broad keyword results are round-robin by file: one noisy source file
+     * must not consume the limit before other matching files are shown. */
+    options = (CodeLensQueryOptions){.limit = 3, .kind = "keyword"};
+    diverse_keyword_text = code_lens_query_symbols_ex(repo_dir, "report-key", &options);
+    failed |= readback_assert(
+        (diverse_keyword_text != nullptr) &&
+            (strstr(diverse_keyword_text, "payment_report.clj") != nullptr) &&
+            (strstr(diverse_keyword_text, "payment_report_helper.clj") != nullptr) &&
+            (strstr(diverse_keyword_text, "payment_report_test.clj") != nullptr) &&
+            (strstr(diverse_keyword_text, ":report-key-b") == nullptr) &&
+            (strstr(diverse_keyword_text, "additional keyword matches were omitted") != nullptr),
+        "keyword limit covers distinct files before repeated hits and reports truncation");
+
+    /* Once path narrows the search to one file, its occurrences retain source
+     * order and the cap note remains actionable. */
+    options = (CodeLensQueryOptions){
+        .limit = 3,
+        .kind = "keyword",
+        .path = "payment_report.clj",
+    };
+    single_file_keyword_text =
+        code_lens_query_symbols_ex(repo_dir, "report-key", &options);
+    if (single_file_keyword_text == nullptr) {
+        failed |= readback_assert(false, "single-file keyword query returns output");
+    } else {
+        const char *keyword_a = strstr(single_file_keyword_text, ":report-key-a|");
+        const char *keyword_b = strstr(single_file_keyword_text, ":report-key-b|");
+        const char *keyword_c = strstr(single_file_keyword_text, ":report-key-c|");
+
+        failed |= readback_assert(
+            (keyword_a != nullptr) && (keyword_b != nullptr) && (keyword_c != nullptr) &&
+                (keyword_a < keyword_b) && (keyword_b < keyword_c) &&
+                (strstr(single_file_keyword_text, ":report-key-d|") == nullptr) &&
+                (strstr(single_file_keyword_text,
+                        "additional keyword matches were omitted") != nullptr),
+            "path-narrowed keyword hits retain line order and report truncation");
+    }
 
     options = (CodeLensQueryOptions){.limit = 20, .kind = "fn"};
     unknown_kind_text = code_lens_query_symbols_ex(repo_dir, "report target", &options);
