@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.tui;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -15,6 +16,9 @@ import org.jline.reader.impl.LineReaderImpl;
 import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
+import org.jline.utils.AttributedString;
+import org.jline.utils.InfoCmp.Capability;
+import org.jline.utils.Status;
 
 /** JLine terminal facade with a retained main-screen document and full-screen component support. */
 public final class InteractiveTerminal implements AutoCloseable {
@@ -34,7 +38,11 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private final boolean supportsSuspend;
 	private final Attributes shellAttributes;
 	private final Terminal.SignalHandler previousContinueHandler;
+	private final Terminal.SignalHandler previousResizeHandler;
 	private final StringBuilder screenDocument = new StringBuilder();
+	private Status statusBar;
+	private String statusLeft;
+	private String statusRight;
 	private Attributes fullScreenResumeAttributes;
 	private volatile boolean managedSuspend;
 	private Theme theme;
@@ -60,6 +68,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 		previousContinueHandler = supportsSuspend
 				? terminal.handle(Terminal.Signal.CONT, this::handleContinue)
 				: null;
+		previousResizeHandler = terminal.handle(Terminal.Signal.WINCH, this::handleResize);
 		if (supportsSuspend) {
 			Widget previousInit = reader.getWidgets().get(LineReader.CALLBACK_INIT);
 			reader.getWidgets().put(LineReader.CALLBACK_INIT, () -> {
@@ -229,11 +238,13 @@ public final class InteractiveTerminal implements AutoCloseable {
 
 	public <T> T run(TuiComponent<T> component) throws IOException {
 		if (reader.isReading()) resetPromptBackground(theme);
+		suspendStatusBar();
 		try {
 			return new TuiRuntime(
 					terminal, theme, supportsSuspend ? this::suspendFullScreen : null, this::resumeMainScreen)
 					.run(component);
 		} finally {
+			restoreStatusBar();
 			if (reader.isReading()) reader.callWidget(LineReader.REDRAW_LINE);
 		}
 	}
@@ -356,6 +367,66 @@ public final class InteractiveTerminal implements AutoCloseable {
 		this.theme = theme;
 	}
 
+	/** Shows or updates the status bar pinned to the bottom terminal row. */
+	public synchronized void setStatus(String left, String right) {
+		statusLeft = left == null ? "" : left;
+		statusRight = right == null ? "" : right;
+		renderStatusBar();
+	}
+
+	private void handleResize(Terminal.Signal signal) {
+		if (previousResizeHandler != null
+				&& previousResizeHandler != Terminal.SignalHandler.SIG_DFL
+				&& previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
+			previousResizeHandler.handle(signal);
+		}
+		synchronized (this) {
+			if (statusBar != null) {
+				statusBar.resize();
+				renderStatusBar();
+			}
+		}
+	}
+
+	private void renderStatusBar() {
+		if (statusLeft == null && statusRight == null) return;
+		if (statusBar == null) statusBar = Status.getStatus(terminal);
+		if (statusBar == null) return;
+		int columns = terminal.getColumns();
+		int width = columns > 0 ? columns : DEFAULT_COLUMNS;
+		statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(statusLeft, statusRight, width, theme))));
+	}
+
+	/** Left- and right-aligns status content on one full-width row. */
+	static String statusBarLine(String left, String right, int width, Theme theme) {
+		String rightText = TerminalText.truncatePlain(right == null ? "" : right, width);
+		int rightWidth = TerminalText.visibleWidth(rightText);
+		int leftLimit = rightWidth == 0 ? width : width - rightWidth - 1;
+		String leftText = TerminalText.truncatePlain(left == null ? "" : left, Math.max(0, leftLimit));
+		int leftWidth = TerminalText.visibleWidth(leftText);
+		int padding = Math.max(leftText.isEmpty() ? 0 : 1, width - leftWidth - rightWidth);
+		String line = rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
+		return theme.muted().isEmpty() || line.isEmpty() ? line : theme.muted() + line + theme.reset();
+	}
+
+	private synchronized void suspendStatusBar() {
+		if (statusBar != null) statusBar.suspend();
+	}
+
+	private synchronized void restoreStatusBar() {
+		if (statusBar == null) return;
+		statusBar.restore();
+		if (statusBar.size() > 0) {
+			// Alternate-screen switches can drop the scroll region on some terminals.
+			int rows = terminal.getRows() > 0 ? terminal.getRows() : DEFAULT_ROWS;
+			terminal.puts(Capability.save_cursor);
+			terminal.puts(Capability.change_scroll_region, 0, rows - 1 - statusBar.size());
+			terminal.puts(Capability.restore_cursor);
+			renderStatusBar();
+			terminal.flush();
+		}
+	}
+
 	private boolean requestSuspend() {
 		suspendedBuffer = reader.getBuffer().toString();
 		suspendedCursor = reader.getBuffer().cursor();
@@ -434,7 +505,12 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private synchronized void repaintScreen() {
 		terminal.writer().print(theme.reset());
 		terminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
+		boolean redrawStatusBar = statusBar != null && statusBar.size() > 0;
+		// Release the status rows so the redrawn document starts on a clean screen.
+		if (redrawStatusBar) statusBar.update(List.of());
 		terminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
+		// Re-reserve the bottom row before printing so the document scrolls above it.
+		if (redrawStatusBar) renderStatusBar();
 		terminal.writer().print(screenDocument);
 		terminal.writer().print(END_SYNCHRONIZED_OUTPUT);
 		terminal.writer().flush();
@@ -444,6 +520,9 @@ public final class InteractiveTerminal implements AutoCloseable {
 	public void close() throws IOException {
 		if (previousContinueHandler != null) {
 			terminal.handle(Terminal.Signal.CONT, previousContinueHandler);
+		}
+		if (previousResizeHandler != null) {
+			terminal.handle(Terminal.Signal.WINCH, previousResizeHandler);
 		}
 		terminal.close();
 	}

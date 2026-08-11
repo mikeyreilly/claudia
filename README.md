@@ -72,6 +72,11 @@ The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
 provides standard line editing, with Enter to submit, Shift-Enter to insert a
 newline, Ctrl-C to cancel input, Escape to interrupt an active agent turn,
 Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
+A status bar on the bottom terminal row shows the working directory (with the
+home directory abbreviated to `~`) and the checked-out Git branch on the left,
+and the model name, thinking level, and context-window use on the right, for
+example `~/xa/coding-agent [main]` and `GPT-5.6 Sol Max (0%)`. The context
+percentage updates after each assistant response and after `/compact`.
 Transient provider and connection failures (including HTTP 503 responses) are
 automatically retried up to three times with exponential backoff; Escape also
 cancels a pending retry.
