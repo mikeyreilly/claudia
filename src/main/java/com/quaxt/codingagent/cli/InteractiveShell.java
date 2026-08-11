@@ -640,6 +640,8 @@ final class InteractiveShell {
 			return;
 		}
 		terminal.run(new McpSelector(mcp, this::syncMcpTools));
+		// An OAuth connection may finish asynchronously while the selector is open.
+		syncMcpTools();
 	}
 
 	private void selectSettings() throws IOException {

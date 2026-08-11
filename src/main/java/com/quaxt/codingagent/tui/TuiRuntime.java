@@ -45,6 +45,8 @@ final class TuiRuntime {
 					render(component, width, height);
 				}
 				if (input == null) {
+					// Components such as the MCP selector can change from background connection threads.
+					render(component, width, height);
 					continue;
 				}
 				if (suspendAction != null

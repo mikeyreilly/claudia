@@ -121,11 +121,42 @@ supported:
 Relative local-server `cwd` values resolve from the workspace. MCP tools are
 exposed as `<server>_<tool>`, matching OpenCode's name sanitization. In the
 interactive shell, `/mcp` opens the configured-server list; Enter connects,
-disconnects, or retries the selected server without editing its config.
-Streamable HTTP and legacy HTTP+SSE servers are supported. Explicit `headers`
-take precedence for remote authentication; codingagent can also reuse a valid
-OAuth bearer token already stored for the same server URL by OpenCode. New or
-expired OAuth sessions still need to be authenticated with OpenCode first.
+disconnects, authenticates, or retries the selected server without editing its
+config. Streamable HTTP and legacy HTTP+SSE servers are supported.
+
+Remote OAuth is discovered automatically from the MCP server's
+`WWW-Authenticate` challenge and well-known metadata. When `/mcp` reports
+`Authentication required`, select the server and press Enter. codingagent opens
+the authorization page, receives the loopback callback, uses PKCE S256, and
+dynamically registers a client when the authorization server supports it.
+Tokens and registered-client details are stored with user-only permissions in
+`~/.codingagent/mcp-auth.json`; access tokens are refreshed automatically.
+codingagent can also import a matching OpenCode credential (same configured
+server name and exact URL).
+
+OAuth can be customized for servers that require a pre-registered client:
+
+```json
+{
+  "mcp": {
+    "remote-tools": {
+      "type": "remote",
+      "url": "https://example.com/mcp",
+      "oauth": {
+        "clientId": "my-client-id",
+        "clientSecret": "{env:MCP_CLIENT_SECRET}",
+        "scope": "tools:read tools:write",
+        "callbackPort": 19876
+      }
+    }
+  }
+}
+```
+
+`redirectUri` may be used instead of `callbackPort`, but must be an HTTP
+loopback URL that codingagent can listen on. Explicit `Authorization` headers
+take precedence over OAuth discovery. Set `"oauth": false` to disable OAuth
+for a remote server.
 
 `--api-key` overrides environment-based credentials. Without `--no-session`,
 codingagent records an append-only transcript in `~/.codingagent/sessions`.
@@ -151,7 +182,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Anthropic, OpenAI Responses, ChatGPT Plus/Pro, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
 | Streaming agent loop and sequential tool calls | Implemented |
 | `read`, `write`, `edit`, `shell`, `grep`, `find`, `ls` tools | Implemented |
-| OpenCode-compatible local/remote MCP servers and interactive `/mcp` toggles | Implemented |
+| OpenCode-compatible local/remote MCP servers, OAuth 2.1/PKCE, and interactive `/mcp` toggles | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |
 | Interactive `/resume` session listing and restoration | Implemented |

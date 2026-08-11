@@ -62,9 +62,14 @@ final class McpSelector implements TuiComponent<Void> {
 			McpManager.ServerStatus selected = manager.status(filtered.get(selectedIndex));
 			String detail = selected.message() == null ? selected.target() : selected.message();
 			lines.add(theme.muted() + TerminalText.truncatePlain("  " + detail, width) + theme.reset());
+			if (selected.authorizationUrl() != null) {
+				String label = TerminalText.truncatePlain("Open: " + selected.authorizationUrl(), Math.max(1, width - 2));
+				String link = TerminalText.hyperlink(label, selected.authorizationUrl());
+				lines.add(theme.muted() + "  " + link + theme.reset());
+			}
 		}
 		lines.add(theme.muted()
-				+ TerminalText.truncatePlain("Type to filter  Up/Down move  Enter toggle/retry  Esc close", width)
+				+ TerminalText.truncatePlain("Type to filter  Up/Down move  Enter toggle/auth/retry  Esc close", width)
 				+ theme.reset());
 		return lines;
 	}
@@ -72,6 +77,8 @@ final class McpSelector implements TuiComponent<Void> {
 	private static String statusLine(McpManager.ServerStatus status) {
 		return switch (status.state()) {
 			case CONNECTING -> "⋯ " + status.name() + "  Connecting";
+			case AUTHENTICATING -> "⋯ " + status.name() + "  Waiting for OAuth";
+			case AUTH_REQUIRED -> "! " + status.name() + "  Authentication required";
 			case CONNECTED -> "✓ " + status.name() + "  Enabled · " + status.toolCount() + " tool(s)";
 			case DISABLED -> "○ " + status.name() + "  Disabled";
 			case FAILED -> "✗ " + status.name() + "  Failed";
@@ -128,13 +135,8 @@ final class McpSelector implements TuiComponent<Void> {
 
 	private void toggle() {
 		if (filtered.isEmpty()) return;
-		try {
-			manager.toggle(filtered.get(selectedIndex));
-			onChange.run();
-		} catch (InterruptedException error) {
-			Thread.currentThread().interrupt();
-			complete = true;
-		}
+		manager.toggleAsync(filtered.get(selectedIndex));
+		onChange.run();
 	}
 
 	private void move(int delta) {

@@ -151,8 +151,10 @@ public final class McpConfigLoader {
 				}
 				if (!(url.getScheme() != null
 						&& (url.getScheme().equalsIgnoreCase("http") || url.getScheme().equalsIgnoreCase("https"))
-						&& url.getHost() != null)) {
-					throw invalid(name, "url must be an absolute http or https URL");
+						&& url.getHost() != null
+						&& url.getUserInfo() == null
+						&& url.getFragment() == null)) {
+					throw invalid(name, "url must be an absolute http or https URL without user info or a fragment");
 				}
 				JsonNode oauth = value.get("oauth");
 				if (oauth != null && !oauth.isNull() && !oauth.isObject() && !oauth.isBoolean()) {
@@ -161,11 +163,48 @@ public final class McpConfigLoader {
 				if (oauth != null && oauth.isBoolean() && oauth.asBoolean()) {
 					throw invalid(name, "oauth may be an object or false, not true");
 				}
+				if (oauth instanceof ObjectNode oauthObject) validateOAuth(name, oauthObject);
 				yield new McpServerConfig.Remote(
 						url, stringMap(name, value, "headers"), oauth, enabled, timeout);
 			}
 			default -> throw invalid(name, "type must be local or remote");
 		};
+	}
+
+	private static void validateOAuth(String server, ObjectNode oauth) throws IOException {
+		for (String field : List.of("clientId", "clientSecret", "scope")) {
+			JsonNode value = oauth.get(field);
+			if (value != null && !value.isNull() && (!value.isTextual() || value.asText().isBlank())) {
+				throw invalid(server, "oauth." + field + " must be a non-empty string");
+			}
+		}
+		JsonNode callbackPort = oauth.get("callbackPort");
+		if (callbackPort != null && !callbackPort.isNull()
+				&& (!callbackPort.isIntegralNumber()
+						|| !callbackPort.canConvertToInt()
+						|| callbackPort.asInt() < 1
+						|| callbackPort.asInt() > 65_535)) {
+			throw invalid(server, "oauth.callbackPort must be an integer from 1 to 65535");
+		}
+		JsonNode redirect = oauth.get("redirectUri");
+		if (redirect != null && !redirect.isNull()) {
+			if (!redirect.isTextual() || redirect.asText().isBlank()) {
+				throw invalid(server, "oauth.redirectUri must be a non-empty string");
+			}
+			try {
+				URI uri = new URI(redirect.asText());
+				String host = uri.getHost();
+				if (!uri.isAbsolute()
+						|| host == null
+						|| !uri.getScheme().equalsIgnoreCase("http")
+						|| !(host.equalsIgnoreCase("localhost") || host.startsWith("127.") || host.equals("::1"))
+						|| uri.getFragment() != null) {
+					throw invalid(server, "oauth.redirectUri must be an HTTP loopback URL without a fragment");
+				}
+			} catch (URISyntaxException error) {
+				throw invalid(server, "oauth.redirectUri is invalid: " + redirect.asText());
+			}
+		}
 	}
 
 	private static Map<String, String> stringMap(String server, ObjectNode value, String field) throws IOException {

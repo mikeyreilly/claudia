@@ -3,6 +3,7 @@ package com.quaxt.codingagent.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -10,6 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 
@@ -32,6 +34,16 @@ final class McpClient implements AutoCloseable {
 	}
 
 	static McpClient connect(String serverName, McpServerConfig config, Path workspace) throws Exception {
+		return connect(serverName, config, workspace, McpOAuthClient.defaultClient(), false, ignored -> {});
+	}
+
+	static McpClient connect(
+			String serverName,
+			McpServerConfig config,
+			Path workspace,
+			McpOAuthClient oauth,
+			boolean interactiveOAuth,
+			Consumer<URI> authorizationListener) throws Exception {
 		Duration timeout = config.timeoutMillis() == null
 				? DEFAULT_TIMEOUT
 				: Duration.ofMillis(config.timeoutMillis());
@@ -40,16 +52,43 @@ final class McpClient implements AutoCloseable {
 			return initializeOwned(transport, timeout);
 		}
 
-		McpServerConfig.Remote remote = McpOAuthCredentials.apply(serverName, (McpServerConfig.Remote) config);
+		McpServerConfig.Remote remote = (McpServerConfig.Remote) config;
+		McpOAuthClient.Session oauthSession = oauth.session(serverName, remote);
+		try {
+			return connectRemote(remote, workspace, timeout, oauthSession);
+		} catch (Exception error) {
+			if (oauthSession == null || !McpOAuthClient.isOAuthChallenge(error)) throw error;
+			if (!interactiveOAuth) {
+				throw new McpOAuthRequiredException(serverName, McpOAuthClient.isInsufficientScope(error));
+			}
+			McpHttpException challenge = McpHttpException.find(error);
+			oauthSession.authorize(challenge, authorizationListener);
+			try {
+				return connectRemote(remote, workspace, timeout, oauthSession);
+			} catch (Exception retryError) {
+				if (McpOAuthClient.isOAuthChallenge(retryError)) {
+					throw new IOException("MCP server rejected the OAuth token after authorization", retryError);
+				}
+				throw retryError;
+			}
+		}
+	}
+
+	private static McpClient connectRemote(
+			McpServerConfig.Remote remote,
+			Path workspace,
+			Duration timeout,
+			McpOAuthClient.Session oauth) throws Exception {
 		Exception streamableFailure;
-		McpTransport streamable = new StreamableHttpMcpTransport(remote, workspace);
+		McpTransport streamable = new StreamableHttpMcpTransport(remote, workspace, oauth);
 		try {
 			return initializeOwned(streamable, timeout);
 		} catch (Exception error) {
 			streamableFailure = error;
 			if (error instanceof InterruptedException || Thread.currentThread().isInterrupted()) throw error;
+			if (oauth != null && McpOAuthClient.isOAuthChallenge(error)) throw error;
 		}
-		McpTransport sse = new SseHttpMcpTransport(remote, workspace);
+		McpTransport sse = new SseHttpMcpTransport(remote, workspace, oauth);
 		try {
 			return initializeOwned(sse, timeout);
 		} catch (Exception error) {
