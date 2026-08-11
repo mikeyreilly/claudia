@@ -321,6 +321,40 @@ class InteractiveTerminalTest {
 		}
 	}
 
+	@Test
+	void alignsStatusBarSegmentsToTheFullTerminalWidth() {
+		String line = InteractiveTerminal.statusBarLine(
+				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60, Theme.PLAIN);
+
+		assertEquals(60, line.length());
+		assertTrue(line.startsWith("~/xa/coding-agent [main]"));
+		assertTrue(line.endsWith("GPT-5.6 Sol Max (0%)"));
+
+		String styled = InteractiveTerminal.statusBarLine("left", "right", 20, Theme.DARK);
+		assertTrue(styled.startsWith(Theme.DARK.muted()));
+		assertTrue(styled.endsWith(Theme.DARK.reset()));
+
+		String narrow = InteractiveTerminal.statusBarLine(
+				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30, Theme.PLAIN);
+		assertTrue(TerminalText.visibleWidth(narrow) <= 30);
+		assertTrue(narrow.endsWith("GPT-5.6 Sol Max (0%)"));
+
+		assertEquals("left only", InteractiveTerminal.statusBarLine("left only", "", 20, Theme.PLAIN));
+		assertEquals("", InteractiveTerminal.statusBarLine("", "", 20, Theme.PLAIN));
+	}
+
+	@Test
+	void statusBarUpdatesAreIgnoredOnTerminalsWithoutCursorAddressing() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			interactive.setStatus("~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
+			interactive.println("conversation output");
+
+			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("conversation output"));
+		}
+	}
+
 	private static final class ImmediateComponent implements TuiComponent<Void> {
 		@Override
 		public List<String> render(int width, int height, Theme theme) {

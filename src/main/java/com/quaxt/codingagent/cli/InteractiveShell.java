@@ -37,6 +37,7 @@ import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
+import com.quaxt.codingagent.ai.types.Usage;
 import com.quaxt.codingagent.ai.types.UserContent;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
@@ -121,6 +122,7 @@ final class InteractiveShell {
 
 	private int loop() throws InterruptedException, IOException {
 		terminal.print(screenHeader(agent == null ? null : agent.state().model));
+		refreshStatus();
 		while (true) {
 			String input = terminal.readLine("\n> ");
 			if (input == null) {
@@ -155,6 +157,7 @@ final class InteractiveShell {
 			} else if (!emittedText && agent.state().messages.getLast() instanceof AssistantMessage response) {
 				terminal.println(response.errorMessage == null ? response.text() : "Error: " + response.errorMessage);
 			}
+			refreshStatus();
 		}
 	}
 
@@ -180,6 +183,7 @@ final class InteractiveShell {
 				try {
 					var result = agent.compact(null);
 					terminal.println("Context compacted: " + result.tokensBefore() + " -> " + result.estimatedTokensAfter() + " tokens.");
+					refreshStatus();
 				} catch (IllegalStateException error) {
 					terminal.println("Error: " + error.getMessage());
 				}
@@ -188,6 +192,7 @@ final class InteractiveShell {
 				if (input.startsWith("/theme ")) {
 					Theme theme = Theme.named(input.substring("/theme ".length()).trim());
 					terminal.setTheme(theme);
+					refreshStatus();
 					settings = settings.withTheme(theme.name());
 					try {
 						settingsStore.setTheme(theme.name());
@@ -373,24 +378,28 @@ final class InteractiveShell {
 	}
 
 	private void logout() throws IOException {
-		if (agent != null && agent.state().model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
-			chatGptProvider().logout();
-			agent = null;
-			terminal.println("ChatGPT credentials removed. Run /login or /resume to continue.");
-			return;
-		}
-		if (agent != null && agent.state().model.provider.equals("openai")) {
-			FileCredentialStore.defaultStore().delete("openai");
-			agent = null;
-			terminal.println("OpenAI API key removed. Run /login or /resume to continue.");
-			return;
-		}
-		copilotProvider().logout();
-		if (agent != null && agent.state().model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-			agent = null;
-			terminal.println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
-		} else {
-			terminal.println("GitHub Copilot credentials removed.");
+		try {
+			if (agent != null && agent.state().model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+				chatGptProvider().logout();
+				agent = null;
+				terminal.println("ChatGPT credentials removed. Run /login or /resume to continue.");
+				return;
+			}
+			if (agent != null && agent.state().model.provider.equals("openai")) {
+				FileCredentialStore.defaultStore().delete("openai");
+				agent = null;
+				terminal.println("OpenAI API key removed. Run /login or /resume to continue.");
+				return;
+			}
+			copilotProvider().logout();
+			if (agent != null && agent.state().model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+				agent = null;
+				terminal.println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
+			} else {
+				terminal.println("GitHub Copilot credentials removed.");
+			}
+		} finally {
+			refreshStatus();
 		}
 	}
 
@@ -478,6 +487,7 @@ final class InteractiveShell {
 		configureAgent(model, session.cwd(), resumedRecorder);
 		settings = settings.withDefaultModel(model.provider, model.id);
 		agent.state().messages.addAll(restored);
+		refreshStatus();
 		terminal.replaceScreen(renderSessionScreen(model, session.messages(), hideThinkingBlock, terminal.theme()));
 		try {
 			settingsStore.setDefaultModelAndProvider(model.provider, model.id);
@@ -674,6 +684,7 @@ final class InteractiveShell {
 			return;
 		}
 		agent.state().thinkingLevel = level;
+		refreshStatus();
 		settings = settings.withDefaultThinkingLevel(level);
 		try {
 			settingsStore.setDefaultThinkingLevel(level);
@@ -750,6 +761,102 @@ final class InteractiveShell {
 		cwd = configuredCwd.toAbsolutePath().normalize();
 		agent = configured;
 		recorder = nextRecorder;
+		refreshStatus();
+	}
+
+	/** Updates the bottom status bar with workspace and model information. */
+	private void refreshStatus() {
+		String branch = gitBranch(cwd);
+		String left = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
+				+ (branch == null ? "" : " [" + branch + "]");
+		String right = agent == null
+				? ""
+				: modelStatus(agent.state().model, agent.state().thinkingLevel, contextTokens(agent.state().messages));
+		terminal.setStatus(left, right);
+	}
+
+	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
+	static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
+		StringBuilder status = new StringBuilder(model.name);
+		if (level != null && level != ThinkingLevel.OFF) {
+			status.append(' ').append(thinkingLabel(level));
+		}
+		long percent = model.contextWindow > 0
+				? Math.max(0, Math.round(100.0 * contextTokens / model.contextWindow))
+				: 0;
+		return status.append(" (").append(percent).append("%)").toString();
+	}
+
+	private static String thinkingLabel(ThinkingLevel level) {
+		return switch (level) {
+			case OFF -> "Off";
+			case MINIMAL -> "Minimal";
+			case LOW -> "Low";
+			case MEDIUM -> "Medium";
+			case HIGH -> "High";
+			case XHIGH -> "XHigh";
+			case MAX -> "Max";
+		};
+	}
+
+	/** Context tokens consumed by the most recent successful assistant response. */
+	static long contextTokens(List<Message> messages) {
+		for (int index = messages.size() - 1; index >= 0; index--) {
+			if (messages.get(index) instanceof AssistantMessage assistant
+					&& assistant.stopReason != StopReason.ERROR
+					&& assistant.stopReason != StopReason.ABORTED) {
+				Usage usage = assistant.usage;
+				long total = usage.totalTokens > 0
+						? usage.totalTokens
+						: usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+				if (total > 0) return total;
+			}
+		}
+		return 0;
+	}
+
+	/** Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}. */
+	static String displayPath(Path home, Path cwd) {
+		Path absolute = cwd.toAbsolutePath().normalize();
+		if (home != null && !home.toString().isEmpty()) {
+			Path absoluteHome = home.toAbsolutePath().normalize();
+			if (absolute.startsWith(absoluteHome)) {
+				String relative = absoluteHome.relativize(absolute).toString().replace('\\', '/');
+				return relative.isEmpty() ? "~" : "~/" + relative;
+			}
+		}
+		return absolute.toString();
+	}
+
+	/** Reads the checked-out branch (or short detached commit) without spawning git. */
+	static String gitBranch(Path directory) {
+		try {
+			for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
+				Path gitPath = current.resolve(".git");
+				if (Files.isRegularFile(gitPath)) {
+					// Worktree or submodule: .git is a file pointing at the real git dir.
+					String content = Files.readString(gitPath).trim();
+					if (!content.startsWith("gitdir:")) return null;
+					return readGitHead(current.resolve(content.substring("gitdir:".length()).trim()).normalize());
+				}
+				if (Files.isDirectory(gitPath)) return readGitHead(gitPath);
+			}
+		} catch (IOException | java.nio.file.InvalidPathException ignored) {
+			// A missing or unreadable repository simply hides the branch segment.
+		}
+		return null;
+	}
+
+	private static String readGitHead(Path gitDir) throws IOException {
+		Path head = gitDir.resolve("HEAD");
+		if (!Files.isRegularFile(head)) return null;
+		String content = Files.readString(head).trim();
+		if (content.startsWith("ref:")) {
+			String ref = content.substring("ref:".length()).trim();
+			return ref.startsWith("refs/heads/") ? ref.substring("refs/heads/".length()) : ref;
+		}
+		if (content.isEmpty()) return null;
+		return content.length() > 7 ? content.substring(0, 7) : content;
 	}
 
 	private void syncMcpTools() {
@@ -866,7 +973,10 @@ final class InteractiveShell {
 		switch (event) {
 			case AgentEvent.MessageUpdate update -> onMessageUpdate(update.providerEvent());
 			case AgentEvent.MessageEnd end -> {
-				if (end.message() instanceof AssistantMessage) finishStreamOutput();
+				if (end.message() instanceof AssistantMessage) {
+					finishStreamOutput();
+					refreshStatus();
+				}
 			}
 			case AgentEvent.AutoRetryStart retry -> {
 				finishStreamOutput();

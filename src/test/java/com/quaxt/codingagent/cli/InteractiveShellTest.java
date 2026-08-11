@@ -2,10 +2,14 @@ package com.quaxt.codingagent.cli;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
@@ -18,6 +22,7 @@ import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
+import com.quaxt.codingagent.ai.types.Usage;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.tui.Theme;
 
@@ -121,6 +126,80 @@ class InteractiveShellTest {
 		assertEquals(
 				"Build completed successfully.",
 				InteractiveShell.toolResultSummary("shell", AgentTool.ToolResult.text("Build completed successfully.")));
+	}
+
+	@Test
+	void formatsModelThinkingLevelAndContextUseForTheStatusBar() {
+		Model model = Model.builder()
+				.id("gpt-5.6-sol")
+				.name("GPT-5.6 Sol")
+				.api("openai-responses")
+				.provider("github-copilot")
+				.baseUrl("https://example.test")
+				.reasoning(true)
+				.cost(ModelCost.FREE)
+				.contextWindow(1_000_000)
+				.maxTokens(1)
+				.build();
+
+		assertEquals("GPT-5.6 Sol Max (0%)", InteractiveShell.modelStatus(model, ThinkingLevel.MAX, 0));
+		assertEquals("GPT-5.6 Sol Medium (25%)", InteractiveShell.modelStatus(model, ThinkingLevel.MEDIUM, 250_000));
+		assertEquals("GPT-5.6 Sol (100%)", InteractiveShell.modelStatus(model, ThinkingLevel.OFF, 1_000_000));
+		assertEquals("GPT-5.6 Sol (0%)", InteractiveShell.modelStatus(model, null, 0));
+	}
+
+	@Test
+	void contextTokensComeFromTheLatestSuccessfulAssistantResponse() {
+		AssistantMessage first = new AssistantMessage("faux", "faux", "faux-1");
+		first.stopReason = StopReason.STOP;
+		first.usage.totalTokens = 1_000;
+		AssistantMessage second = new AssistantMessage("faux", "faux", "faux-1");
+		second.stopReason = StopReason.STOP;
+		second.usage.input = 2_000;
+		second.usage.output = 500;
+		AssistantMessage failed = new AssistantMessage("faux", "faux", "faux-1");
+		failed.stopReason = StopReason.ERROR;
+		failed.usage.totalTokens = 9_999;
+
+		assertEquals(0, InteractiveShell.contextTokens(List.of(UserMessage.of("hi"))));
+		assertEquals(1_000, InteractiveShell.contextTokens(List.of(UserMessage.of("hi"), first)));
+		assertEquals(2_500, InteractiveShell.contextTokens(List.of(first, UserMessage.of("more"), second)));
+		assertEquals(2_500, InteractiveShell.contextTokens(List.of(first, second, failed)));
+	}
+
+	@Test
+	void abbreviatesTheHomeDirectoryInTheStatusBarPath() {
+		Path home = Path.of("/Users/dev");
+
+		assertEquals("~/xa/coding-agent", InteractiveShell.displayPath(home, Path.of("/Users/dev/xa/coding-agent")));
+		assertEquals("~", InteractiveShell.displayPath(home, Path.of("/Users/dev")));
+		assertEquals("/opt/elsewhere", InteractiveShell.displayPath(home, Path.of("/opt/elsewhere")));
+		assertEquals("/opt/elsewhere", InteractiveShell.displayPath(Path.of(""), Path.of("/opt/elsewhere")));
+	}
+
+	@Test
+	void readsTheGitBranchFromHeadWithoutSpawningGit(@TempDir Path repo) throws Exception {
+		assertNull(InteractiveShell.gitBranch(repo));
+
+		Path gitDir = Files.createDirectories(repo.resolve(".git"));
+		Files.writeString(gitDir.resolve("HEAD"), "ref: refs/heads/main\n");
+		assertEquals("main", InteractiveShell.gitBranch(repo));
+
+		Path nested = Files.createDirectories(repo.resolve("src/deep"));
+		assertEquals("main", InteractiveShell.gitBranch(nested));
+
+		Files.writeString(gitDir.resolve("HEAD"), "0123456789abcdef0123456789abcdef01234567\n");
+		assertEquals("0123456", InteractiveShell.gitBranch(repo));
+	}
+
+	@Test
+	void readsTheGitBranchThroughAWorktreeGitFile(@TempDir Path root) throws Exception {
+		Path gitDir = Files.createDirectories(root.resolve("main-checkout/.git/worktrees/feature"));
+		Files.writeString(gitDir.resolve("HEAD"), "ref: refs/heads/feature-branch\n");
+		Path worktree = Files.createDirectories(root.resolve("feature"));
+		Files.writeString(worktree.resolve(".git"), "gitdir: " + gitDir + "\n");
+
+		assertEquals("feature-branch", InteractiveShell.gitBranch(worktree));
 	}
 
 	private static Model model(String id) {
