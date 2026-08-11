@@ -3,6 +3,7 @@ package com.quaxt.codingagent.mcp;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -33,7 +34,12 @@ class McpConfigLoaderTest {
 				    "remote": {
 				      "type": "remote",
 				      "url": "https://example.test/mcp",
-				      "headers": { "Authorization": "Bearer {env:TOOL_TOKEN}" }
+				      "headers": { "Authorization": "Bearer {env:TOOL_TOKEN}" },
+				      "oauth": {
+				        "clientId": "configured-client",
+				        "scope": "read write",
+				        "callbackPort": 23456
+				      }
 				    }
 				  }
 				}
@@ -48,7 +54,24 @@ class McpConfigLoaderTest {
 		assertFalse(local.enabled());
 		McpServerConfig.Remote remote = assertInstanceOf(McpServerConfig.Remote.class, config.servers().get("remote"));
 		assertEquals("Bearer abc123", remote.headers().get("Authorization"));
+		assertEquals("configured-client", remote.oauth().path("clientId").asText());
+		assertEquals("read write", remote.oauth().path("scope").asText());
+		assertEquals(23456, remote.oauth().path("callbackPort").asInt());
 		assertEquals(java.util.List.of(settingsPath), config.sources());
+	}
+
+	@Test
+	void rejectsANonLoopbackOAuthRedirect() throws Exception {
+		Path settingsPath = tempDir.resolve("home/.codingagent/settings.json");
+		Files.createDirectories(settingsPath.getParent());
+		Files.writeString(settingsPath, """
+				{"mcp":{"remote":{"type":"remote","url":"https://example.test/mcp",
+				"oauth":{"redirectUri":"https://attacker.test/callback"}}}}
+				""");
+
+		Exception error = assertThrows(
+				java.io.IOException.class, () -> new McpConfigLoader(settingsPath, Map.of()).load());
+		assertTrue(error.getMessage().contains("HTTP loopback URL"));
 	}
 
 	@Test

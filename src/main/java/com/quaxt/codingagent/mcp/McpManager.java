@@ -6,13 +6,14 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import com.quaxt.codingagent.agent.AgentTool;
 
 /** Owns configured MCP sessions and supports runtime connect/disconnect toggles. */
 public final class McpManager implements AutoCloseable {
 	public enum State {
 		CONNECTING,
+		AUTHENTICATING,
+		AUTH_REQUIRED,
 		CONNECTED,
 		DISABLED,
 		FAILED
@@ -23,17 +24,25 @@ public final class McpManager implements AutoCloseable {
 			State state,
 			String message,
 			int toolCount,
-			String target) {}
+			String target,
+			String authorizationUrl) {}
 
 	private final Path workspace;
+	private final McpOAuthClient oauth;
 	private final LinkedHashMap<String, Runtime> servers = new LinkedHashMap<>();
 	private volatile boolean closed;
 
 	public McpManager(McpConfiguration configuration, Path workspace) {
+		this(configuration, workspace, McpOAuthClient.defaultClient());
+	}
+
+	McpManager(McpConfiguration configuration, Path workspace, McpOAuthClient oauth) {
 		this.workspace = workspace.toAbsolutePath().normalize();
+		this.oauth = oauth;
 		configuration.servers().forEach((name, config) -> servers.put(name, new Runtime(name, config)));
 		for (Runtime runtime : servers.values()) {
-			if (runtime.config.enabled()) startConnect(runtime);
+			// Startup may refresh an existing token, but never opens a browser unexpectedly.
+			if (runtime.config.enabled()) startConnect(runtime, false);
 		}
 	}
 
@@ -73,8 +82,15 @@ public final class McpManager implements AutoCloseable {
 	/** Connects or retries a configured server and waits for that attempt. */
 	public ServerStatus connect(String name) throws InterruptedException {
 		Runtime runtime = require(name);
-		Thread thread = startConnect(runtime);
+		Thread thread = startConnect(runtime, true);
 		if (thread != null) thread.join();
+		return snapshot(runtime);
+	}
+
+	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
+	public ServerStatus connectAsync(String name) {
+		Runtime runtime = require(name);
+		startConnect(runtime, true);
 		return snapshot(runtime);
 	}
 
@@ -92,6 +108,7 @@ public final class McpManager implements AutoCloseable {
 			runtime.tools = List.of();
 			runtime.state = State.DISABLED;
 			runtime.message = null;
+			runtime.authorizationUrl = null;
 		}
 		if (connector != null) connector.interrupt();
 		if (client != null) client.close();
@@ -105,7 +122,21 @@ public final class McpManager implements AutoCloseable {
 		synchronized (runtime.lock) {
 			state = runtime.state;
 		}
-		return state == State.CONNECTED || state == State.CONNECTING ? disconnect(name) : connect(name);
+		return state == State.CONNECTED || state == State.CONNECTING || state == State.AUTHENTICATING
+				? disconnect(name)
+				: connect(name);
+	}
+
+	/** Asynchronous variant used by the full-screen selector. */
+	public ServerStatus toggleAsync(String name) {
+		Runtime runtime = require(name);
+		State state;
+		synchronized (runtime.lock) {
+			state = runtime.state;
+		}
+		return state == State.CONNECTED || state == State.CONNECTING || state == State.AUTHENTICATING
+				? disconnect(name)
+				: connectAsync(name);
 	}
 
 	/** Returns the current model-visible tool adapters, with OpenCode-compatible names. */
@@ -127,7 +158,7 @@ public final class McpManager implements AutoCloseable {
 		return List.copyOf(result.values());
 	}
 
-	private Thread startConnect(Runtime runtime) {
+	private Thread startConnect(Runtime runtime, boolean interactiveOAuth) {
 		McpClient previous;
 		Thread previousConnector;
 		long generation;
@@ -141,10 +172,11 @@ public final class McpManager implements AutoCloseable {
 			runtime.tools = List.of();
 			runtime.state = State.CONNECTING;
 			runtime.message = null;
+			runtime.authorizationUrl = null;
 			generation = ++runtime.generation;
 			connector = Thread.ofVirtual()
 					.name("mcp-connect-" + McpAgentTool.sanitize(runtime.name))
-					.unstarted(() -> connectAttempt(runtime, generation));
+					.unstarted(() -> connectAttempt(runtime, generation, interactiveOAuth));
 			runtime.connector = connector;
 		}
 		if (previousConnector != null && previousConnector != connector) previousConnector.interrupt();
@@ -153,10 +185,16 @@ public final class McpManager implements AutoCloseable {
 		return connector;
 	}
 
-	private void connectAttempt(Runtime runtime, long generation) {
+	private void connectAttempt(Runtime runtime, long generation, boolean interactiveOAuth) {
 		McpClient candidate = null;
 		try {
-			candidate = McpClient.connect(runtime.name, runtime.config, workspace);
+			candidate = McpClient.connect(
+					runtime.name,
+					runtime.config,
+					workspace,
+					oauth,
+					interactiveOAuth,
+					url -> authorizationStarted(runtime, generation, url.toString()));
 			List<McpClient.ToolDefinition> tools = candidate.listTools();
 			McpClient connected = candidate;
 			candidate.onNotification((method, params) -> {
@@ -168,13 +206,25 @@ public final class McpManager implements AutoCloseable {
 				runtime.tools = List.copyOf(tools);
 				runtime.state = State.CONNECTED;
 				runtime.message = null;
+				runtime.authorizationUrl = null;
 				candidate = null;
+			}
+		} catch (McpOAuthRequiredException error) {
+			synchronized (runtime.lock) {
+				if (!closed && runtime.generation == generation) {
+					runtime.state = State.AUTH_REQUIRED;
+					runtime.message = message(error);
+					runtime.authorizationUrl = null;
+					runtime.client = null;
+					runtime.tools = List.of();
+				}
 			}
 		} catch (Exception error) {
 			synchronized (runtime.lock) {
 				if (!closed && runtime.generation == generation) {
 					runtime.state = State.FAILED;
 					runtime.message = message(error);
+					runtime.authorizationUrl = null;
 					runtime.client = null;
 					runtime.tools = List.of();
 				}
@@ -186,6 +236,15 @@ public final class McpManager implements AutoCloseable {
 					runtime.connector = null;
 				}
 			}
+		}
+	}
+
+	private void authorizationStarted(Runtime runtime, long generation, String url) {
+		synchronized (runtime.lock) {
+			if (closed || runtime.generation != generation) return;
+			runtime.state = State.AUTHENTICATING;
+			runtime.message = "Complete OAuth authorization in your browser";
+			runtime.authorizationUrl = url;
 		}
 	}
 
@@ -211,7 +270,8 @@ public final class McpManager implements AutoCloseable {
 					runtime.state,
 					runtime.message,
 					runtime.tools.size(),
-					target(runtime.config));
+					target(runtime.config),
+					runtime.authorizationUrl);
 		}
 	}
 
@@ -236,6 +296,7 @@ public final class McpManager implements AutoCloseable {
 				runtime.client = null;
 				runtime.tools = List.of();
 				runtime.state = State.DISABLED;
+				runtime.authorizationUrl = null;
 			}
 			if (connector != null) connector.interrupt();
 			if (client != null) client.close();
@@ -263,6 +324,7 @@ public final class McpManager implements AutoCloseable {
 		McpClient client;
 		List<McpClient.ToolDefinition> tools = List.of();
 		Thread connector;
+		String authorizationUrl;
 
 		Runtime(String name, McpServerConfig config) {
 			this.name = name;

@@ -28,6 +28,7 @@ import com.quaxt.codingagent.ai.util.AbortSignal;
 final class SseHttpMcpTransport implements McpTransport {
 	private final URI url;
 	private final Map<String, String> headers;
+	private final McpOAuthClient.Session oauth;
 	private final java.nio.file.Path workspace;
 	private final HttpClient client = HttpClient.newBuilder()
 			.followRedirects(HttpClient.Redirect.NORMAL)
@@ -43,15 +44,24 @@ final class SseHttpMcpTransport implements McpTransport {
 	private volatile String sessionId;
 	private volatile boolean closed;
 
-	SseHttpMcpTransport(McpServerConfig.Remote config, java.nio.file.Path workspace) {
+	SseHttpMcpTransport(
+			McpServerConfig.Remote config, java.nio.file.Path workspace, McpOAuthClient.Session oauth) {
 		url = config.url();
 		headers = config.headers();
+		this.oauth = oauth;
 		this.workspace = workspace.toAbsolutePath().normalize();
-		openEventStream();
+		openEventStream(true);
 	}
 
-	private void openEventStream() {
-		HttpRequest request = request(url, Duration.ofSeconds(30))
+	private void openEventStream(boolean authRetry) {
+		String bearer;
+		try {
+			bearer = oauth == null ? null : oauth.accessToken();
+		} catch (Exception error) {
+			endpoint.completeExceptionally(error);
+			return;
+		}
+		HttpRequest request = request(url, Duration.ofSeconds(30), bearer)
 				.setHeader("Accept", "text/event-stream")
 				.GET()
 				.build();
@@ -72,10 +82,18 @@ final class SseHttpMcpTransport implements McpTransport {
 			}
 			captureSession(response);
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				String body = readErrorBody(response.body());
+				McpHttpException failure = httpError(response.statusCode(), response.uri(), response.headers().map(), body, url);
 				try {
-					response.body().close();
-				} catch (IOException ignored) {}
-				IOException failure = new IOException("MCP SSE endpoint returned HTTP " + response.statusCode() + " (" + url + ")");
+					if (authRetry && oauth != null && oauth.refreshAfterUnauthorized(failure, bearer)) {
+						openEventStream(false);
+						return;
+					}
+				} catch (Exception refreshError) {
+					endpoint.completeExceptionally(refreshError);
+					failPending(refreshError);
+					return;
+				}
 				endpoint.completeExceptionally(failure);
 				failPending(failure);
 				return;
@@ -125,7 +143,13 @@ final class SseHttpMcpTransport implements McpTransport {
 	}
 
 	private void post(URI target, JsonNode message, Duration timeout, AbortSignal signal) throws Exception {
-		HttpRequest request = request(target, timeout)
+		post(target, message, timeout, signal, true);
+	}
+
+	private void post(
+			URI target, JsonNode message, Duration timeout, AbortSignal signal, boolean authRetry) throws Exception {
+		String bearer = oauth == null ? null : oauth.accessToken();
+		HttpRequest request = request(target, timeout, bearer)
 				.setHeader("Content-Type", "application/json")
 				.setHeader("Accept", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(Json.MAPPER.writeValueAsString(message), StandardCharsets.UTF_8))
@@ -134,7 +158,13 @@ final class SseHttpMcpTransport implements McpTransport {
 				client.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)), timeout, signal);
 		captureSession(response);
 		if (response.statusCode() < 200 || response.statusCode() >= 300) {
-			throw new IOException("MCP SSE message endpoint returned HTTP " + response.statusCode() + " (" + target + ")");
+			McpHttpException failure = httpError(
+					response.statusCode(), response.uri(), response.headers().map(), response.body(), target);
+			if (authRetry && oauth != null && oauth.refreshAfterUnauthorized(failure, bearer)) {
+				post(target, message, timeout, signal, false);
+				return;
+			}
+			throw failure;
 		}
 		if (response.body() != null && !response.body().isBlank()) {
 			JsonNode direct = Json.MAPPER.readTree(response.body());
@@ -226,11 +256,12 @@ final class SseHttpMcpTransport implements McpTransport {
 		}));
 	}
 
-	private HttpRequest.Builder request(URI target, Duration timeout) {
+	private HttpRequest.Builder request(URI target, Duration timeout, String bearer) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(timeout);
 		for (var header : headers.entrySet()) {
 			if (!restricted(header.getKey())) builder.header(header.getKey(), header.getValue());
 		}
+		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
 		if (sessionId != null) builder.setHeader("Mcp-Session-Id", sessionId);
 		if (protocolVersion != null) builder.setHeader("MCP-Protocol-Version", protocolVersion);
 		return builder;
@@ -288,6 +319,32 @@ final class SseHttpMcpTransport implements McpTransport {
 		String message = error.path("message").asText("MCP JSON-RPC error");
 		if (error.has("code")) message += " (" + error.path("code").asText() + ")";
 		return new IOException(message);
+	}
+
+	private static String readErrorBody(InputStream stream) {
+		try (stream) {
+			byte[] bytes = stream.readNBytes(4_001);
+			String value = new String(bytes, 0, Math.min(bytes.length, 4_000), StandardCharsets.UTF_8);
+			return bytes.length > 4_000 ? value + "..." : value;
+		} catch (IOException ignored) {
+			return "";
+		}
+	}
+
+	private static McpHttpException httpError(
+			int status, URI responseUri, Map<String, java.util.List<String>> headers, String body, URI target) {
+		String message = switch (status) {
+			case 401 -> "MCP server requires authentication";
+			case 403 -> "MCP server rejected the configured credentials";
+			default -> "MCP SSE endpoint returned HTTP " + status;
+		};
+		if (body != null && !body.isBlank()) message += ": " + abbreviate(body);
+		return new McpHttpException(status, responseUri, headers, body, message + " (" + target + ")");
+	}
+
+	private static String abbreviate(String value) {
+		String normalized = value.replaceAll("\\s+", " ").trim();
+		return normalized.length() <= 500 ? normalized : normalized.substring(0, 500) + "...";
 	}
 
 	private static boolean restricted(String name) {

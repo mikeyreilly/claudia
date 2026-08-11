@@ -29,6 +29,7 @@ import com.quaxt.codingagent.ai.util.AbortSignal;
 final class StreamableHttpMcpTransport implements McpTransport {
 	private final URI url;
 	private final Map<String, String> headers;
+	private final McpOAuthClient.Session oauth;
 	private final PathRoot root;
 	private final HttpClient client = HttpClient.newBuilder()
 			.followRedirects(HttpClient.Redirect.NORMAL)
@@ -42,9 +43,11 @@ final class StreamableHttpMcpTransport implements McpTransport {
 	private volatile CompletableFuture<?> listenerRequest;
 	private volatile boolean closed;
 
-	StreamableHttpMcpTransport(McpServerConfig.Remote config, java.nio.file.Path workspace) {
+	StreamableHttpMcpTransport(
+			McpServerConfig.Remote config, java.nio.file.Path workspace, McpOAuthClient.Session oauth) {
 		url = config.url();
 		headers = config.headers();
+		this.oauth = oauth;
 		root = new PathRoot(workspace.toAbsolutePath().normalize());
 	}
 
@@ -86,8 +89,14 @@ final class StreamableHttpMcpTransport implements McpTransport {
 	}
 
 	private HttpResponse<String> post(JsonNode message, Duration timeout, AbortSignal signal) throws Exception {
+		return post(message, timeout, signal, true);
+	}
+
+	private HttpResponse<String> post(JsonNode message, Duration timeout, AbortSignal signal, boolean authRetry)
+			throws Exception {
 		if (closed) throw new IOException("MCP HTTP transport is closed");
-		HttpRequest.Builder request = request(url, timeout)
+		String bearer = oauth == null ? null : oauth.accessToken();
+		HttpRequest.Builder request = request(url, timeout, bearer)
 				.setHeader("Content-Type", "application/json")
 				.setHeader("Accept", "application/json, text/event-stream")
 				.POST(HttpRequest.BodyPublishers.ofString(Json.MAPPER.writeValueAsString(message), StandardCharsets.UTF_8));
@@ -98,7 +107,11 @@ final class StreamableHttpMcpTransport implements McpTransport {
 		captureSession(response);
 		int status = response.statusCode();
 		if (status < 200 || status >= 300) {
-			throw httpError(status, response.body());
+			McpHttpException failure = httpError(response);
+			if (authRetry && oauth != null && oauth.refreshAfterUnauthorized(failure, bearer)) {
+				return post(message, timeout, signal, false);
+			}
+			throw failure;
 		}
 		return response;
 	}
@@ -173,7 +186,13 @@ final class StreamableHttpMcpTransport implements McpTransport {
 
 	private void startListener() {
 		if (closed || listenerRequest != null) return;
-		HttpRequest request = request(url, null).setHeader("Accept", "text/event-stream").GET().build();
+		HttpRequest request;
+		try {
+			String bearer = oauth == null ? null : oauth.accessToken();
+			request = request(url, null, bearer).setHeader("Accept", "text/event-stream").GET().build();
+		} catch (Exception ignored) {
+			return;
+		}
 		CompletableFuture<HttpResponse<InputStream>> future =
 				client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
 		listenerRequest = future;
@@ -227,12 +246,13 @@ final class StreamableHttpMcpTransport implements McpTransport {
 		}
 	}
 
-	private HttpRequest.Builder request(URI target, Duration timeout) {
+	private HttpRequest.Builder request(URI target, Duration timeout, String bearer) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder(target);
 		if (timeout != null) builder.timeout(timeout);
 		for (var header : headers.entrySet()) {
 			if (!restricted(header.getKey())) builder.header(header.getKey(), header.getValue());
 		}
+		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
 		if (sessionId != null) builder.setHeader("Mcp-Session-Id", sessionId);
 		if (protocolVersion != null) builder.setHeader("MCP-Protocol-Version", protocolVersion);
 		return builder;
@@ -282,9 +302,10 @@ final class StreamableHttpMcpTransport implements McpTransport {
 		}
 		if (sessionId == null) return;
 		try {
-			HttpRequest request = request(url, Duration.ofSeconds(2)).DELETE().build();
+			String bearer = oauth == null ? null : oauth.cachedAccessToken();
+			HttpRequest request = request(url, Duration.ofSeconds(2), bearer).DELETE().build();
 			client.sendAsync(request, HttpResponse.BodyHandlers.discarding());
-		} catch (RuntimeException ignored) {
+		} catch (Exception ignored) {
 			// Session deletion is best effort.
 		}
 	}
@@ -300,7 +321,9 @@ final class StreamableHttpMcpTransport implements McpTransport {
 		return new IOException(message);
 	}
 
-	private IOException httpError(int status, String body) {
+	private McpHttpException httpError(HttpResponse<String> response) {
+		int status = response.statusCode();
+		String body = response.body();
 		String message = switch (status) {
 			case 401 -> "MCP server requires authentication";
 			case 403 -> "MCP server rejected the configured credentials";
@@ -309,7 +332,8 @@ final class StreamableHttpMcpTransport implements McpTransport {
 			default -> "MCP server returned HTTP " + status;
 		};
 		if (body != null && !body.isBlank()) message += ": " + abbreviate(body);
-		return new IOException(message + " (" + url + ")");
+		return new McpHttpException(
+				status, response.uri(), response.headers().map(), body, message + " (" + url + ")");
 	}
 
 	private static boolean restricted(String name) {
