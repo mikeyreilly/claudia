@@ -72,10 +72,18 @@ The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
 provides standard line editing, with Enter to submit, Shift-Enter to insert a
 newline, Ctrl-C to cancel input, Escape to interrupt an active agent turn,
 Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
-A status bar on the bottom terminal row shows the working directory (with the
-home directory abbreviated to `~`) and the checked-out Git branch on the left,
-and the model name, thinking level, and context-window use on the right, for
-example `~/xa/coding-agent [main]` and `GPT-5.6 Sol Max (0%)`. The context
+A status bar on the bottom terminal row starts with the shell's live activity,
+followed by the working directory (with the home directory abbreviated to `~`),
+the checked-out Git branch, and the model, thinking level, and context-window
+use. For example: `● Ready │ ~/xa/coding-agent [main]  GPT-5.6 Sol Max (0%)`.
+In the dark and light themes, `Ready` is the only green activity, making it
+clear when the current turn has settled and the shell can accept another
+prompt; the plain theme keeps the same labels without color. Slash commands
+are identified while they run. During an agent turn, the status distinguishes
+preparing tools, waiting for the model, reasoning, responding, preparing or
+running a tool, retrying, compacting, and stopping;
+active phases include an elapsed timer or retry countdown. Activity is retained
+before workspace/model metadata when the terminal is narrow. The context
 percentage updates after each assistant response and after `/compact`.
 Transient provider and connection failures (including HTTP 503 responses) are
 automatically retried up to three times with exponential backoff; Escape also

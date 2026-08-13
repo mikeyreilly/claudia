@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -228,7 +227,7 @@ public final class OpenAiCompatibleProvider implements Provider {
 			AssistantMessage output,
 			StreamOptions options)
 			throws IOException {
-		Map<Integer, ToolCallAccumulator> tools = new HashMap<>();
+		Map<Integer, ToolCallAccumulator> tools = new LinkedHashMap<>();
 		SseReader.SseEvent event;
 		while ((event = reader.next()) != null) {
 			if (options.isAborted()) {
@@ -316,40 +315,96 @@ public final class OpenAiCompatibleProvider implements Provider {
 		}
 		for (JsonNode delta : deltas) {
 			int wireIndex = delta.path("index").asInt();
-			ToolCallAccumulator accumulator = tools.get(wireIndex);
-			if (accumulator == null) {
-				accumulator = new ToolCallAccumulator(output.content.size());
-				tools.put(wireIndex, accumulator);
-				output.content.add(new ToolCall("", "", Json.object()));
+			ToolCallAccumulator accumulator =
+					tools.computeIfAbsent(wireIndex, ToolCallAccumulator::new);
+			accumulator.rawDeltas.add(delta.deepCopy());
+
+			JsonNode id = delta.get("id");
+			if (fragmentHasValue(id)) {
+				accumulator.hasMeaningfulData = true;
+			}
+			if (id != null && id.isTextual()) {
+				accumulator.id = id.asText();
+			}
+
+			JsonNode function = delta.get("function");
+			JsonNode name = function != null && function.isObject() ? function.get("name") : null;
+			JsonNode arguments = function != null && function.isObject() ? function.get("arguments") : null;
+			if (function != null && !function.isNull() && !function.isObject()) {
+				accumulator.hasMeaningfulData = true;
+			}
+			if (fragmentHasValue(name) || fragmentHasValue(arguments)) {
+				accumulator.hasMeaningfulData = true;
+			}
+			if (name != null && name.isTextual()) {
+				accumulator.name += name.asText();
+			}
+			String argumentFragment = null;
+			if (arguments != null && arguments.isTextual()) {
+				argumentFragment = arguments.asText();
+				accumulator.arguments.append(argumentFragment);
+			}
+
+			if (accumulator.contentIndex == -1 && accumulator.hasMeaningfulData) {
+				accumulator.contentIndex = output.content.size();
+				output.content.add(new ToolCall(accumulator.id, accumulator.name, Json.object()));
 				stream.push(new AssistantMessageEvent.ToolCallStart(accumulator.contentIndex, output));
 			}
-			if (delta.path("id").isTextual()) {
-				accumulator.id = delta.path("id").asText();
-			}
-			JsonNode function = delta.path("function");
-			if (function.path("name").isTextual()) {
-				accumulator.name += function.path("name").asText();
-			}
-			if (function.path("arguments").isTextual()) {
-				String arguments = function.path("arguments").asText();
-				accumulator.arguments.append(arguments);
-				stream.push(new AssistantMessageEvent.ToolCallDelta(accumulator.contentIndex, arguments, output));
+			if (accumulator.contentIndex != -1) {
+				output.content.set(
+						accumulator.contentIndex,
+						new ToolCall(accumulator.id, accumulator.name, Json.object()));
+				if (argumentFragment != null) {
+					stream.push(new AssistantMessageEvent.ToolCallDelta(
+							accumulator.contentIndex, argumentFragment, output));
+				}
 			}
 		}
+	}
+
+	private static boolean fragmentHasValue(JsonNode fragment) {
+		return fragment != null
+				&& !fragment.isNull()
+				&& (!fragment.isTextual() || !fragment.asText().isBlank());
 	}
 
 	private static void finishToolCalls(
 			AssistantMessageEventStream stream, AssistantMessage output, Map<Integer, ToolCallAccumulator> accumulators)
 			throws IOException {
 		for (ToolCallAccumulator accumulator : accumulators.values()) {
-			JsonNode parsed = Json.MAPPER.readTree(accumulator.arguments.toString());
+			if (accumulator.contentIndex == -1) {
+				// Some OpenAI-compatible streams emit a second, index-only/blank
+				// tool-call entry. It carries no call data and should not create a
+				// visible placeholder or invalidate otherwise usable calls.
+				continue;
+			}
+			JsonNode parsed;
+			try {
+				parsed = Json.MAPPER.readTree(accumulator.arguments.toString());
+			} catch (IOException error) {
+				throw invalidToolCall(accumulator, error);
+			}
 			if (!(parsed instanceof ObjectNode arguments)) {
-				throw new IOException("OpenAI tool call arguments must be a JSON object");
+				throw invalidToolCall(accumulator, null);
 			}
 			ToolCall call = new ToolCall(accumulator.id, accumulator.name, arguments);
 			output.content.set(accumulator.contentIndex, call);
 			stream.push(new AssistantMessageEvent.ToolCallEnd(accumulator.contentIndex, call, output));
 		}
+	}
+
+	private static IOException invalidToolCall(ToolCallAccumulator accumulator, IOException cause) {
+		ObjectNode diagnostic = Json.object();
+		diagnostic.put("index", accumulator.wireIndex);
+		diagnostic.put("id", accumulator.id);
+		diagnostic.put("name", accumulator.name);
+		diagnostic.put("arguments", accumulator.arguments.toString());
+		ArrayNode rawDeltas = diagnostic.putArray("rawDeltas");
+		for (JsonNode delta : accumulator.rawDeltas) {
+			rawDeltas.add(delta);
+		}
+		String message = "OpenAI tool call arguments must be a JSON object; raw tool call: " + diagnostic;
+		return cause == null ? new IOException(message) : new IOException(message, cause);
 	}
 
 	private static int lastContentIndex(AssistantMessage output, Class<? extends AssistantContent> contentType) {
@@ -396,13 +451,16 @@ public final class OpenAiCompatibleProvider implements Provider {
 	}
 
 	private static final class ToolCallAccumulator {
-		private final int contentIndex;
+		private final int wireIndex;
+		private final List<JsonNode> rawDeltas = new ArrayList<>();
+		private int contentIndex = -1;
 		private String id = "";
 		private String name = "";
 		private final StringBuilder arguments = new StringBuilder();
+		private boolean hasMeaningfulData;
 
-		private ToolCallAccumulator(int contentIndex) {
-			this.contentIndex = contentIndex;
+		private ToolCallAccumulator(int wireIndex) {
+			this.wireIndex = wireIndex;
 		}
 	}
 }

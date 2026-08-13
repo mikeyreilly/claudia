@@ -22,6 +22,15 @@ import org.jline.utils.Status;
 
 /** JLine terminal facade with a retained main-screen document and full-screen component support. */
 public final class InteractiveTerminal implements AutoCloseable {
+	/** Semantic accent for the high-priority activity segment of the status bar. */
+	public enum StatusAccent {
+		NONE,
+		READY,
+		ACTIVE,
+		TOOL,
+		WARNING
+	}
+
 	private static final int DEFAULT_COLUMNS = 80;
 	private static final int DEFAULT_ROWS = 24;
 	private static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
@@ -41,11 +50,13 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private final Terminal.SignalHandler previousResizeHandler;
 	private final StringBuilder screenDocument = new StringBuilder();
 	private Status statusBar;
+	private String statusActivity;
+	private StatusAccent statusAccent = StatusAccent.NONE;
 	private String statusLeft;
 	private String statusRight;
 	private Attributes fullScreenResumeAttributes;
 	private volatile boolean managedSuspend;
-	private Theme theme;
+	private volatile Theme theme;
 	private String suspendedBuffer;
 	private int suspendedCursor = -1;
 	private int restoreCursor = -1;
@@ -369,6 +380,14 @@ public final class InteractiveTerminal implements AutoCloseable {
 
 	/** Shows or updates the status bar pinned to the bottom terminal row. */
 	public synchronized void setStatus(String left, String right) {
+		setStatus("", StatusAccent.NONE, left, right);
+	}
+
+	/** Shows activity first so it remains visible when workspace/model details need truncation. */
+	public synchronized void setStatus(
+			String activity, StatusAccent accent, String left, String right) {
+		statusActivity = activity == null ? "" : activity;
+		statusAccent = accent == null ? StatusAccent.NONE : accent;
 		statusLeft = left == null ? "" : left;
 		statusRight = right == null ? "" : right;
 		renderStatusBar();
@@ -394,19 +413,70 @@ public final class InteractiveTerminal implements AutoCloseable {
 		if (statusBar == null) return;
 		int columns = terminal.getColumns();
 		int width = columns > 0 ? columns : DEFAULT_COLUMNS;
-		statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(statusLeft, statusRight, width, theme))));
+		statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
+				statusActivity, statusAccent, statusLeft, statusRight, width, theme))));
 	}
 
 	/** Left- and right-aligns status content on one full-width row. */
 	static String statusBarLine(String left, String right, int width, Theme theme) {
+		return statusBarLine("", StatusAccent.NONE, left, right, width, theme);
+	}
+
+	/**
+	 * Keeps activity ahead of workspace/model metadata. When the terminal is
+	 * narrow, metadata is discarded before the activity text is truncated.
+	 */
+	static String statusBarLine(
+			String activity,
+			StatusAccent accent,
+			String left,
+			String right,
+			int width,
+			Theme theme) {
+		int safeWidth = Math.max(0, width);
+		String activityText = TerminalText.truncatePlain(activity == null ? "" : activity, safeWidth);
+		int activityWidth = TerminalText.visibleWidth(activityText);
+		String separatorAndDetails = "";
+		int remaining = safeWidth - activityWidth;
+		if (remaining >= 4 && (!(left == null || left.isEmpty()) || !(right == null || right.isEmpty()))) {
+			String details = alignedStatusDetails(left, right, remaining - 3);
+			if (!details.isEmpty()) separatorAndDetails = " │ " + details;
+		}
+
+		if (activityText.isEmpty()) {
+			String details = alignedStatusDetails(left, right, safeWidth);
+			return mutedStatus(details, theme);
+		}
+		String activityStyle = statusAccent(theme, accent);
+		String styledActivity = activityStyle.isEmpty()
+				? activityText
+				: activityStyle + activityText + theme.reset();
+		return styledActivity + mutedStatus(separatorAndDetails, theme);
+	}
+
+	private static String alignedStatusDetails(String left, String right, int width) {
+		if (width <= 0) return "";
 		String rightText = TerminalText.truncatePlain(right == null ? "" : right, width);
 		int rightWidth = TerminalText.visibleWidth(rightText);
 		int leftLimit = rightWidth == 0 ? width : width - rightWidth - 1;
 		String leftText = TerminalText.truncatePlain(left == null ? "" : left, Math.max(0, leftLimit));
 		int leftWidth = TerminalText.visibleWidth(leftText);
 		int padding = Math.max(leftText.isEmpty() ? 0 : 1, width - leftWidth - rightWidth);
-		String line = rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
-		return theme.muted().isEmpty() || line.isEmpty() ? line : theme.muted() + line + theme.reset();
+		return rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
+	}
+
+	private static String mutedStatus(String text, Theme theme) {
+		return theme.muted().isEmpty() || text.isEmpty() ? text : theme.muted() + text + theme.reset();
+	}
+
+	private static String statusAccent(Theme theme, StatusAccent accent) {
+		return switch (accent == null ? StatusAccent.NONE : accent) {
+			case NONE -> theme.muted();
+			case READY -> theme.readyStatus();
+			case ACTIVE -> theme.activeStatus();
+			case TOOL -> theme.toolStatus();
+			case WARNING -> theme.warningStatus();
+		};
 	}
 
 	private synchronized void suspendStatusBar() {

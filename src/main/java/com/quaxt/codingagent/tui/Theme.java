@@ -10,6 +10,30 @@ public record Theme(String name, String heading, String strong, String code, Str
 	public static final Theme LIGHT = new Theme("light", "\u001b[1m\u001b[34m", "\u001b[1m", "\u001b[2m", "\u001b[2m", "\u001b[0m");
 	public static final Theme PLAIN = new Theme("plain", "", "", "", "", "");
 
+	/** Bold green is reserved for the Ready activity so idle is recognizable at a glance. */
+	public String readyStatus() {
+		return name.equalsIgnoreCase("plain") ? "" : "\u001b[1;92m";
+	}
+
+	/** Active model and shell work; deliberately never green. */
+	public String activeStatus() {
+		return switch (name.toLowerCase()) {
+			case "dark" -> "\u001b[1;96m";
+			case "light" -> "\u001b[1;34m";
+			default -> "";
+		};
+	}
+
+	/** Tool execution; deliberately never green. */
+	public String toolStatus() {
+		return name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
+	}
+
+	/** Retry, cancellation, and configuration attention; deliberately never green. */
+	public String warningStatus() {
+		return name.equalsIgnoreCase("plain") ? "" : "\u001b[1;93m";
+	}
+
 	/** Background used to visually separate the editable prompt from chat output. */
 	public String promptBackground() {
 		return switch (name.toLowerCase()) {
