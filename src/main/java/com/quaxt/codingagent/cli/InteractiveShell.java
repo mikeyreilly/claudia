@@ -13,6 +13,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
@@ -53,7 +56,7 @@ import com.quaxt.codingagent.tui.Selector;
 import com.quaxt.codingagent.tui.Theme;
 
 /** Initial interactive shell backed by JLine and the shared agent runtime. */
-final class InteractiveShell {
+final class InteractiveShell implements AutoCloseable {
 	private final CoreProviders providers;
 	private final Cli.Arguments arguments;
 	private final InteractiveTerminal terminal;
@@ -67,6 +70,11 @@ final class InteractiveShell {
 	private boolean hideThinkingBlock;
 	private StreamOutput streamOutput = StreamOutput.NONE;
 	private int streamedThinkingCharacters;
+	private final Object activityLock = new Object();
+	private final ScheduledExecutorService statusTicker;
+	private volatile ActivityStatus activity = ActivityStatus.noModel(System.nanoTime());
+	private volatile String statusLocation = "";
+	private volatile String statusModel = "";
 
 	private InteractiveShell(
 			CoreProviders providers,
@@ -82,6 +90,8 @@ final class InteractiveShell {
 		this.mcp = mcp;
 		this.settings = settings;
 		this.hideThinkingBlock = settings.hideThinkingBlock();
+		statusTicker = Executors.newSingleThreadScheduledExecutor(
+				Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
 		terminal.bindAppAction("expandTools", () -> showLatestTurnDetails(true));
 		terminal.bindAppAction("toggleThinking", () -> toggleThinkingBlockVisibility(true));
 	}
@@ -91,8 +101,9 @@ final class InteractiveShell {
 		SettingsStore.Settings settings = settingsStore.load();
 		Path workspace = Path.of(".").toAbsolutePath().normalize();
 		try (McpManager mcp = McpManager.loadDefault(workspace);
-				InteractiveTerminal terminal = new InteractiveTerminal(Cli.APP_NAME)) {
-			InteractiveShell shell = new InteractiveShell(providers, arguments, terminal, settingsStore, settings, mcp);
+				InteractiveTerminal terminal = new InteractiveTerminal(Cli.APP_NAME);
+				InteractiveShell shell = new InteractiveShell(
+						providers, arguments, terminal, settingsStore, settings, mcp)) {
 			shell.applySavedTheme();
 			if (arguments.model != null) {
 				// An explicit CLI model overrides the saved default for this session only.
@@ -123,6 +134,7 @@ final class InteractiveShell {
 	private int loop() throws InterruptedException, IOException {
 		terminal.print(screenHeader(agent == null ? null : agent.state().model));
 		refreshStatus();
+		statusTicker.scheduleWithFixedDelay(this::tickStatus, 1, 1, TimeUnit.SECONDS);
 		while (true) {
 			String input = terminal.readLine("\n> ");
 			if (input == null) {
@@ -131,13 +143,23 @@ final class InteractiveShell {
 			}
 			if (input.isBlank()) continue;
 			if (input.startsWith("/")) {
-				if (command(input)) return 0;
+				boolean exit;
+				setActivity(ActivityStatus.active(
+						ActivityStatus.Phase.RUNNING_COMMAND, commandName(input), System.nanoTime()));
+				try {
+					exit = command(input);
+				} finally {
+					setIdleActivity();
+					refreshStatus();
+				}
+				if (exit) return 0;
 				continue;
 			}
 			if (agent == null) {
 				terminal.println("No model configured. Run /login to choose a provider.");
 				continue;
 			}
+			setActivity(ActivityStatus.active(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
 			mcp.awaitReady();
 			syncMcpTools();
 			emittedText = false;
@@ -148,6 +170,7 @@ final class InteractiveShell {
 					() -> agent.prompt(input),
 					() -> {
 						interrupted.set(true);
+						setActivity(ActivityStatus.active(ActivityStatus.Phase.STOPPING, System.nanoTime()));
 						agent.abort();
 					});
 			if (recorder != null) recorder.appendMessages(messages);
@@ -157,6 +180,9 @@ final class InteractiveShell {
 			} else if (!emittedText && agent.state().messages.getLast() instanceof AssistantMessage response) {
 				terminal.println(response.errorMessage == null ? response.text() : "Error: " + response.errorMessage);
 			}
+			// AgentEnd normally performs this transition. Reassert it here to close
+			// the small race where Escape arrives after AgentEnd but before the task returns.
+			setActivity(ActivityStatus.ready(System.nanoTime()));
 			refreshStatus();
 		}
 	}
@@ -536,17 +562,14 @@ final class InteractiveShell {
 			Theme theme,
 			Map<String, ToolResultMessage> toolResults,
 			Set<String> renderedToolResults) {
-		boolean rendered = false;
 		for (AssistantContent content : assistant.content) {
 			if (content instanceof ThinkingContent thinking) {
 				if (!hideThinking && !thinking.thinking().isBlank()) {
 					screen.append("\n").append(theme.muted()).append("Thinking:").append(theme.reset()).append('\n');
 					screen.append(theme.muted()).append(thinking.thinking()).append(theme.reset()).append('\n');
-					rendered = true;
 				}
 			} else if (content instanceof TextContent text) {
 				screen.append(text.text()).append('\n');
-				rendered = true;
 			} else if (content instanceof ToolCall call) {
 				screen.append("\n[")
 						.append(call.name())
@@ -558,10 +581,9 @@ final class InteractiveShell {
 					renderedToolResults.add(result.toolCallId());
 					appendToolResult(screen, result);
 				}
-				rendered = true;
 			}
 		}
-		if (!rendered && assistant.errorMessage != null) {
+		if (assistant.errorMessage != null) {
 			screen.append("Error: ").append(assistant.errorMessage).append('\n');
 		}
 	}
@@ -761,18 +783,68 @@ final class InteractiveShell {
 		cwd = configuredCwd.toAbsolutePath().normalize();
 		agent = configured;
 		recorder = nextRecorder;
+		if (activity.phase() != ActivityStatus.Phase.RUNNING_COMMAND) {
+			setActivity(ActivityStatus.ready(System.nanoTime()));
+		}
 		refreshStatus();
 	}
 
-	/** Updates the bottom status bar with workspace and model information. */
+	/** Updates cached workspace/model details, then redraws the live activity status. */
 	private void refreshStatus() {
 		String branch = gitBranch(cwd);
-		String left = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
+		statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
 				+ (branch == null ? "" : " [" + branch + "]");
-		String right = agent == null
+		statusModel = agent == null
 				? ""
 				: modelStatus(agent.state().model, agent.state().thinkingLevel, contextTokens(agent.state().messages));
-		terminal.setStatus(left, right);
+		renderStatus();
+	}
+
+	private void tickStatus() {
+		if (!activity.isDynamic()) return;
+		try {
+			renderStatus();
+		} catch (RuntimeException ignored) {
+			// A best-effort repaint must not terminate the shell's status ticker.
+		}
+	}
+
+	private void renderStatus() {
+		ActivityStatus current = activity;
+		terminal.setStatus(
+				current.label(System.nanoTime()),
+				current.accent(),
+				statusLocation,
+				statusModel);
+	}
+
+	private void setIdleActivity() {
+		setActivity(agent == null
+				? ActivityStatus.noModel(System.nanoTime())
+				: ActivityStatus.ready(System.nanoTime()));
+	}
+
+	private void setActivity(ActivityStatus next) {
+		boolean changed;
+		synchronized (activityLock) {
+			ActivityStatus current = activity;
+			if (current.phase() == ActivityStatus.Phase.STOPPING
+					&& next.phase() != ActivityStatus.Phase.READY
+					&& next.phase() != ActivityStatus.Phase.NO_MODEL) {
+				return;
+			}
+			changed = !current.sameActivity(next);
+			if (changed) activity = next;
+		}
+		if (changed) renderStatus();
+	}
+
+	private static String commandName(String input) {
+		String trimmed = input.trim();
+		for (int index = 0; index < trimmed.length(); index++) {
+			if (Character.isWhitespace(trimmed.charAt(index))) return trimmed.substring(0, index);
+		}
+		return trimmed;
 	}
 
 	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
@@ -971,6 +1043,22 @@ final class InteractiveShell {
 
 	private void onEvent(AgentEvent event) {
 		switch (event) {
+			case AgentEvent.AgentStart ignored ->
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+			case AgentEvent.AgentEnd ignored ->
+					setActivity(ActivityStatus.ready(System.nanoTime()));
+			case AgentEvent.CompactionStart ignored ->
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
+			case AgentEvent.CompactionEnd ignored -> {
+				if (agent != null && agent.state().isStreaming) {
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+				} else {
+					setActivity(ActivityStatus.ready(System.nanoTime()));
+				}
+				refreshStatus();
+			}
+			case AgentEvent.TurnStart ignored ->
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
 			case AgentEvent.MessageUpdate update -> onMessageUpdate(update.providerEvent());
 			case AgentEvent.MessageEnd end -> {
 				if (end.message() instanceof AssistantMessage) {
@@ -979,6 +1067,8 @@ final class InteractiveShell {
 				}
 			}
 			case AgentEvent.AutoRetryStart retry -> {
+				setActivity(ActivityStatus.retrying(
+						retry.attempt(), retry.maxAttempts(), retry.delayMs(), System.nanoTime()));
 				finishStreamOutput();
 				terminal.println("\nTransient provider error; retrying in "
 						+ formatRetryDelay(retry.delayMs())
@@ -986,6 +1076,8 @@ final class InteractiveShell {
 						+ retry.errorMessage());
 			}
 			case AgentEvent.ToolExecutionStart start -> {
+				setActivity(ActivityStatus.active(
+						ActivityStatus.Phase.RUNNING_TOOL, start.toolName(), System.nanoTime()));
 				finishStreamOutput();
 				terminal.println("\n[" + start.toolName() + "] " + toolDescription(start.toolName(), start.arguments()));
 			}
@@ -994,12 +1086,13 @@ final class InteractiveShell {
 				terminal.println("  " + label + ": " + toolResultSummary(end.toolName(), end.result()));
 			}
 			default -> {
-				// Other lifecycle events have no interactive presentation yet.
+				// Turn-end and low-level update events do not change the presentation phase.
 			}
 		}
 	}
 
 	private void onMessageUpdate(AssistantMessageEvent event) {
+		updateStreamingActivity(event);
 		switch (event) {
 			case AssistantMessageEvent.ThinkingStart ignored -> {
 				if (!hideThinkingBlock) {
@@ -1045,6 +1138,36 @@ final class InteractiveShell {
 				// Tool-call argument streaming is rendered once execution starts.
 			}
 		}
+	}
+
+	private void updateStreamingActivity(AssistantMessageEvent event) {
+		long now = System.nanoTime();
+		switch (event) {
+			case AssistantMessageEvent.ThinkingStart ignored ->
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.REASONING, now));
+			case AssistantMessageEvent.TextStart ignored ->
+					setActivity(ActivityStatus.active(ActivityStatus.Phase.RESPONDING, now));
+			case AssistantMessageEvent.ToolCallStart start -> setActivity(ActivityStatus.active(
+					ActivityStatus.Phase.PREPARING_TOOL,
+					streamedToolName(start.contentIndex(), start.partial()),
+					now));
+			case AssistantMessageEvent.ToolCallEnd end -> setActivity(ActivityStatus.active(
+					ActivityStatus.Phase.PREPARING_TOOL,
+					end.toolCall().name(),
+					now));
+			default -> {
+				// End events retain the current phase until another block or AgentEnd.
+			}
+		}
+	}
+
+	private static String streamedToolName(int contentIndex, AssistantMessage message) {
+		if (contentIndex >= 0
+				&& contentIndex < message.content.size()
+				&& message.content.get(contentIndex) instanceof ToolCall call) {
+			return call.name();
+		}
+		return "";
 	}
 
 	private void finishStreamOutput() {
@@ -1107,6 +1230,16 @@ final class InteractiveShell {
 	private static String abbreviate(String value, int maximumLength) {
 		String normalized = value.replaceAll("\\s+", " ").trim();
 		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
+	}
+
+	@Override
+	public void close() {
+		statusTicker.shutdownNow();
+		try {
+			statusTicker.awaitTermination(1, TimeUnit.SECONDS);
+		} catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private enum StreamOutput {

@@ -344,6 +344,65 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
+	void activityHasPriorityAndOnlyReadyUsesTheGreenAccent() {
+		String ready = InteractiveTerminal.statusBarLine(
+				"● Ready",
+				InteractiveTerminal.StatusAccent.READY,
+				"~/xa/coding-agent [main]",
+				"GPT-5.6 Sol Max (24%)",
+				80,
+				Theme.DARK);
+		String waiting = InteractiveTerminal.statusBarLine(
+				"◐ Waiting for model · 12s",
+				InteractiveTerminal.StatusAccent.ACTIVE,
+				"~/xa/coding-agent [main]",
+				"GPT-5.6 Sol Max (24%)",
+				80,
+				Theme.DARK);
+
+		assertTrue(ready.startsWith(Theme.DARK.readyStatus() + "● Ready"));
+		assertTrue(ready.contains(Theme.DARK.reset() + Theme.DARK.muted() + " │ "));
+		assertTrue(waiting.startsWith(Theme.DARK.activeStatus() + "◐ Waiting for model"));
+		assertFalse(waiting.contains(Theme.DARK.readyStatus()));
+		String lightReady = InteractiveTerminal.statusBarLine(
+				"● Ready", InteractiveTerminal.StatusAccent.READY, "path", "model", 30, Theme.LIGHT);
+		String lightWaiting = InteractiveTerminal.statusBarLine(
+				"Waiting", InteractiveTerminal.StatusAccent.ACTIVE, "path", "model", 30, Theme.LIGHT);
+		assertTrue(lightReady.startsWith(Theme.LIGHT.readyStatus() + "● Ready"));
+		assertFalse(lightWaiting.contains(Theme.LIGHT.readyStatus()));
+		String plainReady = InteractiveTerminal.statusBarLine(
+				"● Ready", InteractiveTerminal.StatusAccent.READY, "path", "model", 30, Theme.PLAIN);
+		assertFalse(plainReady.contains("\u001b"));
+		assertEquals(80, TerminalText.visibleWidth(ready));
+		assertEquals(80, TerminalText.visibleWidth(waiting));
+
+		for (InteractiveTerminal.StatusAccent accent : List.of(
+				InteractiveTerminal.StatusAccent.NONE,
+				InteractiveTerminal.StatusAccent.ACTIVE,
+				InteractiveTerminal.StatusAccent.TOOL,
+				InteractiveTerminal.StatusAccent.WARNING)) {
+			String line = InteractiveTerminal.statusBarLine("Busy", accent, "path", "model", 30, Theme.DARK);
+			assertFalse(line.contains(Theme.DARK.readyStatus()), accent.toString());
+		}
+	}
+
+	@Test
+	void narrowStatusBarsKeepActivityBeforeMetadata() {
+		String line = InteractiveTerminal.statusBarLine(
+				"◐ Waiting for model · 12s",
+				InteractiveTerminal.StatusAccent.ACTIVE,
+				"~/a/very/long/working/directory",
+				"GPT-5.6 Sol Max (24%)",
+				20,
+				Theme.PLAIN);
+
+		assertEquals("◐ Waiting for mod...", line);
+		assertFalse(line.contains("GPT"));
+		assertFalse(line.contains("~/"));
+		assertEquals(20, TerminalText.visibleWidth(line));
+	}
+
+	@Test
 	void statusBarUpdatesAreIgnoredOnTerminalsWithoutCursorAddressing() throws Exception {
 		TerminalFixture fixture = terminal();
 

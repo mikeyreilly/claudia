@@ -99,6 +99,76 @@ class OpenAiCompatibleProviderTest {
 		}
 	}
 
+	@Test
+	void ignoresCompletelyEmptyToolCallAfterAValidCall() throws Exception {
+		HttpServer server = server(exchange -> writeSse(
+				exchange,
+				"""
+				data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}},{"index":1,"function":{"name":"","arguments":""}}]},"finish_reason":"tool_calls"}]}
+
+				data: [DONE]
+
+				"""));
+		try {
+			Model model = model(url(server));
+			OpenAiCompatibleProvider provider =
+					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+
+			AssistantMessageEventStream stream =
+					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key"));
+			List<AssistantMessageEvent> events = new ArrayList<>();
+			for (AssistantMessageEvent event : stream) {
+				events.add(event);
+			}
+			AssistantMessage result = stream.result();
+
+			assertEquals(StopReason.TOOL_USE, result.stopReason);
+			assertEquals(1, result.toolCalls().size());
+			assertEquals("read", result.toolCalls().getFirst().name());
+			assertEquals(
+					1L,
+					events.stream().filter(AssistantMessageEvent.ToolCallStart.class::isInstance).count());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void rejectsArrayToolArgumentsAndPreservesRawStreamFragments() throws Exception {
+		HttpServer server = server(exchange -> writeSse(
+				exchange,
+				"""
+				data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}},{"index":1,"id":"call_2","function":{"name":"broken_","arguments":"["}}]}}]}
+
+				data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"name":"tool","arguments":"]"}}]},"finish_reason":"tool_calls"}]}
+
+				data: [DONE]
+
+				"""));
+		try {
+			Model model = model(url(server));
+			OpenAiCompatibleProvider provider =
+					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+
+			AssistantMessage result =
+					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key")).result();
+
+			assertEquals(StopReason.ERROR, result.stopReason);
+			assertTrue(result.errorMessage.startsWith("OpenAI tool call arguments must be a JSON object"));
+			assertTrue(result.errorMessage.contains("\"index\":1"));
+			assertTrue(result.errorMessage.contains("\"id\":\"call_2\""));
+			assertTrue(result.errorMessage.contains("\"name\":\"broken_tool\""));
+			assertTrue(result.errorMessage.contains("\"arguments\":\"[]\""));
+			assertTrue(result.errorMessage.contains("\"name\":\"broken_\""));
+			assertTrue(result.errorMessage.contains("\"arguments\":\"[\""));
+			assertTrue(result.errorMessage.contains("\"name\":\"tool\""));
+			assertTrue(result.errorMessage.contains("\"arguments\":\"]\""));
+			assertEquals("read", result.toolCalls().getFirst().name());
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	private static Model model(String baseUrl) {
 		return Model.builder()
 				.id("test-model")

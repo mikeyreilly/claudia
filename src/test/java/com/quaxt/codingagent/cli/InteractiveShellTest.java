@@ -108,6 +108,22 @@ class InteractiveShellTest {
 	}
 
 	@Test
+	void rendersAssistantErrorsAfterPartialContent() {
+		Model model = model("gpt-5.4");
+		AssistantMessage failed = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
+		failed.stopReason = StopReason.ERROR;
+		failed.errorMessage = "OpenAI tool call arguments must be a JSON object";
+		failed.content.add(new TextContent("Checking the source."));
+		failed.content.add(new ToolCall("call-1", "read", Json.object().put("path", "README.md")));
+
+		String screen = InteractiveShell.renderSessionScreen(model, List.of(UserMessage.of("Check it"), failed), false, Theme.PLAIN);
+
+		assertTrue(screen.contains("Checking the source."));
+		assertTrue(screen.contains("[read] Reading README.md"));
+		assertTrue(screen.contains("Error: OpenAI tool call arguments must be a JSON object"));
+	}
+
+	@Test
 	void describesToolWorkAndSummarizesResults() {
 		var read = Json.object()
 				.put("path", "src/main/java/com.quaxt.codingagent/cli/Main.java")
