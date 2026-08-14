@@ -39,7 +39,10 @@ class McpConfigLoaderTest {
 				        "clientId": "configured-client",
 				        "scope": "read write",
 				        "callbackPort": 23456
-				      }
+				      },
+				      "resultFilters": [
+				        { "tool": "get*", "dropKeys": ["avatarUrls", "self"] }
+				      ]
 				    }
 				  }
 				}
@@ -57,6 +60,8 @@ class McpConfigLoaderTest {
 		assertEquals("configured-client", remote.oauth().path("clientId").asText());
 		assertEquals("read write", remote.oauth().path("scope").asText());
 		assertEquals(23456, remote.oauth().path("callbackPort").asInt());
+		assertEquals("get*", remote.resultFilters().getFirst().tool());
+		assertEquals(java.util.List.of("avatarUrls", "self"), remote.resultFilters().getFirst().dropKeys());
 		assertEquals(java.util.List.of(settingsPath), config.sources());
 	}
 

@@ -6,12 +6,17 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.nio.file.ProviderNotFoundException;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -37,14 +42,18 @@ public final class BuiltInTools {
 
 	/** Returns tools scoped to the given working directory. */
 	public static List<AgentTool> create(Path cwd) {
+		return create(cwd, new GitIgnore("git"));
+	}
+
+	static List<AgentTool> create(Path cwd, GitIgnore gitIgnore) {
 		Path resolvedCwd = cwd.toAbsolutePath().normalize();
 		return List.of(
 				new ReadTool(resolvedCwd),
 				new WriteTool(resolvedCwd),
 				new EditTool(resolvedCwd),
 				new ShellTool(resolvedCwd),
-				new GrepTool(resolvedCwd),
-				new FindTool(resolvedCwd),
+				new GrepTool(resolvedCwd, gitIgnore),
+				new FindTool(resolvedCwd, gitIgnore),
 				new LsTool(resolvedCwd));
 	}
 
@@ -80,8 +89,38 @@ public final class BuiltInTools {
 			if (value == null || value.isBlank()) {
 				throw new IllegalArgumentException("path must be a non-empty string");
 			}
-			Path candidate = Path.of(value);
+			String expanded = value;
+			if (value.equals("~")) {
+				expanded = System.getProperty("user.home");
+			} else if (value.startsWith("~/") || (isWindows() && value.startsWith("~\\"))) {
+				expanded = Path.of(System.getProperty("user.home")).resolve(value.substring(2)).toString();
+			} else if (value.startsWith("~")) {
+				throw new IllegalArgumentException("~user paths are not supported; use an absolute path");
+			}
+			Path candidate = Path.of(expanded);
 			return (candidate.isAbsolute() ? candidate : cwd.resolve(candidate)).normalize();
+		}
+
+		final ArchiveLocation archiveLocation(String value) {
+			for (int separator = value.indexOf('!'); separator >= 0; separator = value.indexOf('!', separator + 1)) {
+				if (separator == 0) continue;
+				Path archive;
+				try {
+					archive = path(value.substring(0, separator));
+				} catch (InvalidPathException ignored) {
+					continue;
+				}
+				if (Files.isRegularFile(archive)) {
+					return new ArchiveLocation(archive, value.substring(separator + 1));
+				}
+			}
+			return null;
+		}
+
+		final void rejectArchivePath(String value) {
+			if (archiveLocation(value) != null) {
+				throw new IllegalArgumentException("archives are read-only through this tool");
+			}
 		}
 
 		final void requireNotAborted(AbortSignal signal) {
@@ -96,14 +135,45 @@ public final class BuiltInTools {
 			super(
 					cwd,
 					"read",
-					"Read a text file. Use offset and limit for large files; output is bounded to 2,000 lines or 50KB.",
-					schema("path", string("Path to the file to read"), "offset", optional(integer("1-indexed starting line")), "limit", optional(integer("Maximum lines to read"))));
+					"Read a text file. Use offset and limit for large files; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
+					schema("path", string("Path to the file to read. A leading ~/ expands to the user home directory."), "offset", optional(integer("1-indexed starting line")), "limit", optional(integer("Maximum lines to read"))));
 		}
 
 		@Override
 		public ToolResult execute(String id, ObjectNode arguments, AbortSignal signal, Consumer<ToolResult> update)
 				throws IOException {
-			Path file = path(requiredText(arguments, "path"));
+			String pathText = requiredText(arguments, "path");
+			ArchiveLocation location = archiveLocation(pathText);
+			if (location == null) {
+				return readFile(path(pathText), arguments, signal);
+			}
+			if (location.entry().startsWith("/")) {
+				throw new IllegalArgumentException("Archive entry paths must not start with '/'");
+			}
+			FileSystem archive;
+			try {
+				archive = FileSystems.newFileSystem(location.archive());
+			} catch (IOException | ProviderNotFoundException error) {
+				throw new IOException("Unable to open archive " + location.archive() + ": " + error.getMessage(), error);
+			}
+			try (archive) {
+				Path root = archive.getPath("/");
+				Path entry = location.entry().isEmpty() ? root : root.resolve(location.entry()).normalize();
+				if (!entry.startsWith(root)) {
+					throw new IllegalArgumentException("Archive entry paths must stay within the archive");
+				}
+				requireNotAborted(signal);
+				if (Files.isDirectory(entry)) {
+					return ToolResult.text(listArchiveDirectory(entry));
+				}
+				if (!Files.isRegularFile(entry)) {
+					throw archiveEntryNotFound(location, root);
+				}
+				return readFile(entry, arguments, signal);
+			}
+		}
+
+		private ToolResult readFile(Path file, ObjectNode arguments, AbortSignal signal) throws IOException {
 			requireNotAborted(signal);
 			if (!Files.isRegularFile(file)) {
 				throw new IOException("Not a readable file: " + file);
@@ -123,17 +193,67 @@ public final class BuiltInTools {
 			}
 			return ToolResult.text(output);
 		}
+
+		private static String listArchiveDirectory(Path directory) throws IOException {
+			List<String> entries;
+			try (var paths = Files.list(directory)) {
+				entries = paths.sorted(Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
+						.map(ReadTool::archiveListingEntry)
+						.toList();
+			}
+			return entries.isEmpty() ? "(empty directory)" : truncate(String.join("\n", entries), null);
+		}
+
+		private static String archiveListingEntry(Path entry) {
+			if (Files.isDirectory(entry)) return entry.getFileName() + "/";
+			try {
+				return entry.getFileName() + " (" + Files.size(entry) + " bytes)";
+			} catch (IOException ignored) {
+				return entry.getFileName().toString();
+			}
+		}
+
+		private static IOException archiveEntryNotFound(ArchiveLocation location, Path root) throws IOException {
+			String entry = location.entry();
+			String withoutTrailingSlash = entry.endsWith("/") ? entry.substring(0, entry.length() - 1) : entry;
+			int slash = withoutTrailingSlash.lastIndexOf('/');
+			String prefix = slash < 0 ? "" : withoutTrailingSlash.substring(0, slash + 1);
+			List<String> nearby = List.of();
+			if (!prefix.isEmpty()) {
+				try (var paths = Files.walk(root)) {
+					nearby = paths.filter(Files::isRegularFile)
+							.map(path -> root.relativize(path).toString().replace('\\', '/'))
+							.filter(name -> name.startsWith(prefix))
+							.sorted(String.CASE_INSENSITIVE_ORDER)
+							.limit(20)
+							.toList();
+				}
+			}
+			if (nearby.isEmpty()) {
+				try (var paths = Files.list(root)) {
+					nearby = paths.map(path -> path.getFileName() + (Files.isDirectory(path) ? "/" : ""))
+							.sorted(String.CASE_INSENSITIVE_ORDER)
+							.limit(20)
+							.toList();
+				}
+			}
+			String suggestions = nearby.isEmpty() ? "(archive is empty)" : String.join("\n", nearby);
+			return new IOException("Archive entry not found: " + entry + " in " + location.archive()
+					+ ". Nearby entries:\n" + suggestions);
+		}
 	}
 
 	private static final class WriteTool extends LocalTool {
 		WriteTool(Path cwd) {
-			super(cwd, "write", "Create or overwrite a text file, creating parent directories as needed.", schema("path", string("Path to write"), "content", string("File content")));
+			super(cwd, "write", "Create or overwrite a text file, creating parent directories as needed.", schema("path", string("Path to write. A leading ~/ expands to the user home directory."), "content", string("File content")));
 		}
 
 		@Override
 		public ToolResult execute(String id, ObjectNode arguments, AbortSignal signal, Consumer<ToolResult> update)
 				throws IOException {
-			Path file = path(requiredText(arguments, "path"));
+			String pathText = requiredText(arguments, "path");
+			rejectArchivePath(pathText);
+			Path file = path(pathText);
 			String content = requiredText(arguments, "content");
 			requireNotAborted(signal);
 			Path parent = file.getParent();
@@ -153,13 +273,15 @@ public final class BuiltInTools {
 					cwd,
 					"edit",
 					"Replace one or more unique, non-overlapping exact text blocks in a file.",
-					schema("path", string("Path to edit"), "edits", array("Exact replacements with oldText and newText")));
+					schema("path", string("Path to edit. A leading ~/ expands to the user home directory."), "edits", array("Exact replacements with oldText and newText")));
 		}
 
 		@Override
 		public ToolResult execute(String id, ObjectNode arguments, AbortSignal signal, Consumer<ToolResult> update)
 				throws IOException {
-			Path file = path(requiredText(arguments, "path"));
+			String pathText = requiredText(arguments, "path");
+			rejectArchivePath(pathText);
+			Path file = path(pathText);
 			JsonNode editsNode = arguments.get("edits");
 			if (!(editsNode instanceof ArrayNode edits) || edits.isEmpty()) {
 				throw new IllegalArgumentException("edits must be a non-empty array");
@@ -276,19 +398,23 @@ public final class BuiltInTools {
 	}
 
 	private static final class GrepTool extends LocalTool {
-		GrepTool(Path cwd) {
+		private final GitIgnore gitIgnore;
+
+		GrepTool(Path cwd, GitIgnore gitIgnore) {
 			super(
 					cwd,
 					"grep",
-					"Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Returns paths and line numbers, respecting the result limit.",
+					"Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Files ignored by git are skipped; set includeIgnored to search them. Returns paths and line numbers, respecting the result limit. For symbol definitions and call sites in indexed repositories, a code-lens context/query tool (when connected) is usually faster and resolves aliases.",
 					schema(
 							"pattern", string("Regular expression to search for, or literal text when literal is true"),
-							"path", optional(string("Literal file or directory to search (default: current directory); wildcards are not expanded")),
+							"path", optional(string("Literal file or directory to search (default: current directory); wildcards are not expanded. A leading ~/ expands to the user home directory.")),
 							"glob", optional(string("Glob file filter relative to path, for example '*.java' or 'src/**/*.java'; patterns without a slash match file names at any depth")),
 							"ignoreCase", optional(bool("Case insensitive")),
 							"literal", optional(bool("Treat pattern literally")),
+							"includeIgnored", optional(bool("Search files ignored by git")),
 							"context", optional(integer("Lines before and after matches")),
 							"limit", optional(integer("Maximum matches"))));
+			this.gitIgnore = gitIgnore;
 		}
 
 		@Override
@@ -303,9 +429,11 @@ public final class BuiltInTools {
 			int limit = positiveOrDefault(arguments, "limit", DEFAULT_GREP_LIMIT);
 			String glob = optionalText(arguments, "glob", null);
 			List<PathMatcher> fileMatchers = glob == null ? List.of() : globMatchers(glob);
-			List<Path> files = filesUnder(root);
+			List<Path> files = filesUnder(root, optionalBoolean(arguments, "includeIgnored"), gitIgnore, signal);
 			boolean rootIsDirectory = Files.isDirectory(root);
 			StringBuilder output = new StringBuilder();
+			int filesConsidered = files.size();
+			int filesSearched = 0;
 			int matches = 0;
 			for (Path file : files) {
 				requireNotAborted(signal);
@@ -313,6 +441,7 @@ public final class BuiltInTools {
 				if (!fileMatchers.isEmpty() && !matchesGlob(fileMatchers, relative)) {
 					continue;
 				}
+				filesSearched++;
 				List<String> lines;
 				try {
 					lines = Files.readAllLines(file, StandardCharsets.UTF_8);
@@ -330,7 +459,15 @@ public final class BuiltInTools {
 					}
 				}
 			}
-			return ToolResult.text(matches == 0 ? "No matches found" : truncate(output.toString(), null));
+			if (matches > 0) return ToolResult.text(truncate(output.toString(), null));
+			if (glob != null && filesSearched == 0 && filesConsidered > 0) {
+				return ToolResult.text("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
+						+ root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
+			}
+			if (glob != null) {
+				return ToolResult.text("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
+			}
+			return ToolResult.text("No matches found in " + filesSearched + " files");
 		}
 
 		private Path grepRoot(String pathText) {
@@ -351,8 +488,19 @@ public final class BuiltInTools {
 	}
 
 	private static final class FindTool extends LocalTool {
-		FindTool(Path cwd) {
-			super(cwd, "find", "Find files by glob pattern. Hidden files are included; .git and node_modules are skipped.", schema("pattern", string("Glob pattern"), "path", optional(string("Directory to search")), "limit", optional(integer("Maximum results"))));
+		private final GitIgnore gitIgnore;
+
+		FindTool(Path cwd, GitIgnore gitIgnore) {
+			super(
+					cwd,
+					"find",
+					"Find files by glob pattern. Hidden files are included; .git and node_modules are skipped. Files ignored by git are skipped; set includeIgnored to search them.",
+					schema(
+							"pattern", string("Glob pattern"),
+							"path", optional(string("Directory to search. A leading ~/ expands to the user home directory.")),
+							"includeIgnored", optional(bool("Search files ignored by git")),
+							"limit", optional(integer("Maximum results"))));
+			this.gitIgnore = gitIgnore;
 		}
 
 		@Override
@@ -365,34 +513,29 @@ public final class BuiltInTools {
 			}
 			int limit = positiveOrDefault(arguments, "limit", DEFAULT_FIND_LIMIT);
 			var matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+			List<Path> candidates = filesUnder(root, optionalBoolean(arguments, "includeIgnored"), gitIgnore, signal);
 			List<String> matches = new ArrayList<>();
-			try (var paths = Files.walk(root)) {
-				for (Path candidate : paths.filter(Files::isRegularFile).toList()) {
-					requireNotAborted(signal);
-					Path relative = root.relativize(candidate);
-					if (ignored(relative)) {
-						continue;
-					}
-					if (matcher.matches(relative) || matcher.matches(relative.getFileName())) {
-						matches.add(relative.toString().replace('\\', '/'));
-						if (matches.size() >= limit) {
-							break;
-						}
-					}
+			for (Path candidate : candidates) {
+				requireNotAborted(signal);
+				Path relative = root.relativize(candidate);
+				if (matcher.matches(relative) || matcher.matches(relative.getFileName())) {
+					matches.add(relative.toString().replace('\\', '/'));
 				}
 			}
 			matches.sort(String::compareToIgnoreCase);
 			if (matches.isEmpty()) {
 				return ToolResult.text("No files found matching pattern");
 			}
-			String suffix = matches.size() >= limit ? "\n\n[" + limit + " results limit reached]" : "";
+			boolean limitReached = matches.size() > limit;
+			if (limitReached) matches = new ArrayList<>(matches.subList(0, limit));
+			String suffix = limitReached ? "\n\n[" + limit + " results limit reached]" : "";
 			return ToolResult.text(truncate(String.join("\n", matches) + suffix, null));
 		}
 	}
 
 	private static final class LsTool extends LocalTool {
 		LsTool(Path cwd) {
-			super(cwd, "ls", "List a directory's contents, with a slash suffix on directories.", schema("path", optional(string("Directory to list")), "limit", optional(integer("Maximum entries"))));
+			super(cwd, "ls", "List a directory's contents, with a slash suffix on directories.", schema("path", optional(string("Directory to list. A leading ~/ expands to the user home directory.")), "limit", optional(integer("Maximum entries"))));
 		}
 
 		@Override
@@ -483,16 +626,40 @@ public final class BuiltInTools {
 		return false;
 	}
 
-	private static List<Path> filesUnder(Path root) throws IOException {
+	private static List<Path> filesUnder(
+			Path root, boolean includeIgnored, GitIgnore gitIgnore, AbortSignal signal) throws IOException {
+		List<Path> files;
 		if (Files.isRegularFile(root)) {
-			return List.of(root);
+			files = List.of(root);
+		} else {
+			if (!Files.isDirectory(root)) {
+				throw new IllegalArgumentException("Path not found: " + root);
+			}
+			files = walkRegularFiles(root, signal);
 		}
-		if (!Files.isDirectory(root)) {
-			throw new IllegalArgumentException("Path not found: " + root);
-		}
-		try (var paths = Files.walk(root)) {
-			return paths.filter(Files::isRegularFile).filter(path -> !ignored(root.relativize(path))).toList();
-		}
+		return includeIgnored ? files : gitIgnore.filter(root, files, signal);
+	}
+
+	private static List<Path> walkRegularFiles(Path root, AbortSignal signal) throws IOException {
+		List<Path> files = new ArrayList<>();
+		Files.walkFileTree(root, new SimpleFileVisitor<>() {
+			@Override
+			public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+				if (signal.isAborted()) throw new IllegalStateException("Operation aborted");
+				if (!directory.equals(root) && ignored(root.relativize(directory))) {
+					return FileVisitResult.SKIP_SUBTREE;
+				}
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
+				if (signal.isAborted()) throw new IllegalStateException("Operation aborted");
+				if (attributes.isRegularFile() && !ignored(root.relativize(file))) files.add(file);
+				return FileVisitResult.CONTINUE;
+			}
+		});
+		return List.copyOf(files);
 	}
 
 	private static boolean ignored(Path relative) {
@@ -503,6 +670,12 @@ public final class BuiltInTools {
 		}
 		return false;
 	}
+
+	private static boolean isWindows() {
+		return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+	}
+
+	private record ArchiveLocation(Path archive, String entry) {}
 
 	private static String display(Path root, Path file) {
 		return Files.isDirectory(root) ? root.relativize(file).toString().replace('\\', '/') : file.getFileName().toString();

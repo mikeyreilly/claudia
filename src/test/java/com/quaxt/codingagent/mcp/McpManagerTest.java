@@ -25,7 +25,8 @@ class McpManagerTest {
 				null,
 				Map.of(),
 				true,
-				5_000L);
+				5_000L,
+				List.of(new McpResultFilter("e*o", List.of("avatarUrls", "self"))));
 		try (McpManager manager = new McpManager(
 				new McpConfiguration(Map.of("fixture", server), List.of()), tempDir)) {
 			manager.awaitReady();
@@ -38,6 +39,14 @@ class McpManagerTest {
 					"call-1", Json.object().put("value", "hello"), new AbortSignal(), ignored -> {});
 			assertEquals("hello", ((TextContent) result.content().getFirst()).text());
 			assertFalse(result.isError());
+
+			String json = "{\"self\":\"root\",\"user\":{\"name\":\"Ada\",\"avatarUrls\":{\"small\":\"url\"}},"
+					+ "\"items\":[{\"self\":\"nested\",\"value\":1}]}";
+			AgentTool.ToolResult filtered = tool.execute(
+					"call-2", Json.object().put("value", json), new AbortSignal(), ignored -> {});
+			assertEquals(
+					"{\"user\":{\"name\":\"Ada\"},\"items\":[{\"value\":1}]}",
+					((TextContent) filtered.content().getFirst()).text());
 
 			assertEquals(McpManager.State.DISABLED, manager.disconnect("fixture").state());
 			assertTrue(manager.tools().isEmpty());

@@ -151,7 +151,8 @@ public final class McpManager implements AutoCloseable {
 				definitions = runtime.tools;
 			}
 			for (McpClient.ToolDefinition definition : definitions) {
-				McpAgentTool tool = new McpAgentTool(runtime.name, definition, client);
+				McpAgentTool tool = new McpAgentTool(
+						runtime.name, definition, client, runtime.config.resultFilters());
 				result.put(tool.name(), tool);
 			}
 		}
