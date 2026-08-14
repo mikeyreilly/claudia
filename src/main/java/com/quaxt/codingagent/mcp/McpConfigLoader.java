@@ -124,6 +124,7 @@ public final class McpConfigLoader {
 		if (typeNode == null || !typeNode.isTextual()) throw invalid(name, "type must be a string");
 		boolean enabled = optionalBoolean(name, value, "enabled", true);
 		Long timeout = optionalPositiveLong(name, value, "timeout");
+		List<McpResultFilter> resultFilters = resultFilters(name, value);
 		return switch (typeNode.asText()) {
 			case "local" -> {
 				JsonNode commandNode = value.get("command");
@@ -139,7 +140,7 @@ public final class McpConfigLoader {
 				}
 				String cwd = optionalText(name, value, "cwd");
 				Map<String, String> environment = stringMap(name, value, "environment");
-				yield new McpServerConfig.Local(command, cwd, environment, enabled, timeout);
+				yield new McpServerConfig.Local(command, cwd, environment, enabled, timeout, resultFilters);
 			}
 			case "remote" -> {
 				String rawUrl = requiredText(name, value, "url");
@@ -165,10 +166,38 @@ public final class McpConfigLoader {
 				}
 				if (oauth instanceof ObjectNode oauthObject) validateOAuth(name, oauthObject);
 				yield new McpServerConfig.Remote(
-						url, stringMap(name, value, "headers"), oauth, enabled, timeout);
+						url, stringMap(name, value, "headers"), oauth, enabled, timeout, resultFilters);
 			}
 			default -> throw invalid(name, "type must be local or remote");
 		};
+	}
+
+	private static List<McpResultFilter> resultFilters(String server, ObjectNode value) throws IOException {
+		JsonNode node = value.get("resultFilters");
+		if (node == null || node.isNull()) return List.of();
+		if (!node.isArray()) throw invalid(server, "resultFilters must be an array");
+		List<McpResultFilter> filters = new ArrayList<>();
+		for (int index = 0; index < node.size(); index++) {
+			JsonNode filter = node.get(index);
+			if (!filter.isObject()) throw invalid(server, "resultFilters[" + index + "] must be an object");
+			JsonNode tool = filter.get("tool");
+			if (tool == null || !tool.isTextual() || tool.asText().isBlank()) {
+				throw invalid(server, "resultFilters[" + index + "].tool must be a non-empty string");
+			}
+			JsonNode dropKeys = filter.get("dropKeys");
+			if (dropKeys == null || !dropKeys.isArray() || dropKeys.isEmpty()) {
+				throw invalid(server, "resultFilters[" + index + "].dropKeys must be a non-empty array of strings");
+			}
+			List<String> keys = new ArrayList<>();
+			for (JsonNode key : dropKeys) {
+				if (!key.isTextual() || key.asText().isBlank()) {
+					throw invalid(server, "resultFilters[" + index + "].dropKeys must contain non-empty strings");
+				}
+				keys.add(key.asText());
+			}
+			filters.add(new McpResultFilter(tool.asText(), keys));
+		}
+		return List.copyOf(filters);
 	}
 
 	private static void validateOAuth(String server, ObjectNode oauth) throws IOException {

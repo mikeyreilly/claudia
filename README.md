@@ -137,6 +137,24 @@ interactive shell, `/mcp` opens the configured-server list; Enter connects,
 disconnects, authenticates, or retries the selected server without editing its
 config. Streamable HTTP and legacy HTTP+SSE servers are supported.
 
+Noisy keys can be removed recursively from JSON results for selected tools with
+an optional per-server `resultFilters` list. Tool patterns support `*` and `?`;
+plain-text results pass through unchanged. For example:
+
+```json
+{
+  "mcp": {
+    "atlassian-mcp": {
+      "type": "remote",
+      "url": "https://example.atlassian.net/mcp",
+      "resultFilters": [
+        { "tool": "*", "dropKeys": ["avatarUrls", "self"] }
+      ]
+    }
+  }
+}
+```
+
 Remote OAuth is discovered automatically from the MCP server's
 `WWW-Authenticate` challenge and well-known metadata. When `/mcp` reports
 `Authentication required`, select the server and press Enter. codingagent opens

@@ -12,17 +12,31 @@ public sealed interface McpServerConfig permits McpServerConfig.Local, McpServer
 	/** Request and startup timeout in milliseconds, or {@code null} for the default. */
 	Long timeoutMillis();
 
+	/** Optional recursive JSON result filters for tools on this server. */
+	List<McpResultFilter> resultFilters();
+
 	/** A local MCP server connected over newline-delimited JSON-RPC on stdio. */
 	record Local(
 			List<String> command,
 			String cwd,
 			Map<String, String> environment,
 			boolean enabled,
-			Long timeoutMillis)
+			Long timeoutMillis,
+			List<McpResultFilter> resultFilters)
 			implements McpServerConfig {
 		public Local {
 			command = List.copyOf(command);
 			environment = Map.copyOf(environment);
+			resultFilters = List.copyOf(resultFilters);
+		}
+
+		public Local(
+				List<String> command,
+				String cwd,
+				Map<String, String> environment,
+				boolean enabled,
+				Long timeoutMillis) {
+			this(command, cwd, environment, enabled, timeoutMillis, List.of());
 		}
 	}
 
@@ -32,11 +46,22 @@ public sealed interface McpServerConfig permits McpServerConfig.Local, McpServer
 			Map<String, String> headers,
 			JsonNode oauth,
 			boolean enabled,
-			Long timeoutMillis)
+			Long timeoutMillis,
+			List<McpResultFilter> resultFilters)
 			implements McpServerConfig {
 		public Remote {
 			headers = Map.copyOf(headers);
 			oauth = oauth == null ? null : oauth.deepCopy();
+			resultFilters = List.copyOf(resultFilters);
+		}
+
+		public Remote(
+				URI url,
+				Map<String, String> headers,
+				JsonNode oauth,
+				boolean enabled,
+				Long timeoutMillis) {
+			this(url, headers, oauth, enabled, timeoutMillis, List.of());
 		}
 	}
 }
