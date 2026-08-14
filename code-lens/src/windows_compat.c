@@ -489,7 +489,10 @@ int pthread_once(pthread_once_t *once, void (*routine)(void))
     return InitOnceExecuteOnce(once, cp_once_callback, (PVOID)routine, NULL) != 0 ? 0 : EINVAL;
 }
 
-int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_ms)
+static int cp_run_process_redirect(const char *cwd,
+                                   const char *const argv[],
+                                   uint32_t timeout_ms,
+                                   FILE *child_stdout)
 {
     char previous[PATH_MAX];
     intptr_t child;
@@ -498,7 +501,8 @@ int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_m
     bool changed_directory = false;
     int saved_stdout = -1;
 
-    if ((argv == NULL) || (argv[0] == NULL) || (argv[0][0] == '\0')) {
+    if ((argv == NULL) || (argv[0] == NULL) || (argv[0][0] == '\0') ||
+        (child_stdout == NULL)) {
         return -1;
     }
     if ((cwd != NULL) && (cwd[0] != '\0')) {
@@ -508,8 +512,9 @@ int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_m
         changed_directory = true;
     }
     (void)fflush(stdout);
+    (void)fflush(child_stdout);
     saved_stdout = _dup(_fileno(stdout));
-    if ((saved_stdout < 0) || (_dup2(_fileno(stderr), _fileno(stdout)) != 0)) {
+    if ((saved_stdout < 0) || (_dup2(_fileno(child_stdout), _fileno(stdout)) != 0)) {
         if (saved_stdout >= 0) {
             (void)_close(saved_stdout);
         }
@@ -544,4 +549,31 @@ int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_m
     }
     (void)CloseHandle((HANDLE)child);
     return exit_code <= (DWORD)INT_MAX ? (int)exit_code : 1;
+}
+
+int cp_run_process(const char *cwd, const char *const argv[], uint32_t timeout_ms)
+{
+    return cp_run_process_redirect(cwd, argv, timeout_ms, stderr);
+}
+
+int cp_run_process_output(const char *cwd,
+                          const char *const argv[],
+                          uint32_t timeout_ms,
+                          const char *output_path)
+{
+    FILE *output;
+    int rc;
+
+    if (output_path == NULL) {
+        return -1;
+    }
+    output = fopen(output_path, "wb");
+    if (output == NULL) {
+        return -1;
+    }
+    rc = cp_run_process_redirect(cwd, argv, timeout_ms, output);
+    if (fclose(output) != 0) {
+        return -1;
+    }
+    return rc;
 }

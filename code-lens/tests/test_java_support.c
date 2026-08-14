@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+size_t code_lens_test_classpath_entry_count(const char *classpath, char separator);
+
 static int java_assert(bool condition, const char *message)
 {
     if (!condition) {
@@ -397,24 +399,21 @@ static uint32_t java_zip_crc32(const char *data, size_t len)
     return ~crc;
 }
 
-static int java_write_source_jar(const char *path)
+static int java_write_archive_entry(const char *path,
+                                    const char *entry_name,
+                                    const char *source)
 {
-    /* Dependency archives are not workspace trees: package paths that happen
-     * to use an ignored workspace directory name must still be indexed. */
-    static const char entry_name[] = "vendor/org/example/lib/ExternalService.java";
-    static const char source[] =
-        "package org.example.lib;\n"
-        "/** Dependency service. */\n"
-        "public class ExternalService {\n"
-        "  /** Executes dependency work. */\n"
-        "  public String execute(int value) { return String.valueOf(value); }\n"
-        "}\n";
     FILE *file = fopen(path, "wb");
-    uint32_t crc = java_zip_crc32(source, sizeof(source) - 1U);
+    size_t entry_name_len = strlen(entry_name);
+    size_t source_len = strlen(source);
+    uint32_t crc = java_zip_crc32(source, source_len);
     long central_offset;
     long end_offset;
 
-    if (file == nullptr) {
+    if ((file == nullptr) || (entry_name_len > UINT16_MAX) || (source_len > UINT32_MAX)) {
+        if (file != nullptr) {
+            (void)fclose(file);
+        }
         return -1;
     }
     java_zip_write_u32(file, 0x04034b50U);
@@ -424,12 +423,12 @@ static int java_write_source_jar(const char *path)
     java_zip_write_u16(file, 0U);
     java_zip_write_u16(file, 0U);
     java_zip_write_u32(file, crc);
-    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
-    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
-    java_zip_write_u16(file, (uint16_t)(sizeof(entry_name) - 1U));
+    java_zip_write_u32(file, (uint32_t)source_len);
+    java_zip_write_u32(file, (uint32_t)source_len);
+    java_zip_write_u16(file, (uint16_t)entry_name_len);
     java_zip_write_u16(file, 0U);
-    (void)fwrite(entry_name, 1U, sizeof(entry_name) - 1U, file);
-    (void)fwrite(source, 1U, sizeof(source) - 1U, file);
+    (void)fwrite(entry_name, 1U, entry_name_len, file);
+    (void)fwrite(source, 1U, source_len, file);
 
     central_offset = ftell(file);
     if (central_offset < 0L) {
@@ -444,16 +443,16 @@ static int java_write_source_jar(const char *path)
     java_zip_write_u16(file, 0U);
     java_zip_write_u16(file, 0U);
     java_zip_write_u32(file, crc);
-    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
-    java_zip_write_u32(file, (uint32_t)(sizeof(source) - 1U));
-    java_zip_write_u16(file, (uint16_t)(sizeof(entry_name) - 1U));
+    java_zip_write_u32(file, (uint32_t)source_len);
+    java_zip_write_u32(file, (uint32_t)source_len);
+    java_zip_write_u16(file, (uint16_t)entry_name_len);
     java_zip_write_u16(file, 0U);
     java_zip_write_u16(file, 0U);
     java_zip_write_u16(file, 0U);
     java_zip_write_u16(file, 0U);
     java_zip_write_u32(file, 0U);
     java_zip_write_u32(file, 0U);
-    (void)fwrite(entry_name, 1U, sizeof(entry_name) - 1U, file);
+    (void)fwrite(entry_name, 1U, entry_name_len, file);
 
     end_offset = ftell(file);
     if (end_offset < central_offset) {
@@ -474,6 +473,22 @@ static int java_write_source_jar(const char *path)
 
         return (io_error == 0) && (close_error == 0) ? 0 : -1;
     }
+}
+
+static int java_write_source_jar(const char *path)
+{
+    /* Dependency archives are not workspace trees: package paths that happen
+     * to use an ignored workspace directory name must still be indexed. */
+    static const char source[] =
+        "package org.example.lib;\n"
+        "/** Dependency service. */\n"
+        "public class ExternalService {\n"
+        "  /** Executes dependency work. */\n"
+        "  public String execute(int value) { return String.valueOf(value); }\n"
+        "}\n";
+
+    return java_write_archive_entry(
+        path, "vendor/org/example/lib/ExternalService.java", source);
 }
 
 static int java_count_lines(const char *path)
@@ -531,6 +546,10 @@ static int test_maven_dependency_sources(void)
         "dest=\"$out/org/example/demo-lib/1.0\"\n"
         "mkdir -p \"$dest\"\n"
         "cp fixture-sources.jar \"$dest/demo-lib-1.0-sources.jar\"\n";
+    static const char lein_wrapper[] =
+        "#!/bin/sh\n"
+        "echo run >> lein-invocations.txt\n"
+        "exit 99\n";
     static const char app_source[] =
         "package demo.app;\n"
         "import org.example.lib.ExternalService;\n"
@@ -546,14 +565,17 @@ static int test_maven_dependency_sources(void)
     const char *old_incremental = getenv("CODE_LENS_INCREMENTAL");
     const char *old_maven = getenv("CODE_LENS_MAVEN");
     const char *old_command = getenv("CODE_LENS_MAVEN_COMMAND");
+    const char *old_lein_command = getenv("CODE_LENS_LEIN_COMMAND");
     char saved_home[PATH_MAX] = {0};
     char saved_incremental[PATH_MAX] = {0};
     char saved_maven[PATH_MAX] = {0};
     char saved_command[PATH_MAX] = {0};
+    char saved_lein_command[PATH_MAX] = {0};
     bool had_home = old_home != nullptr;
     bool had_incremental = old_incremental != nullptr;
     bool had_maven = old_maven != nullptr;
     bool had_command = old_command != nullptr;
+    bool had_lein_command = old_lein_command != nullptr;
     char *root;
     char *repo;
     char *home;
@@ -563,6 +585,8 @@ static int test_maven_dependency_sources(void)
     char *pom_path;
     char *count_path;
     char *fail_path;
+    char *lein_wrapper_path;
+    char *lein_count_path;
     CodeLensIndexStats stats = {0};
     CodeLensQueryOptions dependency_options = {
         .limit = 10,
@@ -588,6 +612,9 @@ static int test_maven_dependency_sources(void)
     }
     if (had_maven) (void)snprintf(saved_maven, sizeof(saved_maven), "%s", old_maven);
     if (had_command) (void)snprintf(saved_command, sizeof(saved_command), "%s", old_command);
+    if (had_lein_command) {
+        (void)snprintf(saved_lein_command, sizeof(saved_lein_command), "%s", old_lein_command);
+    }
     if ((tmp == nullptr) || (tmp[0] == '\0')) tmp = "/tmp";
     (void)snprintf(template_buffer,
                    sizeof(template_buffer),
@@ -606,18 +633,25 @@ static int test_maven_dependency_sources(void)
     pom_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "pom.xml");
     count_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "maven-invocations.txt");
     fail_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "fail-maven");
+    lein_wrapper_path = root == nullptr ? nullptr : code_lens_join_path(root, "fake-lein");
+    lein_count_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "lein-invocations.txt");
     if ((repo == nullptr) || (home == nullptr) || (src == nullptr) ||
         (wrapper_path == nullptr) || (jar_path == nullptr) || (pom_path == nullptr) ||
         (count_path == nullptr) || (fail_path == nullptr) ||
+        (lein_wrapper_path == nullptr) || (lein_count_path == nullptr) ||
         (code_lens_mkdir_p(src) != 0) ||
         (code_lens_mkdir_p(home) != 0) ||
         (java_write_file(src, "App.java", app_source) != 0) ||
         (java_write_file(repo, "pom.xml", "<project/>\n") != 0) ||
+        (java_write_file(repo, "project.clj", "(defproject ignored \"0.1\")\n") != 0) ||
+        (java_write_file(root, "fake-lein", lein_wrapper) != 0) ||
+        (chmod(lein_wrapper_path, 0755) != 0) ||
         (java_write_file(repo, "mvnw", wrapper) != 0) || (chmod(wrapper_path, 0755) != 0) ||
         (java_write_file(repo, "fail-maven", "transient failure\n") != 0) ||
         (java_write_source_jar(jar_path) != 0) ||
         (setenv("CODE_LENS_HOME", home, 1) != 0) ||
         (setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
+        (setenv("CODE_LENS_LEIN_COMMAND", lein_wrapper_path, 1) != 0) ||
         (unsetenv("CODE_LENS_MAVEN_COMMAND") != 0) ||
         (unsetenv("CODE_LENS_INCREMENTAL") != 0)) {
         failed = 1;
@@ -628,7 +662,7 @@ static int test_maven_dependency_sources(void)
         failed = 1;
         goto done;
     }
-    failed |= java_assert(stats.file_count == 1U,
+    failed |= java_assert(stats.file_count == 2U,
                           "first Maven failure publishes a workspace-only partial index");
     failed |= java_assert(java_count_lines(count_path) == 1,
                           "Maven wrapper invoked on first index");
@@ -642,8 +676,10 @@ static int test_maven_dependency_sources(void)
         failed = 1;
         goto done;
     }
-    failed |= java_assert(stats.file_count == 2U,
+    failed |= java_assert(stats.file_count == 3U,
                           "failed Maven status retries without an input edit");
+    failed |= java_assert(!code_lens_path_exists(lein_count_path),
+                          "mixed pom.xml/project.clj repository uses Maven only");
     failed |= java_assert(java_count_lines(count_path) == 2,
                           "retry invokes Maven and indexes dependency sources");
 
@@ -671,7 +707,7 @@ static int test_maven_dependency_sources(void)
             repo, "ExternalService#execute", &context_options);
     }
     failed |= java_assert((context != nullptr) &&
-                              (strstr(context, "showing Maven dependency definitions") != nullptr) &&
+                              (strstr(context, "showing dependency definitions") != nullptr) &&
                               (strstr(context, "org.example.lib.ExternalService") != nullptr) &&
                               (strstr(context, "org.example:demo-lib:1.0") != nullptr) &&
                               (strstr(context, "service.execute") != nullptr) &&
@@ -744,6 +780,8 @@ static int test_maven_dependency_sources(void)
                           "dependency remains queryable after Maven refresh");
 
 done:
+    if (had_lein_command) (void)setenv("CODE_LENS_LEIN_COMMAND", saved_lein_command, 1);
+    else (void)unsetenv("CODE_LENS_LEIN_COMMAND");
     if (had_command) (void)setenv("CODE_LENS_MAVEN_COMMAND", saved_command, 1);
     else (void)unsetenv("CODE_LENS_MAVEN_COMMAND");
     if (had_maven) (void)setenv("CODE_LENS_MAVEN", saved_maven, 1);
@@ -758,6 +796,324 @@ done:
     return failed == 0 ? 0 : 1;
 }
 
+static int test_clojure_dependency_sources(void)
+{
+    static const char command_script[] =
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "echo run >> dependency-invocations.txt\n"
+        "if [ -f fail-deps ]; then exit 43; fi\n"
+        "cat dependency-classpath.txt\n";
+    static const char clojure_dependency[] =
+        "(ns some.ns)\n"
+        "(defn some-fn \"Dependency function.\" [x] (inc x))\n";
+    static const char workspace_source[] =
+        "(ns app.core (:require [some.ns :as some]))\n"
+        "(defn use-dependency [] (some/some-fn 1))\n";
+    static const char ignored_java[] =
+        "package acme.java; public class IgnoredMainJar {}\n";
+    static const char preferred_java[] =
+        "package acme.java; public class PreferredSourcesJar {}\n";
+    char template_buffer[PATH_MAX];
+    char resolved[PATH_MAX];
+    const char *tmp = getenv("TMPDIR");
+    const char *old_home = getenv("CODE_LENS_HOME");
+    const char *old_incremental = getenv("CODE_LENS_INCREMENTAL");
+    const char *old_maven = getenv("CODE_LENS_MAVEN");
+    const char *old_maven_command = getenv("CODE_LENS_MAVEN_COMMAND");
+    const char *old_lein_command = getenv("CODE_LENS_LEIN_COMMAND");
+    const char *old_clojure_command = getenv("CODE_LENS_CLOJURE_COMMAND");
+    char saved_home[PATH_MAX] = {0};
+    char saved_incremental[PATH_MAX] = {0};
+    char saved_maven[PATH_MAX] = {0};
+    char saved_maven_command[PATH_MAX] = {0};
+    char saved_lein_command[PATH_MAX] = {0};
+    char saved_clojure_command[PATH_MAX] = {0};
+    bool had_home = old_home != nullptr;
+    bool had_incremental = old_incremental != nullptr;
+    bool had_maven = old_maven != nullptr;
+    bool had_maven_command = old_maven_command != nullptr;
+    bool had_lein_command = old_lein_command != nullptr;
+    bool had_clojure_command = old_clojure_command != nullptr;
+    char *root = nullptr;
+    char *home;
+    char *repository;
+    char *clj_dir;
+    char *java_dir;
+    char *clj_jar;
+    char *java_jar;
+    char *java_sources_jar;
+    char *command;
+    char *lein_repo;
+    char *lein_src;
+    char *lein_count;
+    char *lein_fail;
+    char *deps_repo;
+    char *deps_src;
+    char *deps_count;
+    char *none_repo;
+    char *none_src;
+    char *classpath_text;
+    CodeLensIndexStats stats = {0};
+    CodeLensQueryOptions dependency_options = {
+        .limit = 10,
+        .kind = "function",
+        .scope = "dependencies",
+        .dependency = "acme:*",
+    };
+    CodeLensQueryOptions any_dependency_options = {
+        .limit = 10,
+        .scope = "dependencies",
+    };
+    char *query;
+    char *context;
+    char *rows;
+    int failed = 0;
+
+    if (had_home) (void)snprintf(saved_home, sizeof(saved_home), "%s", old_home);
+    if (had_incremental) {
+        (void)snprintf(saved_incremental, sizeof(saved_incremental), "%s", old_incremental);
+    }
+    if (had_maven) (void)snprintf(saved_maven, sizeof(saved_maven), "%s", old_maven);
+    if (had_maven_command) {
+        (void)snprintf(saved_maven_command, sizeof(saved_maven_command), "%s", old_maven_command);
+    }
+    if (had_lein_command) {
+        (void)snprintf(saved_lein_command, sizeof(saved_lein_command), "%s", old_lein_command);
+    }
+    if (had_clojure_command) {
+        (void)snprintf(saved_clojure_command,
+                       sizeof(saved_clojure_command),
+                       "%s",
+                       old_clojure_command);
+    }
+    if ((tmp == nullptr) || (tmp[0] == '\0')) tmp = "/tmp";
+    (void)snprintf(template_buffer,
+                   sizeof(template_buffer),
+                   "%s/code-lens-clojure-deps-XXXXXX",
+                   tmp);
+    root = mkdtemp(template_buffer);
+    if ((root == nullptr) || (realpath(root, resolved) == nullptr)) {
+        return 1;
+    }
+    root = resolved;
+    home = code_lens_join_path(root, "home");
+    repository = home == nullptr ? nullptr : code_lens_join_path(home, ".m2/repository");
+    clj_dir = repository == nullptr ? nullptr : code_lens_join_path(repository, "acme/clj-lib/1.2");
+    java_dir = repository == nullptr ? nullptr : code_lens_join_path(repository, "acme/java-lib/2.0");
+    clj_jar = clj_dir == nullptr ? nullptr : code_lens_join_path(clj_dir, "clj-lib-1.2.jar");
+    java_jar = java_dir == nullptr ? nullptr : code_lens_join_path(java_dir, "java-lib-2.0.jar");
+    java_sources_jar = java_dir == nullptr
+                           ? nullptr
+                           : code_lens_join_path(java_dir, "java-lib-2.0-sources.jar");
+    command = code_lens_join_path(root, "fake-classpath-command");
+    lein_repo = code_lens_join_path(root, "lein-repo");
+    lein_src = lein_repo == nullptr ? nullptr : code_lens_join_path(lein_repo, "src/app");
+    lein_count = lein_repo == nullptr
+                     ? nullptr
+                     : code_lens_join_path(lein_repo, "dependency-invocations.txt");
+    lein_fail = lein_repo == nullptr ? nullptr : code_lens_join_path(lein_repo, "fail-deps");
+    deps_repo = code_lens_join_path(root, "deps-repo");
+    deps_src = deps_repo == nullptr ? nullptr : code_lens_join_path(deps_repo, "src/app");
+    deps_count = deps_repo == nullptr
+                     ? nullptr
+                     : code_lens_join_path(deps_repo, "dependency-invocations.txt");
+    none_repo = code_lens_join_path(root, "none-repo");
+    none_src = none_repo == nullptr ? nullptr : code_lens_join_path(none_repo, "src/app");
+    if ((home == nullptr) || (repository == nullptr) || (clj_dir == nullptr) ||
+        (java_dir == nullptr) || (clj_jar == nullptr) || (java_jar == nullptr) ||
+        (java_sources_jar == nullptr) || (command == nullptr) || (lein_repo == nullptr) ||
+        (lein_src == nullptr) || (lein_count == nullptr) || (lein_fail == nullptr) ||
+        (deps_repo == nullptr) || (deps_src == nullptr) || (deps_count == nullptr) ||
+        (none_repo == nullptr) || (none_src == nullptr) ||
+        (code_lens_mkdir_p(home) != 0) || (code_lens_mkdir_p(clj_dir) != 0) ||
+        (code_lens_mkdir_p(java_dir) != 0) || (code_lens_mkdir_p(lein_src) != 0) ||
+        (code_lens_mkdir_p(deps_src) != 0) || (code_lens_mkdir_p(none_src) != 0) ||
+        (java_write_file(root, "fake-classpath-command", command_script) != 0) ||
+        (chmod(command, 0755) != 0) ||
+        (java_write_archive_entry(clj_jar, "some/ns.clj", clojure_dependency) != 0) ||
+        (java_write_archive_entry(java_jar, "acme/java/IgnoredMainJar.java", ignored_java) != 0) ||
+        (java_write_archive_entry(java_sources_jar,
+                                  "acme/java/PreferredSourcesJar.java",
+                                  preferred_java) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    {
+        int needed = snprintf(nullptr, 0, "%s:%s:%s/src\n", clj_jar, java_jar, lein_repo);
+
+        classpath_text = needed < 0 ? nullptr : code_lens_alloc((size_t)needed + 1U);
+        if (classpath_text != nullptr) {
+            (void)snprintf(classpath_text,
+                           (size_t)needed + 1U,
+                           "%s:%s:%s/src\n",
+                           clj_jar,
+                           java_jar,
+                           lein_repo);
+        }
+    }
+    if ((classpath_text == nullptr) ||
+        (java_write_file(lein_repo, "dependency-classpath.txt", classpath_text) != 0) ||
+        (java_write_file(lein_repo, "project.clj", "(defproject fixture \"0.1\")\n") != 0) ||
+        (java_write_file(lein_src, "core.clj", workspace_source) != 0) ||
+        (java_write_file(deps_repo, "dependency-classpath.txt", classpath_text) != 0) ||
+        (java_write_file(deps_repo, "deps.edn", "{:deps {}}\n") != 0) ||
+        (java_write_file(deps_src, "core.clj", workspace_source) != 0) ||
+        (java_write_file(none_src, "core.clj", "(ns none.core) (defn local-fn [])\n") != 0) ||
+        (setenv("CODE_LENS_HOME", home, 1) != 0) ||
+        (setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
+        (setenv("CODE_LENS_LEIN_COMMAND", command, 1) != 0) ||
+        (setenv("CODE_LENS_CLOJURE_COMMAND", command, 1) != 0) ||
+        (unsetenv("CODE_LENS_MAVEN_COMMAND") != 0) ||
+        (setenv("CODE_LENS_INCREMENTAL", "0", 1) != 0)) {
+        failed = 1;
+        goto done;
+    }
+
+    failed |= java_assert(code_lens_test_classpath_entry_count(
+                              "C:\\one.jar;D:\\two.jar;; C:\\three.jar ", ';') == 3U,
+                          "Windows classpath separator is parsed independently of host OS");
+
+    if (code_lens_index_repository(lein_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(stats.file_count == 4U,
+                          "Leiningen indexes project.clj, workspace, Clojure main-jar, and Java source-jar files");
+    failed |= java_assert(java_count_lines(lein_count) == 1,
+                          "Leiningen classpath command runs on first index");
+    rows = code_lens_run_sql(
+        lein_repo,
+        "SELECT status, scope, direct FROM MavenProject p JOIN DependencyArtifact a "
+        "ON a.repo=p.repo WHERE a.coordinate='acme:clj-lib:1.2'");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "resolved|classpath|-1") != nullptr),
+                          "Leiningen metadata records resolved classpath with unknown directness");
+    query = code_lens_query_symbols_ex(lein_repo, "some-fn", &dependency_options);
+    failed |= java_assert((query != nullptr) &&
+                              (strstr(query, "some-fn|function|some.ns") != nullptr) &&
+                              (strstr(query, "acme:clj-lib:1.2") != nullptr),
+                          "Leiningen dependency query finds a Clojure defn with GAV filter");
+    context = code_lens_context_symbol(lein_repo, "some.ns/some-fn");
+    failed |= java_assert((context != nullptr) &&
+                              (strstr(context, "showing dependency definitions") != nullptr) &&
+                              (strstr(context, "some/some-fn") != nullptr) &&
+                              (strstr(context, "Dependency function.") != nullptr),
+                          "qualified Clojure context falls back to dependency definition");
+    query = code_lens_query_symbols_ex(lein_repo, "PreferredSourcesJar", &any_dependency_options);
+    failed |= java_assert((query != nullptr) &&
+                              (strstr(query, "PreferredSourcesJar|class|") != nullptr),
+                          "classpath resolution prefers a sibling sources jar");
+    query = code_lens_query_symbols_ex(lein_repo, "IgnoredMainJar", &any_dependency_options);
+    failed |= java_assert((query != nullptr) && (strstr(query, "IgnoredMainJar|class|") == nullptr),
+                          "Java main jar is not indexed when a sources jar exists");
+
+    /* A forced full rebuild validates the mixed-language extraction marker
+     * and reuses the cached dependency set without running Leiningen. */
+    if (code_lens_index_repository(lein_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(lein_count) == 1,
+                          "mixed-language dependency cache marker is reusable");
+    if ((java_write_file(lein_src,
+                         "core.clj",
+                         "(ns app.core (:require [some.ns :as some]))\n"
+                         "(defn use-dependency [] (some/some-fn 2))\n") != 0) ||
+        (code_lens_index_repository(lein_repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(lein_count) == 1,
+                          "ordinary Clojure source change does not rerun Leiningen");
+    if ((java_write_file(lein_repo,
+                         "project.clj",
+                         "(defproject fixture \"0.2\")\n") != 0) ||
+        (code_lens_index_repository(lein_repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(lein_count) == 2,
+                          "project.clj change reruns Leiningen classpath resolution");
+
+    if ((java_write_file(lein_repo, "fail-deps", "fail\n") != 0) ||
+        (java_write_file(lein_repo,
+                         "project.clj",
+                         "(defproject fixture \"0.3\")\n") != 0)) {
+        failed = 1;
+        goto done;
+    }
+    if (code_lens_index_repository(lein_repo, &stats) == 0) {
+        failed = 1;
+        goto done;
+    }
+    query = code_lens_query_symbols_ex(lein_repo, "some-fn", &dependency_options);
+    failed |= java_assert(java_count_lines(lein_count) == 3 && (query != nullptr) &&
+                              (strstr(query, "acme:clj-lib:1.2") != nullptr),
+                          "failed Leiningen refresh preserves the published dependency index");
+
+    /* tools.deps uses the same classpath/materialization path, and the global
+     * CODE_LENS_MAVEN switch deliberately gates all dependency commands. */
+    if (setenv("CODE_LENS_MAVEN", "0", 1) != 0 ||
+        code_lens_index_repository(deps_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    rows = code_lens_run_sql(deps_repo, "SELECT status, message FROM MavenProject");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "disabled|tools.deps") != nullptr) &&
+                              !code_lens_path_exists(deps_count),
+                          "kill switch disables tools.deps command execution with status metadata");
+    if ((setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
+        (code_lens_index_repository(deps_repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    query = code_lens_query_symbols_ex(deps_repo, "some-fn", &dependency_options);
+    failed |= java_assert(java_count_lines(deps_count) == 1 && (query != nullptr) &&
+                              (strstr(query, "some-fn|function|some.ns") != nullptr),
+                          "enabling dependency resolution retries tools.deps without deps.edn edit");
+
+    if (code_lens_index_repository(none_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    rows = code_lens_run_sql(none_repo, "SELECT status, rootPom, message FROM MavenProject");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "none||no pom.xml") != nullptr),
+                          "repository without a supported build records a reusable none status");
+    query = code_lens_query_symbols_ex(none_repo, "missing-symbol", &any_dependency_options);
+    failed |= java_assert((query != nullptr) &&
+                              (strstr(query, "dependency sources for repo") != nullptr) &&
+                              (strstr(query, "are none") != nullptr),
+                          "empty dependency-scoped query explains the missing dependency index");
+    if (code_lens_index_repository(none_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    rows = code_lens_run_sql(none_repo, "SELECT COUNT(*) FROM MavenProject WHERE status='none'");
+    failed |= java_assert((rows != nullptr) && (strstr(rows, "\n1\n") != nullptr),
+                          "none status row survives a second full index");
+
+done:
+    if (had_clojure_command) {
+        (void)setenv("CODE_LENS_CLOJURE_COMMAND", saved_clojure_command, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_CLOJURE_COMMAND");
+    }
+    if (had_lein_command) (void)setenv("CODE_LENS_LEIN_COMMAND", saved_lein_command, 1);
+    else (void)unsetenv("CODE_LENS_LEIN_COMMAND");
+    if (had_maven_command) (void)setenv("CODE_LENS_MAVEN_COMMAND", saved_maven_command, 1);
+    else (void)unsetenv("CODE_LENS_MAVEN_COMMAND");
+    if (had_maven) (void)setenv("CODE_LENS_MAVEN", saved_maven, 1);
+    else (void)unsetenv("CODE_LENS_MAVEN");
+    if (had_incremental) (void)setenv("CODE_LENS_INCREMENTAL", saved_incremental, 1);
+    else (void)unsetenv("CODE_LENS_INCREMENTAL");
+    if (had_home) (void)setenv("CODE_LENS_HOME", saved_home, 1);
+    else (void)unsetenv("CODE_LENS_HOME");
+    if ((root != nullptr) && (code_lens_remove_tree(root) != 0)) {
+        (void)fprintf(stderr, "Clojure dependency test warning: failed to remove %s\n", root);
+    }
+    return failed == 0 ? 0 : 1;
+}
+
 int test_java_support(void)
 {
     int failed = 0;
@@ -765,6 +1121,7 @@ int test_java_support(void)
     failed |= test_java_parser();
     failed |= test_java_index();
     failed |= test_maven_dependency_sources();
+    failed |= test_clojure_dependency_sources();
     if (failed == 0) {
         (void)fprintf(stderr, "Java parser and indexing tests passed\n");
     }
