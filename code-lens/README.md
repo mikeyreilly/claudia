@@ -17,14 +17,16 @@ C compiler.
 
 - A C compiler with ISO C23 (or C2x) support
 - `make`, `git`, `curl`, `unzip`, and a POSIX shell
-- Maven (or a project Maven wrapper) plus a JDK when indexing Maven dependency sources
+- The project's dependency tool plus a JDK when indexing dependency sources:
+  Maven/`mvnw`, Leiningen, or the Clojure CLI
 
 ### Windows
 
 - Clang with ISO C23 support on `PATH` (the native `x86_64-pc-windows-msvc`
   build is supported)
 - Git for Windows, `curl.exe`, `tar.exe`, and Windows PowerShell
-- Maven (or a project Maven wrapper) plus a JDK when indexing Maven dependency sources
+- The project's dependency tool plus a JDK when indexing dependency sources:
+  Maven/`mvnw`, Leiningen, or the Clojure CLI
 - A Windows SDK/MSVC runtime discoverable by Clang
 
 No MSYS2 shell, `make`, or separately installed zlib is needed for the native
@@ -90,44 +92,61 @@ uses tree-sitter-c and indexes functions/prototypes, variables, typedefs,
 structs, unions, enums, fields, macros, documentation comments, calls, and
 member accesses. Repositories can mix all three languages.
 
-## Maven dependency sources
+## Dependency sources
 
-When a repository root contains `pom.xml`, indexing transparently invokes the
-project's `mvnw`/`mvnw.cmd` when present, otherwise `mvn`, to resolve source
-JARs for the effective test classpath. The Maven Dependency Plugin version is
-pinned by code-lens. Maven therefore applies the project's normal parent POMs,
-dependency management, profiles, mirrors, credentials, proxies, and reactor
-rules rather than code-lens attempting to reproduce model resolution.
+Code-lens detects one root build file in priority order:
 
-Source JARs are materialized under
+1. `pom.xml`: invoke the project's `mvnw`/`mvnw.cmd` when present, otherwise
+   `mvn`, and use the pinned Maven Dependency Plugin to copy source JARs for
+   the effective test classpath.
+2. `project.clj`: invoke `lein classpath` and inspect its resolved JARs.
+3. `deps.edn`: invoke `clojure -Spath` and inspect its resolved JARs.
+
+Maven applies the project's normal parent POMs, dependency management,
+profiles, mirrors, credentials, proxies, and reactor rules. Leiningen and
+`tools.deps` use their default profile/alias classpaths. For classpath JARs,
+code-lens prefers a sibling `-sources.jar`; when none exists it extracts
+supported Clojure and Java source files from the main JAR, as is customary for
+Clojure libraries.
+
+Extracted sources are materialized under
 `$CODE_LENS_HOME/dependencies/sources/<group>/<artifact>/<version>/<checksum>/`.
 Those paths are stable and can be passed directly to `read` or `grep` tools.
-The extracted source cache is shared by checksum; each repository index records
-the exact Maven coordinates and files on its resolved classpath in
-`DependencyArtifact` and `DependencyFile`. Multi-module reactors currently use a
-reactor-wide union: `modulePath` is the repository root, dependency directness is
-unknown, and the recorded scope is `test-classpath`.
+The cache is shared by checksum; each repository index records the exact GAV
+coordinates and files in `DependencyArtifact` and `DependencyFile`. Maven
+reactors currently use a reactor-wide union with scope `test-classpath`;
+Leiningen/tools.deps entries use scope `classpath`. In both cases `modulePath`
+is the repository root and dependency directness is unknown (`direct = -1`).
+The legacy `MavenProject.rootPom` column stores whichever root build file was
+detected (`pom.xml`, `project.clj`, or `deps.edn`).
 
 `query` remains workspace-only by default. Use `--scope dependencies` (or MCP
 `scope: "dependencies"`) to search dependency definitions, `--scope all` to
-search both, and `--dependency 'org.jline:*'` to filter by a Maven GAV glob.
-Results include their origin, coordinate, classpath scope, and materialized
-source path. `context` first searches workspace definitions, then automatically
-falls back to Maven dependency definitions while keeping workspace call sites
-first. A workspace source-file `path` can be supplied as calling context when
-there is no definition in that file.
+search both, and `--dependency 'org.jline:*'` to filter by a GAV glob. Results
+include their origin, coordinate, classpath scope, and materialized source
+path. `context` first searches workspace definitions, then automatically falls
+back to dependency definitions while keeping workspace call sites first. A
+workspace source-file `path` can be supplied as calling context when there is
+no definition in that file. Repositories without a recognized root build file
+record a `none` dependency status, so dependency-scoped empty results explain
+why no dependency files are available.
 
 Code-lens snapshots all reactor `pom.xml` files, local parent POMs, Maven
-wrappers, and `.mvn/**`. Ordinary source refreshes reuse the prior dependency
-set; Maven runs again when those inputs change, the materialized cache is
-missing, or a prior `failed`/`disabled` generation becomes retryable. A Maven
-failure never replaces an existing published index. On a first index it
-produces a workspace-only partial index and a warning. Set
-`CODE_LENS_MAVEN=0` to disable Maven execution or
-`CODE_LENS_MAVEN_TIMEOUT_MS` to change the 120-second timeout. Maven execution
-is enabled by default. Because Maven may execute build extensions and plugins,
-index only repositories you trust; set `CODE_LENS_MAVEN=0` before indexing or
-starting MCP for untrusted code.
+wrappers, and `.mvn/**`; for Leiningen/tools.deps it snapshots the root
+`project.clj`/`deps.edn`. Ordinary source refreshes reuse the prior dependency
+set. Resolution runs again when those inputs change, the materialized cache is
+missing, or a prior `failed`/`disabled` generation becomes retryable. A build
+tool failure never replaces an existing published index. On a first index it
+produces a workspace-only partial index and a warning.
+
+`CODE_LENS_MAVEN=0` is the global dependency-resolution kill switch for Maven,
+Leiningen, and tools.deps; `CODE_LENS_MAVEN_TIMEOUT_MS` changes the shared
+120-second timeout. Hermetic installations can override executables with
+`CODE_LENS_MAVEN_COMMAND`, `CODE_LENS_LEIN_COMMAND`, and
+`CODE_LENS_CLOJURE_COMMAND`. Automatic dependency resolution is enabled by
+default and build tools may execute project code, plugins, or extensions.
+Index only repositories you trust, or set `CODE_LENS_MAVEN=0` before indexing
+or starting MCP.
 
 ## CLI at a glance
 

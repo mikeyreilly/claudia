@@ -246,7 +246,8 @@ typedef struct {
     /* Case-insensitive substring of result file paths. */
     const char *path;
     /* workspace (default), dependencies, or all; dependency is an optional
-     * Maven GAV glob. */
+     * GAV glob for Maven-layout dependencies resolved through Maven,
+     * Leiningen, or tools.deps. */
     const char *scope;
     const char *dependency;
 } CodeLensQueryOptions;
