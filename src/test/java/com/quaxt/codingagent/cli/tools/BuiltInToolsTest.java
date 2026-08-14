@@ -58,11 +58,54 @@ class BuiltInToolsTest {
 	}
 
 	@Test
+	void grepFiltersFilesWithAGlobSeparateFromItsLiteralPath() throws Exception {
+		Files.createDirectories(tempDir.resolve("src/nested"));
+		Files.writeString(tempDir.resolve("src/Root.java"), "needle");
+		Files.writeString(tempDir.resolve("src/nested/Nested.java"), "needle");
+		Files.writeString(tempDir.resolve("src/nested/notes.txt"), "needle");
+
+		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		String byFileName = run(
+				tools,
+				"grep",
+				Json.object().put("pattern", "needle").put("path", "src").put("glob", "*.java"));
+		assertTrue(byFileName.contains("Root.java:1:"));
+		assertTrue(byFileName.contains("nested/Nested.java:1:"));
+		assertFalse(byFileName.contains("notes.txt"));
+
+		String recursive = run(
+				tools,
+				"grep",
+				Json.object().put("pattern", "needle").put("path", "src").put("glob", "**/*.java"));
+		assertTrue(recursive.contains("Root.java:1:"));
+		assertTrue(recursive.contains("nested/Nested.java:1:"));
+	}
+
+	@Test
+	void grepRejectsWildcardsInLiteralPathWithActionableError() {
+		ObjectNode arguments = Json.object().put("pattern", "needle").put("path", "src/**/*.java");
+
+		IllegalArgumentException error = assertThrows(
+				IllegalArgumentException.class,
+				() -> tool(BuiltInTools.create(tempDir), "grep")
+						.execute("id", arguments, new AbortSignal(), ignored -> {}));
+
+		assertTrue(error.getMessage().contains("path is literal"));
+		assertTrue(error.getMessage().contains("glob"));
+	}
+
+	@Test
 	void schemasDescribeRequiredInputs() {
-		AgentTool write = tool(BuiltInTools.create(tempDir), "write");
+		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		AgentTool write = tool(tools, "write");
 		assertTrue(write.parameters().path("required").toString().contains("\"path\""));
 		assertTrue(write.parameters().path("required").toString().contains("\"content\""));
-		assertFalse(tool(BuiltInTools.create(tempDir), "ls").parameters().path("required").toString().contains("\"path\""));
+		assertFalse(tool(tools, "ls").parameters().path("required").toString().contains("\"path\""));
+
+		AgentTool grep = tool(tools, "grep");
+		assertTrue(grep.parameters().path("properties").has("path"));
+		assertTrue(grep.parameters().path("properties").has("glob"));
+		assertTrue(grep.parameters().path("properties").path("path").path("description").asText().contains("Literal"));
 	}
 
 	private static AgentTool tool(List<AgentTool> tools, String name) {

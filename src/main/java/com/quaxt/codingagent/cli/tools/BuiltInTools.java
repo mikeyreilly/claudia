@@ -8,11 +8,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -277,8 +280,15 @@ public final class BuiltInTools {
 			super(
 					cwd,
 					"grep",
-					"Search text files with a regular expression. Returns paths and line numbers, respecting the result limit.",
-					schema("pattern", string("Regex or literal search pattern"), "path", optional(string("File or directory to search")), "glob", optional(string("Optional glob filter")), "ignoreCase", optional(bool("Case insensitive")), "literal", optional(bool("Treat pattern literally")), "context", optional(integer("Lines before and after matches")), "limit", optional(integer("Maximum matches"))));
+					"Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Returns paths and line numbers, respecting the result limit.",
+					schema(
+							"pattern", string("Regular expression to search for, or literal text when literal is true"),
+							"path", optional(string("Literal file or directory to search (default: current directory); wildcards are not expanded")),
+							"glob", optional(string("Glob file filter relative to path, for example '*.java' or 'src/**/*.java'; patterns without a slash match file names at any depth")),
+							"ignoreCase", optional(bool("Case insensitive")),
+							"literal", optional(bool("Treat pattern literally")),
+							"context", optional(integer("Lines before and after matches")),
+							"limit", optional(integer("Maximum matches"))));
 		}
 
 		@Override
@@ -288,15 +298,19 @@ public final class BuiltInTools {
 			boolean literal = optionalBoolean(arguments, "literal");
 			int flags = optionalBoolean(arguments, "ignoreCase") ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0;
 			Pattern pattern = Pattern.compile(literal ? Pattern.quote(patternText) : patternText, flags);
-			Path root = path(optionalText(arguments, "path", "."));
+			String pathText = optionalText(arguments, "path", ".");
+			Path root = grepRoot(pathText);
 			int limit = positiveOrDefault(arguments, "limit", DEFAULT_GREP_LIMIT);
 			String glob = optionalText(arguments, "glob", null);
+			List<PathMatcher> fileMatchers = glob == null ? List.of() : globMatchers(glob);
 			List<Path> files = filesUnder(root);
+			boolean rootIsDirectory = Files.isDirectory(root);
 			StringBuilder output = new StringBuilder();
 			int matches = 0;
 			for (Path file : files) {
 				requireNotAborted(signal);
-				if (glob != null && !FileSystems.getDefault().getPathMatcher("glob:" + glob).matches(root.relativize(file))) {
+				Path relative = rootIsDirectory ? root.relativize(file) : file.getFileName();
+				if (!fileMatchers.isEmpty() && !matchesGlob(fileMatchers, relative)) {
 					continue;
 				}
 				List<String> lines;
@@ -317,6 +331,22 @@ public final class BuiltInTools {
 				}
 			}
 			return ToolResult.text(matches == 0 ? "No matches found" : truncate(output.toString(), null));
+		}
+
+		private Path grepRoot(String pathText) {
+			Path root;
+			try {
+				root = path(pathText);
+			} catch (InvalidPathException error) {
+				if (containsGlobMetacharacter(pathText)) {
+					throw wildcardPathError(pathText);
+				}
+				throw error;
+			}
+			if (!Files.exists(root) && containsGlobMetacharacter(pathText)) {
+				throw wildcardPathError(pathText);
+			}
+			return root;
 		}
 	}
 
@@ -385,6 +415,72 @@ public final class BuiltInTools {
 			}
 			return ToolResult.text(truncate(String.join("\n", entries), null));
 		}
+	}
+
+	private static IllegalArgumentException wildcardPathError(String path) {
+		return new IllegalArgumentException(
+				"path is literal and does not expand wildcards: " + path
+						+ ". Put the search root in path and the file pattern in glob, for example path=\"src\" and glob=\"**/*.java\".");
+	}
+
+	private static boolean containsGlobMetacharacter(String value) {
+		for (int index = 0; index < value.length(); index++) {
+			if (switch (value.charAt(index)) {
+				case '*', '?', '[', '{' -> true;
+				default -> false;
+			}) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static List<PathMatcher> globMatchers(String glob) {
+		if (glob.isBlank()) {
+			throw new IllegalArgumentException("glob must be a non-empty string");
+		}
+		try {
+			return globVariants(glob).stream()
+					.map(variant -> FileSystems.getDefault().getPathMatcher("glob:" + variant))
+					.toList();
+		} catch (java.util.regex.PatternSyntaxException error) {
+			throw new IllegalArgumentException("Invalid glob '" + glob + "': " + error.getDescription(), error);
+		}
+	}
+
+	// Java's recursive-directory glob requires at least one directory; ripgrep-style globs allow zero.
+	private static List<String> globVariants(String glob) {
+		LinkedHashSet<String> variants = new LinkedHashSet<>();
+		List<String> pending = new ArrayList<>();
+		variants.add(glob);
+		pending.add(glob);
+		for (int pendingIndex = 0; pendingIndex < pending.size(); pendingIndex++) {
+			String variant = pending.get(pendingIndex);
+			for (int index = variant.indexOf("**/"); index >= 0; index = variant.indexOf("**/", index + 3)) {
+				String withoutDirectoryWildcard = variant.substring(0, index) + variant.substring(index + 3);
+				if (variants.add(withoutDirectoryWildcard)) {
+					pending.add(withoutDirectoryWildcard);
+				}
+			}
+		}
+		return List.copyOf(variants);
+	}
+
+	private static boolean matchesGlob(List<PathMatcher> matchers, Path relative) {
+		for (PathMatcher matcher : matchers) {
+			if (matcher.matches(relative)) {
+				return true;
+			}
+		}
+		Path fileName = relative.getFileName();
+		if (fileName != null && !fileName.equals(relative)) {
+			for (PathMatcher matcher : matchers) {
+				if (matcher.matches(fileName)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static List<Path> filesUnder(Path root) throws IOException {
