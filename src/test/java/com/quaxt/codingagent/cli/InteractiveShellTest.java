@@ -108,6 +108,24 @@ class InteractiveShellTest {
 	}
 
 	@Test
+	void displaysFinalAssistantErrorsEvenAfterEarlierStreamedText() {
+		AssistantMessage failed = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
+		failed.stopReason = StopReason.ERROR;
+		failed.errorMessage = "java.net.ConnectException";
+
+		assertEquals("Error: java.net.ConnectException", InteractiveShell.finalAssistantOutput(failed, true));
+	}
+
+	@Test
+	void doesNotRepeatSuccessfulFinalOutputAfterItWasStreamed() {
+		AssistantMessage response = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
+		response.content.add(new TextContent("Done."));
+
+		assertNull(InteractiveShell.finalAssistantOutput(response, true));
+		assertEquals("Done.", InteractiveShell.finalAssistantOutput(response, false));
+	}
+
+	@Test
 	void rendersAssistantErrorsAfterPartialContent() {
 		Model model = model("gpt-5.4");
 		AssistantMessage failed = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");

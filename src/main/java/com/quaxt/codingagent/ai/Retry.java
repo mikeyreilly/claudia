@@ -37,6 +37,7 @@ public final class Retry {
 		"provider.?returned.?error",
 		"network.?error",
 		"connection.?error",
+		"connect.?exception",
 		"connection.?refused",
 		"connection.?lost",
 		"connection.?reset",

@@ -23,6 +23,7 @@ class RetryTest {
 	void classifiesRetryableErrors() {
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "429 Too Many Requests")));
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "socket hang up")));
+		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "java.net.ConnectException")));
 		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "Overloaded")));
 		assertTrue(Retry.isRetryableAssistantError(message(
 				StopReason.ERROR,

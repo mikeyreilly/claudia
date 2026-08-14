@@ -177,8 +177,12 @@ final class InteractiveShell implements AutoCloseable {
 			if (interrupted.get()) {
 				finishStreamOutput();
 				terminal.println("Interrupted.");
-			} else if (!emittedText && agent.state().messages.getLast() instanceof AssistantMessage response) {
-				terminal.println(response.errorMessage == null ? response.text() : "Error: " + response.errorMessage);
+			} else if (agent.state().messages.getLast() instanceof AssistantMessage response) {
+				String finalOutput = finalAssistantOutput(response, emittedText);
+				if (finalOutput != null) {
+					finishStreamOutput();
+					terminal.println(finalOutput);
+				}
 			}
 			// AgentEnd normally performs this transition. Reassert it here to close
 			// the small race where Escape arrives after AgentEnd but before the task returns.
@@ -633,6 +637,11 @@ final class InteractiveShell implements AutoCloseable {
 				description,
 				session.id() + " " + session.provider() + " " + session.model() + " "
 						+ session.firstMessage() + " " + session.allMessagesText());
+	}
+
+	static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
+		if (response.errorMessage != null) return "Error: " + response.errorMessage;
+		return emittedText ? null : response.text();
 	}
 
 	private static String formatRetryDelay(long delayMs) {
