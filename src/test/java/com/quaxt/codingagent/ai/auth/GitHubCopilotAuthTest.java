@@ -1,9 +1,11 @@
 package com.quaxt.codingagent.ai.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -66,6 +68,34 @@ class GitHubCopilotAuthTest {
 			assertEquals("copilot-token", auth.resolveToken().accessToken());
 			assertEquals(1, tokenRequests.get());
 			assertEquals(1, policyRequests.get());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void reportsCopilotTokenHttpFailuresAsIoErrors() throws Exception {
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/copilot_internal/v2/token", exchange -> {
+			byte[] body = "<html><title>Unicorn!</title></html>".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "text/html");
+			exchange.sendResponseHeaders(502, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
+			FileCredentialStore store = new FileCredentialStore(tempDir.resolve("failing-auth.json"));
+			store.modify(
+					GitHubCopilotAuth.PROVIDER_ID,
+					ignored -> new Credential.OAuthCredential("expired-token", "github-token", 0));
+			GitHubCopilotAuth auth =
+					new GitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
+
+			IOException error = assertThrows(IOException.class, auth::resolveToken);
+
+			assertTrue(error.getMessage().startsWith("502:"));
 		} finally {
 			server.stop(0);
 		}
