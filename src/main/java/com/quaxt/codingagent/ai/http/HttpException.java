@@ -1,10 +1,12 @@
 package com.quaxt.codingagent.ai.http;
 
+import java.io.IOException;
+
 /**
  * Non-2xx HTTP response from a provider. Message includes status and truncated
  * body (mirrors the display format of packages/ai/src/utils/error-body.ts).
  */
-public class HttpException extends RuntimeException {
+public class HttpException extends IOException {
 	public static final int MAX_ERROR_BODY_CHARS = 4000;
 
 	private final int status;
