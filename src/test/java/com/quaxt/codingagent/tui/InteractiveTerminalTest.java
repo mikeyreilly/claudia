@@ -92,6 +92,29 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
+	void slashCommandPanelFiltersNavigatesAndInsertsWithoutSubmitting() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write(
+					"/\u001b[B\r\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(
+					Duration.ofSeconds(5),
+					() -> interactive.readLine(
+							"> ",
+							List.of("/models", "/help", "/compact", "/details", "/exit")));
+
+			assertEquals("/details", line);
+			String written = fixture.output().toString(StandardCharsets.UTF_8);
+			assertTrue(written.contains("╭"));
+			assertTrue(written.contains("/compact"));
+			assertTrue(written.contains("/details"));
+		}
+	}
+
+	@Test
 	void shiftEnterVariantsInsertNewlinesAndEnterSubmitsThePrompt() throws Exception {
 		TerminalFixture fixture = terminal();
 
@@ -132,6 +155,22 @@ class InteractiveTerminalTest {
 			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
 
 			assertEquals("first\nsecond", line);
+		}
+	}
+
+	@Test
+	void unbracketedMultilinePasteIsNotMistakenForACommandSelection() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write("/help\rsecond\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(
+					Duration.ofSeconds(5),
+					() -> interactive.readLine("> ", List.of("/help", "/models")));
+
+			assertEquals("/help\nsecond", line);
 		}
 	}
 

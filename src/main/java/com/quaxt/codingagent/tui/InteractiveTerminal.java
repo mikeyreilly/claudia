@@ -6,13 +6,16 @@ import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
+import java.util.function.Supplier;
+import org.jline.keymap.KeyMap;
+import org.jline.reader.Binding;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.Reference;
 import org.jline.reader.UserInterruptException;
 import org.jline.reader.Widget;
 import org.jline.reader.impl.LineReaderImpl;
+import org.jline.reader.impl.history.DefaultHistory;
 import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
@@ -42,7 +45,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private static final long PASTE_LOOKAHEAD_MILLIS = 10;
 
 	private final Terminal terminal;
-	private final LineReaderImpl reader;
+	private final PromptLineReader reader;
 	private final SuspendAction suspendAction;
 	private final boolean supportsSuspend;
 	private final Attributes shellAttributes;
@@ -60,6 +63,7 @@ public final class InteractiveTerminal implements AutoCloseable {
 	private String suspendedBuffer;
 	private int suspendedCursor = -1;
 	private int restoreCursor = -1;
+	private CommandSuggestions activeCommandSuggestions;
 
 	public InteractiveTerminal(String appName) throws IOException {
 		this(
@@ -74,7 +78,8 @@ public final class InteractiveTerminal implements AutoCloseable {
 		this.suspendAction = suspendAction;
 		this.supportsSuspend = supportsSuspend;
 		shellAttributes = new Attributes(terminal.getAttributes());
-		reader = (LineReaderImpl) LineReaderBuilder.builder().terminal(terminal).build();
+		reader = new PromptLineReader(terminal);
+		reader.setHistory(new DefaultHistory());
 		installEditorBindings();
 		previousContinueHandler = supportsSuspend
 				? terminal.handle(Terminal.Signal.CONT, this::handleContinue)
@@ -123,11 +128,46 @@ public final class InteractiveTerminal implements AutoCloseable {
 		Reference submit = new Reference(submitWidgetName);
 		String[] submitSequences = Keybindings.editorSequences("submit").toArray(String[]::new);
 
+		String suggestionUpWidgetName = "codingagent-previous-command-suggestion";
+		reader.getWidgets().put(
+				suggestionUpWidgetName,
+				() -> moveCommandSuggestion(-1, LineReader.UP_LINE_OR_SEARCH));
+		Reference suggestionUp = new Reference(suggestionUpWidgetName);
+		String suggestionDownWidgetName = "codingagent-next-command-suggestion";
+		reader.getWidgets().put(
+				suggestionDownWidgetName,
+				() -> moveCommandSuggestion(1, LineReader.DOWN_LINE_OR_SEARCH));
+		Reference suggestionDown = new Reference(suggestionDownWidgetName);
+		String terminalUp = KeyMap.key(terminal, Capability.key_up);
+		String terminalDown = KeyMap.key(terminal, Capability.key_down);
+
 		reader.getWidgets().put(LineReader.BEGIN_PASTE, this::insertBracketedPaste);
 		for (var keyMap : reader.getKeyMaps().values()) {
 			keyMap.bind(insertNewline, newlineSequences);
 			keyMap.bind(submit, submitSequences);
+			bindNavigationKey(keyMap, suggestionUp, terminalUp, "\u001b[A", "\u001bOA");
+			bindNavigationKey(keyMap, suggestionDown, terminalDown, "\u001b[B", "\u001bOB");
 		}
+	}
+
+	private static void bindNavigationKey(
+			KeyMap<Binding> keyMap,
+			Reference widget,
+			String terminalSequence,
+			String... fallbackSequences) {
+		if (terminalSequence != null && !terminalSequence.isEmpty()) {
+			keyMap.bind(widget, terminalSequence);
+		}
+		keyMap.bind(widget, fallbackSequences);
+	}
+
+	private boolean moveCommandSuggestion(int delta, String fallbackWidget) {
+		if (activeCommandSuggestions != null
+				&& activeCommandSuggestions.move(reader.getBuffer().toString(), delta)) {
+			return true;
+		}
+		reader.callWidget(fallbackWidget);
+		return true;
 	}
 
 	/**
@@ -136,12 +176,29 @@ public final class InteractiveTerminal implements AutoCloseable {
 	 */
 	private boolean submitOrInsertPastedNewline() {
 		int next = reader.peekCharacter(PASTE_LOOKAHEAD_MILLIS);
-		if (next >= 0) {
+		// Preserve multiline paste detection even when the pasted first line
+		// happens to look like a slash command. A queued CR is instead treated
+		// as the user's second Enter after choosing a command.
+		if (next >= 0 && next != '\r') {
 			if (next == '\n') reader.readCharacter();
 			reader.getBuffer().write('\n');
 			return true;
 		}
+		if (acceptCommandSuggestion()) return true;
+		if (next >= 0) {
+			reader.getBuffer().write('\n');
+			return true;
+		}
 		reader.callWidget(LineReader.ACCEPT_LINE);
+		return true;
+	}
+
+	private boolean acceptCommandSuggestion() {
+		if (activeCommandSuggestions == null) return false;
+		String command = activeCommandSuggestions.accept(reader.getBuffer().toString());
+		if (command == null) return false;
+		reader.getBuffer().clear();
+		reader.getBuffer().write(command);
 		return true;
 	}
 
@@ -176,20 +233,28 @@ public final class InteractiveTerminal implements AutoCloseable {
 
 	/** Returns null on EOF and an empty string after Ctrl-C. */
 	public String readLine(String prompt) {
-		return readLine(prompt, null);
+		return readLine(prompt, null, null);
+	}
+
+	/** Reads a line with an alphabetized slash-command panel below the prompt. */
+	public String readLine(String prompt, List<String> slashCommands) {
+		CommandSuggestions suggestions = slashCommands == null || slashCommands.isEmpty()
+				? null
+				: new CommandSuggestions(slashCommands);
+		return readLine(prompt, null, suggestions);
 	}
 
 	/** Returns null on EOF and an empty string after Ctrl-C without echoing the entered value. */
 	public String readPassword(String prompt) {
-		return readLine(prompt, '*');
+		return readLine(prompt, '*', null);
 	}
 
-	private String readLine(String prompt, Character mask) {
+	private String readLine(String prompt, Character mask, CommandSuggestions suggestions) {
 		String initialBuffer = null;
 		while (true) {
 			Theme promptTheme = theme;
 			try {
-				String line = readEditorLine(prompt, mask, initialBuffer, promptTheme);
+				String line = readEditorLine(prompt, mask, initialBuffer, promptTheme, suggestions);
 				rememberCompletedLine(prompt, line, mask, promptTheme);
 				return line;
 			} catch (SuspendRequested ignored) {
@@ -215,7 +280,12 @@ public final class InteractiveTerminal implements AutoCloseable {
 	}
 
 	/** Keeps the background active so JLine's erase/edit operations preserve the full-width prompt bar. */
-	private String readEditorLine(String prompt, Character mask, String initialBuffer, Theme promptTheme) {
+	private String readEditorLine(
+			String prompt,
+			Character mask,
+			String initialBuffer,
+			Theme promptTheme,
+			CommandSuggestions suggestions) {
 		String background = promptTheme.promptBackground();
 		reader.setVariable(
 				LineReader.SECONDARY_PROMPT_PATTERN,
@@ -225,11 +295,23 @@ public final class InteractiveTerminal implements AutoCloseable {
 		String editorPrompt = background.isEmpty()
 				? prompt
 				: styleActivePromptLine(prompt, background);
+		activeCommandSuggestions = suggestions;
+		reader.setDynamicPost(suggestions == null ? null : () -> renderCommandPanel(suggestions, promptTheme));
 		try {
 			return reader.readLine(editorPrompt, null, mask, initialBuffer);
 		} finally {
+			reader.setDynamicPost(null);
+			activeCommandSuggestions = null;
 			resetPromptBackground(promptTheme);
 		}
+	}
+
+	private AttributedString renderCommandPanel(CommandSuggestions suggestions, Theme promptTheme) {
+		int columns = terminal.getColumns() > 0 ? terminal.getColumns() : DEFAULT_COLUMNS;
+		List<String> lines = suggestions.render(reader.getBuffer().toString(), columns, promptTheme);
+		return lines.isEmpty()
+				? new AttributedString("")
+				: AttributedString.fromAnsi(String.join("\n", lines));
 	}
 
 	private static String styleActivePromptLine(String prompt, String background) {
@@ -595,6 +677,48 @@ public final class InteractiveTerminal implements AutoCloseable {
 			terminal.handle(Terminal.Signal.WINCH, previousResizeHandler);
 		}
 		terminal.close();
+	}
+
+	/** Exposes JLine's post-prompt region while keeping it absent when the panel is closed. */
+	private static final class PromptLineReader extends LineReaderImpl {
+		private Supplier<AttributedString> dynamicPost;
+
+		PromptLineReader(Terminal terminal) {
+			super(terminal, terminal.getName(), null);
+		}
+
+		void setDynamicPost(Supplier<AttributedString> dynamicPost) {
+			this.dynamicPost = dynamicPost;
+		}
+
+		@Override
+		public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
+			if (dynamicPost == null || post != null) {
+				return super.getDisplayedBufferWithPrompts(secondaryPrompts);
+			}
+			AttributedString rendered = dynamicPost.get();
+			if (rendered == null || rendered.length() == 0) {
+				return super.getDisplayedBufferWithPrompts(secondaryPrompts);
+			}
+			Supplier<AttributedString> previousPost = post;
+			post = () -> rendered;
+			try {
+				return super.getDisplayedBufferWithPrompts(secondaryPrompts);
+			} finally {
+				post = previousPost;
+			}
+		}
+
+		@Override
+		protected void doCleanup(boolean newline) {
+			Supplier<AttributedString> previousDynamicPost = dynamicPost;
+			dynamicPost = null;
+			try {
+				super.doCleanup(newline);
+			} finally {
+				dynamicPost = previousDynamicPost;
+			}
+		}
 	}
 
 	private static final class SuspendRequested extends RuntimeException {
