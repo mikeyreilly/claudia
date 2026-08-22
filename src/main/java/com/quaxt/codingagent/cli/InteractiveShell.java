@@ -57,6 +57,20 @@ import com.quaxt.codingagent.tui.Theme;
 
 /** Initial interactive shell backed by JLine and the shared agent runtime. */
 final class InteractiveShell implements AutoCloseable {
+	static final List<String> SLASH_COMMANDS = List.of(
+			"/compact",
+			"/details",
+			"/exit",
+			"/help",
+			"/login",
+			"/logout",
+			"/mcp",
+			"/models",
+			"/quit",
+			"/resume",
+			"/settings",
+			"/theme");
+
 	private final CoreProviders providers;
 	private final Cli.Arguments arguments;
 	private final InteractiveTerminal terminal;
@@ -136,7 +150,7 @@ final class InteractiveShell implements AutoCloseable {
 		refreshStatus();
 		statusTicker.scheduleWithFixedDelay(this::tickStatus, 1, 1, TimeUnit.SECONDS);
 		while (true) {
-			String input = terminal.readLine("\n> ");
+			String input = terminal.readLine("\n> ", SLASH_COMMANDS);
 			if (input == null) {
 				terminal.println("");
 				return 0;

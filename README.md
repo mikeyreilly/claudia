@@ -68,10 +68,13 @@ and new messages continue appending to the same session file. The active
 session is excluded from the selector. If a saved model is unavailable, the
 currently configured model is used as a fallback.
 
-The shell supports `/theme dark`, `/theme light`, and `/theme plain`; JLine
-provides standard line editing, with Enter to submit, Shift-Enter to insert a
-newline, Ctrl-C to cancel input, Escape to interrupt an active agent turn,
-Ctrl-D to close the shell, and Ctrl-Z to suspend the foreground job on Unix.
+The shell supports `/theme dark`, `/theme light`, and `/theme plain`. Typing
+`/` opens a four-row, alphabetized command panel below the prompt; continue
+typing to prefix-filter it, use Up/Down to navigate, and press Enter to insert
+the selected command. JLine provides standard line editing: Enter submits,
+Shift-Enter inserts a newline, Ctrl-C cancels input, Escape interrupts an active
+agent turn, Ctrl-D closes the shell, and Ctrl-Z suspends the foreground job on
+Unix.
 A status bar on the bottom terminal row starts with the shell's live activity,
 followed by the working directory (with the home directory abbreviated to `~`),
 the checked-out Git branch, and the model, thinking level, and context-window

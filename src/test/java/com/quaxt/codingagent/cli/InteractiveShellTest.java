@@ -204,11 +204,13 @@ class InteractiveShellTest {
 	@Test
 	void abbreviatesTheHomeDirectoryInTheStatusBarPath() {
 		Path home = Path.of("/Users/dev");
+		Path elsewhere = Path.of("/opt/elsewhere");
+		String absoluteElsewhere = elsewhere.toAbsolutePath().normalize().toString();
 
 		assertEquals("~/xa/coding-agent", InteractiveShell.displayPath(home, Path.of("/Users/dev/xa/coding-agent")));
 		assertEquals("~", InteractiveShell.displayPath(home, Path.of("/Users/dev")));
-		assertEquals("/opt/elsewhere", InteractiveShell.displayPath(home, Path.of("/opt/elsewhere")));
-		assertEquals("/opt/elsewhere", InteractiveShell.displayPath(Path.of(""), Path.of("/opt/elsewhere")));
+		assertEquals(absoluteElsewhere, InteractiveShell.displayPath(home, elsewhere));
+		assertEquals(absoluteElsewhere, InteractiveShell.displayPath(Path.of(""), elsewhere));
 	}
 
 	@Test
