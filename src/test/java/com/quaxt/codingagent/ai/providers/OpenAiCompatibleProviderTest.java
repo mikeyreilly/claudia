@@ -100,6 +100,34 @@ class OpenAiCompatibleProviderTest {
 	}
 
 	@Test
+	void treatsBlankToolArgumentsAsAnEmptyObject() throws Exception {
+		HttpServer server = server(exchange -> writeSse(
+				exchange,
+				"""
+				data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"toolu_1","function":{"name":"parameterless_tool","arguments":""}}]},"finish_reason":"tool_calls"}]}
+
+				data: [DONE]
+
+				"""));
+		try {
+			Model model = model(url(server));
+			OpenAiCompatibleProvider provider =
+					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+
+			AssistantMessage result =
+					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key")).result();
+
+			assertEquals(StopReason.TOOL_USE, result.stopReason);
+			assertEquals(1, result.toolCalls().size());
+			assertEquals("toolu_1", result.toolCalls().getFirst().id());
+			assertEquals("parameterless_tool", result.toolCalls().getFirst().name());
+			assertTrue(result.toolCalls().getFirst().arguments().isEmpty());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
 	void ignoresCompletelyEmptyToolCallAfterAValidCall() throws Exception {
 		HttpServer server = server(exchange -> writeSse(
 				exchange,

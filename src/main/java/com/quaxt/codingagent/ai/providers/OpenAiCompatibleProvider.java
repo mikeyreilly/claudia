@@ -378,11 +378,18 @@ public final class OpenAiCompatibleProvider implements Provider {
 				// visible placeholder or invalidate otherwise usable calls.
 				continue;
 			}
+			String rawArguments = accumulator.arguments.toString();
 			JsonNode parsed;
-			try {
-				parsed = Json.MAPPER.readTree(accumulator.arguments.toString());
-			} catch (IOException error) {
-				throw invalidToolCall(accumulator, error);
+			if (rawArguments.isBlank()) {
+				// Some compatible models emit an empty argument string instead of
+				// the JSON object "{}" for parameterless tools.
+				parsed = Json.object();
+			} else {
+				try {
+					parsed = Json.MAPPER.readTree(rawArguments);
+				} catch (IOException error) {
+					throw invalidToolCall(accumulator, error);
+				}
 			}
 			if (!(parsed instanceof ObjectNode arguments)) {
 				throw invalidToolCall(accumulator, null);
