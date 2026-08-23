@@ -27,17 +27,16 @@ any file or directory within it. Supported source extensions are .clj, .cljc,
 
 MCP tool surface:
 
-  list_repos()
-  query(repo, query, limit?, excludeTests?, kind?, path?, scope?, dependency?)
-  context(repo, name, excludeTests?, namespace?, path?)
-  sql(repo, query)
-  remove_repo(repo)
+  query(query, repo?, limit?, excludeTests?, kind?, path?, scope?, dependency?)
+  context(name, repo?, excludeTests?, namespace?, path?)
+  sql(query, repo?)
 
-  MCP query, context, and sql require `repo` to be the exact root of a Git
-  worktree. They build a missing index, repair an unreadable or obsolete index,
-  and refresh a stale index before reading. list_repos is observational and
-  never builds, repairs, or refreshes an index. remove_repo can evict an
-  orphaned index by its stored repo path.
+  `repo` accepts a repository root or any file or directory inside a non-bare
+  Git worktree. Relative paths resolve from the server's working directory;
+  omitting it uses that directory. Every request prepares current search data
+  transparently. Repository inventory, freshness, and cache maintenance are
+  available only through the administrative CLI, not as MCP tools or result
+  notes.
 
 Dependency sources:
 
@@ -123,14 +122,12 @@ checked out next to this repository):
   type spellings are ignored for lookup when no exact dotted definition exists. Its `--namespace <namespace>`/MCP `namespace` and
   `--path <substring>`/MCP `path` filters select matching definition
   candidates, and therefore show only references resolving to those candidates
-  rather than merely filtering reference-site output. `list`, `query`, and
-  `context` compare the index's recorded
-  file size/mtime snapshot with the current repo and report how long that
-  staleness check took. CLI/public-API reads only report staleness. In MCP,
-  query, context, and sql require the exact Git-worktree root and atomically
-  build missing indexes, repair unreadable or obsolete indexes, or refresh
-  stale indexes before reading; list_repos only observes indexes. Indexing
-  parallelizes read/parse/extract work by default, capped at 8 workers. Set
+  rather than merely filtering reference-site output. CLI/public-API `list`,
+  `query`, and `context` report freshness details without mutating stored data.
+  MCP instead makes `query`, `context`, and `sql` current before reading and
+  returns either current results or an ordinary search-availability error; it
+  does not expose maintenance details. Indexing parallelizes read/parse/extract
+  work by default, capped at 8 workers. Set
   CODE_LENS_INDEX_THREADS=<n> to override the worker count; values 0 and 1
   keep the sequential path.
 
