@@ -1192,12 +1192,12 @@ static int test_mcp_json_parsing(void)
         static const char message[] =
             "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\","
             "\"params\":{\"arguments\":{\"name\":\"evil\",\"repo\":\"r\"},"
-            "\"name\":\"list_repos\"}}";
+            "\"name\":\"query\"}}";
         const char *params = code_lens_test_json_object_value(message, "params");
 
         failed |= json_assert(params != nullptr, "params found");
         text = code_lens_test_json_get_string(params, "name");
-        failed |= json_assert((text != nullptr) && (strcmp(text, "list_repos") == 0),
+        failed |= json_assert((text != nullptr) && (strcmp(text, "query") == 0),
                               "params.name wins over arguments.name");
         text = code_lens_test_json_get_arguments(params);
         failed |= json_assert((text != nullptr) &&
@@ -1627,9 +1627,9 @@ static int test_incremental_reindex(void)
                 : code_lens_test_mcp_call_tool("query", incremental_query_args);
 
         failed |= incremental_assert(
-            (refresh_text != nullptr) && (strstr(refresh_text, "auto-refreshed") != nullptr) &&
+            (refresh_text != nullptr) && (strstr(refresh_text, "auto-refreshed") == nullptr) &&
                 (strstr(refresh_text, "consumer-extra|") != nullptr),
-            "MCP query incrementally refreshes before searching");
+            "MCP query refreshes transparently before searching");
     }
     failed |= incremental_assert(refdata_id_gap(repo_dir) > 0LL,
                                   "MCP incremental refresh leaves RefData id holes");
@@ -1858,9 +1858,9 @@ static int mcp_on_demand_assert(int condition, const char *message)
     return 0;
 }
 
-static int mcp_rejects_non_root(const char *home_dir,
-                                const char *repo_dir,
-                                const char *expected_symbol)
+static int mcp_rejects_invalid_repo_path(const char *home_dir,
+                                         const char *repo_dir,
+                                         const char *expected_symbol)
 {
     char args[2048];
     int args_len;
@@ -1877,6 +1877,7 @@ static int mcp_rejects_non_root(const char *home_dir,
     }
     text = code_lens_test_mcp_call_tool("query", args);
     return (text != nullptr) && (strstr(text, expected_symbol) == nullptr) &&
+           (strstr(text, "index") == nullptr) && (strstr(text, "stale") == nullptr) &&
            (mcp_single_index_db_path(home_dir) == nullptr);
 }
 
@@ -1921,7 +1922,7 @@ static int test_mcp_on_demand_indexing(void)
     }
     (void)snprintf(root_template,
                    sizeof(root_template),
-                   "build/code-lens-mcp-on-demand-XXXXXX");
+                   "/tmp/code-lens-mcp-on-demand-XXXXXX");
     root = canonical_temp_root(root_template);
     if (root == nullptr) {
         (void)fprintf(stderr, "MCP on-demand test failed: mkdtemp failed\n");
@@ -2014,23 +2015,20 @@ static int test_mcp_on_demand_indexing(void)
         }
     }
 
-    /* list_repos is observational: an empty cache remains empty after listing. */
+    /* Cache inspection and maintenance are deliberately absent from the MCP surface. */
     if (setenv("CODE_LENS_HOME", empty_home, 1) != 0) {
         failed = 1;
         goto done;
     }
     text = code_lens_test_mcp_call_tool("list_repos", "{}");
     failed |= mcp_on_demand_assert(
-        (text != nullptr) &&
-            (strcmp(text,
-                    "No readable repositories are indexed yet. `list_repos` only reports "
-                    "existing indexes. To create one automatically, call `query`, `context`, "
-                    "or `sql` with `repo` set to the exact root of a non-bare Git worktree. "
-                    "That call will build the index before returning results.\n") == 0) &&
-            (mcp_single_index_db_path(empty_home) == nullptr),
-        "MCP list_repos explains automatic indexing without building an index");
+        (text == nullptr) && (mcp_single_index_db_path(empty_home) == nullptr),
+        "MCP does not expose repository cache inspection");
+    text = code_lens_test_mcp_call_tool("remove_repo", "{}");
+    failed |= mcp_on_demand_assert(text == nullptr,
+                                   "MCP does not expose repository cache maintenance");
 
-    /* First calls must build from a valid exact Git root and return their
+    /* First calls prepare a valid Git worktree and return their
      * requested result, rather than telling the client to make a second call. */
     (void)snprintf(query_args,
                    sizeof(query_args),
@@ -2043,6 +2041,9 @@ static int test_mcp_on_demand_indexing(void)
     text = code_lens_test_mcp_call_tool("query", query_args);
     failed |= mcp_on_demand_assert((text != nullptr) &&
                                        (strstr(text, "first-query|function|on.demand.query") != nullptr) &&
+                                       (strstr(text, "staleness") == nullptr) &&
+                                       (strstr(text, "index is") == nullptr) &&
+                                       (strstr(text, "missing index") == nullptr) &&
                                        (mcp_single_index_db_path(query_home) != nullptr),
                                    "MCP query builds an empty-cache Git root on its initiating call");
 
@@ -2089,8 +2090,8 @@ static int test_mcp_on_demand_indexing(void)
     text = code_lens_test_mcp_call_tool("sql", sql_args);
     failed |= mcp_on_demand_assert((text != nullptr) &&
                                        (strncmp(text, "name\nsql-stale\n", 15U) == 0) &&
-                                       (strstr(text, "auto-refreshed") != nullptr),
-                                   "MCP sql refreshes stale indexes without preceding its header");
+                                       (strstr(text, "auto-refreshed") == nullptr),
+                                   "MCP sql refreshes transparently without preceding its header");
 
     /* An unreadable/corrupt or obsolete database is recovered by the same
      * on-demand path, and the initiating query sees the rebuilt rows. */
@@ -2163,8 +2164,8 @@ static int test_mcp_on_demand_indexing(void)
                                        mcp_index_is_valid(db_path),
                                    "MCP query rebuilds an unreadable index");
 
-    /* Only exact working-tree roots may trigger a build. A normal root and
-     * Git's linked-worktree gitfile form are both accepted. */
+    /* Normal roots and Git's linked-worktree gitfile form are both accepted. */
+
     (void)snprintf(query_args,
                    sizeof(query_args),
                    "{\"repo\":\"%s\",\"query\":\"exact-root\"}",
@@ -2203,23 +2204,67 @@ static int test_mcp_on_demand_indexing(void)
                                        mcp_index_is_valid(mcp_single_index_db_path(linked_home)),
                                    "MCP accepts a linked-worktree .git gitfile root");
 
+    (void)snprintf(query_args,
+                   sizeof(query_args),
+                   "{\"repo\":\"%s\",\"query\":\"exact-root\"}",
+                   validation_child);
+    if (setenv("CODE_LENS_HOME", validation_home, 1) != 0) {
+        failed = 1;
+        goto done;
+    }
+    text = code_lens_test_mcp_call_tool("query", query_args);
     failed |= mcp_on_demand_assert(
-        mcp_rejects_non_root(invalid_home, validation_child, "exact-root"),
-        "MCP rejects a descendant of a Git working-tree root");
-    failed |= mcp_on_demand_assert(mcp_rejects_non_root(invalid_home, plain_repo, "plain-root"),
-                                   "MCP rejects a plain non-Git directory");
-    failed |= mcp_on_demand_assert(mcp_rejects_non_root(invalid_home, bare_repo, "bare-root"),
-                                   "MCP rejects a bare Git repository");
-    failed |= mcp_on_demand_assert(mcp_rejects_non_root(invalid_home, missing_repo, "missing-root"),
-                                   "MCP rejects a missing repository path");
-    failed |= mcp_on_demand_assert(
-        mcp_rejects_non_root(invalid_home, malformed_repo, "malformed-root"),
-        "MCP rejects a malformed .git gitfile");
-    failed |= mcp_on_demand_assert(mcp_rejects_non_root(invalid_home, dangling_repo, "dangling-root"),
-                                   "MCP rejects a dangling .git gitfile");
+        (text != nullptr) && (strstr(text, "exact-root|") != nullptr),
+        "MCP resolves a descendant directory to its Git worktree");
+    {
+        char *validation_file = code_lens_join_path(validation_repo, "validation.clj");
 
-    /* Removal must resolve an already-indexed path even after its checkout
-     * vanishes, so stale cache entries never become unremovable. */
+        (void)snprintf(query_args,
+                       sizeof(query_args),
+                       "{\"repo\":\"%s\",\"query\":\"exact-root\"}",
+                       validation_file == nullptr ? "" : validation_file);
+        text = validation_file == nullptr
+                   ? nullptr
+                   : code_lens_test_mcp_call_tool("query", query_args);
+        failed |= mcp_on_demand_assert(
+            (text != nullptr) && (strstr(text, "exact-root|") != nullptr),
+            "MCP resolves a source file to its Git worktree");
+    }
+    {
+        char saved_cwd[PATH_MAX];
+        bool changed_directory =
+            (getcwd(saved_cwd, sizeof(saved_cwd)) != nullptr) &&
+            (chdir(validation_child) == 0);
+
+        text = changed_directory
+                   ? code_lens_test_mcp_call_tool("query", "{\"query\":\"exact-root\"}")
+                   : nullptr;
+        if (changed_directory && (chdir(saved_cwd) != 0)) {
+            failed = 1;
+            goto done;
+        }
+        failed |= mcp_on_demand_assert(
+            (text != nullptr) && (strstr(text, "exact-root|") != nullptr),
+            "MCP defaults repo to its current working directory");
+    }
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_invalid_repo_path(invalid_home, plain_repo, "plain-root"),
+        "MCP rejects a plain non-Git directory");
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_invalid_repo_path(invalid_home, bare_repo, "bare-root"),
+        "MCP rejects a bare Git repository");
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_invalid_repo_path(invalid_home, missing_repo, "missing-root"),
+        "MCP rejects a missing repository path");
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_invalid_repo_path(invalid_home, malformed_repo, "malformed-root"),
+        "MCP rejects a malformed .git gitfile");
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_invalid_repo_path(invalid_home, dangling_repo, "dangling-root"),
+        "MCP rejects a dangling .git gitfile");
+
+    /* Even after a repository has been searched, cache eviction remains an
+     * administrative CLI operation rather than an MCP tool. */
     (void)snprintf(query_args,
                    sizeof(query_args),
                    "{\"repo\":\"%s\",\"query\":\"remove-after-delete\"}",
@@ -2232,17 +2277,22 @@ static int test_mcp_on_demand_indexing(void)
     failed |= mcp_on_demand_assert((text != nullptr) &&
                                        (strstr(text, "remove-after-delete|") != nullptr) &&
                                        mcp_index_is_valid(mcp_single_index_db_path(remove_home)),
-                                   "MCP creates the checkout-deletion fixture index");
+                                   "MCP creates the maintenance fixture data");
     if (code_lens_remove_tree(remove_repo) != 0) {
         failed = 1;
         goto done;
     }
+    text = code_lens_test_mcp_call_tool("query", query_args);
+    failed |= mcp_on_demand_assert(
+        (text != nullptr) && (strstr(text, "remove-after-delete|") == nullptr) &&
+            (strstr(text, "index") == nullptr) && (strstr(text, "stale") == nullptr) &&
+            mcp_index_is_valid(mcp_single_index_db_path(remove_home)),
+        "MCP does not return stored data for a missing checkout");
     (void)snprintf(query_args, sizeof(query_args), "{\"repo\":\"%s\"}", remove_repo);
     text = code_lens_test_mcp_call_tool("remove_repo", query_args);
-    failed |= mcp_on_demand_assert((text != nullptr) &&
-                                       (strstr(text, "removed repo") != nullptr) &&
-                                       (mcp_single_index_db_path(remove_home) == nullptr),
-                                   "MCP remove_repo works after checkout deletion");
+    failed |= mcp_on_demand_assert(
+        (text == nullptr) && mcp_index_is_valid(mcp_single_index_db_path(remove_home)),
+        "MCP does not expose repository removal");
 
 done:
     if (had_home) {
@@ -2289,7 +2339,7 @@ static void concurrent_refresh_child(int inherited_lock_fd,
                                      int result_fd,
                                      const char *query_args,
                                      const char *expected_symbol,
-                                     bool require_auto_refresh)
+                                     bool require_transparent_refresh)
 {
     char signal = 'R';
     char *text;
@@ -2302,7 +2352,7 @@ static void concurrent_refresh_child(int inherited_lock_fd,
     }
     text = code_lens_test_mcp_call_tool("query", query_args);
     signal = ((text != nullptr) && (strstr(text, expected_symbol) != nullptr) &&
-              (!require_auto_refresh || (strstr(text, "auto-refreshed") != nullptr)) &&
+              (!require_transparent_refresh || (strstr(text, "auto-refreshed") == nullptr)) &&
               (strstr(text, "automatic refresh failed") == nullptr))
                  ? '1'
                  : '0';
@@ -2313,7 +2363,7 @@ static void concurrent_refresh_child(int inherited_lock_fd,
 static int assert_locked_mcp_pair(const char *repo_dir,
                                   const char *query_args,
                                   const char *expected_symbol,
-                                  bool require_auto_refresh)
+                                  bool require_transparent_refresh)
 {
     int ready_pipe[2] = {-1, -1};
     int result_pipe[2] = {-1, -1};
@@ -2339,7 +2389,7 @@ static int assert_locked_mcp_pair(const char *repo_dir,
                                      result_pipe[1],
                                      query_args,
                                      expected_symbol,
-                                     require_auto_refresh);
+                                     require_transparent_refresh);
         }
         if (pid < 0) {
             (void)fprintf(stderr, "repository lock test failed: fork failed\n");

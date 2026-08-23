@@ -164,14 +164,15 @@ code-lens sql --repo <path> "<query>"
 code-lens mcp
 ```
 
-`code-lens mcp` runs a JSON-RPC 2.0 MCP server on stdio exposing five tools:
-`list_repos`, `query`, `context`, `sql`, and `remove_repo`. For MCP
-`query`, `context`, and `sql`, `repo` must be the exact root of a Git
-worktree—not a subdirectory, file, or plain directory. These self-maintaining
-tools automatically build a missing index, repair an unreadable or obsolete
-one, and refresh a stale one before reading. `list_repos` is observational and
-never changes indexes. `remove_repo` can evict an orphaned index by its stored
-repo path. See `USAGE.txt` for client registration examples.
+`code-lens mcp` runs a JSON-RPC 2.0 MCP server on stdio exposing three semantic
+tools: `query`, `context`, and `sql`. Their optional `repo` argument accepts a
+repository root or any file or directory inside a non-bare Git worktree;
+relative paths resolve from the server's working directory, and omitting
+`repo` uses that directory. Code-lens prepares current search data
+transparently before each request. Index inventory, freshness, and cache
+maintenance are deliberately absent from the model-facing interface; use the
+`index`, `list`, and `remove` CLI commands for administration. See `USAGE.txt`
+for client registration examples.
 
 `query` searches Clojure, Java, and C symbol definitions plus Clojure keyword
 usage locations. Symbol results match whole words and word prefixes (names are split
@@ -217,12 +218,11 @@ with output capped at 100 rows.
 
 `list`, `query`, and `context` check whether indexed files still match their
 recorded size/mtime snapshot and whether new Clojure, Java, or C files have
-appeared.
-Explicit CLI and public-API reads retain their non-mutating behavior: they
-return any stale results with a warning. In contrast, MCP `query`, `context`,
-and `sql` maintain an exact-root Git-worktree index before reading: they build,
-repair, or refresh it atomically as needed. `list_repos` remains observational;
-MCP `sql` remains read-only with respect to user SQL.
+appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
+they return any stale results with a warning. MCP instead guarantees that
+`query`, `context`, and `sql` operate on current worktree data or return an
+ordinary search-availability error; maintenance details are not included in
+tool metadata or results. MCP `sql` remains read-only with respect to user SQL.
 
 ## Documentation
 

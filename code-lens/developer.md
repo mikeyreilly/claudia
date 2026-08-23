@@ -347,9 +347,11 @@ Rules:
   (`canonical_repo_path`: `~/` expansion + `realpath`), retain support for
   plain directories, and use `resolve_repo_id` to walk up from an input path
   probing for an existing index, so a path inside an indexed repository
-  resolves to that repository. MCP has a deliberately narrower boundary:
-  its self-maintaining `query`, `context`, and `sql` tools accept only the
-  exact root of a Git worktree.
+  resolves to that repository. MCP uses `mcp_worktree_root` to accept a
+  worktree root or any file/directory inside it, walking upward to validate the
+  nearest `.git` directory or gitfile without invoking Git. An omitted `repo`
+  resolves from `.` (the MCP server working directory); standalone plain directories and
+  bare repositories are rejected.
 - `repo_write_lock_acquire`: opens the canonical repo's persistent lock file
   below `<home>/repos/.locks/` and waits for an exclusive whole-file `fcntl`
   lock. `code_lens_index_repository` holds it across the stale recheck,
@@ -962,13 +964,14 @@ reports the elapsed time in a leading `note:` or `warning:` line. These direct
 reads return stale results with the warning; `sql` skips the check and remains
 raw read-only DB access.
 
-MCP is intentionally different. Its `query`, `context`, and `sql` tools first
-require `repo` to name the exact root of a Git worktree. Before opening a read
-connection, they self-maintain that worktree's index through the ordinary
-staging-and-rename path: build when it is missing, repair it when unreadable or
-obsolete, and refresh it when stale. `list_repos` is observational only; it
-does not build, repair, or refresh indexes. `remove_repo` can evict an
-orphaned index by its stored repo path.
+MCP is intentionally different. Its `query`, `context`, and `sql` tools accept
+an optional `repo` naming a worktree root or any path inside it; omission uses
+the server working directory. `mcp_repo_session_open` resolves the canonical
+worktree and transparently prepares a current database through the ordinary
+staging-and-rename path. It never returns a known-stale fallback: preparation
+failure becomes one generic search-availability result. Successful results do
+not include build, repair, freshness, timing, or cache notes. Index inventory
+and removal remain available through the CLI/public API but are not MCP tools.
 
 - `code_lens_list_repos`: walks `<home>/repos/`, opens every published
   `index.sqlite` in sorted directory order, and concatenates
@@ -1155,21 +1158,19 @@ stdio. Protocol version `2024-11-05`, server name `code-lens`, capabilities
   `-32603` tool failure or out-of-memory.
 - Tools (`respond_tools_list`), all returning a single text content block:
 
-| Tool | Arguments | Maps to |
+| Tool | Arguments | Internal operation |
 | --- | --- | --- |
-| `list_repos` | none | `code_lens_list_repos()` |
-| `query` | `repo` (required), `query` (required), `limit` (default 10), `excludeTests` (default false), `kind`, `path` | `code_lens_query_symbols_ex(repo, query, options)` |
-| `context` | `repo` (required), `name` (required), `excludeTests` (default false), `namespace`, `path` | `code_lens_context_symbol_ex(repo, name, &options)` |
-| `sql` | `repo` (required), `query` (required) | `code_lens_run_sql(repo, query)` |
-| `remove_repo` | `repo` (required) | `code_lens_remove_repo(repo)` |
+| `query` | `query` (required), `repo` (default `.`), `limit` (default 10), `excludeTests` (default false), `kind`, `path`, `scope`, `dependency` | prepares the worktree, then calls `query_symbols_ex_internal` with its open database |
+| `context` | `name` (required), `repo` (default `.`), `excludeTests` (default false), `namespace`, `path` | prepares the worktree, then calls `context_symbol_ex_internal` with its open database |
+| `sql` | `query` (required), `repo` (default `.`) | prepares the worktree, then calls `query_with_open_repo_db` |
 
-There are exactly five MCP tools: `list_repos`, `query`, `context`, `sql`, and
-`remove_repo`. `query`, `context`, and `sql` require `repo` to be the exact
-root of a Git worktree and automatically build a missing index, repair an
-unreadable or obsolete index, and refresh a stale index before reading.
-`list_repos` is observational and does not mutate indexes. `remove_repo`
-accepts a repo path so it can evict an orphaned index even when that worktree
-is no longer available.
+There are exactly three MCP tools: `query`, `context`, and `sql`. Cache
+inventory and removal are intentionally CLI/public-API concerns. `repo` can be
+a root, descendant directory, or file in a non-bare Git worktree. Initialization
+and `tools/list` do not enumerate cached repositories or mention storage
+status, and successful calls do not prepend maintenance notes. This keeps the
+model-facing contract equivalent to a source search rooted at the requested
+path.
 
 Client registration (Copilot CLI example, from `USAGE.txt`):
 
@@ -1240,7 +1241,7 @@ Harness mechanics:
 - `test_repository_write_lock` holds one repo's writer lock in the parent,
   forks two MCP query processes against a stale index, proves neither can
   finish while the lock is held, then verifies both return the newly indexed
-  symbol without a refresh-failure warning. The first waiter refreshes and the
+  symbol without exposing refresh status. The first waiter refreshes and the
   second rechecks under the lock and takes the current-index no-op path.
 - `test_context_alias_resolution` builds a four-file fixture (a definition,
   an alias-qualified caller, a fully-qualified caller, and a same-named
@@ -1295,14 +1296,14 @@ changes whose median regresses beyond noise (>2% is the working threshold).
 ### MCP smoke gate
 
 `scripts/mcp-smoke.sh` is the pre-commit end-to-end gate: it drives
-`build/code-lens mcp` (override with `CODE_LENS_BIN`) over
-Content-Length-framed JSON-RPC against the committed
-`tests/fixtures/mcp-smoke` mixed Clojure/Java/C fixture — initialize, tools/list,
-Clojure, Java, and C query/context, list_repos, sql, remove_repo — asserting only
-change-insensitive semantic facts (a known symbol resolves to a known path,
-`sql` sees the expected `Symbol` count, `remove_repo` empties the repo
-list). Run it before every commit that touches indexing, storage, or MCP
-code.
+`build/code-lens mcp` (override with `CODE_LENS_BIN`) over newline-delimited
+JSON-RPC against the committed `tests/fixtures/mcp-smoke` mixed
+Clojure/Java/C fixture. It covers initialize, tools/list, default/descendant
+repository resolution, and Clojure, Java, and C query/context and SQL. It
+asserts change-insensitive semantic facts (a known symbol resolves to a known
+path and `sql` sees the expected `Symbol` count) and verifies that cache and
+freshness details are absent from MCP metadata. Run it before every commit
+that touches indexing, storage, or MCP code.
 
 ### Regression counts and the benchmark fixture
 

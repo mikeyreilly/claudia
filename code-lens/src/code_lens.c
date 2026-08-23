@@ -13360,9 +13360,10 @@ static char *canonical_repo_path(const char *input)
     return copy;
 }
 
-/* MCP accepts only a worktree root, unlike the public API which may index a
- * plain directory or resolve a path inside an existing index.  Validate the
- * Git metadata without invoking Git or searching parent directories. */
+/* MCP resolves a caller's path to its containing worktree without invoking
+ * Git. The cache key and maintenance machinery still receive one canonical
+ * root, while callers get grep-like path semantics and never need to know
+ * which roots have already been seen by code-lens. */
 static char *mcp_read_git_path_file(const char *path, const char *prefix)
 {
     CodeLensMappedFile mapped = {0};
@@ -13456,29 +13457,83 @@ static bool mcp_git_dir_valid(const char *git_dir)
     return valid;
 }
 
+static bool mcp_path_parent_in_place(char *path)
+{
+    size_t len;
+    char *slash;
+
+    if ((path == nullptr) || (path[0] == '\0')) {
+        return false;
+    }
+    len = strlen(path);
+    while ((len > 1U) && (path[len - 1U] == '/')) {
+#ifdef _WIN32
+        if ((len == 3U) && isalpha((unsigned char)path[0]) && (path[1] == ':')) {
+            break;
+        }
+#endif
+        path[--len] = '\0';
+    }
+    slash = strrchr(path, '/');
+    if (slash == nullptr) {
+        return false;
+    }
+#ifdef _WIN32
+    if ((slash == path + 2) && isalpha((unsigned char)path[0]) && (path[1] == ':')) {
+        if (slash[1] == '\0') {
+            return false;
+        }
+        slash[1] = '\0';
+        return true;
+    }
+#endif
+    if (slash == path) {
+        if (slash[1] == '\0') {
+            return false;
+        }
+        slash[1] = '\0';
+        return true;
+    }
+    *slash = '\0';
+    return true;
+}
+
 static char *mcp_worktree_root(const char *input)
 {
     struct stat metadata;
-    char *root = canonical_repo_path(input);
-    char *git_entry;
-    char *git_dir = nullptr;
+    const char *requested = ((input == nullptr) || (input[0] == '\0')) ? "." : input;
+    char *probe = canonical_repo_path(requested);
 
-    if ((root == nullptr) || !code_lens_is_directory(root)) {
+    if ((probe == nullptr) || (stat(probe, &metadata) != 0)) {
         return nullptr;
     }
-    git_entry = code_lens_join_path(root, ".git");
-    if ((git_entry == nullptr) || (stat(git_entry, &metadata) != 0)) {
+    if (!S_ISDIR(metadata.st_mode) && !mcp_path_parent_in_place(probe)) {
         return nullptr;
     }
-    if (S_ISDIR(metadata.st_mode)) {
-        return mcp_git_dir_valid(git_entry) ? root : nullptr;
+
+    for (;;) {
+        char *git_entry = code_lens_join_path(probe, ".git");
+
+        if (git_entry == nullptr) {
+            return nullptr;
+        }
+        if (stat(git_entry, &metadata) == 0) {
+            char *git_dir;
+
+            if (S_ISDIR(metadata.st_mode)) {
+                return mcp_git_dir_valid(git_entry) ? probe : nullptr;
+            }
+            if (!S_ISREG(metadata.st_mode)) {
+                return nullptr;
+            }
+            git_dir = mcp_read_git_path_file(git_entry, "gitdir: ");
+            git_dir = mcp_resolve_git_path(probe, git_dir);
+            return mcp_git_dir_valid(git_dir) ? probe : nullptr;
+        }
+        if ((errno != ENOENT) || !mcp_path_parent_in_place(probe)) {
+            return nullptr;
+        }
     }
-    if (!S_ISREG(metadata.st_mode)) {
-        return nullptr;
-    }
-    git_dir = mcp_read_git_path_file(git_entry, "gitdir: ");
-    git_dir = mcp_resolve_git_path(root, git_dir);
-    return mcp_git_dir_valid(git_dir) ? root : nullptr;
 }
 
 /* Directory component for a repo id (its canonical path): the sanitized
@@ -15318,7 +15373,7 @@ static int maven_dependencies_prepare(const char *repo_path, MavenDependencySet 
     if (!maven_enabled()) {
         set->status = copy_bytes("disabled", strlen("disabled"));
         set->message = alloc_printf(
-            "%s dependency indexing disabled by CODE_LENS_MAVEN=0",
+            "%s dependency source resolution disabled by CODE_LENS_MAVEN=0",
             dependency_project_name(set->project_kind));
         return (set->status == nullptr) || (set->message == nullptr) ? -1 : 0;
     }
@@ -17953,19 +18008,9 @@ static int open_search_db(CodeLensDb *db,
     return 0;
 }
 
-typedef enum {
-    MCP_INDEX_CURRENT,
-    MCP_INDEX_BUILT,
-    MCP_INDEX_REPAIRED,
-    MCP_INDEX_REFRESHED,
-    MCP_INDEX_STALE_FALLBACK
-} McpIndexStatus;
-
 typedef struct {
     char *repo_id;
     CodeLensDb db;
-    StalenessStatus staleness;
-    McpIndexStatus index_status;
 } McpRepoSession;
 
 static void mcp_repo_session_close(McpRepoSession *session)
@@ -17975,21 +18020,29 @@ static void mcp_repo_session_close(McpRepoSession *session)
     }
 }
 
-static char *mcp_worktree_root_error(const char *repo)
+static char *mcp_repo_path_error(const char *repo)
 {
+    const char *requested = ((repo == nullptr) || (repo[0] == '\0')) ? "." : repo;
+
     return alloc_printf(
-        "repo \"%s\" must be the exact root of a non-bare Git worktree with a valid .git "
-        "directory or gitfile; descendants and plain directories are not accepted\n",
-        repo == nullptr ? "" : repo);
+        "repo \"%s\" is not a file or directory inside a non-bare Git worktree\n",
+        requested);
 }
 
-/* Opens the one database handle used for the lifetime of an MCP read.  The
- * staleness check happens here, before the read-specific renderer executes,
- * so query/context/sql all observe the same published index generation. */
+static char *mcp_repo_prepare_error(const char *repo)
+{
+    return alloc_printf("code search is unavailable for repo \"%s\"; retry the request or "
+                        "check the code-lens server logs\n",
+                        repo == nullptr ? "" : repo);
+}
+
+/* Opens one current database generation for the lifetime of an MCP read.
+ * Preparing and refreshing the backing data is deliberately invisible to
+ * callers: a request either sees the current worktree or gets one ordinary
+ * search-availability error. */
 static char *mcp_repo_session_open(McpRepoSession *session, const char *repo)
 {
     char *db_path;
-    bool had_index;
 
     if (session == nullptr) {
         return nullptr;
@@ -17997,92 +18050,29 @@ static char *mcp_repo_session_open(McpRepoSession *session, const char *repo)
     (void)memset(session, 0, sizeof(*session));
     session->repo_id = mcp_worktree_root(repo);
     if (session->repo_id == nullptr) {
-        return mcp_worktree_root_error(repo);
+        return mcp_repo_path_error(repo);
     }
     db_path = repo_db_path(session->repo_id);
     if (db_path == nullptr) {
-        return alloc_printf("failed to prepare an index path for repo \"%s\"\n", session->repo_id);
+        return mcp_repo_prepare_error(session->repo_id);
     }
-    had_index = code_lens_path_exists(db_path);
-    if (had_index && (code_lens_db_open_read(&session->db, db_path) == 0)) {
-        if (check_repo_staleness(&session->db, session->repo_id, &session->staleness) != 0) {
-            /* Preserve the readable index when the check itself cannot run. */
-            session->index_status = MCP_INDEX_CURRENT;
-            return nullptr;
-        }
-        if (!session->staleness.stale) {
-            session->index_status = MCP_INDEX_CURRENT;
-            return nullptr;
-        }
 
+    if (code_lens_path_exists(db_path) &&
+        (code_lens_db_open_read(&session->db, db_path) == 0)) {
+        StalenessStatus status = {0};
+
+        if ((check_repo_staleness(&session->db, session->repo_id, &status) == 0) &&
+            !status.stale) {
+            return nullptr;
+        }
         code_lens_db_close(&session->db);
-        session->staleness.refresh_attempted = true;
-        session->staleness.refreshed =
-            code_lens_index_repository(session->repo_id, nullptr) == 0;
-        if (session->staleness.refreshed &&
-            (code_lens_db_open_read(&session->db, db_path) == 0)) {
-            session->index_status = MCP_INDEX_REFRESHED;
-            return nullptr;
-        }
-        /* Atomic publication leaves the previous index readable when the
-         * refresh failed. Reopen it only for this documented stale fallback. */
-        if (code_lens_db_open_read(&session->db, db_path) == 0) {
-            session->index_status = MCP_INDEX_STALE_FALLBACK;
-            return nullptr;
-        }
-        return alloc_printf("repo \"%s\" has a stale index that could not be refreshed; run "
-                            "code-lens index --repo \"%s\" and retry\n",
-                            session->repo_id,
-                            session->repo_id);
     }
 
-    if (code_lens_index_repository(session->repo_id, nullptr) != 0) {
-        return alloc_printf("failed to %s the index for repo \"%s\"; run code-lens index "
-                            "--repo \"%s\" and retry\n",
-                            had_index ? "repair" : "build",
-                            session->repo_id,
-                            session->repo_id);
+    if ((code_lens_index_repository(session->repo_id, nullptr) != 0) ||
+        (code_lens_db_open_read(&session->db, db_path) != 0)) {
+        return mcp_repo_prepare_error(session->repo_id);
     }
-    if (code_lens_db_open_read(&session->db, db_path) != 0) {
-        return alloc_printf("repo \"%s\" index was %s but is not readable; run code-lens "
-                            "index --repo \"%s\" and retry\n",
-                            session->repo_id,
-                            had_index ? "repaired" : "built",
-                            session->repo_id);
-    }
-    session->index_status = had_index ? MCP_INDEX_REPAIRED : MCP_INDEX_BUILT;
     return nullptr;
-}
-
-static char *mcp_repo_session_note(const McpRepoSession *session)
-{
-    if ((session == nullptr) || (session->repo_id == nullptr)) {
-        return nullptr;
-    }
-    if (session->index_status == MCP_INDEX_BUILT) {
-        return alloc_printf("note: repo \"%s\" built its missing index\n", session->repo_id);
-    }
-    if (session->index_status == MCP_INDEX_REPAIRED) {
-        return alloc_printf("note: repo \"%s\" repaired its unreadable or obsolete index\n",
-                            session->repo_id);
-    }
-    if (session->index_status == MCP_INDEX_REFRESHED) {
-        return alloc_printf("note: repo \"%s\" auto-refreshed its stale index\n",
-                            session->repo_id);
-    }
-    if (session->index_status == MCP_INDEX_STALE_FALLBACK) {
-        return alloc_printf("warning: repo \"%s\" is stale and automatic refresh failed; "
-                            "returning the last published index (run code-lens index --repo "
-                            "\"%s\" to retry)\n",
-                            session->repo_id,
-                            session->repo_id);
-    }
-    if (!session->staleness.checked) {
-        return alloc_printf("warning: repo \"%s\" staleness check failed; using its published "
-                            "index\n",
-                            session->repo_id);
-    }
-    return alloc_printf("note: repo \"%s\" index is current\n", session->repo_id);
 }
 
 static char *maven_project_status_note(CodeLensDb *db, const char *repo_name)
@@ -18102,12 +18092,14 @@ static char *maven_project_status_note(CodeLensDb *db, const char *repo_name)
         const char *message = (const char *)sqlite3_column_text(stmt, 1);
 
         if ((status != nullptr) && (strcmp(status, "resolved") != 0)) {
+            const char *detail = strcmp(status, "disabled") == 0 ? "" : message;
+
             note = alloc_printf("%s: dependency sources for repo \"%s\" are %s%s%s\n",
                                 strcmp(status, "failed") == 0 ? "warning" : "note",
                                 repo_name,
                                 status,
-                                (message != nullptr) && (message[0] != '\0') ? ": " : "",
-                                message == nullptr ? "" : message);
+                                (detail != nullptr) && (detail[0] != '\0') ? ": " : "",
+                                detail == nullptr ? "" : detail);
         }
     }
     (void)sqlite3_finalize(stmt);
@@ -18136,8 +18128,8 @@ static char *resolved_dependency_empty_note(CodeLensDb *db, const char *repo_nam
         if ((status != nullptr) && (strcmp(status, "resolved") == 0) &&
             (file_count == 0)) {
             note = alloc_printf(
-                "note: dependency sources for repo \"%s\" are resolved%s%s, but the index "
-                "contains no dependency source files\n",
+                "note: dependency sources for repo \"%s\" are resolved%s%s, but no "
+                "dependency source files are available\n",
                 repo_name,
                 (message != nullptr) && (message[0] != '\0') ? ": " : "",
                 message == nullptr ? "" : message);
@@ -18145,35 +18137,6 @@ static char *resolved_dependency_empty_note(CodeLensDb *db, const char *repo_nam
     }
     (void)sqlite3_finalize(stmt);
     return note;
-}
-
-static char *mcp_join_session_note(McpRepoSession *session, char *result, bool prepend)
-{
-    char *note;
-    char *maven_note;
-    size_t len;
-
-    if (result == nullptr) {
-        return nullptr;
-    }
-    note = mcp_repo_session_note(session);
-    maven_note = (session == nullptr) || !session->db.is_open
-                     ? nullptr
-                     : maven_project_status_note(&session->db, session->repo_id);
-    if (maven_note != nullptr) {
-        note = note == nullptr ? maven_note : alloc_printf("%s%s", note, maven_note);
-    }
-    if (note == nullptr) {
-        return result;
-    }
-    if (prepend) {
-        return alloc_printf("%s\n%s", note, result);
-    }
-    len = strlen(result);
-    return alloc_printf("%s%s%s",
-                        result,
-                        (len > 0U) && (result[len - 1U] == '\n') ? "" : "\n",
-                        note);
 }
 
 #define REFERENCE_SNIPPET_CONTEXT_LINES 2U
@@ -18212,8 +18175,8 @@ static bool append_reference_snippet(StringBuilder *out,
     if ((out == nullptr) || (file == nullptr) || (file->data == nullptr) ||
         ((size_t)start_byte > (size_t)end_byte) || ((size_t)end_byte > file->len) ||
         (line_number == 0U)) {
-        return sb_append(out, "snippet unavailable: indexed byte range is outside current file; "
-                              "re-index required\n");
+        return sb_append(out, "snippet unavailable: the source changed while it was being read; "
+                              "retry the search\n");
     }
 
     start = (size_t)start_byte;
@@ -18385,7 +18348,7 @@ fail:
     return nullptr;
 }
 
-static char *list_repos_internal(bool mcp_guidance)
+static char *list_repos_internal(void)
 {
     static const char list_query[] =
         "SELECT path AS path, indexedAt AS indexedAt, "
@@ -18477,16 +18440,8 @@ static char *list_repos_internal(bool mcp_guidance)
     }
 
     if (emitted == 0U) {
-        if (mcp_guidance) {
-            result = alloc_printf(
-                "No readable repositories are indexed yet. `list_repos` only reports "
-                "existing indexes. To create one automatically, call `query`, `context`, "
-                "or `sql` with `repo` set to the exact root of a non-bare Git worktree. "
-                "That call will build the index before returning results.\n");
-        } else {
-            result = alloc_printf("No readable repositories indexed. Run code-lens index "
-                                  "--repo <path> before direct query, context, or sql reads.\n");
-        }
+        result = alloc_printf("No readable repositories indexed. Run code-lens index "
+                              "--repo <path> before direct query, context, or sql reads.\n");
         goto done;
     }
 
@@ -18505,7 +18460,7 @@ done:
 
 char *code_lens_list_repos(void)
 {
-    return list_repos_internal(false);
+    return list_repos_internal();
 }
 
 char *code_lens_remove_repo(const char *repo_name)
@@ -19098,8 +19053,11 @@ static char *query_symbols_ex_internal(const char *repo_name,
         (strcmp(scope_filter, "all") == 0)) {
         dependency_empty_note = resolved_dependency_empty_note(db, repo_name);
     }
-    if (owns_db) {
+    if (owns_db || (strcmp(scope_filter, "dependencies") == 0) ||
+        (strcmp(scope_filter, "all") == 0)) {
         maven_note = maven_project_status_note(db, repo_name);
+    }
+    if (owns_db) {
         code_lens_db_close(db);
     }
 
@@ -19457,8 +19415,10 @@ static char *context_symbol_ex_internal(const char *repo_name,
             definition_scope,
             exclude_tests);
     }
-    if (owns_db) {
+    if (owns_db || (strcmp(definition_scope, "dependencies") == 0)) {
         maven_note = maven_project_status_note(db, repo_name);
+    }
+    if (owns_db) {
         code_lens_db_close(db);
     }
 
@@ -19976,49 +19936,15 @@ static void respond_text(const char *id, const char *text)
 static void respond_initialize(const char *id)
 {
     StringBuilder out = {0};
-    StringBuilder instructions = {0};
-    CodeLensPathList repos = {0};
-    size_t listed = 0U;
-
-    (void)sb_append(
-        &instructions,
-        "code-lens serves pre-built code intelligence for Clojure, Java, and C repositories. "
-        "When working with these languages, prefer these tools over grep or other text "
-        "search: query finds symbol definitions and Clojure :keyword usages by name (word "
-        "and prefix matches, ranked), and context returns a symbol's definitions plus "
-        "resolved call sites in one call. It understands Clojure :as/:refer, Java imports"
-        " and receiver types, and C linkage/member types, which text search misses. query, "
-        "context, and sql require repo to be the exact root of a non-bare Git worktree. They automatically build missing indexes, "
-        "repair unreadable or obsolete indexes, and refresh stale indexes before reading. "
-        "sql runs read-only SELECTs against the index for anything structural.");
-
-    if (for_each_repo(&repos) == 0) {
-        for (size_t i = 0U; i < repos.count; i++) {
-            CodeLensDb db;
-            char *repo_path;
-
-            if (code_lens_db_open_read(&db, repos.paths[i]) != 0) {
-                continue;
-            }
-            repo_path = read_repo_path(&db);
-            if (repo_path != nullptr) {
-                (void)sb_append(&instructions,
-                                listed == 0U ? " Indexed repositories: " : ", ");
-                (void)sb_append(&instructions, repo_path);
-                listed++;
-            }
-            code_lens_db_close(&db);
-        }
-    }
-    if (listed == 0U) {
-        (void)sb_append(&instructions,
-                        " No repositories are indexed yet; the first query, context, or sql "
-                        "call for an exact Git worktree root builds its index.");
-    } else {
-        (void)sb_append(&instructions,
-                        ". query, context, and sql maintain their exact Git worktree-root "
-                        "indexes on demand.");
-    }
+    static const char instructions[] =
+        "code-lens provides code intelligence for Clojure, Java, and C repositories. "
+        "When working with these languages, prefer query and context over text search: "
+        "query finds symbol definitions and Clojure :keyword usages by name, while context "
+        "returns a symbol's definitions and resolved call sites. It understands Clojure "
+        ":as/:refer, Java imports and receiver types, and C linkage and member types. Set "
+        "repo to a repository root or any file or directory inside it; omit repo to use the "
+        "server's current working directory. sql runs read-only structural queries over the "
+        "same repository.";
 
     respond_preamble(&out, id);
     (void)sb_append(
@@ -20027,114 +19953,94 @@ static void respond_initialize(const char *id)
         "\"serverInfo\":{\"name\":\"code-lens\",\"version\":");
     (void)json_escape_append(&out, CODE_LENS_VERSION);
     (void)sb_append(&out, "},\"instructions\":");
-    (void)json_escape_append(&out, instructions.data == nullptr ? "" : instructions.data);
+    (void)json_escape_append(&out, instructions);
     (void)sb_append(&out, "}}");
     write_message(out.data);
     sb_free(&out);
-    sb_free(&instructions);
 }
 
 static void respond_tools_list(const char *id)
 {
-    static const char tools_prefix[] =
-        "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":["
-        "{\"name\":\"list_repos\",\"description\":\"List indexed repositories with row"
-        " counts and staleness notes; never builds an index.\","
-        "\"inputSchema\":{\"type\":\"object\",\"properties\":{},\"required\":[]}},"
+    static const char query_tool[] =
         "{\"name\":\"query\",\"description\":\"Ranked prefix search over definitions and"
         " Clojure keywords. Keyword results cover distinct files before repeated uses from"
         " one file. Workspace is the default; scope can opt into resolved dependency"
-        " sources from Maven, Leiningen, or tools.deps projects. repo must be an exact Git"
-        " worktree root; its index is maintained"
-        " automatically.\","
+        " sources from Maven, Leiningen, or tools.deps projects. repo may be a repository"
+        " root or any path inside it and defaults to the current working directory.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"description\":\"Exact non-bare Git worktree root path.\"},"
+        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
+        " inside it. Relative paths resolve from the server's current working directory.\"},"
         "\"query\":{\"type\":\"string\"},\"limit\":{\"type\":\"number\",\"default\":10},"
         "\"excludeTests\":{\"type\":\"boolean\",\"default\":false},"
         "\"kind\":{\"type\":\"string\",\"enum\":[\"function\",\"var\",\"macro\",\"multimethod\","
         "\"method\",\"protocol\",\"record\",\"type\",\"test\",\"class\",\"interface\","
         "\"enum\",\"annotation\",\"constructor\",\"field\",\"enum_constant\",\"module\","
         "\"variable\",\"struct\",\"union\",\"typedef\",\"keyword\"],"
-        "\"description\":\"Restrict results to one kind. Symbol kinds filter the Symbols section"
-        " and suppress the Keywords section; 'keyword' returns Clojure keyword usages only.\"},"
+        "\"description\":\"Restrict results to one kind. Symbol kinds filter the Symbols"
+        " section and suppress the Keywords section; 'keyword' returns Clojure keyword"
+        " usages only.\"},"
         "\"scope\":{\"type\":\"string\",\"enum\":[\"workspace\",\"dependencies\",\"all\"],"
-        "\"default\":\"workspace\",\"description\":\"Search workspace definitions by default; resolved Maven-layout dependency sources are opt-in.\"},"
-        "\"dependency\":{\"type\":\"string\",\"description\":\"Optional GAV glob for Maven, Leiningen, or tools.deps dependencies, for example org.jline:*.\"},"
+        "\"default\":\"workspace\",\"description\":\"Search workspace definitions by"
+        " default; resolved Maven, Leiningen, or tools.deps sources are opt-in.\"},"
+        "\"dependency\":{\"type\":\"string\",\"description\":\"Optional GAV glob, for"
+        " example org.jline:*.\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
         " result file paths; use it to narrow common keywords to a component or directory.\"}},"
-        "\"required\":[\"repo\",\"query\"]}},";
-    static const char tools_suffix[] =
+        "\"required\":[\"query\"]}}";
+    static const char context_tool[] =
         "{\"name\":\"context\",\"description\":\"Show definitions and resolved call sites"
-        " with snippets. Resolves Clojure :as/:refer, Java imports/receiver types, and C"
-        " linkage/aggregate members. Resolved dependency definitions from Maven, Leiningen,"
-        " or tools.deps projects are an automatic fallback;"
-        " workspace call sites rank first. Accepts str/join, Type.member, Type#member, package.Type,"
-        " and ptr->field qualifiers. repo must be an exact Git worktree root;"
-        " its index is maintained automatically. namespace and path narrow candidate"
-        " definitions and their references.\","
+        " with snippets. Resolves Clojure :as/:refer, Java imports and receiver types, and C"
+        " linkage and aggregate members. Dependency definitions are an automatic fallback;"
+        " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
+        " package.Type, and ptr->field qualifiers. repo may be a repository root or any path"
+        " inside it and defaults to the current working directory. namespace and path narrow"
+        " candidate definitions and their references.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"description\":\"Exact non-bare Git worktree root path.\"},"
+        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
+        " inside it. Relative paths resolve from the server's current working directory.\"},"
         "\"name\":{\"type\":\"string\",\"description\":\"Symbol name, optionally qualified"
-        " with a Clojure namespace/alias, Java type/package, or C aggregate.\"},"
+        " with a Clojure namespace or alias, Java type or package, or C aggregate.\"},"
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
-        " definitions (Java enclosing type; C file/type scope).\"},"
+        " definitions (Java enclosing type; C file or type scope).\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
         " matching definition file paths. A workspace calling file is also accepted as"
         " dependency-resolution context.\"},"
         "\"excludeTests\":{\"type\":\"boolean\",\"default\":false,"
-        "\"description\":\"Drop definitions, references, and snippets in test files"
-        " (paths containing /test/ or /tests/) and test-kind definitions.\"}},"
-        "\"required\":[\"repo\",\"name\"]}},"
-        "{\"name\":\"sql\",\"description\":\"Run a read-only SQLite SELECT against the repo"
-        " index - the escape hatch when query/context don't fit (authorizer denies"
-        " ATTACH/PRAGMA/writes; output capped at 100 rows with a trailing note; only the"
-        " first statement of a multi-statement string runs)."
-        " Tables/views: Symbol(repo, name, kind, namespace, filePath, startLine, endLine,"
-        " content, doc), Ref(fileId, filePath, symbol, symbolBase, targetNamespace, lineNumber,"
-        " columnNumber, startByte, endByte), Keyword(fileId, filePath, keyword, keywordBase,"
-        " qualifier, targetNamespace, lineNumber, columnNumber), File(rowid, repo, path,"
-        " namespace, size), Alias(repo, filePath, namespace, alias), Referred(repo, filePath,"
-        " namespace, symbol; ':all' = Clojure whole-namespace referral or Java static"
-        " wildcard import), Repo(path,"
-        " indexedAt), MavenProject(repo, rootPom, status, resolvedAt, message; rootPom is the"
-        " legacy column name for the detected pom.xml, project.clj, or deps.edn build file),"
-        " MavenInput(repo, path, size, mtimeSec, mtimeNsec),"
+        "\"description\":\"Drop definitions, references, and snippets in test files and"
+        " test-kind definitions.\"}},\"required\":[\"name\"]}}";
+    static const char sql_tool[] =
+        "{\"name\":\"sql\",\"description\":\"Run a read-only SQLite SELECT over extracted"
+        " code data when query and context do not fit. ATTACH, PRAGMA, and writes are denied;"
+        " output is capped at 100 rows and only the first statement runs. Tables and views:"
+        " Symbol(repo, name, kind, namespace, filePath, startLine, endLine, content, doc),"
+        " Ref(fileId, filePath, symbol, symbolBase, targetNamespace, lineNumber, columnNumber,"
+        " startByte, endByte), Keyword(fileId, filePath, keyword, keywordBase, qualifier,"
+        " targetNamespace, lineNumber, columnNumber), File(rowid, repo, path, namespace, size),"
+        " Alias(repo, filePath, namespace, alias), Referred(repo, filePath, namespace, symbol),"
         " DependencyArtifact(repo, coordinate, groupId, artifactId, version, scope, direct,"
-        " sourceJar, sourceRoot, checksum), DependencyFile(repo, filePath, artifactId,"
-        " sourcePath, modulePath)."
-        " For Java, Symbol.namespace is the fully qualified enclosing type,"
-        " File.namespace is the package, Alias rows are normal imports, and Referred rows"
-        " are static imports. For C, global namespaces are empty, static namespaces are file"
-        " paths, and field namespaces are aggregate names. Join File via File.rowid = fileId; File.id is an unrelated"
-        " TEXT key. repo must be the exact root of a non-bare Git worktree; its missing, unreadable,"
-        " obsolete, or stale index is maintained automatically before the query.\","
+        " sourceJar, sourceRoot, checksum), and DependencyFile(repo, filePath, artifactId,"
+        " sourcePath, modulePath). For Java, Symbol.namespace is the fully qualified enclosing"
+        " type, File.namespace is the package, Alias rows are normal imports, and Referred"
+        " rows are static imports. For C, global namespaces are empty, static namespaces are"
+        " file paths, and field namespaces are aggregate names. Join File via File.rowid ="
+        " fileId. repo may be a repository root or any path inside it and defaults to the"
+        " current working directory.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"description\":\"Exact non-bare Git worktree root path.\"},"
-        "\"query\":{\"type\":\"string\"}},\"required\":[\"repo\",\"query\"]}},"
-        "{\"name\":\"remove_repo\",\"description\":\"Remove a cached repository index by"
-        " repository path, including when the source checkout has disappeared.\","
-        "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"description\":\"Repository path recorded in the cached index.\"}},"
-        "\"required\":[\"repo\"]}}]}}";
-    int prefix_needed = snprintf(nullptr, 0, tools_prefix, id == nullptr ? "null" : id);
-    size_t suffix_len = strlen(tools_suffix);
-    char *response;
+        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
+        " inside it. Relative paths resolve from the server's current working directory.\"},"
+        "\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}";
+    StringBuilder out = {0};
 
-    if ((prefix_needed < 0) || ((size_t)prefix_needed > SIZE_MAX - suffix_len - 1U)) {
+    respond_preamble(&out, id);
+    if (!sb_append(&out, ",\"result\":{\"tools\":[") || !sb_append(&out, query_tool) ||
+        !sb_append(&out, ",") || !sb_append(&out, context_tool) || !sb_append(&out, ",") ||
+        !sb_append(&out, sql_tool) || !sb_append(&out, "]}}")) {
+        sb_free(&out);
         respond_error(id, -32603, "out of memory");
         return;
     }
-    response = code_lens_alloc((size_t)prefix_needed + suffix_len + 1U);
-    if (response == nullptr) {
-        respond_error(id, -32603, "out of memory");
-        return;
-    }
-    (void)snprintf(response,
-                   (size_t)prefix_needed + 1U,
-                   tools_prefix,
-                   id == nullptr ? "null" : id);
-    (void)memcpy(response + (size_t)prefix_needed, tools_suffix, suffix_len + 1U);
-    write_message(response);
+    write_message(out.data);
+    sb_free(&out);
 }
 
 static char *call_tool(const char *tool_name, const char *args)
@@ -20150,9 +20056,7 @@ static char *call_tool(const char *tool_name, const char *args)
     int limit = json_get_int(args, "limit", 10);
     char *result = nullptr;
 
-    if (strcmp(tool_name, "list_repos") == 0) {
-        result = list_repos_internal(true);
-    } else if (strcmp(tool_name, "query") == 0) {
+    if (strcmp(tool_name, "query") == 0) {
         CodeLensQueryOptions options = {
             .limit = limit,
             .exclude_tests = json_get_bool(args, "excludeTests", false),
@@ -20171,7 +20075,7 @@ static char *call_tool(const char *tool_name, const char *args)
                 session.repo_id, query, &options, &session.db);
             result = result == nullptr
                          ? alloc_printf("failed to search repo \"%s\"\n", session.repo_id)
-                         : mcp_join_session_note(&session, result, true);
+                         : result;
             mcp_repo_session_close(&session);
         }
     } else if (strcmp(tool_name, "context") == 0) {
@@ -20191,7 +20095,7 @@ static char *call_tool(const char *tool_name, const char *args)
             result = result == nullptr
                          ? alloc_printf("failed to read context from repo \"%s\"\n",
                                         session.repo_id)
-                         : mcp_join_session_note(&session, result, true);
+                         : result;
             mcp_repo_session_close(&session);
         }
     } else if (strcmp(tool_name, "sql") == 0) {
@@ -20205,11 +20109,9 @@ static char *call_tool(const char *tool_name, const char *args)
             result = result == nullptr
                          ? alloc_printf("failed to execute SQL against repo \"%s\"\n",
                                         session.repo_id)
-                         : mcp_join_session_note(&session, result, false);
+                         : result;
             mcp_repo_session_close(&session);
         }
-    } else if (strcmp(tool_name, "remove_repo") == 0) {
-        result = code_lens_remove_repo(repo);
     }
 
     return result;
