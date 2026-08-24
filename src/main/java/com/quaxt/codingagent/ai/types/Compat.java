@@ -41,9 +41,20 @@ public sealed interface Compat
 			Boolean supportsLongCacheRetention,
 			Boolean supportsCacheControlOnTools,
 			Boolean supportsTemperature,
-			Boolean allowEmptySignature)
+			Boolean allowEmptySignature,
+			/** Use adaptive thinking plus output_config.effort instead of a token budget. */
+			Boolean forceAdaptiveThinking)
 			implements Compat {
-		public static final AnthropicMessages DEFAULTS = new AnthropicMessages(null, null, null, null);
+		/** Retains the original four-field construction form for callers without an adaptive override. */
+		public AnthropicMessages(
+				Boolean supportsLongCacheRetention,
+				Boolean supportsCacheControlOnTools,
+				Boolean supportsTemperature,
+				Boolean allowEmptySignature) {
+			this(supportsLongCacheRetention, supportsCacheControlOnTools, supportsTemperature, allowEmptySignature, null);
+		}
+
+		public static final AnthropicMessages DEFAULTS = new AnthropicMessages(null, null, null, null, null);
 	}
 
 	/** Compatibility settings for Google Generative Language API. */

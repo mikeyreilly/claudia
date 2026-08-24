@@ -19,6 +19,7 @@ import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
 import com.quaxt.codingagent.ai.types.AssistantContent;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
+import com.quaxt.codingagent.ai.types.Compat;
 import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.ImageContent;
 import com.quaxt.codingagent.ai.types.Message;
@@ -26,6 +27,7 @@ import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
+import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.Tool;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
@@ -160,10 +162,16 @@ public final class AnthropicProvider implements Provider {
 		if (options.temperature != null) {
 			request.put("temperature", options.temperature);
 		}
-		if (options.reasoning != null && options.reasoning != com.quaxt.codingagent.ai.types.ThinkingLevel.OFF) {
+		if (options.reasoning != null && options.reasoning != ThinkingLevel.OFF) {
 			ObjectNode thinking = request.putObject("thinking");
-			thinking.put("type", "enabled");
-			thinking.put("budget_tokens", Math.min(model.maxTokens, 16_000));
+			if (usesAdaptiveThinking(model)) {
+				thinking.put("type", "adaptive");
+				thinking.put("display", "summarized");
+				request.putObject("output_config").put("effort", adaptiveThinkingEffort(model, options.reasoning));
+			} else {
+				thinking.put("type", "enabled");
+				thinking.put("budget_tokens", Math.min(model.maxTokens, 16_000));
+			}
 		}
 		ArrayNode messages = request.putArray("messages");
 		for (Message message : context.messages) {
@@ -179,6 +187,27 @@ public final class AnthropicProvider implements Provider {
 			}
 		}
 		return request;
+	}
+
+	private static boolean usesAdaptiveThinking(Model model) {
+		return model.compat instanceof Compat.AnthropicMessages compat
+				&& Boolean.TRUE.equals(compat.forceAdaptiveThinking());
+	}
+
+	private static String adaptiveThinkingEffort(Model model, ThinkingLevel requested) {
+		ThinkingLevel level = Models.clampThinkingLevel(model, requested);
+		if (model.thinkingLevelMap != null) {
+			String mapped = model.thinkingLevelMap.get(level);
+			if (mapped != null) {
+				return mapped;
+			}
+		}
+		return switch (level) {
+			case MINIMAL, LOW -> "low";
+			case MEDIUM -> "medium";
+			case HIGH, XHIGH, MAX -> "high";
+			case OFF -> throw new IllegalArgumentException("Adaptive thinking requires a non-off thinking level");
+		};
 	}
 
 	private static void appendMessage(ArrayNode messages, Message message) {
@@ -225,9 +254,20 @@ public final class AnthropicProvider implements Provider {
 			if (block instanceof TextContent text) {
 				content.addObject().put("type", "text").put("text", text.text());
 			} else if (block instanceof ThinkingContent thinking) {
-				ObjectNode targetThinking = content.addObject().put("type", "thinking").put("thinking", thinking.thinking());
-				if (thinking.thinkingSignature() != null) {
-					targetThinking.put("signature", thinking.thinkingSignature());
+				String signature = thinking.thinkingSignature();
+				boolean hasSignature = signature != null && !signature.isBlank();
+				if (!hasSignature) {
+					// Anthropic rejects a thinking block without a non-empty opaque signature.
+					// Preserve visible reasoning as ordinary context instead of replaying an
+					// invalid empty signature from an interrupted or incomplete stream.
+					if (!thinking.thinking().isBlank()) {
+						content.addObject().put("type", "text").put("text", thinking.thinking());
+					}
+				} else {
+					content.addObject()
+							.put("type", "thinking")
+							.put("thinking", thinking.thinking())
+							.put("signature", signature);
 				}
 			} else if (block instanceof ToolCall call) {
 				content.addObject()
@@ -301,7 +341,7 @@ public final class AnthropicProvider implements Provider {
 				stream.push(new AssistantMessageEvent.TextStart(index, output));
 			}
 			case "thinking" -> {
-				ensureContentIndex(output, index, new ThinkingContent("", block.path("signature").asText(null), false));
+				ensureContentIndex(output, index, new ThinkingContent("", nonBlankText(block, "signature"), false));
 				stream.push(new AssistantMessageEvent.ThinkingStart(index, output));
 			}
 			case "tool_use" -> {
@@ -338,6 +378,14 @@ public final class AnthropicProvider implements Provider {
 				output.content.set(index, current.withThinking(current.thinking() + thinking));
 				stream.push(new AssistantMessageEvent.ThinkingDelta(index, thinking, output));
 			}
+			case "signature_delta" -> {
+				ThinkingContent current = (ThinkingContent) output.content.get(index);
+				String signature = delta.path("signature").asText();
+				if (!signature.isEmpty()) {
+					String previous = current.thinkingSignature();
+					output.content.set(index, current.withSignature((previous == null ? "" : previous) + signature));
+				}
+			}
 			case "input_json_delta" -> {
 				ToolCallAccumulator tool = tools.get(index);
 				if (tool == null) {
@@ -348,9 +396,14 @@ public final class AnthropicProvider implements Provider {
 				stream.push(new AssistantMessageEvent.ToolCallDelta(index, json, output));
 			}
 			default -> {
-				// signature_delta and unknown types have no public event.
+				// Unknown future delta types have no public event.
 			}
 		}
+	}
+
+	private static String nonBlankText(JsonNode object, String field) {
+		JsonNode value = object.get(field);
+		return value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : null;
 	}
 
 	private static void stopContent(
