@@ -19215,7 +19215,9 @@ static const char *context_infer_java_namespace(CodeLensDb *db,
     if ((qualifier == nullptr) ||
         (db_prepare(db,
                     "SELECT DISTINCT namespace FROM Symbol WHERE repo = ?1 AND name = ?2 "
-                    "AND (namespace = ?3 OR namespace LIKE '%.' || ?3) "
+                    "AND (namespace = ?3 OR namespace LIKE '%.' || ?3 "
+                    "OR namespace = ?3 || '.' || ?2 "
+                    "OR namespace LIKE '%.' || ?3 || '.' || ?2) "
                     "ORDER BY namespace LIMIT 2",
                     &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
         (bind_text(stmt, 2, symbol_base) != 0) || (bind_text(stmt, 3, qualifier) != 0)) {
@@ -19259,6 +19261,3034 @@ static bool context_path_is_workspace_file(CodeLensDb *db,
     }
     (void)sqlite3_finalize(stmt);
     return found;
+}
+
+/* Java type context is rendered as a bounded semantic dossier rather than the
+ * generic definition/reference tables. The index intentionally stays
+ * language-neutral: the dossier derives hierarchy, supporting types, and
+ * usage categories from Java Symbol/Ref rows and current source text. */
+#define CLASS_DOSSIER_MAX_TYPES 3U
+#define CLASS_DOSSIER_MAX_MEMBER_LOAD 256U
+#define CLASS_DOSSIER_MAX_MEMBERS CLASS_DOSSIER_MAX_MEMBER_LOAD
+#define CLASS_DOSSIER_MAX_LINKS 16U
+#define CLASS_DOSSIER_MAX_ANCESTORS 16U
+#define CLASS_DOSSIER_MAX_OVERRIDES 24U
+#define CLASS_DOSSIER_MAX_INHERITED 24U
+#define CLASS_DOSSIER_MAX_INHERITED_METHOD_LOAD 512U
+#define CLASS_DOSSIER_MAX_SUPPORTING 10U
+#define CLASS_DOSSIER_MAX_USAGE_LOAD 512U
+#define CLASS_DOSSIER_USAGES_PER_GROUP 5U
+#define CLASS_DOSSIER_SOURCE_MAX 640U
+#define CLASS_DOSSIER_SNIPPET_MAX 320U
+
+typedef struct {
+    char *name;
+    char *kind;
+    char *namespace_name;
+    char *file_path;
+    uint32_t start_line;
+    uint32_t end_line;
+    char *content;
+    char *doc;
+    char *scope;
+    char *dependency;
+    char *dependency_scope;
+} ClassDossierSymbol;
+
+typedef struct {
+    char *relation;
+    char *target_namespace;
+    char *reference_name;
+    ClassDossierSymbol definition;
+} ClassDossierLink;
+
+typedef struct {
+    char *relation;
+    char *current_name;
+    char *current_content;
+    char *other_namespace;
+    char *other_name;
+    char *other_content;
+    char *other_path;
+    uint32_t other_line;
+    bool incoming;
+} ClassDossierOverride;
+
+typedef struct {
+    ClassDossierSymbol definition;
+    unsigned int depth;
+} ClassDossierAncestor;
+
+typedef struct {
+    ClassDossierSymbol method;
+    char *reason;
+    unsigned int depth;
+    int score;
+} ClassDossierInherited;
+
+typedef enum {
+    CLASS_USAGE_CONSTRUCTION = 0,
+    CLASS_USAGE_CALL,
+    CLASS_USAGE_FIELD,
+    CLASS_USAGE_TYPE_CHECK,
+    CLASS_USAGE_TEST,
+    CLASS_USAGE_OTHER,
+    CLASS_USAGE_GROUP_COUNT
+} ClassDossierUsageGroup;
+
+typedef struct {
+    ClassDossierUsageGroup group;
+    char *path;
+    uint32_t line;
+    uint32_t column;
+    char *symbol;
+    char *base;
+    char *scope;
+    char *dependency;
+    char *snippet;
+    int score;
+} ClassDossierUsage;
+
+typedef enum {
+    CLASS_DOSSIER_NOT_A_TYPE = 0,
+    CLASS_DOSSIER_RENDERED,
+    CLASS_DOSSIER_ERROR
+} ClassDossierStatus;
+
+static char *class_dossier_column_copy(sqlite3_stmt *stmt, int column)
+{
+    const unsigned char *value = sqlite3_column_text(stmt, column);
+    int bytes = sqlite3_column_bytes(stmt, column);
+
+    return copy_bytes(value == nullptr ? "" : (const char *)value,
+                      value == nullptr ? 0U : (size_t)bytes);
+}
+
+static bool class_dossier_java_type_kind(const char *kind)
+{
+    return (kind != nullptr) &&
+           ((strcmp(kind, "class") == 0) || (strcmp(kind, "interface") == 0) ||
+            (strcmp(kind, "enum") == 0) || (strcmp(kind, "annotation") == 0) ||
+            (strcmp(kind, "record") == 0));
+}
+
+static bool class_dossier_method_kind(const char *kind)
+{
+    return (kind != nullptr) &&
+           ((strcmp(kind, "method") == 0) || (strcmp(kind, "test") == 0));
+}
+
+static bool class_dossier_fill_symbol(sqlite3_stmt *stmt,
+                                      int first_column,
+                                      ClassDossierSymbol *out)
+{
+    (void)memset(out, 0, sizeof(*out));
+    out->name = class_dossier_column_copy(stmt, first_column);
+    out->kind = class_dossier_column_copy(stmt, first_column + 1);
+    out->namespace_name = class_dossier_column_copy(stmt, first_column + 2);
+    out->file_path = class_dossier_column_copy(stmt, first_column + 3);
+    out->start_line = (uint32_t)sqlite3_column_int64(stmt, first_column + 4);
+    out->end_line = (uint32_t)sqlite3_column_int64(stmt, first_column + 5);
+    out->content = class_dossier_column_copy(stmt, first_column + 6);
+    out->doc = class_dossier_column_copy(stmt, first_column + 7);
+    out->scope = class_dossier_column_copy(stmt, first_column + 8);
+    out->dependency = class_dossier_column_copy(stmt, first_column + 9);
+    out->dependency_scope = class_dossier_column_copy(stmt, first_column + 10);
+    return (out->name != nullptr) && (out->kind != nullptr) &&
+           (out->namespace_name != nullptr) && (out->file_path != nullptr) &&
+           (out->content != nullptr) && (out->doc != nullptr) && (out->scope != nullptr) &&
+           (out->dependency != nullptr) && (out->dependency_scope != nullptr);
+}
+
+static bool class_dossier_identifier_char(unsigned char ch)
+{
+    return isalnum(ch) || (ch == '_') || (ch == '$') || (ch >= 0x80U);
+}
+
+static bool class_dossier_token_equals(const char *start, size_t len, const char *word)
+{
+    return (strlen(word) == len) && (memcmp(start, word, len) == 0);
+}
+
+static bool class_dossier_has_token_before(const char *text,
+                                           size_t limit,
+                                           const char *word)
+{
+    size_t word_len = strlen(word);
+
+    if (text == nullptr) {
+        return false;
+    }
+    for (size_t i = 0U; (i + word_len) <= limit; i++) {
+        bool left = (i == 0U) || !class_dossier_identifier_char((unsigned char)text[i - 1U]);
+        bool right = (i + word_len == limit) ||
+                     !class_dossier_identifier_char((unsigned char)text[i + word_len]);
+
+        if (left && right && (memcmp(text + i, word, word_len) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t class_dossier_newline_count(const char *text, size_t limit)
+{
+    size_t count = 0U;
+
+    if (text == nullptr) {
+        return 0U;
+    }
+    for (size_t i = 0U; (i < limit) && (text[i] != '\0'); i++) {
+        count += text[i] == '\n' ? 1U : 0U;
+    }
+    return count;
+}
+
+/* Finds the declaration body rather than annotation-array braces. */
+static size_t class_dossier_java_body_open(const char *text)
+{
+    size_t len;
+    unsigned int paren_depth = 0U;
+    unsigned int bracket_depth = 0U;
+    bool in_string = false;
+    bool in_character = false;
+    bool in_line_comment = false;
+    bool in_block_comment = false;
+    bool escaped = false;
+
+    if (text == nullptr) {
+        return SIZE_MAX;
+    }
+    len = strlen(text);
+    for (size_t i = 0U; i < len; i++) {
+        unsigned char ch = (unsigned char)text[i];
+
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (in_string || in_character) {
+            if (ch == '\\') {
+                escaped = true;
+            } else if (in_string && (ch == '"')) {
+                in_string = false;
+            } else if (in_character && (ch == '\'')) {
+                in_character = false;
+            }
+            continue;
+        }
+        if (in_line_comment) {
+            in_line_comment = ch != '\n';
+            continue;
+        }
+        if (in_block_comment) {
+            if ((ch == '*') && (i + 1U < len) && (text[i + 1U] == '/')) {
+                in_block_comment = false;
+                i++;
+            }
+            continue;
+        }
+        if ((ch == '/') && (i + 1U < len) && (text[i + 1U] == '/')) {
+            in_line_comment = true;
+            i++;
+        } else if ((ch == '/') && (i + 1U < len) && (text[i + 1U] == '*')) {
+            in_block_comment = true;
+            i++;
+        } else if (ch == '"') {
+            in_string = true;
+        } else if (ch == '\'') {
+            in_character = true;
+        } else if (ch == '(') {
+            paren_depth++;
+        } else if ((ch == ')') && (paren_depth > 0U)) {
+            paren_depth--;
+        } else if (ch == '[') {
+            bracket_depth++;
+        } else if ((ch == ']') && (bracket_depth > 0U)) {
+            bracket_depth--;
+        } else if ((ch == '{') && (paren_depth == 0U) && (bracket_depth == 0U)) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static char *class_dossier_compact_text(const char *text, size_t limit, bool add_ellipsis)
+{
+    StringBuilder out = {0};
+    size_t len;
+    bool pending_space = false;
+    bool truncated = false;
+
+    if (text == nullptr) {
+        return copy_cstr("");
+    }
+    len = strlen(text);
+    for (size_t i = 0U; i < len; i++) {
+        unsigned char ch = (unsigned char)text[i];
+
+        if (isspace(ch)) {
+            pending_space = out.len > 0U;
+            continue;
+        }
+        if (pending_space) {
+            if (out.len + 1U >= limit) {
+                truncated = true;
+                break;
+            }
+            if (!sb_append(&out, " ")) {
+                return nullptr;
+            }
+            pending_space = false;
+        }
+        if (out.len + 1U >= limit) {
+            truncated = true;
+            break;
+        }
+        if (!sb_append_len(&out, text + i, 1U)) {
+            return nullptr;
+        }
+    }
+    while ((out.len > 0U) && isspace((unsigned char)out.data[out.len - 1U])) {
+        out.data[--out.len] = '\0';
+    }
+    if ((truncated || add_ellipsis) && !sb_append(&out, " ...")) {
+        return nullptr;
+    }
+    return out.data == nullptr ? copy_cstr("") : out.data;
+}
+
+static char *class_dossier_member_source(const ClassDossierSymbol *member,
+                                          bool prefer_signature)
+{
+    size_t len;
+    size_t body;
+    bool method_like;
+    bool signature_only;
+    char *prefix;
+    char *compact;
+
+    if ((member == nullptr) || (member->content == nullptr)) {
+        return copy_cstr("");
+    }
+    len = strlen(member->content);
+    method_like = class_dossier_method_kind(member->kind) ||
+                  (strcmp(member->kind, "constructor") == 0);
+    signature_only = method_like &&
+                     (prefer_signature || (len > CLASS_DOSSIER_SOURCE_MAX) ||
+                      (class_dossier_newline_count(member->content, len) > 6U));
+    body = signature_only ? class_dossier_java_body_open(member->content) : SIZE_MAX;
+    if (body != SIZE_MAX) {
+        while ((body > 0U) && isspace((unsigned char)member->content[body - 1U])) {
+            body--;
+        }
+        prefix = copy_bytes(member->content, body);
+        if (prefix == nullptr) {
+            return nullptr;
+        }
+        compact = class_dossier_compact_text(prefix, CLASS_DOSSIER_SOURCE_MAX, false);
+        return compact == nullptr ? nullptr : alloc_printf("%s { ... }", compact);
+    }
+    return class_dossier_compact_text(member->content,
+                                      CLASS_DOSSIER_SOURCE_MAX,
+                                      len >= CLASS_DOSSIER_SOURCE_MAX);
+}
+
+/* Returns extends/implements/permits only when the referenced top-level type
+ * occurs in that clause. Generic bounds and generic arguments are ignored. */
+static const char *class_dossier_java_relation(const char *declaration,
+                                               const char *reference_base)
+{
+    const char *relation = nullptr;
+    size_t len;
+    unsigned int angle_depth = 0U;
+
+    if ((declaration == nullptr) || (reference_base == nullptr) ||
+        (reference_base[0] == '\0')) {
+        return nullptr;
+    }
+    len = class_dossier_java_body_open(declaration);
+    if (len == SIZE_MAX) {
+        len = strlen(declaration);
+    }
+    for (size_t i = 0U; i < len;) {
+        unsigned char ch = (unsigned char)declaration[i];
+
+        if (ch == '<') {
+            angle_depth++;
+            i++;
+            continue;
+        }
+        if (ch == '>') {
+            if (angle_depth > 0U) {
+                angle_depth--;
+            }
+            i++;
+            continue;
+        }
+        if (!class_dossier_identifier_char(ch)) {
+            i++;
+            continue;
+        }
+        size_t start = i;
+        const char *token;
+        size_t token_len;
+        size_t previous = start;
+
+        while ((i < len) && class_dossier_identifier_char((unsigned char)declaration[i])) {
+            i++;
+        }
+        token = declaration + start;
+        token_len = i - start;
+        while ((previous > 0U) && isspace((unsigned char)declaration[previous - 1U])) {
+            previous--;
+        }
+        if (angle_depth != 0U) {
+            continue;
+        }
+        if (class_dossier_token_equals(token, token_len, "extends")) {
+            relation = "extends";
+        } else if (class_dossier_token_equals(token, token_len, "implements")) {
+            relation = "implements";
+        } else if (class_dossier_token_equals(token, token_len, "permits")) {
+            relation = "permits";
+        } else if ((relation != nullptr) &&
+                   class_dossier_token_equals(token, token_len, reference_base) &&
+                   ((previous == 0U) || (declaration[previous - 1U] != '@'))) {
+            return relation;
+        }
+    }
+    return nullptr;
+}
+
+static int class_dossier_load_type_candidates(CodeLensDb *db,
+                                               const char *repo_name,
+                                               const char *symbol_base,
+                                               const char *namespace_filter,
+                                               const char *path_filter,
+                                               const char *definition_scope,
+                                               int exclude_tests,
+                                               ClassDossierSymbol *types,
+                                               size_t *out_count,
+                                               bool *out_more)
+{
+    static const char sql[] =
+        "SELECT s.name, s.kind, s.namespace, s.filePath, s.startLine, s.endLine, "
+        "s.content, s.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, '') "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo=s.repo AND df.filePath=s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE s.repo=?1 AND s.name=?2 "
+        "AND s.kind IN ('class','interface','enum','annotation','record') "
+        "AND lower(substr(s.filePath, -5))='.java' "
+        "AND (?3='' OR s.namespace=?3) "
+        "AND (?4='' OR instr(lower(s.filePath), lower(?4))>0) "
+        "AND ((?5='workspace' AND df.id IS NULL) "
+        "OR (?5='dependencies' AND df.id IS NOT NULL)) "
+        "AND (?6=0 OR (instr(lower(replace(s.filePath, '\\', '/')), '/test/')=0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/')=0)) "
+        "ORDER BY s.namespace, s.filePath, s.startLine LIMIT 4";
+    sqlite3_stmt *stmt = nullptr;
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    *out_more = false;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, symbol_base) != 0) ||
+        (bind_text(stmt, 3, namespace_filter) != 0) ||
+        (bind_text(stmt, 4, path_filter) != 0) ||
+        (bind_text(stmt, 5, definition_scope) != 0) ||
+        (sqlite3_bind_int(stmt, 6, exclude_tests) != SQLITE_OK)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (count >= CLASS_DOSSIER_MAX_TYPES) {
+            *out_more = true;
+            continue;
+        }
+        if (!class_dossier_fill_symbol(stmt, 0, &types[count])) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        count++;
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query Java type candidates");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_count = count;
+    return 0;
+}
+
+static int class_dossier_load_members(CodeLensDb *db,
+                                      const char *repo_name,
+                                      const ClassDossierSymbol *type,
+                                      int exclude_tests,
+                                      ClassDossierSymbol *members,
+                                      size_t *out_count,
+                                      bool *out_more)
+{
+    static const char sql[] =
+        "SELECT s.name, s.kind, s.namespace, s.filePath, s.startLine, s.endLine, "
+        "s.content, s.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, '') "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo=s.repo AND df.filePath=s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE s.repo=?1 AND ("
+        "(s.namespace=?2 AND NOT (s.name=?3 AND s.kind=?4 "
+        "AND s.filePath=?5 AND s.startLine=?6)) OR "
+        "(s.filePath=?5 AND s.kind IN ('class','interface','enum','annotation','record') "
+        "AND s.namespace LIKE ?2 || '.%' "
+        "AND instr(substr(s.namespace, length(?2)+2), '.')=0)) "
+        "AND (?7=0 OR (s.kind!='test' "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/')=0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/')=0)) "
+        "ORDER BY s.startLine, "
+        "CASE s.kind WHEN 'field' THEN 0 WHEN 'enum_constant' THEN 1 "
+        "WHEN 'constructor' THEN 2 WHEN 'method' THEN 3 WHEN 'test' THEN 4 ELSE 5 END, "
+        "s.name LIMIT 257";
+    sqlite3_stmt *stmt = nullptr;
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    *out_more = false;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, type->namespace_name) != 0) ||
+        (bind_text(stmt, 3, type->name) != 0) || (bind_text(stmt, 4, type->kind) != 0) ||
+        (bind_text(stmt, 5, type->file_path) != 0) ||
+        (sqlite3_bind_int64(stmt, 6, (sqlite3_int64)type->start_line) != SQLITE_OK) ||
+        (sqlite3_bind_int(stmt, 7, exclude_tests) != SQLITE_OK)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (count >= CLASS_DOSSIER_MAX_MEMBER_LOAD) {
+            *out_more = true;
+            continue;
+        }
+        if (!class_dossier_fill_symbol(stmt, 0, &members[count])) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        count++;
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query Java type members");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_load_type_definition(CodeLensDb *db,
+                                                const char *repo_name,
+                                                const char *namespace_name,
+                                                ClassDossierSymbol *out)
+{
+    static const char sql[] =
+        "SELECT s.name, s.kind, s.namespace, s.filePath, s.startLine, s.endLine, "
+        "s.content, s.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, '') "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo=s.repo AND df.filePath=s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE s.repo=?1 AND s.namespace=?2 "
+        "AND s.kind IN ('class','interface','enum','annotation','record') "
+        "AND lower(substr(s.filePath, -5))='.java' "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, s.startLine LIMIT 1";
+    sqlite3_stmt *stmt = nullptr;
+    bool found = false;
+
+    (void)memset(out, 0, sizeof(*out));
+    if ((db_prepare(db, sql, &stmt) == 0) && (bind_text(stmt, 1, repo_name) == 0) &&
+        (bind_text(stmt, 2, namespace_name) == 0) &&
+        (sqlite3_step(stmt) == SQLITE_ROW)) {
+        found = class_dossier_fill_symbol(stmt, 0, out);
+    }
+    (void)sqlite3_finalize(stmt);
+    return found;
+}
+
+static bool class_dossier_load_referenced_type_definition(
+    CodeLensDb *db,
+    const char *repo_name,
+    const ClassDossierSymbol *source_type,
+    const char *reference_name,
+    const char *target_namespace,
+    ClassDossierSymbol *out)
+{
+    static const char unique_sql[] =
+        "SELECT s.name, s.kind, s.namespace, s.filePath, s.startLine, s.endLine, "
+        "s.content, s.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, '') "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo=s.repo AND df.filePath=s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE s.repo=?1 AND s.name=?2 "
+        "AND s.kind IN ('class','interface','enum','annotation','record') "
+        "AND lower(substr(s.filePath, -5))='.java' "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, s.namespace LIMIT 2";
+    sqlite3_stmt *stmt = nullptr;
+    const char *separator;
+    char *sibling_namespace = nullptr;
+    bool found = false;
+
+    if ((target_namespace != nullptr) && (target_namespace[0] != '\0') &&
+        class_dossier_load_type_definition(db, repo_name, target_namespace, out)) {
+        return true;
+    }
+
+    /* Syntax-only Java resolution can prefer a wildcard import over a type in
+     * the current package. Recover the declaration from the lexical sibling
+     * before considering a repository-wide unique simple name. */
+    separator = (source_type == nullptr) || (source_type->namespace_name == nullptr)
+                    ? nullptr
+                    : strrchr(source_type->namespace_name, '.');
+    if ((separator != nullptr) && (reference_name != nullptr) &&
+        (reference_name[0] != '\0')) {
+        sibling_namespace = alloc_printf("%.*s.%s",
+                                         (int)(separator - source_type->namespace_name),
+                                         source_type->namespace_name,
+                                         reference_name);
+        if ((sibling_namespace != nullptr) &&
+            class_dossier_load_type_definition(db,
+                                               repo_name,
+                                               sibling_namespace,
+                                               out)) {
+            return true;
+        }
+    }
+
+    (void)memset(out, 0, sizeof(*out));
+    if ((reference_name == nullptr) || (reference_name[0] == '\0') ||
+        (db_prepare(db, unique_sql, &stmt) != 0) ||
+        (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, reference_name) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return false;
+    }
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        found = class_dossier_fill_symbol(stmt, 0, out);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            found = false;
+            (void)memset(out, 0, sizeof(*out));
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    return found;
+}
+
+static bool class_dossier_link_exists(const ClassDossierLink *links,
+                                      size_t count,
+                                      const char *relation,
+                                      const char *target_namespace)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if ((strcmp(links[i].relation, relation) == 0) &&
+            (strcmp(links[i].target_namespace, target_namespace) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool class_dossier_add_link(CodeLensDb *db,
+                                   const char *repo_name,
+                                   const ClassDossierSymbol *source_type,
+                                   ClassDossierLink *links,
+                                   size_t *count,
+                                   const char *relation,
+                                   const char *target_namespace,
+                                   const char *reference_name)
+{
+    ClassDossierLink *link;
+    ClassDossierSymbol definition;
+    bool has_definition;
+    const char *canonical_namespace;
+
+    if ((target_namespace == nullptr) || (target_namespace[0] == '\0')) {
+        return true;
+    }
+    has_definition = class_dossier_load_referenced_type_definition(db,
+                                                                   repo_name,
+                                                                   source_type,
+                                                                   reference_name,
+                                                                   target_namespace,
+                                                                   &definition);
+    canonical_namespace = has_definition ? definition.namespace_name : target_namespace;
+    if (class_dossier_link_exists(links, *count, relation, canonical_namespace)) {
+        return true;
+    }
+    if (*count >= CLASS_DOSSIER_MAX_LINKS) {
+        return true;
+    }
+    link = &links[(*count)++];
+    (void)memset(link, 0, sizeof(*link));
+    link->relation = copy_cstr(relation);
+    link->target_namespace = copy_cstr(canonical_namespace);
+    link->reference_name = copy_cstr(reference_name == nullptr ? "" : reference_name);
+    if ((link->relation == nullptr) || (link->target_namespace == nullptr) ||
+        (link->reference_name == nullptr)) {
+        return false;
+    }
+    if (has_definition) {
+        link->definition = definition;
+    }
+    return true;
+}
+
+static int class_dossier_load_direct_links(CodeLensDb *db,
+                                           const char *repo_name,
+                                           const ClassDossierSymbol *type,
+                                           ClassDossierLink *links,
+                                           size_t *out_count)
+{
+    static const char sql[] =
+        "SELECT r.symbolBase, r.targetNamespace FROM Ref r "
+        "JOIN File f ON f.rowid=r.fileId "
+        "WHERE f.repo=?1 AND f.path=?2 AND r.lineNumber>=?3 AND r.lineNumber<=?4 "
+        "AND r.targetNamespace!='' ORDER BY r.lineNumber, r.columnNumber";
+    sqlite3_stmt *stmt = nullptr;
+    uint32_t header_end = type->start_line +
+                          (uint32_t)class_dossier_newline_count(type->content,
+                                                               strlen(type->content));
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, type->file_path) != 0) ||
+        (sqlite3_bind_int64(stmt, 3, (sqlite3_int64)type->start_line) != SQLITE_OK) ||
+        (sqlite3_bind_int64(stmt, 4, (sqlite3_int64)header_end) != SQLITE_OK)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *base = (const char *)sqlite3_column_text(stmt, 0);
+        const char *target = (const char *)sqlite3_column_text(stmt, 1);
+        const char *relation = class_dossier_java_relation(type->content, base);
+
+        if ((relation != nullptr) && (target != nullptr) &&
+            (strcmp(target, type->namespace_name) != 0) &&
+            !class_dossier_add_link(db,
+                                    repo_name,
+                                    type,
+                                    links,
+                                    &count,
+                                    relation,
+                                    target,
+                                    base)) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query Java direct hierarchy");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_count = count;
+    return 0;
+}
+
+static const char *class_dossier_inverse_relation(const char *relation)
+{
+    if (strcmp(relation, "extends") == 0) {
+        return "extended by";
+    }
+    if (strcmp(relation, "implements") == 0) {
+        return "implemented by";
+    }
+    if (strcmp(relation, "permits") == 0) {
+        return "permitted by";
+    }
+    return nullptr;
+}
+
+static int class_dossier_load_incoming_links(CodeLensDb *db,
+                                             const char *repo_name,
+                                             const ClassDossierSymbol *type,
+                                             ClassDossierLink *links,
+                                             size_t *in_out_count)
+{
+    static const char sql[] =
+        "SELECT child.name, child.kind, child.namespace, child.filePath, "
+        "child.startLine, child.endLine, child.content, child.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, ''), r.symbolBase, "
+        "r.targetNamespace "
+        "FROM Ref r JOIN File f ON f.rowid=r.fileId "
+        "JOIN Symbol child ON child.repo=f.repo AND child.filePath=f.path "
+        "LEFT JOIN DependencyFile df ON df.repo=child.repo AND df.filePath=child.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE f.repo=?1 AND r.symbolBase=?2 "
+        "AND child.kind IN ('class','interface','enum','annotation','record') "
+        "AND lower(substr(child.filePath, -5))='.java' "
+        "AND r.lineNumber>=child.startLine "
+        "AND r.lineNumber<=child.startLine + "
+        "(length(child.content)-length(replace(child.content, char(10), ''))) "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, child.namespace LIMIT 128";
+    sqlite3_stmt *stmt = nullptr;
+    size_t count = *in_out_count;
+    int rc;
+
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, type->name) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        ClassDossierSymbol child;
+        const char *base = (const char *)sqlite3_column_text(stmt, 11);
+        const char *target = (const char *)sqlite3_column_text(stmt, 12);
+        const char *relation;
+        const char *inverse;
+        ClassDossierSymbol resolved;
+        ClassDossierLink *link;
+
+        if (!class_dossier_fill_symbol(stmt, 0, &child)) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        relation = class_dossier_java_relation(child.content, base);
+        inverse = relation == nullptr ? nullptr : class_dossier_inverse_relation(relation);
+        if ((inverse == nullptr) ||
+            !class_dossier_load_referenced_type_definition(db,
+                                                            repo_name,
+                                                            &child,
+                                                            base,
+                                                            target,
+                                                            &resolved) ||
+            (strcmp(resolved.namespace_name, type->namespace_name) != 0) ||
+            (strcmp(child.namespace_name, type->namespace_name) == 0) ||
+            class_dossier_link_exists(links, count, inverse, child.namespace_name)) {
+            continue;
+        }
+        if (count >= CLASS_DOSSIER_MAX_LINKS) {
+            continue;
+        }
+        link = &links[count++];
+        (void)memset(link, 0, sizeof(*link));
+        link->relation = copy_cstr(inverse);
+        link->target_namespace = copy_cstr(child.namespace_name);
+        link->reference_name = copy_cstr(child.name);
+        link->definition = child;
+        if ((link->relation == nullptr) || (link->target_namespace == nullptr) ||
+            (link->reference_name == nullptr)) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query Java incoming hierarchy");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    *in_out_count = count;
+    return 0;
+}
+
+static bool class_dossier_parent_relation(const char *relation)
+{
+    return (relation != nullptr) &&
+           ((strcmp(relation, "extends") == 0) ||
+            (strcmp(relation, "implements") == 0));
+}
+
+static bool class_dossier_ancestor_exists(const ClassDossierAncestor *ancestors,
+                                           size_t count,
+                                           const char *namespace_name)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if (strcmp(ancestors[i].definition.namespace_name, namespace_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Build a small breadth-first lineage for override and inherited-behavior
+ * selection. The hierarchy section remains direct: transitive ancestors are
+ * loaded only so a class such as CProjNode can connect its Node overrides and
+ * calls without dumping Node's entire API. */
+static int class_dossier_load_ancestors(CodeLensDb *db,
+                                        const char *repo_name,
+                                        const ClassDossierSymbol *type,
+                                        const ClassDossierLink *direct_links,
+                                        size_t direct_link_count,
+                                        ClassDossierAncestor *ancestors,
+                                        size_t *out_count,
+                                        bool *out_more)
+{
+    size_t count = 0U;
+
+    *out_count = 0U;
+    *out_more = false;
+    for (size_t i = 0U; i < direct_link_count; i++) {
+        const ClassDossierLink *link = &direct_links[i];
+
+        if (!class_dossier_parent_relation(link->relation) ||
+            (link->definition.name == nullptr) ||
+            (link->definition.namespace_name == nullptr) ||
+            (link->definition.namespace_name[0] == '\0') ||
+            (strcmp(link->definition.namespace_name, type->namespace_name) == 0) ||
+            class_dossier_ancestor_exists(ancestors,
+                                          count,
+                                          link->definition.namespace_name)) {
+            continue;
+        }
+        if (count >= CLASS_DOSSIER_MAX_ANCESTORS) {
+            *out_more = true;
+            continue;
+        }
+        ancestors[count].definition = link->definition;
+        ancestors[count].depth = 1U;
+        count++;
+    }
+
+    for (size_t index = 0U; index < count; index++) {
+        ClassDossierLink parent_links[CLASS_DOSSIER_MAX_LINKS];
+        size_t parent_count = 0U;
+
+        if (class_dossier_load_direct_links(db,
+                                            repo_name,
+                                            &ancestors[index].definition,
+                                            parent_links,
+                                            &parent_count) != 0) {
+            return -1;
+        }
+        for (size_t i = 0U; i < parent_count; i++) {
+            const ClassDossierLink *link = &parent_links[i];
+
+            if (!class_dossier_parent_relation(link->relation) ||
+                (link->definition.name == nullptr) ||
+                (link->definition.namespace_name == nullptr) ||
+                (link->definition.namespace_name[0] == '\0') ||
+                (strcmp(link->definition.namespace_name, type->namespace_name) == 0) ||
+                class_dossier_ancestor_exists(ancestors,
+                                              count,
+                                              link->definition.namespace_name)) {
+                continue;
+            }
+            if (count >= CLASS_DOSSIER_MAX_ANCESTORS) {
+                *out_more = true;
+                continue;
+            }
+            ancestors[count].definition = link->definition;
+            ancestors[count].depth = ancestors[index].depth + 1U;
+            count++;
+        }
+    }
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_method_bounds(const char *content,
+                                        const char *name,
+                                        size_t *out_name_start,
+                                        size_t *out_open,
+                                        size_t *out_close)
+{
+    size_t len;
+    size_t name_len;
+
+    if ((content == nullptr) || (name == nullptr)) {
+        return false;
+    }
+    len = strlen(content);
+    name_len = strlen(name);
+    for (size_t i = 0U; (i + name_len) <= len; i++) {
+        size_t open;
+        unsigned int depth = 1U;
+        bool in_string = false;
+        bool in_character = false;
+        bool escaped = false;
+
+        if ((memcmp(content + i, name, name_len) != 0) ||
+            ((i > 0U) && class_dossier_identifier_char((unsigned char)content[i - 1U])) ||
+            ((i + name_len < len) &&
+             class_dossier_identifier_char((unsigned char)content[i + name_len]))) {
+            continue;
+        }
+        open = i + name_len;
+        while ((open < len) && isspace((unsigned char)content[open])) {
+            open++;
+        }
+        if ((open >= len) || (content[open] != '(')) {
+            continue;
+        }
+        for (size_t pos = open + 1U; pos < len; pos++) {
+            unsigned char ch = (unsigned char)content[pos];
+
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (in_string || in_character) {
+                if (ch == '\\') {
+                    escaped = true;
+                } else if (in_string && (ch == '"')) {
+                    in_string = false;
+                } else if (in_character && (ch == '\'')) {
+                    in_character = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                in_string = true;
+            } else if (ch == '\'') {
+                in_character = true;
+            } else if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth--;
+                if (depth == 0U) {
+                    *out_name_start = i;
+                    *out_open = open;
+                    *out_close = pos;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static int class_dossier_method_arity(const ClassDossierSymbol *member)
+{
+    size_t name_start;
+    size_t open;
+    size_t close;
+    unsigned int paren_depth = 0U;
+    unsigned int angle_depth = 0U;
+    unsigned int bracket_depth = 0U;
+    int commas = 0;
+    bool has_content = false;
+
+    if ((member == nullptr) ||
+        !class_dossier_method_bounds(member->content,
+                                     member->name,
+                                     &name_start,
+                                     &open,
+                                     &close)) {
+        return -1;
+    }
+    (void)name_start;
+    for (size_t i = open + 1U; i < close; i++) {
+        unsigned char ch = (unsigned char)member->content[i];
+
+        if (!isspace(ch)) {
+            has_content = true;
+        }
+        if (ch == '(') {
+            paren_depth++;
+        } else if ((ch == ')') && (paren_depth > 0U)) {
+            paren_depth--;
+        } else if (ch == '<') {
+            angle_depth++;
+        } else if ((ch == '>') && (angle_depth > 0U)) {
+            angle_depth--;
+        } else if (ch == '[') {
+            bracket_depth++;
+        } else if ((ch == ']') && (bracket_depth > 0U)) {
+            bracket_depth--;
+        } else if ((ch == ',') && (paren_depth == 0U) && (angle_depth == 0U) &&
+                   (bracket_depth == 0U)) {
+            commas++;
+        }
+    }
+    return has_content ? commas + 1 : 0;
+}
+
+static char *class_dossier_parameter_shape(const ClassDossierSymbol *member)
+{
+    StringBuilder shape = {0};
+    size_t name_start;
+    size_t open;
+    size_t close;
+    size_t segment_start;
+    unsigned int angle_depth = 0U;
+    unsigned int paren_depth = 0U;
+    unsigned int bracket_depth = 0U;
+
+    if ((member == nullptr) ||
+        !class_dossier_method_bounds(member->content,
+                                     member->name,
+                                     &name_start,
+                                     &open,
+                                     &close)) {
+        return nullptr;
+    }
+    (void)name_start;
+    segment_start = open + 1U;
+    for (size_t pos = segment_start; pos <= close; pos++) {
+        unsigned char ch = pos < close ? (unsigned char)member->content[pos] : ',';
+        bool delimiter = (ch == ',') && (angle_depth == 0U) &&
+                         (paren_depth == 0U) && (bracket_depth == 0U);
+
+        if (!delimiter) {
+            if (ch == '<') {
+                angle_depth++;
+            } else if ((ch == '>') && (angle_depth > 0U)) {
+                angle_depth--;
+            } else if (ch == '(') {
+                paren_depth++;
+            } else if ((ch == ')') && (paren_depth > 0U)) {
+                paren_depth--;
+            } else if (ch == '[') {
+                bracket_depth++;
+            } else if ((ch == ']') && (bracket_depth > 0U)) {
+                bracket_depth--;
+            }
+            continue;
+        }
+
+        bool segment_has_content = false;
+
+        for (size_t scan = segment_start; scan < pos; scan++) {
+            if (!isspace((unsigned char)member->content[scan])) {
+                segment_has_content = true;
+                break;
+            }
+        }
+        if (!segment_has_content) {
+            segment_start = pos + 1U;
+            continue;
+        }
+
+        size_t first_identifier = SIZE_MAX;
+        size_t previous_identifier = SIZE_MAX;
+        size_t last_identifier = SIZE_MAX;
+        size_t previous_length = 0U;
+        size_t last_length = 0U;
+        unsigned int local_angle = 0U;
+        unsigned int local_paren = 0U;
+        unsigned int array_depth = 0U;
+        bool varargs = false;
+
+        for (size_t scan = segment_start; scan < pos;) {
+            unsigned char current = (unsigned char)member->content[scan];
+
+            if (current == '<') {
+                local_angle++;
+                scan++;
+                continue;
+            }
+            if ((current == '>') && (local_angle > 0U)) {
+                local_angle--;
+                scan++;
+                continue;
+            }
+            if (current == '(') {
+                local_paren++;
+                scan++;
+                continue;
+            }
+            if ((current == ')') && (local_paren > 0U)) {
+                local_paren--;
+                scan++;
+                continue;
+            }
+            if ((local_angle == 0U) && (local_paren == 0U) &&
+                (current == '[')) {
+                array_depth++;
+            }
+            if ((local_angle == 0U) && (local_paren == 0U) &&
+                (scan + 2U < pos) && (member->content[scan] == '.') &&
+                (member->content[scan + 1U] == '.') &&
+                (member->content[scan + 2U] == '.')) {
+                varargs = true;
+                scan += 3U;
+                continue;
+            }
+            if ((local_angle != 0U) || (local_paren != 0U) ||
+                !class_dossier_identifier_char(current)) {
+                scan++;
+                continue;
+            }
+            size_t token_start = scan;
+
+            while ((scan < pos) && class_dossier_identifier_char(
+                                       (unsigned char)member->content[scan])) {
+                scan++;
+            }
+            first_identifier = first_identifier == SIZE_MAX ? token_start : first_identifier;
+            previous_identifier = last_identifier;
+            previous_length = last_length;
+            last_identifier = token_start;
+            last_length = scan - token_start;
+        }
+        (void)first_identifier;
+        (void)last_identifier;
+        (void)last_length;
+        if (previous_identifier == SIZE_MAX) {
+            return nullptr;
+        }
+        if ((shape.len > 0U) && !sb_append(&shape, ";")) {
+            return nullptr;
+        }
+        if (!sb_append_len(&shape,
+                           member->content + previous_identifier,
+                           previous_length)) {
+            return nullptr;
+        }
+        for (unsigned int dimension = 0U;
+             dimension < array_depth + (varargs ? 1U : 0U);
+             dimension++) {
+            if (!sb_append(&shape, "[]")) {
+                return nullptr;
+            }
+        }
+        segment_start = pos + 1U;
+    }
+    return shape.data == nullptr ? copy_cstr("") : shape.data;
+}
+
+static char *class_dossier_short_signature(const char *content, const char *name)
+{
+    size_t name_start;
+    size_t open;
+    size_t close;
+    char *slice;
+
+    if (!class_dossier_method_bounds(content, name, &name_start, &open, &close)) {
+        return copy_cstr(name == nullptr ? "" : name);
+    }
+    (void)open;
+    slice = copy_bytes(content + name_start, close - name_start + 1U);
+    return slice == nullptr ? nullptr : class_dossier_compact_text(slice, 240U, false);
+}
+
+static bool class_dossier_non_overridable(const ClassDossierSymbol *member)
+{
+    size_t body;
+    size_t limit;
+
+    if ((member == nullptr) || (member->content == nullptr)) {
+        return true;
+    }
+    body = class_dossier_java_body_open(member->content);
+    limit = body == SIZE_MAX ? strlen(member->content) : body;
+    return class_dossier_has_token_before(member->content, limit, "static") ||
+           class_dossier_has_token_before(member->content, limit, "private");
+}
+
+static int class_dossier_load_methods_for_namespace(CodeLensDb *db,
+                                                    const char *repo_name,
+                                                    const char *namespace_name,
+                                                    int exclude_tests,
+                                                    ClassDossierSymbol *methods,
+                                                    size_t capacity,
+                                                    size_t *out_count)
+{
+    static const char sql[] =
+        "SELECT s.name, s.kind, s.namespace, s.filePath, s.startLine, s.endLine, "
+        "s.content, s.doc, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), COALESCE(da.scope, '') "
+        "FROM Symbol s LEFT JOIN DependencyFile df "
+        "ON df.repo=s.repo AND df.filePath=s.filePath "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE s.repo=?1 AND s.namespace=?2 AND s.kind IN ('method','test') "
+        "AND (?3=0 OR (s.kind!='test' "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/')=0 "
+        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/')=0)) "
+        "ORDER BY s.name, s.startLine LIMIT 128";
+    sqlite3_stmt *stmt = nullptr;
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, namespace_name) != 0) ||
+        (sqlite3_bind_int(stmt, 3, exclude_tests) != SQLITE_OK)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (count >= capacity) {
+            continue;
+        }
+        if (!class_dossier_fill_symbol(stmt, 0, &methods[count])) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        count++;
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query related Java methods");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_override_exists(const ClassDossierOverride *items,
+                                          size_t count,
+                                          const ClassDossierSymbol *current,
+                                          const ClassDossierSymbol *other,
+                                          bool incoming)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if ((items[i].incoming == incoming) &&
+            (strcmp(items[i].current_name, current->name) == 0) &&
+            (strcmp(items[i].other_namespace, other->namespace_name) == 0) &&
+            (strcmp(items[i].other_name, other->name) == 0) &&
+            (items[i].other_line == other->start_line)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool class_dossier_add_override(ClassDossierOverride *items,
+                                       size_t *count,
+                                       const char *relation,
+                                       const ClassDossierSymbol *current,
+                                       const ClassDossierSymbol *other,
+                                       bool incoming)
+{
+    ClassDossierOverride *item;
+
+    if (class_dossier_override_exists(items, *count, current, other, incoming) ||
+        (*count >= CLASS_DOSSIER_MAX_OVERRIDES)) {
+        return true;
+    }
+    item = &items[(*count)++];
+    item->relation = copy_cstr(relation);
+    item->current_name = copy_cstr(current->name);
+    item->current_content = copy_cstr(current->content);
+    item->other_namespace = copy_cstr(other->namespace_name);
+    item->other_name = copy_cstr(other->name);
+    item->other_content = copy_cstr(other->content);
+    item->other_path = copy_cstr(other->file_path);
+    item->other_line = other->start_line;
+    item->incoming = incoming;
+    return (item->relation != nullptr) && (item->current_name != nullptr) &&
+           (item->current_content != nullptr) && (item->other_namespace != nullptr) &&
+           (item->other_name != nullptr) && (item->other_content != nullptr) &&
+           (item->other_path != nullptr);
+}
+
+static bool class_dossier_methods_override_match(const ClassDossierSymbol *current,
+                                                  const ClassDossierSymbol *other)
+{
+    int current_arity;
+    int other_arity;
+
+    if (!class_dossier_method_kind(current->kind) ||
+        !class_dossier_method_kind(other->kind) ||
+        class_dossier_non_overridable(current) ||
+        class_dossier_non_overridable(other) ||
+        (strcmp(current->name, other->name) != 0)) {
+        return false;
+    }
+    current_arity = class_dossier_method_arity(current);
+    other_arity = class_dossier_method_arity(other);
+    if ((current_arity < 0) || (current_arity != other_arity)) {
+        return false;
+    }
+    char *current_shape = class_dossier_parameter_shape(current);
+    char *other_shape = class_dossier_parameter_shape(other);
+
+    return (current_shape != nullptr) && (other_shape != nullptr) &&
+           (strcmp(current_shape, other_shape) == 0);
+}
+
+static int class_dossier_load_overrides(CodeLensDb *db,
+                                        const char *repo_name,
+                                        const ClassDossierSymbol *type,
+                                        const ClassDossierSymbol *members,
+                                        size_t member_count,
+                                        const ClassDossierLink *links,
+                                        size_t link_count,
+                                        const ClassDossierAncestor *ancestors,
+                                        size_t ancestor_count,
+                                        int exclude_tests,
+                                        ClassDossierOverride *items,
+                                        size_t *out_count)
+{
+    ClassDossierSymbol related[128];
+    size_t count = 0U;
+
+    /* A Java override may target a grandparent declaration. Compare against
+     * the bounded lineage rather than only the direct superclass. */
+    for (size_t ancestor_index = 0U; ancestor_index < ancestor_count;
+         ancestor_index++) {
+        const ClassDossierAncestor *ancestor = &ancestors[ancestor_index];
+        size_t related_count = 0U;
+        const char *relation =
+            (strcmp(ancestor->definition.kind, "interface") == 0) &&
+                    (strcmp(type->kind, "interface") != 0)
+                ? "implements"
+                : "overrides";
+
+        if (class_dossier_load_methods_for_namespace(
+                db,
+                repo_name,
+                ancestor->definition.namespace_name,
+                exclude_tests,
+                related,
+                sizeof(related) / sizeof(related[0]),
+                &related_count) != 0) {
+            return -1;
+        }
+        for (size_t member_index = 0U; member_index < member_count; member_index++) {
+            const ClassDossierSymbol *member = &members[member_index];
+
+            for (size_t related_index = 0U; related_index < related_count;
+                 related_index++) {
+                if (class_dossier_methods_override_match(member,
+                                                         &related[related_index]) &&
+                    !class_dossier_add_override(items,
+                                                &count,
+                                                relation,
+                                                member,
+                                                &related[related_index],
+                                                false)) {
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /* Direct known subtypes are useful too, but do not recursively enumerate
+     * a potentially huge descendant tree. */
+    for (size_t link_index = 0U; link_index < link_count; link_index++) {
+        const ClassDossierLink *link = &links[link_index];
+        bool incoming = (strcmp(link->relation, "extended by") == 0) ||
+                        (strcmp(link->relation, "implemented by") == 0);
+        size_t related_count = 0U;
+        const char *relation;
+
+        if (!incoming) {
+            continue;
+        }
+        relation = (strcmp(link->relation, "implemented by") == 0) ||
+                           (strcmp(type->kind, "interface") == 0)
+                       ? "implements"
+                       : "overrides";
+        if (class_dossier_load_methods_for_namespace(db,
+                                                     repo_name,
+                                                     link->target_namespace,
+                                                     exclude_tests,
+                                                     related,
+                                                     sizeof(related) / sizeof(related[0]),
+                                                     &related_count) != 0) {
+            return -1;
+        }
+        for (size_t member_index = 0U; member_index < member_count; member_index++) {
+            const ClassDossierSymbol *member = &members[member_index];
+
+            for (size_t related_index = 0U; related_index < related_count;
+                 related_index++) {
+                if (class_dossier_methods_override_match(member,
+                                                         &related[related_index]) &&
+                    !class_dossier_add_override(items,
+                                                &count,
+                                                relation,
+                                                member,
+                                                &related[related_index],
+                                                true)) {
+                    return -1;
+                }
+            }
+        }
+    }
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_signature_contains(const ClassDossierSymbol *member,
+                                             const char *base,
+                                             uint32_t reference_line)
+{
+    size_t limit;
+    uint32_t signature_end_line;
+
+    if ((member == nullptr) || (base == nullptr) || (member->content == nullptr)) {
+        return false;
+    }
+    limit = class_dossier_java_body_open(member->content);
+    if (limit == SIZE_MAX) {
+        limit = strlen(member->content);
+    }
+    if ((strcmp(member->kind, "field") == 0) ||
+        (strcmp(member->kind, "enum_constant") == 0)) {
+        for (size_t i = 0U; i < limit; i++) {
+            if (member->content[i] == '=') {
+                limit = i;
+                break;
+            }
+        }
+    }
+    signature_end_line = member->start_line +
+                         (uint32_t)class_dossier_newline_count(member->content, limit);
+    return (reference_line >= member->start_line) && (reference_line <= signature_end_line) &&
+           class_dossier_has_token_before(member->content, limit, base);
+}
+
+static bool class_dossier_target_in_links(const ClassDossierLink *links,
+                                          size_t count,
+                                          const char *target_namespace)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if (strcmp(links[i].target_namespace, target_namespace) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static const ClassDossierSymbol *class_dossier_member_at_line(
+    const ClassDossierSymbol *members,
+    size_t count,
+    uint32_t line)
+{
+    const ClassDossierSymbol *best = nullptr;
+
+    for (size_t i = 0U; i < count; i++) {
+        if ((line < members[i].start_line) || (line > members[i].end_line)) {
+            continue;
+        }
+        if ((best == nullptr) ||
+            ((members[i].end_line - members[i].start_line) <
+             (best->end_line - best->start_line))) {
+            best = &members[i];
+        }
+    }
+    return best;
+}
+
+static char *class_dossier_support_relation(const ClassDossierSymbol *owner,
+                                             bool in_signature)
+{
+    if (!in_signature) {
+        if (strcmp(owner->kind, "field") == 0) {
+            return alloc_printf("field initializer `%s`", owner->name);
+        }
+        return alloc_printf("used by `%s`", owner->name);
+    }
+    if (strcmp(owner->kind, "field") == 0) {
+        return copy_cstr("field type");
+    }
+    if (strcmp(owner->kind, "constructor") == 0) {
+        return copy_cstr("constructor signature");
+    }
+    if (class_dossier_method_kind(owner->kind)) {
+        return copy_cstr("method signature");
+    }
+    return copy_cstr("member declaration");
+}
+
+static int class_dossier_load_supporting(CodeLensDb *db,
+                                         const char *repo_name,
+                                         const ClassDossierSymbol *type,
+                                         const ClassDossierSymbol *members,
+                                         size_t member_count,
+                                         const ClassDossierLink *links,
+                                         size_t link_count,
+                                         ClassDossierLink *supporting,
+                                         size_t *out_count)
+{
+    static const char sql[] =
+        "SELECT r.symbolBase, r.targetNamespace, r.lineNumber FROM Ref r "
+        "JOIN File f ON f.rowid=r.fileId "
+        "WHERE f.repo=?1 AND f.path=?2 AND r.lineNumber>=?3 AND r.lineNumber<=?4 "
+        "AND r.targetNamespace!='' ORDER BY r.lineNumber, r.columnNumber LIMIT 512";
+    sqlite3_stmt *stmt = nullptr;
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, type->file_path) != 0) ||
+        (sqlite3_bind_int64(stmt, 3, (sqlite3_int64)type->start_line) != SQLITE_OK) ||
+        (sqlite3_bind_int64(stmt, 4, (sqlite3_int64)type->end_line) != SQLITE_OK)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    /* Behavior references outrank signature-only types when the cap is hit.
+     * Each pass preserves source order within its relevance tier. */
+    for (unsigned int pass = 0U; pass < 2U; pass++) {
+        if ((pass > 0U) && (sqlite3_reset(stmt) != SQLITE_OK)) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const char *base = (const char *)sqlite3_column_text(stmt, 0);
+            const char *target = (const char *)sqlite3_column_text(stmt, 1);
+            uint32_t line = (uint32_t)sqlite3_column_int64(stmt, 2);
+            const ClassDossierSymbol *owner;
+            ClassDossierSymbol definition;
+            bool in_signature;
+
+            if ((base == nullptr) || (target == nullptr) ||
+                (strcmp(target, type->namespace_name) == 0) ||
+                class_dossier_target_in_links(links, link_count, target) ||
+                class_dossier_target_in_links(supporting, count, target)) {
+                continue;
+            }
+            owner = class_dossier_member_at_line(members, member_count, line);
+            in_signature = (owner != nullptr) &&
+                           class_dossier_signature_contains(owner, base, line);
+            if ((owner == nullptr) ||
+                (((pass == 0U) && in_signature) ||
+                 ((pass == 1U) && !in_signature)) ||
+                !class_dossier_load_referenced_type_definition(db,
+                                                                repo_name,
+                                                                type,
+                                                                base,
+                                                                target,
+                                                                &definition)) {
+                continue;
+            }
+            if (class_dossier_target_in_links(links,
+                                              link_count,
+                                              definition.namespace_name) ||
+                class_dossier_target_in_links(supporting,
+                                              count,
+                                              definition.namespace_name)) {
+                continue;
+            }
+            if (count >= CLASS_DOSSIER_MAX_SUPPORTING) {
+                continue;
+            }
+            supporting[count].relation =
+                class_dossier_support_relation(owner, in_signature);
+            supporting[count].target_namespace = copy_cstr(definition.namespace_name);
+            supporting[count].reference_name = copy_cstr(base);
+            supporting[count].definition = definition;
+            if ((supporting[count].relation == nullptr) ||
+                (supporting[count].target_namespace == nullptr) ||
+                (supporting[count].reference_name == nullptr)) {
+                (void)sqlite3_finalize(stmt);
+                return -1;
+            }
+            count++;
+        }
+        if (rc != SQLITE_DONE) {
+            (void)report_sqlite_error(db->handle,
+                                      "query Java supporting definitions");
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    *out_count = count;
+    return 0;
+}
+
+static const char *class_dossier_member_kind_for_name(const ClassDossierSymbol *members,
+                                                       size_t count,
+                                                       const char *name)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if (strcmp(members[i].name, name) == 0) {
+            return members[i].kind;
+        }
+    }
+    return nullptr;
+}
+
+static bool class_dossier_reference_preceded_by(const CodeLensMappedFile *file,
+                                                uint32_t start_byte,
+                                                const char *word)
+{
+    size_t pos = (size_t)start_byte;
+    size_t end;
+    size_t start;
+
+    if ((file == nullptr) || (file->data == nullptr) || (pos > file->len)) {
+        return false;
+    }
+    while ((pos > 0U) &&
+           (class_dossier_identifier_char((unsigned char)file->data[pos - 1U]) ||
+            (file->data[pos - 1U] == '.'))) {
+        pos--;
+    }
+    while ((pos > 0U) && isspace((unsigned char)file->data[pos - 1U])) {
+        pos--;
+    }
+    end = pos;
+    while ((pos > 0U) && class_dossier_identifier_char((unsigned char)file->data[pos - 1U])) {
+        pos--;
+    }
+    start = pos;
+    return class_dossier_token_equals(file->data + start, end - start, word);
+}
+
+static bool class_dossier_reference_followed_by(const CodeLensMappedFile *file,
+                                                uint32_t end_byte,
+                                                const char *text)
+{
+    size_t pos = (size_t)end_byte;
+    size_t text_len = strlen(text);
+
+    if ((file == nullptr) || (file->data == nullptr) || (pos > file->len)) {
+        return false;
+    }
+    while ((pos < file->len) && isspace((unsigned char)file->data[pos])) {
+        pos++;
+    }
+    return (text_len <= file->len - pos) && (memcmp(file->data + pos, text, text_len) == 0);
+}
+
+static bool class_dossier_reference_has_foreign_receiver(
+    const CodeLensMappedFile *file,
+    uint32_t start_byte)
+{
+    size_t pos = (size_t)start_byte;
+    size_t end;
+    size_t start;
+
+    if ((file == nullptr) || (file->data == nullptr) || (pos > file->len)) {
+        return false;
+    }
+    while ((pos > 0U) && isspace((unsigned char)file->data[pos - 1U])) {
+        pos--;
+    }
+    if ((pos == 0U) || (file->data[pos - 1U] != '.')) {
+        return false;
+    }
+    pos--;
+    while ((pos > 0U) && isspace((unsigned char)file->data[pos - 1U])) {
+        pos--;
+    }
+    end = pos;
+    while ((pos > 0U) && class_dossier_identifier_char(
+                              (unsigned char)file->data[pos - 1U])) {
+        pos--;
+    }
+    start = pos;
+    return !class_dossier_token_equals(file->data + start, end - start, "this") &&
+           !class_dossier_token_equals(file->data + start, end - start, "super");
+}
+
+static bool class_dossier_reference_is_cast(const CodeLensMappedFile *file,
+                                            uint32_t start_byte,
+                                            uint32_t end_byte)
+{
+    size_t before = (size_t)start_byte;
+    size_t after = (size_t)end_byte;
+
+    if ((file == nullptr) || (file->data == nullptr) || (before > file->len) ||
+        (after > file->len)) {
+        return false;
+    }
+    while ((before > 0U) &&
+           (class_dossier_identifier_char((unsigned char)file->data[before - 1U]) ||
+            (file->data[before - 1U] == '.'))) {
+        before--;
+    }
+    while ((before > 0U) && isspace((unsigned char)file->data[before - 1U])) {
+        before--;
+    }
+    while ((after < file->len) && isspace((unsigned char)file->data[after])) {
+        after++;
+    }
+    return (before > 0U) && (file->data[before - 1U] == '(') && (after < file->len) &&
+           (file->data[after] == ')');
+}
+
+static char *class_dossier_source_line(const CodeLensMappedFile *file,
+                                       uint32_t start_byte,
+                                       uint32_t end_byte)
+{
+    size_t start;
+    size_t end;
+    char *line;
+
+    if ((file == nullptr) || (file->data == nullptr) ||
+        ((size_t)start_byte > (size_t)end_byte) || ((size_t)end_byte > file->len)) {
+        return copy_cstr("snippet unavailable");
+    }
+    start = line_start_before(file->data, (size_t)start_byte);
+    end = line_end_after(file->data, file->len, (size_t)end_byte);
+    while ((start < end) && isspace((unsigned char)file->data[start])) {
+        start++;
+    }
+    while ((end > start) && isspace((unsigned char)file->data[end - 1U])) {
+        end--;
+    }
+    line = copy_bytes(file->data + start, end - start);
+    return line == nullptr
+               ? nullptr
+               : class_dossier_compact_text(line, CLASS_DOSSIER_SNIPPET_MAX, false);
+}
+
+static bool class_dossier_usage_receiver_matches_type(
+    const CodeLensMappedFile *file,
+    uint32_t start_byte,
+    const char *symbol,
+    const char *type_name)
+{
+    const char *dot;
+    const char *receiver;
+    size_t receiver_len;
+    size_t type_len;
+    size_t end;
+    size_t begin;
+
+    if ((file == nullptr) || (file->data == nullptr) || (symbol == nullptr) ||
+        (type_name == nullptr) || ((dot = strrchr(symbol, '.')) == nullptr)) {
+        return false;
+    }
+    receiver = dot;
+    while ((receiver > symbol) &&
+           class_dossier_identifier_char((unsigned char)receiver[-1])) {
+        receiver--;
+    }
+    receiver_len = (size_t)(dot - receiver);
+    if (receiver_len == 0U) {
+        return false;
+    }
+    if (class_dossier_token_equals(receiver, receiver_len, type_name)) {
+        return true;
+    }
+
+    end = (size_t)start_byte > file->len ? file->len : (size_t)start_byte;
+    begin = end > 8192U ? end - 8192U : 0U;
+    type_len = strlen(type_name);
+    for (size_t pos = begin; (pos + type_len) <= end; pos++) {
+        size_t scan;
+        unsigned int angle_depth = 0U;
+
+        if ((memcmp(file->data + pos, type_name, type_len) != 0) ||
+            ((pos > 0U) && class_dossier_identifier_char(
+                              (unsigned char)file->data[pos - 1U])) ||
+            ((pos + type_len < file->len) && class_dossier_identifier_char(
+                                                (unsigned char)file->data[pos + type_len]))) {
+            continue;
+        }
+        scan = pos + type_len;
+        while ((scan < end) && isspace((unsigned char)file->data[scan])) {
+            scan++;
+        }
+        if ((scan < end) && (file->data[scan] == '<')) {
+            do {
+                if (file->data[scan] == '<') {
+                    angle_depth++;
+                } else if ((file->data[scan] == '>') && (angle_depth > 0U)) {
+                    angle_depth--;
+                }
+                scan++;
+            } while ((scan < end) && (angle_depth > 0U));
+            while ((scan < end) && isspace((unsigned char)file->data[scan])) {
+                scan++;
+            }
+        }
+        while ((scan + 1U < end) && (file->data[scan] == '[') &&
+               (file->data[scan + 1U] == ']')) {
+            scan += 2U;
+            while ((scan < end) && isspace((unsigned char)file->data[scan])) {
+                scan++;
+            }
+        }
+        if ((receiver_len <= end - scan) &&
+            (memcmp(file->data + scan, receiver, receiver_len) == 0) &&
+            ((scan + receiver_len == file->len) ||
+             !class_dossier_identifier_char(
+                 (unsigned char)file->data[scan + receiver_len]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static ClassDossierUsageGroup class_dossier_classify_usage(
+    const CodeLensMappedFile *file,
+    uint32_t start_byte,
+    uint32_t end_byte,
+    const char *base,
+    const char *type_name,
+    const char *member_kind,
+    bool is_test)
+{
+    if (is_test) {
+        return CLASS_USAGE_TEST;
+    }
+    if ((strcmp(base, type_name) == 0) &&
+        (class_dossier_reference_preceded_by(file, start_byte, "new") ||
+         class_dossier_reference_followed_by(file, end_byte, "::new"))) {
+        return CLASS_USAGE_CONSTRUCTION;
+    }
+    if ((strcmp(base, type_name) == 0) &&
+        (class_dossier_reference_preceded_by(file, start_byte, "instanceof") ||
+         class_dossier_reference_preceded_by(file, start_byte, "case") ||
+         class_dossier_reference_is_cast(file, start_byte, end_byte) ||
+         class_dossier_reference_followed_by(file, end_byte, ".class"))) {
+        return CLASS_USAGE_TYPE_CHECK;
+    }
+    if ((member_kind != nullptr) && class_dossier_method_kind(member_kind)) {
+        return CLASS_USAGE_CALL;
+    }
+    if ((member_kind != nullptr) &&
+        ((strcmp(member_kind, "field") == 0) ||
+         (strcmp(member_kind, "enum_constant") == 0))) {
+        return CLASS_USAGE_FIELD;
+    }
+    if ((strcmp(base, type_name) != 0) &&
+        class_dossier_reference_followed_by(file, end_byte, "(")) {
+        return CLASS_USAGE_CALL;
+    }
+    return CLASS_USAGE_OTHER;
+}
+
+static bool class_dossier_text_contains_case(const char *text, const char *needle)
+{
+    size_t needle_len;
+
+    if ((text == nullptr) || (needle == nullptr) || (needle[0] == '\0')) {
+        return false;
+    }
+    needle_len = strlen(needle);
+    for (size_t i = 0U; text[i] != '\0'; i++) {
+        size_t matched = 0U;
+
+        while ((matched < needle_len) && (text[i + matched] != '\0') &&
+               (tolower((unsigned char)text[i + matched]) ==
+                tolower((unsigned char)needle[matched]))) {
+            matched++;
+        }
+        if (matched == needle_len) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int class_dossier_usage_score(ClassDossierUsageGroup group,
+                                     const char *scope,
+                                     const char *path,
+                                     const char *type_path,
+                                     const char *snippet,
+                                     const char *member_kind)
+{
+    static const int group_scores[CLASS_USAGE_GROUP_COUNT] = {100, 85, 75, 95, 80, 55};
+    bool has_snippet = (snippet != nullptr) &&
+                       (strcmp(snippet, "snippet unavailable") != 0);
+    int score = group_scores[group];
+
+    score += strcmp(scope, "workspace") == 0 ? 40 : 0;
+    score += strcmp(path, type_path) == 0 ? -20 : 15;
+    score += has_snippet ? 5 : 0;
+    if (!has_snippet) {
+        return score;
+    }
+
+    /* Lexical intent signals break the many same-scope ties without relying
+     * on file order. They deliberately remain small compared with scope and
+     * purpose so ranking stays predictable. */
+    if ((strchr(snippet, '=') != nullptr) ||
+        class_dossier_text_contains_case(snippet, "return ")) {
+        score += 6;
+    }
+    if ((strlen(snippet) >= 24U) && (strlen(snippet) <= 240U)) {
+        score += 3;
+    }
+    switch (group) {
+        case CLASS_USAGE_CONSTRUCTION:
+            score += strchr(snippet, '"') != nullptr ? 6 : 0;
+            score += class_dossier_text_contains_case(snippet, "return ") ? 4 : 0;
+            break;
+        case CLASS_USAGE_CALL:
+            score += (member_kind != nullptr) ? 8 : 0;
+            score += class_dossier_text_contains_case(snippet, "if (") ? 3 : 0;
+            break;
+        case CLASS_USAGE_FIELD:
+            score += strcmp(path, type_path) == 0 ? 0 : 8;
+            break;
+        case CLASS_USAGE_TYPE_CHECK:
+            score += class_dossier_text_contains_case(snippet, "if (") ? 8 : 0;
+            score += class_dossier_text_contains_case(snippet, "switch") ? 5 : 0;
+            break;
+        case CLASS_USAGE_TEST:
+            score += class_dossier_text_contains_case(snippet, "assert") ? 18 : 0;
+            score += (class_dossier_text_contains_case(snippet, "expect") ||
+                      class_dossier_text_contains_case(snippet, "verif") ||
+                      class_dossier_text_contains_case(snippet, "should"))
+                         ? 10
+                         : 0;
+            break;
+        case CLASS_USAGE_OTHER:
+        case CLASS_USAGE_GROUP_COUNT:
+            break;
+    }
+    return score;
+}
+
+static int class_dossier_compare_usages(const void *left_value, const void *right_value)
+{
+    const ClassDossierUsage *left = left_value;
+    const ClassDossierUsage *right = right_value;
+    int path_order;
+
+    if (left->group != right->group) {
+        return left->group < right->group ? -1 : 1;
+    }
+    if (left->score != right->score) {
+        return left->score > right->score ? -1 : 1;
+    }
+    path_order = strcmp(left->path, right->path);
+    if (path_order != 0) {
+        return path_order;
+    }
+    if (left->line != right->line) {
+        return left->line < right->line ? -1 : 1;
+    }
+    return left->column < right->column ? -1 : left->column != right->column;
+}
+
+static int class_dossier_load_usages(CodeLensDb *db,
+                                     const char *repo_name,
+                                     const ClassDossierSymbol *type,
+                                     const ClassDossierSymbol *members,
+                                     size_t member_count,
+                                     int exclude_tests,
+                                     ClassDossierUsage *usages,
+                                     size_t *out_count,
+                                     bool *out_more)
+{
+    static const char sql[] =
+        "WITH type_files(fileId) AS MATERIALIZED ("
+        "SELECT DISTINCT tr.fileId FROM Ref tr "
+        "WHERE tr.symbolBase=?4 AND tr.targetNamespace=?2) "
+        "SELECT f.path, r.lineNumber, r.columnNumber, r.startByte, r.endByte, "
+        "r.symbol, r.symbolBase, "
+        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
+        "COALESCE(da.coordinate, ''), "
+        "CASE WHEN r.targetNamespace='' AND EXISTS (SELECT 1 FROM Referred erf "
+        "WHERE erf.repo=f.repo AND erf.filePath=f.path AND erf.namespace=?2 "
+        "AND (erf.symbol=r.symbolBase OR erf.symbol=':all')) THEN ?2 "
+        "ELSE r.targetNamespace END, "
+        "CASE WHEN instr(lower(replace(f.path, '\\', '/')), '/test/')>0 "
+        "OR instr(lower(replace(f.path, '\\', '/')), '/tests/')>0 "
+        "OR EXISTS (SELECT 1 FROM Symbol tst WHERE tst.repo=f.repo "
+        "AND tst.filePath=f.path AND tst.kind='test' "
+        "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine) THEN 1 ELSE 0 END "
+        "FROM Ref r JOIN File f ON f.rowid=r.fileId "
+        "LEFT JOIN DependencyFile df ON df.repo=f.repo AND df.filePath=f.path "
+        "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
+        "WHERE f.repo=?1 AND (r.targetNamespace=?2 OR "
+        "(r.targetNamespace='' AND EXISTS (SELECT 1 FROM Referred rf "
+        "WHERE rf.repo=f.repo AND rf.filePath=f.path AND rf.namespace=?2 "
+        "AND (rf.symbol=r.symbolBase OR rf.symbol=':all'))) OR "
+        "(r.targetNamespace='' AND EXISTS (SELECT 1 FROM Symbol ms "
+        "WHERE ms.repo=f.repo AND ms.namespace=?2 AND ms.name=r.symbolBase "
+        "AND ms.kind IN ('method','test','field','enum_constant')) "
+        "AND r.fileId IN (SELECT fileId FROM type_files))) "
+        "AND (?3=0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/')=0 "
+        "AND instr(lower(replace(f.path, '\\', '/')), '/tests/')=0 "
+        "AND NOT EXISTS (SELECT 1 FROM Symbol tst WHERE tst.repo=f.repo "
+        "AND tst.filePath=f.path AND tst.kind='test' "
+        "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine))) "
+        "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, "
+        "CASE WHEN r.targetNamespace=?2 THEN 0 ELSE 1 END, f.path, r.lineNumber, "
+        "r.columnNumber LIMIT 513";
+    sqlite3_stmt *stmt = nullptr;
+    CodeLensMappedFile mapped = {0};
+    char *mapped_path = nullptr;
+    bool has_mapping = false;
+    size_t count = 0U;
+    int rc;
+
+    *out_count = 0U;
+    *out_more = false;
+    if ((db_prepare(db, sql, &stmt) != 0) || (bind_text(stmt, 1, repo_name) != 0) ||
+        (bind_text(stmt, 2, type->namespace_name) != 0) ||
+        (sqlite3_bind_int(stmt, 3, exclude_tests) != SQLITE_OK) ||
+        (bind_text(stmt, 4, type->name) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *path = (const char *)sqlite3_column_text(stmt, 0);
+        uint32_t line = (uint32_t)sqlite3_column_int64(stmt, 1);
+        uint32_t column = (uint32_t)sqlite3_column_int64(stmt, 2);
+        uint32_t start_byte = (uint32_t)sqlite3_column_int64(stmt, 3);
+        uint32_t end_byte = (uint32_t)sqlite3_column_int64(stmt, 4);
+        const char *symbol = (const char *)sqlite3_column_text(stmt, 5);
+        const char *base = (const char *)sqlite3_column_text(stmt, 6);
+        const char *scope = (const char *)sqlite3_column_text(stmt, 7);
+        const char *dependency = (const char *)sqlite3_column_text(stmt, 8);
+        const char *target = (const char *)sqlite3_column_text(stmt, 9);
+        bool is_test = sqlite3_column_int(stmt, 10) != 0;
+        const char *member_kind;
+        ClassDossierUsage *usage;
+
+        if (count >= CLASS_DOSSIER_MAX_USAGE_LOAD) {
+            *out_more = true;
+            continue;
+        }
+        if ((path == nullptr) || (base == nullptr)) {
+            continue;
+        }
+        if ((mapped_path == nullptr) || (strcmp(mapped_path, path) != 0)) {
+            if (has_mapping) {
+                code_lens_mapped_file_free(&mapped);
+                has_mapping = false;
+            }
+            mapped_path = copy_cstr(path);
+            if ((mapped_path != nullptr) && (code_lens_map_file(mapped_path, &mapped) == 0)) {
+                has_mapping = true;
+            }
+        }
+        if ((target != nullptr) && (target[0] == '\0') &&
+            (!has_mapping ||
+             !class_dossier_usage_receiver_matches_type(&mapped,
+                                                         start_byte,
+                                                         symbol,
+                                                         type->name))) {
+            continue;
+        }
+        usage = &usages[count];
+        (void)memset(usage, 0, sizeof(*usage));
+        member_kind = class_dossier_member_kind_for_name(members, member_count, base);
+        usage->group = class_dossier_classify_usage(has_mapping ? &mapped : nullptr,
+                                                     start_byte,
+                                                     end_byte,
+                                                     base,
+                                                     type->name,
+                                                     member_kind,
+                                                     is_test);
+        usage->path = copy_cstr(path);
+        usage->line = line;
+        usage->column = column;
+        usage->symbol = copy_cstr(symbol == nullptr ? base : symbol);
+        usage->base = copy_cstr(base);
+        usage->scope = copy_cstr(scope == nullptr ? "workspace" : scope);
+        usage->dependency = copy_cstr(dependency == nullptr ? "" : dependency);
+        usage->snippet = has_mapping
+                             ? class_dossier_source_line(&mapped, start_byte, end_byte)
+                             : copy_cstr("snippet unavailable");
+        if ((usage->path == nullptr) || (usage->symbol == nullptr) ||
+            (usage->base == nullptr) || (usage->scope == nullptr) ||
+            (usage->dependency == nullptr) ||
+            (usage->snippet == nullptr)) {
+            if (has_mapping) {
+                code_lens_mapped_file_free(&mapped);
+            }
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        usage->score = class_dossier_usage_score(usage->group,
+                                                  usage->scope,
+                                                  usage->path,
+                                                  type->file_path,
+                                                  usage->snippet,
+                                                  member_kind);
+        count++;
+    }
+    if (has_mapping) {
+        code_lens_mapped_file_free(&mapped);
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query Java type usages");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    qsort(usages, count, sizeof(*usages), class_dossier_compare_usages);
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_declares_method(const ClassDossierSymbol *members,
+                                           size_t count,
+                                           const char *name)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if (class_dossier_method_kind(members[i].kind) &&
+            (strcmp(members[i].name, name) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool class_dossier_namespace_is_ancestor(
+    const ClassDossierAncestor *ancestors,
+    size_t count,
+    const char *namespace_name)
+{
+    if ((namespace_name == nullptr) || (namespace_name[0] == '\0')) {
+        return false;
+    }
+    for (size_t i = 0U; i < count; i++) {
+        if (strcmp(ancestors[i].definition.namespace_name, namespace_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t class_dossier_find_inherited_method(
+    const ClassDossierSymbol *methods,
+    const unsigned int *depths,
+    size_t method_count,
+    const ClassDossierAncestor *ancestors,
+    size_t ancestor_count,
+    const char *name,
+    const char *target_namespace)
+{
+    size_t best = SIZE_MAX;
+    bool target_is_ancestor = class_dossier_namespace_is_ancestor(ancestors,
+                                                                  ancestor_count,
+                                                                  target_namespace);
+
+    if ((target_namespace != nullptr) && (target_namespace[0] != '\0') &&
+        !target_is_ancestor) {
+        return SIZE_MAX;
+    }
+    for (size_t i = 0U; i < method_count; i++) {
+        bool exact_target;
+        bool best_exact_target;
+
+        if (strcmp(methods[i].name, name) != 0) {
+            continue;
+        }
+        exact_target = target_is_ancestor &&
+                       (strcmp(methods[i].namespace_name, target_namespace) == 0);
+        best_exact_target = (best != SIZE_MAX) && target_is_ancestor &&
+                            (strcmp(methods[best].namespace_name,
+                                    target_namespace) == 0);
+        if ((best == SIZE_MAX) || (exact_target && !best_exact_target) ||
+            (exact_target == best_exact_target && depths[i] < depths[best]) ||
+            (exact_target == best_exact_target && depths[i] == depths[best] &&
+             methods[i].start_line < methods[best].start_line)) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+static bool class_dossier_inherited_exists(const ClassDossierInherited *items,
+                                            size_t count,
+                                            const ClassDossierSymbol *method,
+                                            size_t *out_index)
+{
+    for (size_t i = 0U; i < count; i++) {
+        if ((strcmp(items[i].method.namespace_name, method->namespace_name) == 0) &&
+            (strcmp(items[i].method.name, method->name) == 0) &&
+            (items[i].method.start_line == method->start_line)) {
+            if (out_index != nullptr) {
+                *out_index = i;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool class_dossier_add_inherited(ClassDossierInherited *items,
+                                         size_t *count,
+                                         const ClassDossierSymbol *method,
+                                         unsigned int depth,
+                                         const char *reason,
+                                         int score,
+                                         bool *out_more)
+{
+    size_t existing = 0U;
+
+    if (class_dossier_inherited_exists(items, *count, method, &existing)) {
+        if (score > items[existing].score) {
+            items[existing].reason = copy_cstr(reason);
+            items[existing].score = score;
+            items[existing].depth = depth;
+            if (items[existing].reason == nullptr) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (*count >= CLASS_DOSSIER_MAX_INHERITED) {
+        *out_more = true;
+        return true;
+    }
+    items[*count].method = *method;
+    items[*count].reason = copy_cstr(reason);
+    items[*count].depth = depth;
+    items[*count].score = score;
+    if (items[*count].reason == nullptr) {
+        return false;
+    }
+    (*count)++;
+    return true;
+}
+
+static int class_dossier_compare_inherited(const void *left_value,
+                                            const void *right_value)
+{
+    const ClassDossierInherited *left = left_value;
+    const ClassDossierInherited *right = right_value;
+    int order;
+
+    if (left->score != right->score) {
+        return left->score > right->score ? -1 : 1;
+    }
+    if (left->depth != right->depth) {
+        return left->depth < right->depth ? -1 : 1;
+    }
+    order = strcmp(left->method.namespace_name, right->method.namespace_name);
+    if (order != 0) {
+        return order;
+    }
+    if (left->method.start_line != right->method.start_line) {
+        return left->method.start_line < right->method.start_line ? -1 : 1;
+    }
+    return 0;
+}
+
+static int class_dossier_load_relevant_inherited(
+    CodeLensDb *db,
+    const char *repo_name,
+    const ClassDossierSymbol *type,
+    const ClassDossierSymbol *members,
+    size_t member_count,
+    const ClassDossierAncestor *ancestors,
+    size_t ancestor_count,
+    const ClassDossierOverride *overrides,
+    size_t override_count,
+    const ClassDossierUsage *usages,
+    size_t usage_count,
+    int exclude_tests,
+    ClassDossierInherited *items,
+    size_t *out_count,
+    bool *out_more)
+{
+    static const char refs_sql[] =
+        "SELECT r.symbolBase, r.targetNamespace, r.lineNumber, r.startByte, r.endByte "
+        "FROM Ref r JOIN File f ON f.rowid=r.fileId "
+        "WHERE f.repo=?1 AND f.path=?2 AND r.lineNumber>=?3 AND r.lineNumber<=?4 "
+        "ORDER BY r.lineNumber, r.columnNumber LIMIT 512";
+    ClassDossierSymbol methods[CLASS_DOSSIER_MAX_INHERITED_METHOD_LOAD];
+    unsigned int depths[CLASS_DOSSIER_MAX_INHERITED_METHOD_LOAD];
+    size_t method_count = 0U;
+    size_t count = 0U;
+    sqlite3_stmt *stmt = nullptr;
+    CodeLensMappedFile mapped = {0};
+    bool has_mapping = false;
+    int rc = SQLITE_DONE;
+
+    *out_count = 0U;
+    *out_more = false;
+    for (size_t ancestor_index = 0U; ancestor_index < ancestor_count;
+         ancestor_index++) {
+        size_t loaded = 0U;
+        size_t capacity = CLASS_DOSSIER_MAX_INHERITED_METHOD_LOAD - method_count;
+
+        if (capacity == 0U) {
+            *out_more = true;
+            break;
+        }
+        if (class_dossier_load_methods_for_namespace(
+                db,
+                repo_name,
+                ancestors[ancestor_index].definition.namespace_name,
+                exclude_tests,
+                methods + method_count,
+                capacity,
+                &loaded) != 0) {
+            return -1;
+        }
+        for (size_t i = 0U; i < loaded; i++) {
+            depths[method_count + i] = ancestors[ancestor_index].depth;
+        }
+        method_count += loaded;
+    }
+
+    /* Override targets are behaviorally relevant even when the subclass does
+     * not call them. This also captures abstract/interface contracts. */
+    for (size_t override_index = 0U; override_index < override_count;
+         override_index++) {
+        const ClassDossierOverride *override = &overrides[override_index];
+
+        if (override->incoming) {
+            continue;
+        }
+        for (size_t method_index = 0U; method_index < method_count; method_index++) {
+            if ((strcmp(methods[method_index].namespace_name,
+                        override->other_namespace) == 0) &&
+                (strcmp(methods[method_index].name, override->other_name) == 0) &&
+                (methods[method_index].start_line == override->other_line)) {
+                const char *reason = strcmp(override->relation, "implements") == 0
+                                         ? "implemented contract"
+                                         : "overridden declaration";
+
+                if (!class_dossier_add_inherited(items,
+                                                 &count,
+                                                 &methods[method_index],
+                                                 depths[method_index],
+                                                 reason,
+                                                 120 - (int)depths[method_index],
+                                                 out_more)) {
+                    return -1;
+                }
+                break;
+            }
+        }
+    }
+
+    if ((method_count > 0U) &&
+        (db_prepare(db, refs_sql, &stmt) == 0) &&
+        (bind_text(stmt, 1, repo_name) == 0) &&
+        (bind_text(stmt, 2, type->file_path) == 0) &&
+        (sqlite3_bind_int64(stmt, 3, (sqlite3_int64)type->start_line) == SQLITE_OK) &&
+        (sqlite3_bind_int64(stmt, 4, (sqlite3_int64)type->end_line) == SQLITE_OK)) {
+        has_mapping = code_lens_map_file(type->file_path, &mapped) == 0;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            const char *base = (const char *)sqlite3_column_text(stmt, 0);
+            const char *target = (const char *)sqlite3_column_text(stmt, 1);
+            uint32_t line = (uint32_t)sqlite3_column_int64(stmt, 2);
+            uint32_t start_byte = (uint32_t)sqlite3_column_int64(stmt, 3);
+            uint32_t end_byte = (uint32_t)sqlite3_column_int64(stmt, 4);
+            const ClassDossierSymbol *owner;
+            size_t method_index;
+            char *reason;
+
+            if ((base == nullptr) || (target == nullptr) ||
+                (has_mapping &&
+                 (!class_dossier_reference_followed_by(&mapped, end_byte, "(") ||
+                  class_dossier_reference_has_foreign_receiver(&mapped,
+                                                               start_byte)))) {
+                continue;
+            }
+            if (class_dossier_declares_method(members, member_count, base) &&
+                !class_dossier_namespace_is_ancestor(ancestors,
+                                                     ancestor_count,
+                                                     target)) {
+                continue;
+            }
+            method_index = class_dossier_find_inherited_method(methods,
+                                                               depths,
+                                                               method_count,
+                                                               ancestors,
+                                                               ancestor_count,
+                                                               base,
+                                                               target);
+            if (method_index == SIZE_MAX) {
+                continue;
+            }
+            owner = class_dossier_member_at_line(members, member_count, line);
+            if ((owner == nullptr) || class_dossier_java_type_kind(owner->kind)) {
+                continue;
+            }
+            reason = alloc_printf("called by `%s`", owner->name);
+            if ((reason == nullptr) ||
+                !class_dossier_add_inherited(items,
+                                             &count,
+                                             &methods[method_index],
+                                             depths[method_index],
+                                             reason,
+                                             100 - (int)depths[method_index],
+                                             out_more)) {
+                if (has_mapping) {
+                    code_lens_mapped_file_free(&mapped);
+                }
+                (void)sqlite3_finalize(stmt);
+                return -1;
+            }
+        }
+    } else if (method_count > 0U) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    if (has_mapping) {
+        code_lens_mapped_file_free(&mapped);
+    }
+    if (stmt != nullptr) {
+        if (rc != SQLITE_DONE) {
+            (void)report_sqlite_error(db->handle, "query inherited Java calls");
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        (void)sqlite3_finalize(stmt);
+    }
+
+    /* Calls made on instances at representative usage sites reveal inherited
+     * public behavior (for example Node.peephole on CProjNode) without
+     * enumerating every inherited method. */
+    for (size_t usage_index = 0U; usage_index < usage_count; usage_index++) {
+        size_t method_index;
+
+        if ((usages[usage_index].group != CLASS_USAGE_CALL) ||
+            class_dossier_declares_method(members,
+                                          member_count,
+                                          usages[usage_index].base)) {
+            continue;
+        }
+        method_index = class_dossier_find_inherited_method(methods,
+                                                           depths,
+                                                           method_count,
+                                                           ancestors,
+                                                           ancestor_count,
+                                                           usages[usage_index].base,
+                                                           "");
+        if ((method_index != SIZE_MAX) &&
+            !class_dossier_add_inherited(items,
+                                         &count,
+                                         &methods[method_index],
+                                         depths[method_index],
+                                         "called on instances at usage sites",
+                                         70 - (int)depths[method_index],
+                                         out_more)) {
+            return -1;
+        }
+    }
+    qsort(items, count, sizeof(*items), class_dossier_compare_inherited);
+    *out_count = count;
+    return 0;
+}
+
+static bool class_dossier_append_code_block(StringBuilder *out,
+                                            const char *content,
+                                            size_t max_bytes)
+{
+    size_t len = content == nullptr ? 0U : strlen(content);
+    size_t shown = len > max_bytes ? max_bytes : len;
+
+    while ((shown > 0U) && (shown < len) &&
+           (((unsigned char)content[shown] & 0xc0U) == 0x80U)) {
+        shown--;
+    }
+    return sb_append(out, "```java\n") && sb_append_len(out, content == nullptr ? "" : content, shown) &&
+           ((shown == 0U) || (content[shown - 1U] == '\n') || sb_append(out, "\n")) &&
+           ((shown == len) || sb_append(out, "// ... declaration truncated by dossier cap\n")) &&
+           sb_append(out, "```\n");
+}
+
+static bool class_dossier_append_type_header(StringBuilder *out,
+                                             const ClassDossierSymbol *type)
+{
+    char *doc = class_dossier_compact_text(type->doc, 800U, false);
+
+    if (doc == nullptr) {
+        return false;
+    }
+    if (!sb_append(out,
+                   "name|kind|namespace|filePath|startLine|endLine|scope|dependency\n") ||
+        !sb_appendf(out,
+                    "%s|%s|%s|%s|%u|%u|%s|%s\n",
+                    type->name,
+                    type->kind,
+                    type->namespace_name,
+                    type->file_path,
+                    type->start_line,
+                    type->end_line,
+                    type->scope,
+                    type->dependency)) {
+        return false;
+    }
+    if ((doc[0] != '\0') &&
+        (!sb_append(out, "\nDocumentation: ") || !sb_append(out, doc) ||
+         !sb_append(out, "\n"))) {
+        return false;
+    }
+    return sb_append(out, "\nDeclaration\n-----------\n") &&
+           class_dossier_append_code_block(out, type->content, 4096U);
+}
+
+static bool class_dossier_append_members(StringBuilder *out,
+                                         const ClassDossierSymbol *members,
+                                         size_t member_count,
+                                         bool more_members)
+{
+    size_t shown = member_count > CLASS_DOSSIER_MAX_MEMBERS
+                       ? CLASS_DOSSIER_MAX_MEMBERS
+                       : member_count;
+
+    if (!sb_appendf(out, "\nMembers (%zu", member_count) ||
+        (more_members && !sb_append(out, "+")) || !sb_append(out, ")\n-------") ||
+        !sb_append(out, "\n")) {
+        return false;
+    }
+    if (shown == 0U) {
+        return sb_append(out, "(none indexed)\n");
+    }
+    for (size_t i = 0U; i < shown; i++) {
+        char *source = class_dossier_member_source(&members[i], member_count > 64U);
+        char *doc = class_dossier_compact_text(members[i].doc, 240U, false);
+
+        if ((source == nullptr) || (doc == nullptr) ||
+            !sb_appendf(out,
+                        "- %s `%s` (lines %u-%u)\n  %s\n",
+                        members[i].kind,
+                        members[i].name,
+                        members[i].start_line,
+                        members[i].end_line,
+                        source)) {
+            return false;
+        }
+        if ((doc[0] != '\0') &&
+            (!sb_append(out, "  doc: ") || !sb_append(out, doc) || !sb_append(out, "\n"))) {
+            return false;
+        }
+    }
+    if ((shown < member_count) || more_members) {
+        return sb_appendf(out,
+                          "note: showing the first %zu members; additional members omitted by "
+                          "the dossier cap\n",
+                          shown);
+    }
+    return true;
+}
+
+static bool class_dossier_append_hierarchy(StringBuilder *out,
+                                           const ClassDossierLink *links,
+                                           size_t count)
+{
+    if (!sb_appendf(out, "\nInheritance and subtypes (%zu)\n-----------------------------\n", count)) {
+        return false;
+    }
+    if (count == 0U) {
+        return sb_append(out, "(no indexed direct relationships)\n");
+    }
+    for (size_t i = 0U; i < count; i++) {
+        const ClassDossierSymbol *definition = &links[i].definition;
+
+        if (!sb_appendf(out, "- %s `%s`", links[i].relation, links[i].target_namespace)) {
+            return false;
+        }
+        if ((definition->kind != nullptr) && (definition->kind[0] != '\0') &&
+            (!sb_appendf(out,
+                         " (%s) — %s:%u",
+                         definition->kind,
+                         definition->file_path,
+                         definition->start_line))) {
+            return false;
+        }
+        if (!sb_append(out, "\n")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool class_dossier_append_overrides(StringBuilder *out,
+                                           const ClassDossierSymbol *type,
+                                           const ClassDossierOverride *items,
+                                           size_t count)
+{
+    if (!sb_appendf(out,
+                    "\nOverrides and implementations (%zu)\n"
+                    "-------------------------------------\n",
+                    count)) {
+        return false;
+    }
+    if (count == 0U) {
+        return sb_append(out, "(no direct name/arity matches)\n");
+    }
+    for (size_t i = 0U; i < count; i++) {
+        char *current_signature =
+            class_dossier_short_signature(items[i].current_content, items[i].current_name);
+        char *other_signature =
+            class_dossier_short_signature(items[i].other_content, items[i].other_name);
+
+        if ((current_signature == nullptr) || (other_signature == nullptr)) {
+            return false;
+        }
+        if (items[i].incoming) {
+            if (!sb_appendf(out,
+                            "- `%s.%s` %s `%s.%s` — %s:%u\n",
+                            items[i].other_namespace,
+                            other_signature,
+                            items[i].relation,
+                            type->namespace_name,
+                            current_signature,
+                            items[i].other_path,
+                            items[i].other_line)) {
+                return false;
+            }
+        } else if (!sb_appendf(out,
+                               "- `%s.%s` %s `%s.%s` — %s:%u\n",
+                               type->namespace_name,
+                               current_signature,
+                               items[i].relation,
+                               items[i].other_namespace,
+                               other_signature,
+                               items[i].other_path,
+                               items[i].other_line)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool class_dossier_append_inherited(StringBuilder *out,
+                                           const ClassDossierInherited *items,
+                                           size_t count,
+                                           bool more)
+{
+    if (!sb_appendf(out,
+                    "\nRelevant inherited methods (%zu%s)\n"
+                    "--------------------------------\n",
+                    count,
+                    more ? "+" : "")) {
+        return false;
+    }
+    if (count == 0U) {
+        return sb_append(out, "(none selected)\n");
+    }
+    for (size_t i = 0U; i < count; i++) {
+        char *signature = class_dossier_short_signature(items[i].method.content,
+                                                         items[i].method.name);
+        char *source = class_dossier_member_source(&items[i].method, false);
+
+        if ((signature == nullptr) || (source == nullptr) ||
+            !sb_appendf(out,
+                        "- `%s.%s` — %s — %s:%u\n  %s\n",
+                        items[i].method.namespace_name,
+                        signature,
+                        items[i].reason,
+                        items[i].method.file_path,
+                        items[i].method.start_line,
+                        source)) {
+            return false;
+        }
+    }
+    if (more) {
+        return sb_append(out,
+                         "note: additional inherited candidates were omitted by "
+                         "the dossier cap\n");
+    }
+    return true;
+}
+
+static bool class_dossier_append_supporting(StringBuilder *out,
+                                            const ClassDossierLink *supporting,
+                                            size_t count)
+{
+    if (!sb_appendf(out,
+                    "\nSupporting definitions (%zu)\n---------------------------\n",
+                    count)) {
+        return false;
+    }
+    if (count == 0U) {
+        return sb_append(out, "(none selected)\n");
+    }
+    for (size_t i = 0U; i < count; i++) {
+        const ClassDossierSymbol *definition = &supporting[i].definition;
+        char *declaration = class_dossier_compact_text(definition->content, 480U, false);
+
+        if ((declaration == nullptr) ||
+            !sb_appendf(out,
+                        "- %s `%s` (%s) — %s:%u\n  %s\n",
+                        supporting[i].relation,
+                        supporting[i].target_namespace,
+                        definition->kind,
+                        definition->file_path,
+                        definition->start_line,
+                        declaration)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool class_dossier_usage_path_selected(const ClassDossierUsage *usages,
+                                               const size_t *selected,
+                                               size_t selected_count,
+                                               const char *path)
+{
+    for (size_t i = 0U; i < selected_count; i++) {
+        if (strcmp(usages[selected[i]].path, path) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool class_dossier_append_usage_group(StringBuilder *out,
+                                             const ClassDossierUsage *usages,
+                                             size_t usage_count,
+                                             ClassDossierUsageGroup group,
+                                             const char *title)
+{
+    size_t selected[CLASS_DOSSIER_USAGES_PER_GROUP];
+    size_t selected_count = 0U;
+    size_t total = 0U;
+
+    for (size_t i = 0U; i < usage_count; i++) {
+        total += usages[i].group == group ? 1U : 0U;
+    }
+    for (unsigned int pass = 0U;
+         (pass < 2U) && (selected_count < CLASS_DOSSIER_USAGES_PER_GROUP);
+         pass++) {
+        for (size_t i = 0U;
+             (i < usage_count) && (selected_count < CLASS_DOSSIER_USAGES_PER_GROUP);
+             i++) {
+            if (usages[i].group != group) {
+                continue;
+            }
+            if ((pass == 0U) && class_dossier_usage_path_selected(usages,
+                                                                  selected,
+                                                                  selected_count,
+                                                                  usages[i].path)) {
+                continue;
+            }
+            bool already_selected = false;
+
+            for (size_t j = 0U; j < selected_count; j++) {
+                if (selected[j] == i) {
+                    already_selected = true;
+                    break;
+                }
+            }
+            if (!already_selected) {
+                selected[selected_count++] = i;
+            }
+        }
+    }
+    if (!sb_appendf(out, "\n%s (%zu", title, total) ||
+        ((selected_count < total) && !sb_appendf(out, "; showing %zu", selected_count)) ||
+        !sb_append(out, ")\n")) {
+        return false;
+    }
+    if (selected_count == 0U) {
+        return sb_append(out, "- none\n");
+    }
+    for (size_t i = 0U; i < selected_count; i++) {
+        const ClassDossierUsage *usage = &usages[selected[i]];
+
+        if (!sb_appendf(out,
+                        "- %s:%u:%u [%s%s%s] %s\n  > %s\n",
+                        usage->path,
+                        usage->line,
+                        usage->column,
+                        usage->scope,
+                        usage->dependency[0] == '\0' ? "" : " ",
+                        usage->dependency,
+                        usage->symbol,
+                        usage->snippet)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool class_dossier_append_usages(StringBuilder *out,
+                                        const ClassDossierUsage *usages,
+                                        size_t count,
+                                        bool more)
+{
+    static const char *const titles[CLASS_USAGE_GROUP_COUNT] = {
+        "Construction", "Calls", "Field access", "Type checks", "Tests",
+        "Other type references",
+    };
+
+    if (!sb_appendf(out,
+                    "\nUsages — representative references (%zu%s)\n"
+                    "============================================\n"
+                    "Ranked by explanatory signals, workspace-first, and diversified by "
+                    "source file.\n",
+                    count,
+                    more ? "+" : "")) {
+        return false;
+    }
+    for (size_t group = 0U; group < CLASS_USAGE_GROUP_COUNT; group++) {
+        if (!class_dossier_append_usage_group(out,
+                                              usages,
+                                              count,
+                                              (ClassDossierUsageGroup)group,
+                                              titles[group])) {
+            return false;
+        }
+    }
+    if (more) {
+        return sb_append(out,
+                         "note: additional references were omitted by the dossier scan cap\n");
+    }
+    return true;
+}
+
+static bool class_dossier_render_one(CodeLensDb *db,
+                                     const char *repo_name,
+                                     const ClassDossierSymbol *type,
+                                     int exclude_tests,
+                                     StringBuilder *out)
+{
+    ClassDossierSymbol members[CLASS_DOSSIER_MAX_MEMBER_LOAD];
+    ClassDossierLink links[CLASS_DOSSIER_MAX_LINKS];
+    ClassDossierAncestor ancestors[CLASS_DOSSIER_MAX_ANCESTORS];
+    ClassDossierOverride overrides[CLASS_DOSSIER_MAX_OVERRIDES];
+    ClassDossierInherited inherited[CLASS_DOSSIER_MAX_INHERITED];
+    ClassDossierLink supporting[CLASS_DOSSIER_MAX_SUPPORTING];
+    ClassDossierUsage usages[CLASS_DOSSIER_MAX_USAGE_LOAD];
+    size_t member_count = 0U;
+    size_t link_count = 0U;
+    size_t ancestor_count = 0U;
+    size_t override_count = 0U;
+    size_t inherited_count = 0U;
+    size_t supporting_count = 0U;
+    size_t usage_count = 0U;
+    bool more_members = false;
+    bool more_ancestors = false;
+    bool more_inherited = false;
+    bool more_usages = false;
+
+    (void)memset(links, 0, sizeof(links));
+    (void)memset(supporting, 0, sizeof(supporting));
+    if (!class_dossier_java_type_kind(type->kind) ||
+        (class_dossier_load_members(db,
+                                    repo_name,
+                                    type,
+                                    exclude_tests,
+                                    members,
+                                    &member_count,
+                                    &more_members) != 0) ||
+        (class_dossier_load_direct_links(db,
+                                         repo_name,
+                                         type,
+                                         links,
+                                         &link_count) != 0) ||
+        (class_dossier_load_incoming_links(db,
+                                           repo_name,
+                                           type,
+                                           links,
+                                           &link_count) != 0) ||
+        (class_dossier_load_ancestors(db,
+                                      repo_name,
+                                      type,
+                                      links,
+                                      link_count,
+                                      ancestors,
+                                      &ancestor_count,
+                                      &more_ancestors) != 0) ||
+        (class_dossier_load_overrides(db,
+                                      repo_name,
+                                      type,
+                                      members,
+                                      member_count,
+                                      links,
+                                      link_count,
+                                      ancestors,
+                                      ancestor_count,
+                                      exclude_tests,
+                                      overrides,
+                                      &override_count) != 0) ||
+        (class_dossier_load_supporting(db,
+                                       repo_name,
+                                       type,
+                                       members,
+                                       member_count,
+                                       links,
+                                       link_count,
+                                       supporting,
+                                       &supporting_count) != 0) ||
+        (class_dossier_load_usages(db,
+                                   repo_name,
+                                   type,
+                                   members,
+                                   member_count,
+                                   exclude_tests,
+                                   usages,
+                                   &usage_count,
+                                   &more_usages) != 0) ||
+        (class_dossier_load_relevant_inherited(db,
+                                               repo_name,
+                                               type,
+                                               members,
+                                               member_count,
+                                               ancestors,
+                                               ancestor_count,
+                                               overrides,
+                                               override_count,
+                                               usages,
+                                               usage_count,
+                                               exclude_tests,
+                                               inherited,
+                                               &inherited_count,
+                                               &more_inherited) != 0)) {
+        return false;
+    }
+    more_inherited = more_inherited || more_ancestors;
+    return class_dossier_append_type_header(out, type) &&
+           class_dossier_append_members(out, members, member_count, more_members) &&
+           class_dossier_append_hierarchy(out, links, link_count) &&
+           class_dossier_append_overrides(out, type, overrides, override_count) &&
+           class_dossier_append_inherited(out,
+                                          inherited,
+                                          inherited_count,
+                                          more_inherited) &&
+           class_dossier_append_supporting(out, supporting, supporting_count) &&
+           class_dossier_append_usages(out, usages, usage_count, more_usages);
+}
+
+static char *class_dossier_render(CodeLensDb *db,
+                                  const char *repo_name,
+                                  const char *symbol_base,
+                                  const char *namespace_filter,
+                                  const char *path_filter,
+                                  const char *definition_scope,
+                                  int exclude_tests,
+                                  ClassDossierStatus *out_status)
+{
+    ClassDossierSymbol types[CLASS_DOSSIER_MAX_TYPES];
+    size_t type_count = 0U;
+    bool more_types = false;
+    StringBuilder out = {0};
+
+    *out_status = CLASS_DOSSIER_ERROR;
+    if (class_dossier_load_type_candidates(db,
+                                           repo_name,
+                                           symbol_base,
+                                           namespace_filter,
+                                           path_filter,
+                                           definition_scope,
+                                           exclude_tests,
+                                           types,
+                                           &type_count,
+                                           &more_types) != 0) {
+        return nullptr;
+    }
+    if (type_count == 0U) {
+        *out_status = CLASS_DOSSIER_NOT_A_TYPE;
+        return nullptr;
+    }
+    if (!sb_append(&out,
+                   "Class Dossier\n=============\n"
+                   "Bounded semantic neighborhood; unrelated inherited APIs and "
+                   "repetitive usages are omitted.\n")) {
+        return nullptr;
+    }
+    if ((type_count > 1U) || more_types) {
+        if (!sb_appendf(&out,
+                        "note: the name is ambiguous; showing %zu matching types%s. "
+                        "Use namespace or path to select one.\n\n",
+                        type_count,
+                        more_types ? " (additional matches omitted)" : "")) {
+            return nullptr;
+        }
+    }
+    for (size_t i = 0U; i < type_count; i++) {
+        if ((i > 0U) && !sb_append(&out, "\n\n")) {
+            return nullptr;
+        }
+        if (!sb_appendf(&out, "Type: `%s`\n---------------\n", types[i].namespace_name) ||
+            !class_dossier_render_one(db, repo_name, &types[i], exclude_tests, &out)) {
+            return nullptr;
+        }
+    }
+    *out_status = CLASS_DOSSIER_RENDERED;
+    return out.data;
 }
 
 static char *context_symbol_ex_internal(const char *repo_name,
@@ -19330,6 +22360,8 @@ static char *context_symbol_ex_internal(const char *repo_name,
     char *symbol_rows;
     char *ref_rows = nullptr;
     char *snippet_rows = nullptr;
+    ClassDossierStatus dossier_status = CLASS_DOSSIER_NOT_A_TYPE;
+    char *dossier = nullptr;
     size_t symbol_row_count = 0U;
     size_t ref_row_count = 0U;
     StalenessStatus staleness = {0};
@@ -19388,6 +22420,45 @@ static char *context_symbol_ex_internal(const char *repo_name,
          * the calling source context and let dependency fallback search its
          * materialized source set. */
         path_filter = "";
+    }
+
+    dossier = class_dossier_render(db,
+                                    repo_name,
+                                    symbol_base,
+                                    namespace_filter,
+                                    path_filter,
+                                    definition_scope,
+                                    exclude_tests,
+                                    &dossier_status);
+    if (dossier_status == CLASS_DOSSIER_ERROR) {
+        if (owns_db) {
+            code_lens_db_close(db);
+        }
+        return nullptr;
+    }
+    if (dossier_status == CLASS_DOSSIER_RENDERED) {
+        if (owns_db || (strcmp(definition_scope, "dependencies") == 0)) {
+            maven_note = maven_project_status_note(db, repo_name);
+        }
+        if (owns_db) {
+            code_lens_db_close(db);
+        }
+        if ((maven_note != nullptr) &&
+            (!sb_append(&output, maven_note) || !sb_append(&output, "\n"))) {
+            return nullptr;
+        }
+        if ((strcmp(definition_scope, "dependencies") == 0) &&
+            !sb_append(&output,
+                       "note: no workspace definition matched; showing dependency "
+                       "definitions\n\n")) {
+            return nullptr;
+        }
+        if (!sb_append(&output, dossier)) {
+            return nullptr;
+        }
+        return prepared_db == nullptr
+                   ? prepend_staleness_note(repo_name, &staleness, output.data)
+                   : output.data;
     }
 
     params[0] = repo_name;
@@ -19940,7 +23011,8 @@ static void respond_initialize(const char *id)
         "code-lens provides code intelligence for Clojure, Java, and C repositories. "
         "When working with these languages, prefer query and context over text search: "
         "query finds symbol definitions and Clojure :keyword usages by name, while context "
-        "returns a symbol's definitions and resolved call sites. It understands Clojure "
+        "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
+        "when the target is a Java type. It understands Clojure "
         ":as/:refer, Java imports and receiver types, and C linkage and member types. Set "
         "repo to a repository root or any file or directory inside it; omit repo to use the "
         "server's current working directory. sql runs read-only structural queries over the "
@@ -19989,7 +23061,10 @@ static void respond_tools_list(const char *id)
         "\"required\":[\"query\"]}}";
     static const char context_tool[] =
         "{\"name\":\"context\",\"description\":\"Show definitions and resolved call sites"
-        " with snippets. Resolves Clojure :as/:refer, Java imports and receiver types, and C"
+        " with snippets. An exact Java type automatically returns a bounded Class Dossier"
+        " with members, hierarchy, relevant inherited behavior, support types, overrides,"
+        " and purpose-grouped representative usages. Resolves Clojure :as/:refer, Java"
+        " imports and receiver types, and C"
         " linkage and aggregate members. Dependency definitions are an automatic fallback;"
         " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
         " package.Type, and ptr->field qualifiers. repo may be a repository root or any path"

@@ -1028,6 +1028,17 @@ and removal remain available through the CLI/public API but are not MCP tools.
 - `code_lens_context_symbol_ex`: two bound queries stitched into a text
   report with `Definitions` and `References` headings
   (`code_lens_context_symbol` delegates with default options):
+  - before the generic queries render, `class_dossier_render` checks for an
+    exact indexed Java type candidate. A match short-circuits to the bounded
+    Class Dossier renderer: compact type declaration, declared-member
+    inventory (with an explicit output cap), direct hierarchy and subtype
+    links, transitive override targets, and inherited methods selected only
+    when overridden or called by the
+    class/representative sites, implementation-referenced supporting types,
+    and purpose-grouped usages. Small methods retain bodies; larger methods
+    become signatures. Candidate/member/hierarchy/support/reference caps are
+    explicit `CLASS_DOSSIER_*` constants, and usage ranking combines purpose
+    and lexical explanatory signals with workspace priority and file diversity;
   - definitions: `s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0`, exact
     matches ranked first, `LIMIT 5`. `s.content` (full source for Clojure and
     Java members; a compact declaration header for Java types) is returned

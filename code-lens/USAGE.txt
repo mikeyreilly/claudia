@@ -113,7 +113,11 @@ checked out next to this repository):
   `context` performs this dependency fallback without a scope flag and separates
   workspace call sites from dependency-internal references.
   `context` lists a symbol's definitions, reference call sites, and lazy
-  source snippets. Clojure aliases and referred symbols are resolved. Java
+  source snippets. An exact Java type target automatically returns a bounded
+  Class Dossier instead: declaration, declared members, selected inherited
+  behavior and supporting types, override links, and representative usages
+  grouped as construction, calls, field access, type checks, and tests.
+  Clojure aliases and referred symbols are resolved. Java
   normal/static imports, enclosing types, and declared receiver types are
   resolved without invoking a compiler; receiver types requiring whole-program
   inference can remain unresolved. C global/static linkage, declared receiver

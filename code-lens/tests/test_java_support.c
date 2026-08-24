@@ -210,6 +210,8 @@ static int test_java_index(void)
     char *query;
     char *context;
     char *static_context;
+    char *class_context;
+    char *qualified_class_context;
     char *rows;
     char *stale;
     char *fresh;
@@ -252,10 +254,38 @@ static int test_java_index(void)
                          "Service.java",
                          "package demo.lib;\n"
                          "/** A service. */\n"
-                         "public class Service {\n"
+                         "interface Worker { String execute(int value); }\n"
+                         "class BaseService {\n"
+                         "  protected int normalize(int value) { return value; }\n"
+                         "}\n"
+                         "class Request {}\n"
+                         "class Result {}\n"
+                         "public class Service extends BaseService implements Worker {\n"
+                         "  public int calls;\n"
                          "  public static Service create() { return new Service(); }\n"
                          "  /** Executes work. */\n"
-                         "  public String execute(int value) { return String.valueOf(value); }\n"
+                         "  @Override public String execute(int value) {\n"
+                         "    calls++;\n"
+                         "    return String.valueOf(normalize(value));\n"
+                         "  }\n"
+                         "  public String handle(Request request) {\n"
+                         "    Result result = new Result();\n"
+                         "    return result == null ? \"\" : execute(1);\n"
+                         "  }\n"
+                         "  public int longOperation(int value) {\n"
+                         "    int result = value;\n"
+                         "    result += 1;\n"
+                         "    result += 2;\n"
+                         "    result += 3;\n"
+                         "    result += 4;\n"
+                         "    result += 5;\n"
+                         "    return result;\n"
+                         "  }\n"
+                         "}\n"
+                         "class SpecialService extends Service {\n"
+                         "  @Override public String execute(int value) {\n"
+                         "    return super.execute(value);\n"
+                         "  }\n"
                          "}\n") != 0) ||
         (java_write_file(util_dir,
                          "Helpers.java",
@@ -273,6 +303,12 @@ static int test_java_index(void)
                          "    Service.create();\n"
                          "    make();\n"
                          "    return service.execute(value);\n"
+                         "  }\n"
+                         "  public boolean isService() { return service instanceof Service; }\n"
+                         "  public int observedCalls(Object value) {\n"
+                         "    return value instanceof Service found ? found.calls : 0;\n"
+                         "  }\n"
+                         "  @Test public void verifiesService() { service.execute(7);\n"
                          "  }\n"
                          "}\n") != 0) ||
         (setenv("CODE_LENS_HOME", home, 1) != 0)) {
@@ -310,6 +346,48 @@ static int test_java_index(void)
                               (strstr(context, "service.execute|demo.lib.Service") != nullptr) &&
                               (strstr(context, "Executes work.") != nullptr),
                           "context links Java method definition and call site");
+
+    class_context = code_lens_context_symbol(repo, "Service");
+    failed |= java_assert((class_context != nullptr) &&
+                              (strstr(class_context, "Class Dossier") != nullptr) &&
+                              (strstr(class_context,
+                                      "Service|class|demo.lib.Service") != nullptr) &&
+                              (strstr(class_context, "Members (") != nullptr) &&
+                              (strstr(class_context, "method `execute`") != nullptr) &&
+                              (strstr(class_context,
+                                      "longOperation(int value) { ... }") != nullptr) &&
+                              (strstr(class_context,
+                                      "extends `demo.lib.BaseService`") != nullptr) &&
+                              (strstr(class_context,
+                                      "implements `demo.lib.Worker`") != nullptr) &&
+                              (strstr(class_context,
+                                      "extended by `demo.lib.SpecialService`") != nullptr) &&
+                              (strstr(class_context,
+                                      "Overrides and implementations") != nullptr) &&
+                              (strstr(class_context,
+                                      "Relevant inherited methods") != nullptr) &&
+                              (strstr(class_context,
+                                      "BaseService.normalize(int value)") != nullptr) &&
+                              (strstr(class_context,
+                                      "Supporting definitions") != nullptr) &&
+                              (strstr(class_context, "demo.lib.Request") != nullptr) &&
+                              (strstr(class_context, "demo.lib.Result") != nullptr) &&
+                              (strstr(class_context, "Construction (") != nullptr) &&
+                              (strstr(class_context, "Calls (") != nullptr) &&
+                              (strstr(class_context, "Field access (") != nullptr) &&
+                              (strstr(class_context, "found.calls") != nullptr) &&
+                              (strstr(class_context, "Type checks (") != nullptr) &&
+                              (strstr(class_context, "Tests (") != nullptr) &&
+                              (strstr(class_context, "verifiesService") != nullptr),
+                          "class context returns a type-aware semantic dossier");
+
+    qualified_class_context =
+        code_lens_context_symbol(repo, "demo.lib.Service");
+    failed |= java_assert((qualified_class_context != nullptr) &&
+                              (strstr(qualified_class_context, "Class Dossier") != nullptr) &&
+                              (strstr(qualified_class_context,
+                                      "Service|class|demo.lib.Service") != nullptr),
+                          "fully-qualified Java type selects the class dossier");
 
     static_context = code_lens_context_symbol(repo, "make");
     failed |= java_assert((static_context != nullptr) &&
