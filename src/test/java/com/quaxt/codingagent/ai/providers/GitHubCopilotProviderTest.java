@@ -1,7 +1,10 @@
 package com.quaxt.codingagent.ai.providers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -9,14 +12,19 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.ai.ModelCatalog;
 import com.quaxt.codingagent.ai.StreamOptions;
+import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.auth.Credential;
 import com.quaxt.codingagent.ai.auth.FileCredentialStore;
 import com.quaxt.codingagent.ai.auth.GitHubCopilotAuth;
 import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
+import com.quaxt.codingagent.ai.types.ThinkingLevel;
+import com.quaxt.codingagent.ai.types.UserMessage;
 
 class GitHubCopilotProviderTest {
 	@Test
@@ -77,6 +85,61 @@ class GitHubCopilotProviderTest {
 			assertEquals("anthropic", provider.stream(models.get(0), new Context(), new StreamOptions()).result().text());
 			assertEquals("completions", provider.stream(models.get(1), new Context(), new StreamOptions()).result().text());
 			assertEquals("responses", provider.stream(models.get(2), new Context(), new StreamOptions()).result().text());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void sendsAdaptiveThinkingForCopilotOpus5() throws Exception {
+		AtomicReference<JsonNode> request = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			assertBearer(exchange);
+			request.set(Json.MAPPER.readTree(exchange.getRequestBody()));
+			writeSse(exchange, """
+					event: message_start
+					data: {"message":{"id":"opus","usage":{"input_tokens":1}}}
+
+					event: content_block_start
+					data: {"index":0,"content_block":{"type":"text"}}
+
+					event: content_block_delta
+					data: {"index":0,"delta":{"type":"text_delta","text":"adaptive"}}
+
+					event: message_stop
+					data: {}
+
+					""");
+		});
+		server.start();
+		try {
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			Model opus = ModelCatalog.loadBundled()
+					.require(GitHubCopilotAuth.PROVIDER_ID, "claude-opus-5")
+					.toBuilder()
+					.baseUrl(base)
+					.build();
+			FileCredentialStore store = new FileCredentialStore(Files.createTempDirectory("copilot-auth").resolve("auth.json"));
+			store.modify(
+					GitHubCopilotAuth.PROVIDER_ID,
+					ignored -> new Credential.OAuthCredential("copilot-token", "github-token", Long.MAX_VALUE, null));
+			GitHubCopilotProvider provider = new GitHubCopilotProvider(
+					List.of(opus),
+					new GitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)));
+			Context context = new Context();
+			context.messages.add(UserMessage.of("Use adaptive thinking"));
+
+			assertEquals(
+					"adaptive",
+					provider.stream(opus, context, new StreamOptions().reasoning(ThinkingLevel.MEDIUM)).result().text());
+
+			JsonNode payload = request.get();
+			assertNotNull(payload);
+			assertEquals("adaptive", payload.path("thinking").path("type").asText());
+			assertEquals("summarized", payload.path("thinking").path("display").asText());
+			assertFalse(payload.path("thinking").has("budget_tokens"));
+			assertEquals("medium", payload.path("output_config").path("effort").asText());
 		} finally {
 			server.stop(0);
 		}

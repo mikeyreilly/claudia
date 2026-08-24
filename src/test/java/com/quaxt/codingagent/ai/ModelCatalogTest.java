@@ -1,11 +1,13 @@
 package com.quaxt.codingagent.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.ai.types.Compat;
 import com.quaxt.codingagent.ai.types.Model;
 
 class ModelCatalogTest {
@@ -32,6 +34,14 @@ class ModelCatalogTest {
 		assertEquals("openai-responses", catalog.require("github-copilot", "gpt-5.6-terra").api);
 		assertEquals("openai-completions", catalog.require("github-copilot", "gemini-3.6-flash").api);
 		assertEquals("anthropic-messages", catalog.require("github-copilot", "claude-opus-5").api);
+	}
+
+	@Test
+	void preservesAdaptiveThinkingCompatibility() {
+		Model opus = ModelCatalog.loadBundled().require("github-copilot", "claude-opus-5");
+
+		Compat.AnthropicMessages compat = assertInstanceOf(Compat.AnthropicMessages.class, opus.compat);
+		assertEquals(Boolean.TRUE, compat.forceAdaptiveThinking());
 	}
 
 	@Test

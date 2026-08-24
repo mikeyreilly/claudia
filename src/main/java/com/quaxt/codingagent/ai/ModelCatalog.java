@@ -131,18 +131,26 @@ public final class ModelCatalog {
 			builder.headers(parsedHeaders);
 		}
 
-		Compat compat = parseCompat(builder, node.get("compat"));
+		Compat compat = parseCompat(node);
 		if (compat != null) {
 			builder.compat(compat);
 		}
 		return builder.build();
 	}
 
-	private static Compat parseCompat(Model.Builder builder, JsonNode ignored) {
-		// The generated catalog has many long-tail compatibility settings. The
-		// core adapters use conservative defaults, so custom catalog flags are
-		// added only when the corresponding adapter supports them.
-		return null;
+	private static Compat parseCompat(JsonNode model) {
+		JsonNode compat = model.get("compat");
+		if (compat == null || !compat.isObject()) {
+			return null;
+		}
+		if (!model.path("api").asText().equals("anthropic-messages")) {
+			return null;
+		}
+		JsonNode adaptiveThinking = compat.get("forceAdaptiveThinking");
+		if (adaptiveThinking == null || !adaptiveThinking.isBoolean()) {
+			return null;
+		}
+		return new Compat.AnthropicMessages(null, null, null, null, adaptiveThinking.booleanValue());
 	}
 
 	private static ModelCost parseCost(JsonNode node) {
