@@ -191,8 +191,15 @@ to any-term matches and flags the result with a notice line. Use
 matches; `path` is a case-insensitive substring of result file paths and is especially
 useful for common keywords in large repositories. Symbol kinds filter symbols only
 and suppress keyword rows, while
-`--kind keyword` returns keyword rows only. `context` shows
-definitions, reference call sites, and lazy source snippets for a symbol name;
+`--kind keyword` returns keyword rows only. `context` normally shows
+definitions, reference call sites, and lazy source snippets for a symbol name.
+When the selected Java symbol is a class, interface, enum, annotation, or
+record, it instead returns a bounded **Class Dossier**: the declaration and
+member inventory, small method bodies (large methods are signatures), direct
+hierarchy, override relationships, only behaviorally relevant inherited
+methods, supporting implementation types, and representative
+construction/call/field/type-check/test usages ranked for explanatory value.
+No separate tool or option is required. For non-type targets,
 references include alias-qualified and fully-qualified uses resolved through
 each file's require aliases, plus unqualified uses in files that `:refer` or
 `:use` the symbol in (or define it themselves), and a qualifier in the given
