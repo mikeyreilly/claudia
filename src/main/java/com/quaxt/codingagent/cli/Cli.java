@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.cli;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import com.quaxt.codingagent.agent.Agent;
@@ -81,7 +82,7 @@ final class Cli {
 			mcp.awaitReady();
 			Agent agent = new Agent(arguments.systemPrompt, model, provider::stream);
 			agent.setApiKey(arguments.apiKey);
-			agent.state().tools.addAll(BuiltInTools.create(cwd));
+			configureBuiltInTools(agent, cwd, arguments.systemPrompt);
 			agent.state().tools.addAll(mcp.tools());
 			if (arguments.mode.equals("json")) {
 				agent.subscribe(Cli::printJsonEvent);
@@ -106,6 +107,27 @@ final class Cli {
 
 			throw new IllegalStateException("Agent ended without an assistant response");
 		}
+	}
+
+	/**
+	 * Adds local tools and composes repository {@code AGENTS.md} text into the
+	 * agent's system prompt. Path-based tools refresh the prompt when they move
+	 * into a deeper descendant scope.
+	 */
+	static void configureBuiltInTools(Agent agent, Path cwd, String baseSystemPrompt) {
+		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(cwd, baseSystemPrompt);
+		agent.state().systemPrompt = instructions.systemPrompt();
+		agent.subscribe(event -> {
+			if (event instanceof AgentEvent.AgentStart) {
+				instructions.refresh();
+				agent.state().systemPrompt = instructions.systemPrompt();
+			}
+		});
+		agent.state().tools.addAll(BuiltInTools.create(cwd, path -> {
+			if (instructions.observe(path)) {
+				agent.state().systemPrompt = instructions.systemPrompt();
+			}
+		}));
 	}
 
 	private static void printJsonEvent(AgentEvent event) {

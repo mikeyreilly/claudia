@@ -18,7 +18,6 @@ import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
 import com.quaxt.codingagent.cli.session.SessionStore;
-import com.quaxt.codingagent.cli.tools.BuiltInTools;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpManager;
 
@@ -152,7 +151,7 @@ final class RpcServer {
 		Provider provider = providers.require(model.provider);
 		agent = new Agent(arguments.systemPrompt, model, provider::stream);
 		agent.setApiKey(arguments.apiKey);
-		agent.state().tools.addAll(BuiltInTools.create(Path.of(".")));
+		Cli.configureBuiltInTools(agent, Path.of("."), arguments.systemPrompt);
 		agent.state().tools.addAll(mcp.tools());
 		agent.subscribe(this::event);
 		recorder = arguments.noSession

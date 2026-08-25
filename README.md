@@ -195,6 +195,17 @@ for a remote server.
 `--api-key` overrides environment-based credentials. Without `--no-session`,
 codingagent records an append-only transcript in `~/.codingagent/sessions`.
 
+## Repository instructions
+
+When started inside a Git worktree, codingagent reads applicable `AGENTS.md`
+files from the repository root through the current working directory. Their
+contents are appended to the model's instruction context in that order, so
+more deeply nested files are more specific. `AGENTS.override.md` takes
+precedence over `AGENTS.md` when both are in the same directory. As local tools
+move into a deeper descendant directory, any newly applicable instructions are
+loaded before the next model request. These files are prompt text only; they do
+not impose separate filesystem restrictions.
+
 ## RPC mode
 
 `--mode rpc` accepts JSONL commands on standard input and emits JSONL responses

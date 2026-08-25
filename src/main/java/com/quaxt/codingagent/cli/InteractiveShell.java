@@ -47,7 +47,6 @@ import com.quaxt.codingagent.cli.session.SessionRecorder;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
 import com.quaxt.codingagent.cli.session.SessionStore;
 import com.quaxt.codingagent.cli.settings.SettingsStore;
-import com.quaxt.codingagent.cli.tools.BuiltInTools;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpManager;
 import com.quaxt.codingagent.tui.InteractiveTerminal;
@@ -800,7 +799,7 @@ final class InteractiveShell implements AutoCloseable {
 		Agent configured = new Agent(arguments.systemPrompt, model, provider::stream);
 		configured.setApiKey(arguments.apiKey);
 		configured.state().thinkingLevel = initialThinkingLevel(model, settings.defaultThinkingLevel());
-		configured.state().tools.addAll(BuiltInTools.create(configuredCwd));
+		Cli.configureBuiltInTools(configured, configuredCwd, arguments.systemPrompt);
 		configured.state().tools.addAll(mcp.tools());
 		configured.subscribe(this::onEvent);
 		cwd = configuredCwd.toAbsolutePath().normalize();

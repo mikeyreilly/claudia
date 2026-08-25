@@ -42,19 +42,33 @@ public final class BuiltInTools {
 
 	/** Returns tools scoped to the given working directory. */
 	public static List<AgentTool> create(Path cwd) {
-		return create(cwd, new GitIgnore("git"));
+		return create(cwd, ignored -> {});
+	}
+
+	/**
+	 * Returns tools scoped to the given working directory and reports paths as
+	 * they are accessed. The callback is observational; it does not alter tool
+	 * permissions or path resolution.
+	 */
+	public static List<AgentTool> create(Path cwd, Consumer<Path> onPathAccess) {
+		return create(cwd, new GitIgnore("git"), onPathAccess);
 	}
 
 	static List<AgentTool> create(Path cwd, GitIgnore gitIgnore) {
+		return create(cwd, gitIgnore, ignored -> {});
+	}
+
+	private static List<AgentTool> create(Path cwd, GitIgnore gitIgnore, Consumer<Path> onPathAccess) {
 		Path resolvedCwd = cwd.toAbsolutePath().normalize();
+		Consumer<Path> observer = java.util.Objects.requireNonNull(onPathAccess, "onPathAccess");
 		return List.of(
-				new ReadTool(resolvedCwd),
-				new WriteTool(resolvedCwd),
-				new EditTool(resolvedCwd),
-				new ShellTool(resolvedCwd),
-				new GrepTool(resolvedCwd, gitIgnore),
-				new FindTool(resolvedCwd, gitIgnore),
-				new LsTool(resolvedCwd));
+				new ReadTool(resolvedCwd, observer),
+				new WriteTool(resolvedCwd, observer),
+				new EditTool(resolvedCwd, observer),
+				new ShellTool(resolvedCwd, observer),
+				new GrepTool(resolvedCwd, gitIgnore, observer),
+				new FindTool(resolvedCwd, gitIgnore, observer),
+				new LsTool(resolvedCwd, observer));
 	}
 
 	private abstract static class LocalTool implements AgentTool {
@@ -62,12 +76,14 @@ public final class BuiltInTools {
 		private final String name;
 		private final String description;
 		private final ObjectNode parameters;
+		private final Consumer<Path> onPathAccess;
 
-		LocalTool(Path cwd, String name, String description, ObjectNode parameters) {
+		LocalTool(Path cwd, String name, String description, ObjectNode parameters, Consumer<Path> onPathAccess) {
 			this.cwd = cwd;
 			this.name = name;
 			this.description = description;
 			this.parameters = parameters;
+			this.onPathAccess = onPathAccess;
 		}
 
 		@Override
@@ -98,7 +114,9 @@ public final class BuiltInTools {
 				throw new IllegalArgumentException("~user paths are not supported; use an absolute path");
 			}
 			Path candidate = Path.of(expanded);
-			return (candidate.isAbsolute() ? candidate : cwd.resolve(candidate)).normalize();
+			Path resolved = (candidate.isAbsolute() ? candidate : cwd.resolve(candidate)).normalize();
+			onPathAccess.accept(resolved);
+			return resolved;
 		}
 
 		final ArchiveLocation archiveLocation(String value) {
@@ -131,12 +149,13 @@ public final class BuiltInTools {
 	}
 
 	private static final class ReadTool extends LocalTool {
-		ReadTool(Path cwd) {
+		ReadTool(Path cwd, Consumer<Path> onPathAccess) {
 			super(
 					cwd,
 					"read",
 					"Read a text file. Use offset and limit for large files; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
-					schema("path", string("Path to the file to read. A leading ~/ expands to the user home directory."), "offset", optional(integer("1-indexed starting line")), "limit", optional(integer("Maximum lines to read"))));
+					schema("path", string("Path to the file to read. A leading ~/ expands to the user home directory."), "offset", optional(integer("1-indexed starting line")), "limit", optional(integer("Maximum lines to read"))),
+					onPathAccess);
 		}
 
 		@Override
@@ -244,8 +263,8 @@ public final class BuiltInTools {
 	}
 
 	private static final class WriteTool extends LocalTool {
-		WriteTool(Path cwd) {
-			super(cwd, "write", "Create or overwrite a text file, creating parent directories as needed.", schema("path", string("Path to write. A leading ~/ expands to the user home directory."), "content", string("File content")));
+		WriteTool(Path cwd, Consumer<Path> onPathAccess) {
+			super(cwd, "write", "Create or overwrite a text file, creating parent directories as needed.", schema("path", string("Path to write. A leading ~/ expands to the user home directory."), "content", string("File content")), onPathAccess);
 		}
 
 		@Override
@@ -268,12 +287,13 @@ public final class BuiltInTools {
 	}
 
 	private static final class EditTool extends LocalTool {
-		EditTool(Path cwd) {
+		EditTool(Path cwd, Consumer<Path> onPathAccess) {
 			super(
 					cwd,
 					"edit",
 					"Replace one or more unique, non-overlapping exact text blocks in a file.",
-					schema("path", string("Path to edit. A leading ~/ expands to the user home directory."), "edits", array("Exact replacements with oldText and newText")));
+					schema("path", string("Path to edit. A leading ~/ expands to the user home directory."), "edits", array("Exact replacements with oldText and newText")),
+					onPathAccess);
 		}
 
 		@Override
@@ -326,12 +346,12 @@ public final class BuiltInTools {
 	private static final class ShellTool extends LocalTool {
 		private final Shell shell;
 
-		ShellTool(Path cwd) {
-			this(cwd, Shell.current());
+		ShellTool(Path cwd, Consumer<Path> onPathAccess) {
+			this(cwd, Shell.current(), onPathAccess);
 		}
 
-		private ShellTool(Path cwd, Shell shell) {
-			super(cwd, "shell", "Execute a " + shell.displayName + " command in the current working directory. Output is bounded to 2,000 lines or 50KB.", schema("command", string(shell.displayName + " command"), "timeout", optional(number("Optional timeout in seconds"))));
+		private ShellTool(Path cwd, Shell shell, Consumer<Path> onPathAccess) {
+			super(cwd, "shell", "Execute a " + shell.displayName + " command in the current working directory. Output is bounded to 2,000 lines or 50KB.", schema("command", string(shell.displayName + " command"), "timeout", optional(number("Optional timeout in seconds"))), onPathAccess);
 			this.shell = shell;
 		}
 
@@ -400,7 +420,7 @@ public final class BuiltInTools {
 	private static final class GrepTool extends LocalTool {
 		private final GitIgnore gitIgnore;
 
-		GrepTool(Path cwd, GitIgnore gitIgnore) {
+		GrepTool(Path cwd, GitIgnore gitIgnore, Consumer<Path> onPathAccess) {
 			super(
 					cwd,
 					"grep",
@@ -413,7 +433,8 @@ public final class BuiltInTools {
 							"literal", optional(bool("Treat pattern literally")),
 							"includeIgnored", optional(bool("Search files ignored by git")),
 							"context", optional(integer("Lines before and after matches")),
-							"limit", optional(integer("Maximum matches"))));
+							"limit", optional(integer("Maximum matches"))),
+					onPathAccess);
 			this.gitIgnore = gitIgnore;
 		}
 
@@ -490,7 +511,7 @@ public final class BuiltInTools {
 	private static final class FindTool extends LocalTool {
 		private final GitIgnore gitIgnore;
 
-		FindTool(Path cwd, GitIgnore gitIgnore) {
+		FindTool(Path cwd, GitIgnore gitIgnore, Consumer<Path> onPathAccess) {
 			super(
 					cwd,
 					"find",
@@ -499,7 +520,8 @@ public final class BuiltInTools {
 							"pattern", string("Glob pattern"),
 							"path", optional(string("Directory to search. A leading ~/ expands to the user home directory.")),
 							"includeIgnored", optional(bool("Search files ignored by git")),
-							"limit", optional(integer("Maximum results"))));
+							"limit", optional(integer("Maximum results"))),
+					onPathAccess);
 			this.gitIgnore = gitIgnore;
 		}
 
@@ -534,8 +556,8 @@ public final class BuiltInTools {
 	}
 
 	private static final class LsTool extends LocalTool {
-		LsTool(Path cwd) {
-			super(cwd, "ls", "List a directory's contents, with a slash suffix on directories.", schema("path", optional(string("Directory to list. A leading ~/ expands to the user home directory.")), "limit", optional(integer("Maximum entries"))));
+		LsTool(Path cwd, Consumer<Path> onPathAccess) {
+			super(cwd, "ls", "List a directory's contents, with a slash suffix on directories.", schema("path", optional(string("Directory to list. A leading ~/ expands to the user home directory.")), "limit", optional(integer("Maximum entries"))), onPathAccess);
 		}
 
 		@Override
