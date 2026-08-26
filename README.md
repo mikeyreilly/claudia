@@ -142,7 +142,11 @@ Relative local-server `cwd` values resolve from the workspace. MCP tools are
 exposed as `<server>_<tool>`, matching OpenCode's name sanitization. In the
 interactive shell, `/mcp` opens the configured-server list; Enter connects,
 disconnects, authenticates, or retries the selected server without editing its
-config. Streamable HTTP and legacy HTTP+SSE servers are supported.
+config. Press Tab on a connected server to open its tool list, then press
+Enter to individually enable or disable a selected tool. Server and tool
+toggles apply only to the current codingagent process; a disabled tool stays
+disabled if its server reconnects during that process. Streamable HTTP and
+legacy HTTP+SSE servers are supported.
 
 Noisy keys can be removed recursively from JSON results for selected tools with
 an optional per-server `resultFilters` list. Tool patterns support `*` and `?`;
@@ -231,7 +235,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Anthropic, OpenAI Responses, ChatGPT Plus/Pro, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
 | Streaming agent loop and sequential tool calls | Implemented |
 | `read`, `write`, `edit`, `shell`, `grep`, `find`, `ls` tools | Implemented |
-| OpenCode-compatible local/remote MCP servers, OAuth 2.1/PKCE, and interactive `/mcp` toggles | Implemented |
+| OpenCode-compatible local/remote MCP servers, OAuth 2.1/PKCE, and interactive per-server/per-tool `/mcp` toggles | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |
 | Interactive `/resume` session listing and restoration | Implemented |

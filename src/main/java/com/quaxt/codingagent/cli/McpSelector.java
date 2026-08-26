@@ -9,18 +9,26 @@ import com.quaxt.codingagent.tui.Theme;
 import com.quaxt.codingagent.tui.TuiComponent;
 import com.quaxt.codingagent.tui.TuiInput;
 
-/** Full-screen MCP status list whose Enter action toggles without closing it. */
+/** Full-screen MCP server list with a drill-down for toggling individual tools. */
 final class McpSelector implements TuiComponent<Void> {
+	private enum View {
+		SERVERS,
+		TOOLS
+	}
+
 	private final McpManager manager;
 	private final Runnable onChange;
 	private final List<String> names;
 	private List<String> filtered;
+	private List<McpManager.ToolStatus> filteredTools = List.of();
 	private final StringBuilder query = new StringBuilder();
 	private int queryCursor;
 	private int selectedIndex;
 	private int visibleStart;
 	private int visibleCount;
 	private int optionStartRow;
+	private View view = View.SERVERS;
+	private String toolServer;
 	private boolean complete;
 
 	McpSelector(McpManager manager, Runnable onChange) {
@@ -32,8 +40,11 @@ final class McpSelector implements TuiComponent<Void> {
 
 	@Override
 	public List<String> render(int width, int height, Theme theme) {
+		if (view == View.TOOLS) refreshTools();
+
 		List<String> lines = new ArrayList<>();
-		lines.add(theme.heading() + TerminalText.truncatePlain("MCP Servers", width) + theme.reset());
+		String title = view == View.SERVERS ? "MCP Servers" : "MCP Tools: " + toolServer;
+		lines.add(theme.heading() + TerminalText.truncatePlain(title, width) + theme.reset());
 		lines.add("");
 		String before = query.substring(0, queryCursor);
 		String after = query.substring(queryCursor);
@@ -41,48 +52,79 @@ final class McpSelector implements TuiComponent<Void> {
 		lines.add("");
 		optionStartRow = lines.size();
 		visibleCount = Math.max(1, Math.min(10, height - 9));
-		visibleStart = Math.max(
-				0, Math.min(selectedIndex - visibleCount / 2, Math.max(0, filtered.size() - visibleCount)));
-		int end = Math.min(filtered.size(), visibleStart + visibleCount);
-		if (filtered.isEmpty()) {
-			lines.add(theme.muted() + "  No matching servers" + theme.reset());
+		int itemCount = itemCount();
+		visibleStart = Math.max(0, Math.min(selectedIndex - visibleCount / 2, Math.max(0, itemCount - visibleCount)));
+		int end = Math.min(itemCount, visibleStart + visibleCount);
+		if (itemCount == 0) {
+			String empty = view == View.SERVERS ? "  No matching servers" : "  No tools available";
+			lines.add(theme.muted() + empty + theme.reset());
 		} else {
 			for (int index = visibleStart; index < end; index++) {
-				McpManager.ServerStatus status = manager.status(filtered.get(index));
-				String row = (index == selectedIndex ? "> " : "  ") + statusLine(status);
+				String row = (index == selectedIndex ? "> " : "  ") + statusLine(index);
 				row = TerminalText.truncatePlain(row, width);
 				lines.add(index == selectedIndex ? theme.heading() + row + theme.reset() : row);
 			}
-			if (visibleStart > 0 || end < filtered.size()) {
-				lines.add(theme.muted() + "  " + (selectedIndex + 1) + "/" + filtered.size() + theme.reset());
+			if (visibleStart > 0 || end < itemCount) {
+				lines.add(theme.muted() + "  " + (selectedIndex + 1) + "/" + itemCount + theme.reset());
 			}
 		}
 		lines.add("");
-		if (!filtered.isEmpty()) {
-			McpManager.ServerStatus selected = manager.status(filtered.get(selectedIndex));
-			String detail = selected.message() == null ? selected.target() : selected.message();
+		String detail = detail();
+		if (detail != null) {
 			lines.add(theme.muted() + TerminalText.truncatePlain("  " + detail, width) + theme.reset());
+		}
+		if (view == View.SERVERS && !filtered.isEmpty()) {
+			McpManager.ServerStatus selected = manager.status(filtered.get(selectedIndex));
 			if (selected.authorizationUrl() != null) {
 				String label = TerminalText.truncatePlain("Open: " + selected.authorizationUrl(), Math.max(1, width - 2));
 				String link = TerminalText.hyperlink(label, selected.authorizationUrl());
 				lines.add(theme.muted() + "  " + link + theme.reset());
 			}
 		}
-		lines.add(theme.muted()
-				+ TerminalText.truncatePlain("Type to filter  Up/Down move  Enter toggle/auth/retry  Esc close", width)
-				+ theme.reset());
+		String hint = view == View.SERVERS
+				? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
+				: "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
+		lines.add(theme.muted() + TerminalText.truncatePlain(hint, width) + theme.reset());
 		return lines;
 	}
 
-	private static String statusLine(McpManager.ServerStatus status) {
+	private int itemCount() {
+		return view == View.SERVERS ? filtered.size() : filteredTools.size();
+	}
+
+	private String statusLine(int index) {
+		return view == View.SERVERS ? serverStatusLine(manager.status(filtered.get(index))) : toolStatusLine(filteredTools.get(index));
+	}
+
+	private static String serverStatusLine(McpManager.ServerStatus status) {
 		return switch (status.state()) {
 			case CONNECTING -> "⋯ " + status.name() + "  Connecting";
 			case AUTHENTICATING -> "⋯ " + status.name() + "  Waiting for OAuth";
 			case AUTH_REQUIRED -> "! " + status.name() + "  Authentication required";
-			case CONNECTED -> "✓ " + status.name() + "  Enabled · " + status.toolCount() + " tool(s)";
+			case CONNECTED -> "✓ " + status.name() + "  Enabled · " + toolCount(status);
 			case DISABLED -> "○ " + status.name() + "  Disabled";
 			case FAILED -> "✗ " + status.name() + "  Failed";
 		};
+	}
+
+	private static String toolCount(McpManager.ServerStatus status) {
+		if (status.enabledToolCount() == status.toolCount()) return status.toolCount() + " tool(s)";
+		return status.enabledToolCount() + "/" + status.toolCount() + " tool(s)";
+	}
+
+	private static String toolStatusLine(McpManager.ToolStatus status) {
+		return (status.enabled() ? "✓ " : "○ ") + status.name() + "  " + (status.enabled() ? "Enabled" : "Disabled");
+	}
+
+	private String detail() {
+		if (view == View.SERVERS) {
+			if (filtered.isEmpty()) return null;
+			McpManager.ServerStatus selected = manager.status(filtered.get(selectedIndex));
+			return selected.message() == null ? selected.target() : selected.message();
+		}
+		if (filteredTools.isEmpty()) return null;
+		String description = filteredTools.get(selectedIndex).description();
+		return description.isBlank() ? "No description" : description;
 	}
 
 	@Override
@@ -101,7 +143,11 @@ final class McpSelector implements TuiComponent<Void> {
 			case PAGE_UP -> move(-Math.max(1, visibleCount));
 			case PAGE_DOWN -> move(Math.max(1, visibleCount));
 			case ENTER -> toggle();
-			case ESCAPE, CANCEL -> complete = true;
+			case TAB -> toggleView();
+			case ESCAPE, CANCEL -> {
+				if (view == View.TOOLS) closeTools();
+				else complete = true;
+			}
 			case CHARACTER, PASTE -> insert(key.text());
 			case BACKSPACE -> backspace();
 			case DELETE -> delete();
@@ -125,7 +171,7 @@ final class McpSelector implements TuiComponent<Void> {
 			case PRESS -> {
 				int offset = mouse.y() - 1 - optionStartRow;
 				int index = visibleStart + offset;
-				if (mouse.button() == 0 && offset >= 0 && offset < visibleCount && index < filtered.size()) {
+				if (mouse.button() == 0 && offset >= 0 && offset < visibleCount && index < itemCount()) {
 					selectedIndex = index;
 				}
 			}
@@ -134,13 +180,56 @@ final class McpSelector implements TuiComponent<Void> {
 	}
 
 	private void toggle() {
-		if (filtered.isEmpty()) return;
-		manager.toggleAsync(filtered.get(selectedIndex));
-		onChange.run();
+		if (view == View.SERVERS) {
+			if (filtered.isEmpty()) return;
+			manager.toggleAsync(filtered.get(selectedIndex));
+			onChange.run();
+		} else {
+			toggleTool();
+		}
+	}
+
+	private void toggleTool() {
+		refreshTools();
+		if (filteredTools.isEmpty()) return;
+		try {
+			manager.toggleTool(toolServer, filteredTools.get(selectedIndex).name());
+			onChange.run();
+			refreshTools();
+		} catch (IllegalStateException | IllegalArgumentException ignored) {
+			// The server or its catalog may have changed while this selector was open.
+			refreshTools();
+		}
+	}
+
+	private void toggleView() {
+		if (view == View.SERVERS) openTools();
+		else closeTools();
+	}
+
+	private void openTools() {
+		if (view == View.TOOLS || filtered.isEmpty()) return;
+		String server = filtered.get(selectedIndex);
+		if (manager.status(server).state() != McpManager.State.CONNECTED) return;
+		view = View.TOOLS;
+		toolServer = server;
+		clearQuery();
+		refreshTools();
+	}
+
+	private void closeTools() {
+		if (view != View.TOOLS) return;
+		String server = toolServer;
+		view = View.SERVERS;
+		toolServer = null;
+		clearQuery();
+		filter();
+		int index = filtered.indexOf(server);
+		if (index >= 0) selectedIndex = index;
 	}
 
 	private void move(int delta) {
-		if (!filtered.isEmpty()) selectedIndex = Math.floorMod(selectedIndex + delta, filtered.size());
+		if (itemCount() > 0) selectedIndex = Math.floorMod(selectedIndex + delta, itemCount());
 	}
 
 	private void insert(String text) {
@@ -166,12 +255,34 @@ final class McpSelector implements TuiComponent<Void> {
 		filter();
 	}
 
+	private void clearQuery() {
+		query.setLength(0);
+		queryCursor = 0;
+	}
+
 	private void filter() {
-		filtered = FuzzyMatcher.filter(names, query.toString(), name -> {
-			McpManager.ServerStatus status = manager.status(name);
-			return name + " " + status.state() + " " + status.target();
-		});
+		if (view == View.SERVERS) {
+			filtered = FuzzyMatcher.filter(names, query.toString(), name -> {
+				McpManager.ServerStatus status = manager.status(name);
+				return name + " " + status.state() + " " + status.target();
+			});
+		} else {
+			refreshTools();
+		}
 		selectedIndex = 0;
+	}
+
+	private void refreshTools() {
+		if (toolServer == null) {
+			filteredTools = List.of();
+			return;
+		}
+		List<McpManager.ToolStatus> tools = manager.toolStatuses(toolServer);
+		filteredTools = FuzzyMatcher.filter(
+				tools,
+				query.toString(),
+				tool -> tool.name() + " " + tool.description() + " " + (tool.enabled() ? "enabled" : "disabled"));
+		if (selectedIndex >= filteredTools.size()) selectedIndex = Math.max(0, filteredTools.size() - 1);
 	}
 
 	@Override
