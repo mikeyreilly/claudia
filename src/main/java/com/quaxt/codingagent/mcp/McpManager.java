@@ -4,11 +4,13 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import com.quaxt.codingagent.agent.AgentTool;
 
-/** Owns configured MCP sessions and supports runtime connect/disconnect toggles. */
+/** Owns configured MCP sessions and supports runtime server and tool toggles. */
 public final class McpManager implements AutoCloseable {
 	public enum State {
 		CONNECTING,
@@ -24,8 +26,12 @@ public final class McpManager implements AutoCloseable {
 			State state,
 			String message,
 			int toolCount,
+			int enabledToolCount,
 			String target,
 			String authorizationUrl) {}
+
+	/** One cached MCP tool and whether it is exposed to the model in this process. */
+	public record ToolStatus(String serverName, String name, String description, boolean enabled) {}
 
 	private final Path workspace;
 	private final McpOAuthClient oauth;
@@ -63,6 +69,48 @@ public final class McpManager implements AutoCloseable {
 
 	public ServerStatus status(String name) {
 		return snapshot(require(name));
+	}
+
+	/**
+	 * Returns the current tool catalog for a connected server, including tools
+	 * disabled for this process. A disconnected server has no current catalog.
+	 */
+	public List<ToolStatus> toolStatuses(String serverName) {
+		Runtime runtime = require(serverName);
+		synchronized (runtime.lock) {
+			if (runtime.state != State.CONNECTED || runtime.client == null) return List.of();
+			return runtime.tools.stream()
+					.map(tool -> new ToolStatus(
+							runtime.name, tool.name(), tool.description(), !runtime.disabledTools.contains(tool.name())))
+					.toList();
+		}
+	}
+
+	/**
+	 * Enables a currently disabled tool or disables an enabled one without
+	 * disconnecting its server. The choice lasts for this manager's lifetime,
+	 * including a later reconnect of that server.
+	 */
+	public ToolStatus toggleTool(String serverName, String toolName) {
+		Runtime runtime = require(serverName);
+		synchronized (runtime.lock) {
+			if (runtime.state != State.CONNECTED || runtime.client == null) {
+				throw new IllegalStateException("MCP server is not connected: " + serverName);
+			}
+			McpClient.ToolDefinition definition = runtime.tools.stream()
+					.filter(tool -> tool.name().equals(toolName))
+					.findFirst()
+					.orElseThrow(() -> new IllegalArgumentException(
+							"MCP tool is not available from " + serverName + ": " + toolName));
+			boolean enabled;
+			if (runtime.disabledTools.remove(toolName)) {
+				enabled = true;
+			} else {
+				runtime.disabledTools.add(toolName);
+				enabled = false;
+			}
+			return new ToolStatus(runtime.name, definition.name(), definition.description(), enabled);
+		}
 	}
 
 	/** Waits for all currently-starting configured servers. */
@@ -145,12 +193,15 @@ public final class McpManager implements AutoCloseable {
 		for (Runtime runtime : servers.values()) {
 			McpClient client;
 			List<McpClient.ToolDefinition> definitions;
+			Set<String> disabledTools;
 			synchronized (runtime.lock) {
 				if (runtime.state != State.CONNECTED || runtime.client == null) continue;
 				client = runtime.client;
 				definitions = runtime.tools;
+				disabledTools = Set.copyOf(runtime.disabledTools);
 			}
 			for (McpClient.ToolDefinition definition : definitions) {
+				if (disabledTools.contains(definition.name())) continue;
 				McpAgentTool tool = new McpAgentTool(
 						runtime.name, definition, client, runtime.config.resultFilters());
 				result.put(tool.name(), tool);
@@ -266,11 +317,15 @@ public final class McpManager implements AutoCloseable {
 
 	private ServerStatus snapshot(Runtime runtime) {
 		synchronized (runtime.lock) {
+			int enabledToolCount = (int) runtime.tools.stream()
+					.filter(tool -> !runtime.disabledTools.contains(tool.name()))
+					.count();
 			return new ServerStatus(
 					runtime.name,
 					runtime.state,
 					runtime.message,
 					runtime.tools.size(),
+					enabledToolCount,
 					target(runtime.config),
 					runtime.authorizationUrl);
 		}
@@ -324,6 +379,7 @@ public final class McpManager implements AutoCloseable {
 		String message;
 		McpClient client;
 		List<McpClient.ToolDefinition> tools = List.of();
+		final Set<String> disabledTools = new HashSet<>();
 		Thread connector;
 		String authorizationUrl;
 

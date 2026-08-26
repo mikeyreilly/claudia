@@ -32,7 +32,11 @@ class McpManagerTest {
 			manager.awaitReady();
 
 			assertEquals(McpManager.State.CONNECTED, manager.status("fixture").state());
-			assertEquals(1, manager.status("fixture").toolCount());
+			assertEquals(2, manager.status("fixture").toolCount());
+			assertEquals(2, manager.status("fixture").enabledToolCount());
+			assertEquals(
+					List.of("echo", "reverse"),
+					manager.toolStatuses("fixture").stream().map(McpManager.ToolStatus::name).toList());
 			AgentTool tool = manager.tools().getFirst();
 			assertEquals("fixture_echo", tool.name());
 			AgentTool.ToolResult result = tool.execute(
@@ -48,9 +52,20 @@ class McpManagerTest {
 					"{\"user\":{\"name\":\"Ada\"},\"items\":[{\"value\":1}]}",
 					((TextContent) filtered.content().getFirst()).text());
 
+			assertFalse(manager.toggleTool("fixture", "reverse").enabled());
+			assertEquals(2, manager.status("fixture").toolCount());
+			assertEquals(1, manager.status("fixture").enabledToolCount());
+			assertEquals(List.of("fixture_echo"), manager.tools().stream().map(AgentTool::name).toList());
+
 			assertEquals(McpManager.State.DISABLED, manager.disconnect("fixture").state());
 			assertTrue(manager.tools().isEmpty());
 			assertEquals(McpManager.State.CONNECTED, manager.connect("fixture").state());
+			assertEquals(List.of("fixture_echo"), manager.tools().stream().map(AgentTool::name).toList());
+			assertTrue(manager.toggleTool("fixture", "reverse").enabled());
+			assertEquals(2, manager.status("fixture").enabledToolCount());
+			assertEquals(
+					List.of("fixture_echo", "fixture_reverse"),
+					manager.tools().stream().map(AgentTool::name).toList());
 		}
 	}
 }
