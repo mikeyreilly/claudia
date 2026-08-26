@@ -8580,6 +8580,10 @@ typedef struct {
     size_t new_files;
     bool maven_changed;
     bool dependency_sources_changed;
+    /* A failed/disabled dependency-only generation can be retried by an
+     * explicit index without making its already-current workspace rows
+     * unsafe to serve. */
+    bool dependency_retry_due;
     double elapsed_seconds;
     double refresh_elapsed_seconds;
 } StalenessStatus;
@@ -15339,6 +15343,33 @@ static int maven_try_reuse(const char *db_path, MavenDependencySet *set)
     return rc;
 }
 
+/* Failure isolation normally preserves a published dependency index when a
+ * resolver invocation fails. A failed/disabled first generation, however,
+ * deliberately has no dependency rows at all; retaining it buys nothing and
+ * prevents a changed workspace from being refreshed. Be conservative on an
+ * unreadable/old database: treat any uncertainty as dependency data to keep. */
+static bool maven_existing_dependency_data(const char *db_path, const char *repo_path)
+{
+    static const char sql[] =
+        "SELECT EXISTS(SELECT 1 FROM DependencyArtifact WHERE repo = ?1) OR "
+        "EXISTS(SELECT 1 FROM DependencyFile WHERE repo = ?1)";
+    CodeLensDb db = {0};
+    sqlite3_stmt *stmt = nullptr;
+    bool has_data = true;
+
+    if ((db_path == nullptr) || (repo_path == nullptr) ||
+        (code_lens_db_open_read(&db, db_path) != 0)) {
+        return true;
+    }
+    if ((db_prepare(&db, sql, &stmt) == 0) && (bind_text(stmt, 1, repo_path) == 0) &&
+        (sqlite3_step(stmt) == SQLITE_ROW)) {
+        has_data = sqlite3_column_int(stmt, 0) != 0;
+    }
+    (void)sqlite3_finalize(stmt);
+    code_lens_db_close(&db);
+    return has_data;
+}
+
 /* Prepares the exact source artifacts for a full rebuild. A matching build
  * input snapshot reuses prior materialized sources without running Maven,
  * Leiningen, or tools.deps. If a refresh fails while an older index exists,
@@ -15402,9 +15433,12 @@ static int maven_dependencies_prepare(const char *repo_path, MavenDependencySet 
     (void)fprintf(stderr,
                   "code-lens: warning: %s\n",
                   set->message == nullptr ? "dependency source resolution failed" : set->message);
-    if (had_index) {
+    if (had_index && maven_existing_dependency_data(db_path, repo_path)) {
         return -1;
     }
+    /* This is either the first index or an existing workspace-only partial
+     * index. Publishing another partial generation keeps workspace search
+     * current without discarding any previously resolved dependency source. */
     set->artifact_count = 0U;
     set->status = copy_bytes("failed", strlen("failed"));
     if (set->message == nullptr) {
@@ -16136,7 +16170,10 @@ static int index_repository_incremental(const char *repo_path,
     }
     profile_add(&profile, &profile.collect_seconds, start);
 
-    if (status.maven_changed || status.dependency_sources_changed) {
+    if (status.maven_changed || status.dependency_sources_changed ||
+        status.dependency_retry_due) {
+        /* A retry-due partial generation is readable by MCP, but an explicit
+         * index must still fall through to dependency resolution. */
         goto fallback;
     }
 
@@ -17200,15 +17237,20 @@ done:
 
 static int check_maven_inputs_changed(CodeLensDb *db,
                                       const char *repo_path,
-                                      bool *out_changed)
+                                      bool *out_changed,
+                                      bool *out_retry_due)
 {
     MavenDependencySet current;
     sqlite3_stmt *stmt = nullptr;
+    bool retryable = false;
     int step;
 
-    if ((db == nullptr) || (repo_path == nullptr) || (out_changed == nullptr)) {
+    if ((db == nullptr) || (repo_path == nullptr) || (out_changed == nullptr) ||
+        (out_retry_due == nullptr)) {
         return -1;
     }
+    *out_changed = false;
+    *out_retry_due = false;
     (void)memset(&current, 0, sizeof(current));
     current.repo_path = repo_path;
     if (dependency_project_detect(repo_path, &current) != 0) {
@@ -17235,7 +17277,6 @@ static int check_maven_inputs_changed(CodeLensDb *db,
     {
         const char *root_build = (const char *)sqlite3_column_text(stmt, 0);
         const char *status = (const char *)sqlite3_column_text(stmt, 1);
-        bool retryable;
 
         if ((root_build == nullptr) || (status == nullptr) ||
             (strcmp(root_build, current.root_pom) != 0)) {
@@ -17245,13 +17286,6 @@ static int check_maven_inputs_changed(CodeLensDb *db,
         }
         retryable = (strcmp(status, "failed") == 0) ||
                     (strcmp(status, "disabled") == 0);
-        if (maven_enabled() && retryable) {
-            /* Failed and disabled first generations self-heal after a
-             * transient failure or after the global kill switch is lifted. */
-            *out_changed = true;
-            (void)sqlite3_finalize(stmt);
-            return 0;
-        }
         if (((strcmp(status, "none") == 0) !=
              (current.project_kind == DEPENDENCY_PROJECT_NONE)) ||
             ((strcmp(status, "resolved") != 0) && (strcmp(status, "empty") != 0) &&
@@ -17267,6 +17301,12 @@ static int check_maven_inputs_changed(CodeLensDb *db,
     }
     *out_changed = !maven_inputs_match_db(db, &current) ||
                    !maven_artifact_cache_markers_current(db, repo_path);
+    if (!*out_changed && retryable && maven_enabled()) {
+        /* A failed/disabled first generation has no dependency rows to go
+         * stale. Keep its current workspace index available to MCP reads;
+         * explicit indexing still sees this flag and retries resolution. */
+        *out_retry_due = true;
+    }
     return 0;
 }
 
@@ -17893,7 +17933,10 @@ static int check_repo_staleness_diff(CodeLensDb *db,
         if ((check_new_files_current(db, repo_name, repo_path, &indexed_paths, &status, diff) ==
              0) &&
             (fold_stale_entries(&status, diff, entries, entry_count) == 0) &&
-            (check_maven_inputs_changed(db, repo_path, &status.maven_changed) == 0)) {
+            (check_maven_inputs_changed(db,
+                                        repo_path,
+                                        &status.maven_changed,
+                                        &status.dependency_retry_due) == 0)) {
             /* The parallel walk finds new files in nondeterministic order;
              * sort so downstream consumers (the incremental re-parse) stay
              * deterministic per machine. */
@@ -17908,6 +17951,9 @@ static int check_repo_staleness_diff(CodeLensDb *db,
     }
 
     status.checked = rc == 0;
+    /* dependency_retry_due is deliberately not staleness: a first failed or
+     * disabled dependency generation has no dependency rows, while its
+     * workspace snapshot remains safe for MCP reads. */
     status.stale = (status.missing_files > 0U) || (status.changed_files > 0U) ||
                    (status.new_files > 0U) || status.maven_changed ||
                    status.dependency_sources_changed;

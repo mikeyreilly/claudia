@@ -50,8 +50,11 @@ Dependency sources:
   org.jline:*. context falls back to dependency definitions automatically and
   returns stable source paths that normal file-reading tools can open. Build
   tools rerun only when tracked build inputs change, when the source cache is
-  stale, or to retry a prior failure. Set CODE_LENS_MAVEN=0 to disable all
-  dependency execution; CODE_LENS_MAVEN_TIMEOUT_MS defaults to 120000. Automatic
+  stale, or to retry a prior failure. A failed first resolution leaves a
+  workspace-only partial index usable by MCP; subsequent workspace refreshes
+  retain that availability while dependency resolution is retried by `index`.
+  Set CODE_LENS_MAVEN=0 to disable all dependency execution;
+  CODE_LENS_MAVEN_TIMEOUT_MS defaults to 120000. Automatic
   build tools can execute project code, extensions, and plugins, so index only
   trusted projects.
 
@@ -129,8 +132,9 @@ checked out next to this repository):
   rather than merely filtering reference-site output. CLI/public-API `list`,
   `query`, and `context` report freshness details without mutating stored data.
   MCP instead makes `query`, `context`, and `sql` current before reading and
-  returns either current results or an ordinary search-availability error; it
-  does not expose maintenance details. Indexing parallelizes read/parse/extract
+  returns either current results or an ordinary search-availability error. A
+  current workspace-only partial index remains searchable if dependency
+  resolution is unavailable. Indexing parallelizes read/parse/extract
   work by default, capped at 8 workers. Set
   CODE_LENS_INDEX_THREADS=<n> to override the worker count; values 0 and 1
   keep the sequential path.
