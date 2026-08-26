@@ -66,7 +66,10 @@ Use `/resume` to open a searchable list of saved sessions from the current
 folder. Selecting one restores its model and visible conversation transcript,
 and new messages continue appending to the same session file. The active
 session is excluded from the selector. If a saved model is unavailable, the
-currently configured model is used as a fallback.
+currently configured model is used as a fallback. Use `/fork` to branch the
+current conversation into a new session: the name prompt starts with the
+current session name followed by ` fork` (or `fork` for an unnamed session),
+and the shell switches to the new session after you submit the name.
 
 The shell supports `/theme dark`, `/theme light`, and `/theme plain`. Typing
 `/` opens a four-row, alphabetized command panel below the prompt; continue
@@ -77,8 +80,9 @@ agent turn, Ctrl-D closes the shell, and Ctrl-Z suspends the foreground job on
 Unix.
 A status bar on the bottom terminal row starts with the shell's live activity,
 followed by the working directory (with the home directory abbreviated to `~`),
-the checked-out Git branch, and the model, thinking level, and context-window
-use. For example: `● Ready │ ~/xa/coding-agent [main]  GPT-5.6 Sol Max (0%)`.
+the checked-out Git branch, the current named session when present, and the
+model, thinking level, and context-window use. For example:
+`● Ready │ ~/xa/coding-agent [main]  GPT-5.6 Sol Max (0%)`.
 In the dark and light themes, `Ready` is the only green activity, making it
 clear when the current turn has settled and the shell can accept another
 prompt; the plain theme keeps the same labels without color. Slash commands

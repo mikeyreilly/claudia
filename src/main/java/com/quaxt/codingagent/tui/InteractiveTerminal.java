@@ -244,13 +244,22 @@ public final class InteractiveTerminal implements AutoCloseable {
 		return readLine(prompt, null, suggestions);
 	}
 
+	/** Reads a line whose editable buffer starts with {@code initialValue}. */
+	public String readLine(String prompt, String initialValue) {
+		return readLine(prompt, initialValue, null, null);
+	}
+
 	/** Returns null on EOF and an empty string after Ctrl-C without echoing the entered value. */
 	public String readPassword(String prompt) {
 		return readLine(prompt, '*', null);
 	}
 
 	private String readLine(String prompt, Character mask, CommandSuggestions suggestions) {
-		String initialBuffer = null;
+		return readLine(prompt, null, mask, suggestions);
+	}
+
+	private String readLine(
+			String prompt, String initialBuffer, Character mask, CommandSuggestions suggestions) {
 		while (true) {
 			Theme promptTheme = theme;
 			try {

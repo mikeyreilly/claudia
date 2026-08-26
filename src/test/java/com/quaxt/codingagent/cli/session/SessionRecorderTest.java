@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.cli.session;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.ImageContent;
+import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
@@ -40,6 +42,24 @@ class SessionRecorderTest {
 		assertEquals("assistant", entries.get(2).payload().path("role").asText());
 		assertTrue(entries.get(2).payload().path("content").get(0).path("text").asText().contains("tool"));
 		assertEquals("read", entries.getLast().payload().path("toolName").asText());
+	}
+
+	@Test
+	void forksTheTranscriptIntoANamedSession() throws Exception {
+		SessionStore store = new SessionStore(tempDir.resolve("sessions"));
+		SessionRecorder source = SessionRecorder.create(store, tempDir, "faux", "faux-1");
+		List<Message> messages = List.of(UserMessage.of("first prompt"), UserMessage.of("second prompt"));
+		source.appendMessages(messages);
+
+		SessionRecorder fork = SessionRecorder.fork(
+				store, tempDir, "faux", "faux-1", "  investigation fork  ", messages);
+		SessionSnapshot snapshot = store.snapshot(fork.sessionId());
+
+		assertNotEquals(source.sessionId(), fork.sessionId());
+		assertEquals("investigation fork", snapshot.name());
+		assertEquals(2, snapshot.messageCount());
+		assertEquals("first prompt", snapshot.firstMessage());
+		assertEquals(2, store.snapshot(source.sessionId()).messageCount());
 	}
 
 	@Test
