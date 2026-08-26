@@ -141,12 +141,14 @@ supported:
 Relative local-server `cwd` values resolve from the workspace. MCP tools are
 exposed as `<server>_<tool>`, matching OpenCode's name sanitization. In the
 interactive shell, `/mcp` opens the configured-server list; Enter connects,
-disconnects, authenticates, or retries the selected server without editing its
-config. Press Tab on a connected server to open its tool list, then press
+disconnects, authenticates, or retries the selected server. Press Tab on a
+connected server to open its tool list, then press
 Enter to individually enable or disable a selected tool. Server and tool
-toggles apply only to the current codingagent process; a disabled tool stays
-disabled if its server reconnects during that process. Streamable HTTP and
-legacy HTTP+SSE servers are supported.
+toggles are saved to `~/.codingagent/settings.json` and restored by future
+codingagent processes; a disabled tool also stays disabled if its server
+reconnects during the current process. Tool overrides are stored as an
+optional `disabledTools` array of raw MCP tool names on the server definition.
+Streamable HTTP and legacy HTTP+SSE servers are supported.
 
 Noisy keys can be removed recursively from JSON results for selected tools with
 an optional per-server `resultFilters` list. Tool patterns support `*` and `?`;

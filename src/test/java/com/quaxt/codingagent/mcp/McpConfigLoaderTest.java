@@ -42,7 +42,8 @@ class McpConfigLoaderTest {
 				      },
 				      "resultFilters": [
 				        { "tool": "get*", "dropKeys": ["avatarUrls", "self"] }
-				      ]
+				      ],
+				      "disabledTools": ["deleteIssue"]
 				    }
 				  }
 				}
@@ -62,7 +63,21 @@ class McpConfigLoaderTest {
 		assertEquals(23456, remote.oauth().path("callbackPort").asInt());
 		assertEquals("get*", remote.resultFilters().getFirst().tool());
 		assertEquals(java.util.List.of("avatarUrls", "self"), remote.resultFilters().getFirst().dropKeys());
+		assertEquals(java.util.List.of("deleteIssue"), remote.disabledTools());
 		assertEquals(java.util.List.of(settingsPath), config.sources());
+	}
+
+	@Test
+	void rejectsInvalidDisabledTools() throws Exception {
+		Path settingsPath = tempDir.resolve("home/.codingagent/settings.json");
+		Files.createDirectories(settingsPath.getParent());
+		Files.writeString(settingsPath, """
+				{"mcp":{"local":{"type":"local","command":["tool"],"disabledTools":[42]}}}
+				""");
+
+		Exception error = assertThrows(
+				java.io.IOException.class, () -> new McpConfigLoader(settingsPath, Map.of()).load());
+		assertTrue(error.getMessage().contains("disabledTools"));
 	}
 
 	@Test

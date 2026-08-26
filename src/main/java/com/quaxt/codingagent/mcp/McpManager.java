@@ -71,6 +71,14 @@ public final class McpManager implements AutoCloseable {
 		return snapshot(require(name));
 	}
 
+	/** Whether this server is enabled for the current and future manager connections. */
+	public boolean isEnabled(String name) {
+		Runtime runtime = require(name);
+		synchronized (runtime.lock) {
+			return runtime.enabled;
+		}
+	}
+
 	/**
 	 * Returns the current tool catalog for a connected server, including tools
 	 * disabled for this process. A disconnected server has no current catalog.
@@ -88,8 +96,8 @@ public final class McpManager implements AutoCloseable {
 
 	/**
 	 * Enables a currently disabled tool or disables an enabled one without
-	 * disconnecting its server. The choice lasts for this manager's lifetime,
-	 * including a later reconnect of that server.
+	 * disconnecting its server. The runtime choice survives a later reconnect
+	 * of that server.
 	 */
 	public ToolStatus toggleTool(String serverName, String toolName) {
 		Runtime runtime = require(serverName);
@@ -142,7 +150,7 @@ public final class McpManager implements AutoCloseable {
 		return snapshot(runtime);
 	}
 
-	/** Disconnects a server for this process without changing its config file. */
+	/** Disconnects a server and marks it disabled; callers may persist that choice. */
 	public ServerStatus disconnect(String name) {
 		Runtime runtime = require(name);
 		McpClient client;
@@ -154,6 +162,7 @@ public final class McpManager implements AutoCloseable {
 			client = runtime.client;
 			runtime.client = null;
 			runtime.tools = List.of();
+			runtime.enabled = false;
 			runtime.state = State.DISABLED;
 			runtime.message = null;
 			runtime.authorizationUrl = null;
@@ -217,6 +226,7 @@ public final class McpManager implements AutoCloseable {
 		Thread connector;
 		synchronized (runtime.lock) {
 			if (closed) return null;
+			runtime.enabled = true;
 			if (runtime.state == State.CONNECTED && runtime.client != null) return null;
 			previous = runtime.client;
 			previousConnector = runtime.connector;
@@ -375,17 +385,20 @@ public final class McpManager implements AutoCloseable {
 		final String name;
 		final McpServerConfig config;
 		long generation;
+		boolean enabled;
 		State state;
 		String message;
 		McpClient client;
 		List<McpClient.ToolDefinition> tools = List.of();
-		final Set<String> disabledTools = new HashSet<>();
+		final Set<String> disabledTools;
 		Thread connector;
 		String authorizationUrl;
 
 		Runtime(String name, McpServerConfig config) {
 			this.name = name;
 			this.config = config;
+			this.disabledTools = new HashSet<>(config.disabledTools());
+			this.enabled = config.enabled();
 			this.state = config.enabled() ? State.CONNECTING : State.DISABLED;
 		}
 	}

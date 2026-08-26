@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.cli.settings;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -14,7 +15,6 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.EnumSet;
 import java.util.Set;
-import java.util.function.Consumer;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
 
@@ -82,13 +82,53 @@ public final class SettingsStore {
 		modify(root -> root.put("hideThinkingBlock", hide));
 	}
 
-	private void modify(Consumer<ObjectNode> operation) throws IOException {
+	/** Persists whether a configured MCP server should connect on future starts. */
+	public void setMcpServerEnabled(String serverName, boolean enabled) throws IOException {
+		requireValue(serverName, "serverName");
+		modify(root -> mcpServer(root, serverName).put("enabled", enabled));
+	}
+
+	/**
+	 * Persists a per-server tool override. Enabled tools are omitted from
+	 * {@code disabledTools}, because enabled is the default.
+	 */
+	public void setMcpToolEnabled(String serverName, String toolName, boolean enabled) throws IOException {
+		requireValue(serverName, "serverName");
+		requireValue(toolName, "toolName");
+		modify(root -> {
+			ObjectNode server = mcpServer(root, serverName);
+			ArrayNode disabledTools = disabledToolsArray(server, serverName);
+			if (enabled) {
+				if (disabledTools == null) return;
+				ArrayNode retained = Json.MAPPER.createArrayNode();
+				for (JsonNode tool : disabledTools) {
+					String name = disabledToolName(serverName, tool);
+					if (!name.equals(toolName)) retained.add(name);
+				}
+				if (retained.isEmpty()) server.remove("disabledTools");
+				else server.set("disabledTools", retained);
+				return;
+			}
+			if (disabledTools == null) disabledTools = server.putArray("disabledTools");
+			for (JsonNode tool : disabledTools) {
+				if (disabledToolName(serverName, tool).equals(toolName)) return;
+			}
+			disabledTools.add(toolName);
+		});
+	}
+
+	@FunctionalInterface
+	private interface ObjectUpdate {
+		void apply(ObjectNode root) throws IOException;
+	}
+
+	private void modify(ObjectUpdate operation) throws IOException {
 		ensureParentDirectory();
 		try (FileChannel channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
 				FileLock ignored = channel.lock()) {
 			setPermissions(lockPath, FILE_PERMISSIONS);
 			ObjectNode root = readObject();
-			operation.accept(root);
+			operation.apply(root);
 			writeObject(root);
 		}
 	}
@@ -137,6 +177,37 @@ public final class SettingsStore {
 		}
 		Files.createDirectories(parent);
 		setPermissions(parent, DIRECTORY_PERMISSIONS);
+	}
+
+	private static ObjectNode mcpServer(ObjectNode root, String serverName) throws IOException {
+		JsonNode mcp = root.get("mcp");
+		if (!(mcp instanceof ObjectNode servers)) {
+			throw new IOException("Cannot update MCP server \"" + serverName + "\": mcp must be an object");
+		}
+		JsonNode server = servers.get(serverName);
+		if (!(server instanceof ObjectNode object)) {
+			throw new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured");
+		}
+		return object;
+	}
+
+	private static ArrayNode disabledToolsArray(ObjectNode server, String serverName) throws IOException {
+		JsonNode value = server.get("disabledTools");
+		if (value == null || value.isNull()) return null;
+		if (!(value instanceof ArrayNode tools)) {
+			throw new IOException("Invalid MCP server \"" + serverName + "\": disabledTools must be an array");
+		}
+		for (JsonNode tool : tools) {
+			disabledToolName(serverName, tool);
+		}
+		return tools;
+	}
+
+	private static String disabledToolName(String serverName, JsonNode tool) throws IOException {
+		if (!tool.isTextual() || tool.asText().isBlank()) {
+			throw new IOException("Invalid MCP server \"" + serverName + "\": disabledTools must contain non-empty strings");
+		}
+		return tool.asText();
 	}
 
 	private static String optionalText(ObjectNode root, String field) throws IOException {
