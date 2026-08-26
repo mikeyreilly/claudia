@@ -55,6 +55,14 @@ class InteractiveShellTest {
 	}
 
 	@Test
+	void prepopulatesForkNamesFromTheCurrentSessionName() {
+		assertEquals("fork", InteractiveShell.forkName(null));
+		assertEquals("fork", InteractiveShell.forkName("  "));
+		assertEquals("investigation fork", InteractiveShell.forkName("investigation"));
+		assertEquals("investigation fork", InteractiveShell.forkName("  investigation  "));
+	}
+
+	@Test
 	void cleansIncompleteTurnsWhenResuming() {
 		AssistantMessage failed = new AssistantMessage("faux", "faux", "faux-1");
 		failed.stopReason = StopReason.ERROR;

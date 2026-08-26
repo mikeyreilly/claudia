@@ -92,6 +92,22 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
+	void submitsAPrepopulatedInputBuffer() throws Exception {
+		TerminalFixture fixture = terminal();
+
+		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+			fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+
+			String line = assertTimeoutPreemptively(
+					Duration.ofSeconds(5), () -> interactive.readLine("> ", "current session fork"));
+
+			assertEquals("current session fork", line);
+			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("> current session fork"));
+		}
+	}
+
+	@Test
 	void slashCommandPanelFiltersNavigatesAndInsertsWithoutSubmitting() throws Exception {
 		TerminalFixture fixture = terminal();
 

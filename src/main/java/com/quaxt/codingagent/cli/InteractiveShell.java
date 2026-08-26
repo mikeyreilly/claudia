@@ -60,6 +60,7 @@ final class InteractiveShell implements AutoCloseable {
 			"/compact",
 			"/details",
 			"/exit",
+			"/fork",
 			"/help",
 			"/login",
 			"/logout",
@@ -78,6 +79,7 @@ final class InteractiveShell implements AutoCloseable {
 	private SettingsStore.Settings settings;
 	private Agent agent;
 	private SessionRecorder recorder;
+	private String sessionName;
 	private Path cwd = Path.of(".").toAbsolutePath().normalize();
 	private boolean emittedText;
 	private boolean hideThinkingBlock;
@@ -210,8 +212,9 @@ final class InteractiveShell implements AutoCloseable {
 				return true;
 			}
 			case "/help" ->
-					terminal.println("Commands: /help, /details, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+					terminal.println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
 			case "/details" -> showLatestTurnDetails(false);
+			case "/fork" -> forkSession();
 			case "/resume" -> resumeSession();
 			case "/login" -> login();
 			case "/logout" -> logout();
@@ -482,6 +485,49 @@ final class InteractiveShell implements AutoCloseable {
 		}
 	}
 
+	private void forkSession() throws IOException {
+		if (agent == null) {
+			terminal.println("No model is configured.");
+			return;
+		}
+		String name = terminal.readLine("Fork session name: ", forkName(sessionName));
+		if (name == null || name.isBlank()) {
+			terminal.println("Fork cancelled.");
+			return;
+		}
+		name = name.strip();
+		Model model = agent.state().model;
+		String systemPrompt = agent.state().systemPrompt;
+		ThinkingLevel thinkingLevel = agent.state().thinkingLevel;
+		boolean autoCompactionEnabled = agent.state().autoCompactionEnabled;
+		int compactionReserveTokens = agent.state().compactionReserveTokens;
+		List<Message> forkMessages = resumableMessages(agent.state().messages);
+		SessionRecorder forkRecorder = null;
+		if (!arguments.noSession) {
+			try {
+				forkRecorder = SessionRecorder.fork(
+						SessionStore.defaultStore(), cwd, model.provider, model.id, name, forkMessages);
+			} catch (IOException error) {
+				terminal.println("Failed to fork session: " + error.getMessage());
+				return;
+			}
+		}
+		configureAgent(model, cwd, forkRecorder, name);
+		agent.state().systemPrompt = systemPrompt;
+		agent.state().thinkingLevel = thinkingLevel;
+		agent.state().autoCompactionEnabled = autoCompactionEnabled;
+		agent.state().compactionReserveTokens = compactionReserveTokens;
+		agent.state().messages.addAll(forkMessages);
+		refreshStatus();
+		terminal.println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
+	}
+
+	static String forkName(String currentSessionName) {
+		return currentSessionName == null || currentSessionName.isBlank()
+				? "fork"
+				: currentSessionName.strip() + " fork";
+	}
+
 	private void resume(SessionStore store, SessionSnapshot session) throws IOException {
 		if (!Files.isDirectory(session.cwd())) {
 			terminal.println("Cannot resume session because its working directory is unavailable: " + session.cwd());
@@ -527,7 +573,7 @@ final class InteractiveShell implements AutoCloseable {
 		}
 		SessionRecorder resumedRecorder = SessionRecorder.resume(store, session.id());
 		List<Message> restored = resumableMessages(session.messages());
-		configureAgent(model, session.cwd(), resumedRecorder);
+		configureAgent(model, session.cwd(), resumedRecorder, session.name());
 		settings = settings.withDefaultModel(model.provider, model.id);
 		agent.state().messages.addAll(restored);
 		refreshStatus();
@@ -537,7 +583,8 @@ final class InteractiveShell implements AutoCloseable {
 		} catch (IOException error) {
 			terminal.println("Resumed model could not be saved as the default: " + error.getMessage());
 		}
-		terminal.println("Resumed session " + session.id() + " with " + restored.size() + " message(s) using " + model + ".");
+		terminal.println("Resumed session " + sessionDisplayName(session) + " with " + restored.size()
+				+ " message(s) using " + model + ".");
 	}
 
 	static String renderSessionScreen(
@@ -567,7 +614,7 @@ final class InteractiveShell implements AutoCloseable {
 		header.append('\n');
 		header.append(model == null
 				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-				: "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+				: "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
 		header.append('\n');
 		return header.toString();
 	}
@@ -641,15 +688,19 @@ final class InteractiveShell implements AutoCloseable {
 	}
 
 	private static SelectItem<SessionSnapshot> sessionItem(SessionSnapshot session) {
-		String message = abbreviate(session.firstMessage().replaceAll("[\\p{Cntrl}]", " "), 90);
+		String message = abbreviate(sessionDisplayName(session).replaceAll("[\\p{Cntrl}]", " "), 90);
 		String description = session.messageCount() + " messages  " + formatAge(session.modified())
 				+ "  [" + session.provider() + "/" + session.model() + "]";
 		return new SelectItem<>(
 				session,
 				message,
 				description,
-				session.id() + " " + session.provider() + " " + session.model() + " "
-						+ session.firstMessage() + " " + session.allMessagesText());
+				session.id() + " " + sessionDisplayName(session) + " " + session.provider() + " " + session.model()
+						+ " " + session.firstMessage() + " " + session.allMessagesText());
+	}
+
+	private static String sessionDisplayName(SessionSnapshot session) {
+		return session.name() == null ? session.firstMessage() : session.name();
 	}
 
 	static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
@@ -783,7 +834,7 @@ final class InteractiveShell implements AutoCloseable {
 				terminal.println("Model configured, but session persistence is unavailable: " + error.getMessage());
 			}
 		}
-		configureAgent(model, configuredCwd, nextRecorder);
+		configureAgent(model, configuredCwd, nextRecorder, null);
 		if (persistModel) {
 			settings = settings.withDefaultModel(model.provider, model.id);
 			try {
@@ -794,7 +845,8 @@ final class InteractiveShell implements AutoCloseable {
 		}
 	}
 
-	private void configureAgent(Model model, Path configuredCwd, SessionRecorder nextRecorder) {
+	private void configureAgent(
+			Model model, Path configuredCwd, SessionRecorder nextRecorder, String nextSessionName) {
 		Provider provider = providers.require(model.provider);
 		Agent configured = new Agent(arguments.systemPrompt, model, provider::stream);
 		configured.setApiKey(arguments.apiKey);
@@ -805,6 +857,7 @@ final class InteractiveShell implements AutoCloseable {
 		cwd = configuredCwd.toAbsolutePath().normalize();
 		agent = configured;
 		recorder = nextRecorder;
+		sessionName = nextSessionName;
 		if (activity.phase() != ActivityStatus.Phase.RUNNING_COMMAND) {
 			setActivity(ActivityStatus.ready(System.nanoTime()));
 		}
@@ -815,7 +868,8 @@ final class InteractiveShell implements AutoCloseable {
 	private void refreshStatus() {
 		String branch = gitBranch(cwd);
 		statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
-				+ (branch == null ? "" : " [" + branch + "]");
+				+ (branch == null ? "" : " [" + branch + "]")
+				+ (sessionName == null ? "" : " \u2022 " + sessionName);
 		statusModel = agent == null
 				? ""
 				: modelStatus(agent.state().model, agent.state().thinkingLevel, contextTokens(agent.state().messages));

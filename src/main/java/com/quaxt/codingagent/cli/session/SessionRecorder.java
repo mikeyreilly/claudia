@@ -18,13 +18,35 @@ public final class SessionRecorder {
 	}
 
 	public static SessionRecorder create(SessionStore store, Path cwd, String provider, String model) throws IOException {
+		return create(store, cwd, provider, model, null);
+	}
+
+	/** Creates a session with an optional user-visible name. */
+	public static SessionRecorder create(
+			SessionStore store, Path cwd, String provider, String model, String sessionName) throws IOException {
 		String id = store.create();
 		ObjectNode start = Json.object();
 		start.put("cwd", cwd.toAbsolutePath().normalize().toString());
 		start.put("provider", provider);
 		start.put("model", model);
+		String normalizedName = normalizeName(sessionName);
+		if (normalizedName != null) start.put("name", normalizedName);
 		store.append(id, "session_start", start);
 		return new SessionRecorder(store, id);
+	}
+
+	/** Creates a named child session containing a copy of the supplied conversation. */
+	public static SessionRecorder fork(
+			SessionStore store,
+			Path cwd,
+			String provider,
+			String model,
+			String sessionName,
+			List<Message> messages)
+			throws IOException {
+		SessionRecorder fork = create(store, cwd, provider, model, sessionName);
+		fork.appendMessages(messages);
+		return fork;
 	}
 
 	/** Opens an existing session so future messages continue in the same JSONL file. */
@@ -42,5 +64,11 @@ public final class SessionRecorder {
 		for (Message message : messages) {
 			store.append(sessionId, "message", SessionCodec.encode(message));
 		}
+	}
+
+	private static String normalizeName(String sessionName) {
+		if (sessionName == null) return null;
+		String normalized = sessionName.strip();
+		return normalized.isEmpty() ? null : normalized;
 	}
 }

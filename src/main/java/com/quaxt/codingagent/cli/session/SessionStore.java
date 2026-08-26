@@ -164,6 +164,7 @@ public final class SessionStore {
 		String cwdText = requiredText(payload, "cwd", sessionId);
 		String provider = requiredText(payload, "provider", sessionId);
 		String model = requiredText(payload, "model", sessionId);
+		String name = optionalText(payload, "name");
 		List<Message> messages = new ArrayList<>();
 		String firstMessage = "";
 		StringBuilder allMessages = new StringBuilder();
@@ -195,6 +196,7 @@ public final class SessionStore {
 		}
 		return new SessionSnapshot(
 				sessionId,
+				name,
 				file,
 				sessionCwd,
 				provider,
@@ -264,6 +266,11 @@ public final class SessionStore {
 			throw new IOException("Session " + sessionId + " has no valid " + field);
 		}
 		return value.asText();
+	}
+
+	private static String optionalText(JsonNode payload, String field) {
+		JsonNode value = payload.get(field);
+		return value != null && value.isTextual() ? value.asText() : null;
 	}
 
 	private static String messageText(Message message) {
