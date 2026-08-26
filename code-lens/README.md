@@ -136,8 +136,11 @@ wrappers, and `.mvn/**`; for Leiningen/tools.deps it snapshots the root
 `project.clj`/`deps.edn`. Ordinary source refreshes reuse the prior dependency
 set. Resolution runs again when those inputs change, the materialized cache is
 missing, or a prior `failed`/`disabled` generation becomes retryable. A build
-tool failure never replaces an existing published index. On a first index it
-produces a workspace-only partial index and a warning.
+tool failure never discards a published dependency-source set. On a first
+failure it produces a workspace-only partial index and a warning; because that
+generation has no dependency rows to preserve, later workspace refreshes can
+safely publish another current workspace-only generation while resolution
+continues to be retried by `index`.
 
 `CODE_LENS_MAVEN=0` is the global dependency-resolution kill switch for Maven,
 Leiningen, and tools.deps; `CODE_LENS_MAVEN_TIMEOUT_MS` changes the shared
@@ -228,8 +231,10 @@ recorded size/mtime snapshot and whether new Clojure, Java, or C files have
 appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
 they return any stale results with a warning. MCP instead guarantees that
 `query`, `context`, and `sql` operate on current worktree data or return an
-ordinary search-availability error; maintenance details are not included in
-tool metadata or results. MCP `sql` remains read-only with respect to user SQL.
+ordinary search-availability error. A current workspace-only partial index
+remains available when dependency resolution fails, so missing resolver
+credentials do not make workspace search unavailable. MCP `sql` remains
+read-only with respect to user SQL.
 
 ## Documentation
 

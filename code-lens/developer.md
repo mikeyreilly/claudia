@@ -552,8 +552,12 @@ explainable and reusable until build-file detection changes. When an input
 snapshot still matches `MavenInput`, prior `DependencyArtifact` rows and
 checksum-keyed materialized roots are reused. The staleness engine checks the
 same inputs and dependency files. A stored `failed` status (or `disabled` after
-resolution is enabled) is intentionally non-reusable, so transient first-index
-failures retry without requiring an input edit.
+resolution is enabled) is intentionally non-reusable, so an explicit `index`
+retries transient first-index failures without requiring an input edit. Its
+retry requirement is tracked separately from worktree staleness: a failed or
+disabled first generation contains no dependency rows, so a current
+workspace-only snapshot remains safe for MCP reads rather than turning a
+resolver outage into a code-search outage.
 
 On a Maven cache miss, `run_process_with_timeout` invokes the wrapper or Maven
 in batch/no-transfer-progress mode and runs the pinned Maven Dependency Plugin's
@@ -588,8 +592,12 @@ raw emitter's high-volume layouts unchanged. Query defaults to rows with no
 selects workspace candidates first, falls back to dependency candidates, and
 orders workspace reference sites before dependency-internal references.
 Dependency metadata is written with ordinary prepared statements inside the
-same staging transaction. A build-tool refresh failure with an existing index
-aborts before staging and leaves that generation readable.
+same staging transaction. A build-tool refresh failure with published
+`DependencyArtifact`/`DependencyFile` rows aborts before staging and leaves
+that dependency generation readable. If the existing generation is already a
+workspace-only partial index with no dependency rows, a repeated failure may
+publish a refreshed workspace-only generation instead; no resolved dependency
+source set is discarded.
 
 ### C
 
@@ -968,10 +976,12 @@ MCP is intentionally different. Its `query`, `context`, and `sql` tools accept
 an optional `repo` naming a worktree root or any path inside it; omission uses
 the server working directory. `mcp_repo_session_open` resolves the canonical
 worktree and transparently prepares a current database through the ordinary
-staging-and-rename path. It never returns a known-stale fallback: preparation
-failure becomes one generic search-availability result. Successful results do
-not include build, repair, freshness, timing, or cache notes. Index inventory
-and removal remain available through the CLI/public API but are not MCP tools.
+staging-and-rename path. It never returns a known-stale fallback for workspace
+files: preparation failures become one generic search-availability result.
+A current workspace-only partial generation remains usable when dependency
+resolution is unavailable, so a resolver outage does not make workspace code
+search unavailable. Index inventory and removal remain available through the
+CLI/public API but are not MCP tools.
 
 - `code_lens_list_repos`: walks `<home>/repos/`, opens every published
   `index.sqlite` in sorted directory order, and concatenates

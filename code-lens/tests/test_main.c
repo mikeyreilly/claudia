@@ -2306,6 +2306,174 @@ done:
     return failed == 0 ? 0 : 1;
 }
 
+/* A dependency resolver may be unavailable while the workspace itself is
+ * perfectly searchable. Once its first partial index exists, MCP must keep
+ * serving that current workspace rather than trying the resolver on every
+ * read and turning a recoverable dependency failure into an outage. */
+static size_t mcp_dependency_invocation_count(const char *path)
+{
+    FILE *file;
+    size_t count = 0U;
+    int ch;
+
+    if ((path == nullptr) || ((file = fopen(path, "r")) == nullptr)) {
+        return 0U;
+    }
+    while ((ch = fgetc(file)) != EOF) {
+        if (ch == '\n') {
+            count++;
+        }
+    }
+    if (ferror(file)) {
+        count = 0U;
+    }
+    (void)fclose(file);
+    return count;
+}
+
+static int test_mcp_dependency_failure_fallback(void)
+{
+    static const char failing_lein[] =
+        "#!/bin/sh\n"
+        "printf 'run\\n' >> dependency-invocations.txt\n"
+        "exit 42\n";
+    static const char first_source[] =
+        "(ns mcp.dependency)\n"
+        "(defn first-workspace [] 1)\n";
+    static const char refreshed_source[] =
+        "(ns mcp.dependency)\n"
+        "(defn refreshed-workspace [] 2)\n";
+    const char *tmp = getenv("TMPDIR");
+    const char *old_home = getenv("CODE_LENS_HOME");
+    const char *old_maven = getenv("CODE_LENS_MAVEN");
+    const char *old_lein = getenv("CODE_LENS_LEIN_COMMAND");
+    const char *old_incremental = getenv("CODE_LENS_INCREMENTAL");
+    char saved_home[PATH_MAX] = {0};
+    char saved_maven[PATH_MAX] = {0};
+    char saved_lein[PATH_MAX] = {0};
+    char saved_incremental[PATH_MAX] = {0};
+    bool had_home = old_home != nullptr;
+    bool had_maven = old_maven != nullptr;
+    bool had_lein = old_lein != nullptr;
+    bool had_incremental = old_incremental != nullptr;
+    char root_template[PATH_MAX];
+    char *root;
+    char *repo;
+    char *home;
+    char *command;
+    char *invocations;
+    char context_args[PATH_MAX + 128];
+    char *text;
+    int args_len;
+    int failed = 0;
+
+    if (had_home) (void)snprintf(saved_home, sizeof(saved_home), "%s", old_home);
+    if (had_maven) (void)snprintf(saved_maven, sizeof(saved_maven), "%s", old_maven);
+    if (had_lein) (void)snprintf(saved_lein, sizeof(saved_lein), "%s", old_lein);
+    if (had_incremental) {
+        (void)snprintf(saved_incremental, sizeof(saved_incremental), "%s", old_incremental);
+    }
+    if ((tmp == nullptr) || (tmp[0] == '\0')) {
+        tmp = "/tmp";
+    }
+    (void)snprintf(root_template,
+                   sizeof(root_template),
+                   "%s/code-lens-mcp-dependency-XXXXXX",
+                   tmp);
+    root = canonical_temp_root(root_template);
+    if (root == nullptr) {
+        (void)fprintf(stderr, "MCP dependency fallback test failed: mkdtemp failed\n");
+        return 1;
+    }
+
+    repo = code_lens_join_path(root, "repo");
+    home = code_lens_join_path(root, "home");
+    command = code_lens_join_path(root, "failing-lein");
+    invocations = repo == nullptr ? nullptr : code_lens_join_path(repo, "dependency-invocations.txt");
+    if ((repo == nullptr) || (home == nullptr) || (command == nullptr) ||
+        (invocations == nullptr) || (code_lens_mkdir_p(repo) != 0) ||
+        (code_lens_mkdir_p(home) != 0) ||
+        (write_text_file(repo, "workspace.clj", first_source) != 0) ||
+        (write_text_file(repo, "project.clj", "(defproject fixture \"0.1\")\n") != 0) ||
+        (commit_git_fixture(repo) != 0) || (write_text_file(root, "failing-lein", failing_lein) != 0) ||
+        (chmod(command, 0755) != 0) || (setenv("CODE_LENS_HOME", home, 1) != 0) ||
+        (setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
+        (setenv("CODE_LENS_LEIN_COMMAND", command, 1) != 0) ||
+        (setenv("CODE_LENS_INCREMENTAL", "0", 1) != 0)) {
+        (void)fprintf(stderr, "MCP dependency fallback test failed: fixture setup failed\n");
+        failed = 1;
+        goto done;
+    }
+
+    args_len = snprintf(context_args,
+                        sizeof(context_args),
+                        "{\"repo\":\"%s\",\"name\":\"first-workspace\"}",
+                        repo);
+    if ((args_len < 0) || ((size_t)args_len >= sizeof(context_args))) {
+        failed = 1;
+        goto done;
+    }
+    text = code_lens_test_mcp_call_tool("context", context_args);
+    failed |= mcp_on_demand_assert(
+        (text != nullptr) && (strstr(text, "first-workspace|function|mcp.dependency") != nullptr) &&
+            (strstr(text, "code search is unavailable") == nullptr) &&
+            (mcp_dependency_invocation_count(invocations) == 1U),
+        "MCP builds a workspace-only index when Leiningen is unavailable");
+
+    text = code_lens_test_mcp_call_tool("context", context_args);
+    failed |= mcp_on_demand_assert(
+        (text != nullptr) && (strstr(text, "first-workspace|function|mcp.dependency") != nullptr) &&
+            (strstr(text, "code search is unavailable") == nullptr) &&
+            (mcp_dependency_invocation_count(invocations) == 1U),
+        "MCP reuses a current failed-dependency workspace index without retrying Leiningen");
+
+    if (write_text_file(repo, "workspace.clj", refreshed_source) != 0) {
+        failed = 1;
+        goto done;
+    }
+    args_len = snprintf(context_args,
+                        sizeof(context_args),
+                        "{\"repo\":\"%s\",\"name\":\"refreshed-workspace\"}",
+                        repo);
+    if ((args_len < 0) || ((size_t)args_len >= sizeof(context_args))) {
+        failed = 1;
+        goto done;
+    }
+    text = code_lens_test_mcp_call_tool("context", context_args);
+    failed |= mcp_on_demand_assert(
+        (text != nullptr) &&
+            (strstr(text, "refreshed-workspace|function|mcp.dependency") != nullptr) &&
+            (strstr(text, "code search is unavailable") == nullptr) &&
+            (mcp_dependency_invocation_count(invocations) == 2U),
+        "MCP refreshes workspace rows despite a repeated dependency failure");
+
+done:
+    if (had_incremental) {
+        (void)setenv("CODE_LENS_INCREMENTAL", saved_incremental, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_INCREMENTAL");
+    }
+    if (had_lein) {
+        (void)setenv("CODE_LENS_LEIN_COMMAND", saved_lein, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_LEIN_COMMAND");
+    }
+    if (had_maven) {
+        (void)setenv("CODE_LENS_MAVEN", saved_maven, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_MAVEN");
+    }
+    if (had_home) {
+        (void)setenv("CODE_LENS_HOME", saved_home, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_HOME");
+    }
+    if (code_lens_remove_tree(root) != 0) {
+        (void)fprintf(stderr, "MCP dependency fallback test warning: failed to remove %s\n", root);
+    }
+    return failed == 0 ? 0 : 1;
+}
+
 /* --- repository write-lock test -------------------------------------- */
 
 static int read_pipe_bytes(int fd, char *out, size_t count, int timeout_ms)
@@ -2638,6 +2806,10 @@ int main(void)
     }
 
     if (test_mcp_on_demand_indexing() != 0) {
+        return 1;
+    }
+
+    if (test_mcp_dependency_failure_fallback() != 0) {
         return 1;
     }
 
