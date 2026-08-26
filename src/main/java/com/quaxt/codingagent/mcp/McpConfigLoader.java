@@ -125,6 +125,7 @@ public final class McpConfigLoader {
 		boolean enabled = optionalBoolean(name, value, "enabled", true);
 		Long timeout = optionalPositiveLong(name, value, "timeout");
 		List<McpResultFilter> resultFilters = resultFilters(name, value);
+		List<String> disabledTools = disabledTools(name, value);
 		return switch (typeNode.asText()) {
 			case "local" -> {
 				JsonNode commandNode = value.get("command");
@@ -140,7 +141,7 @@ public final class McpConfigLoader {
 				}
 				String cwd = optionalText(name, value, "cwd");
 				Map<String, String> environment = stringMap(name, value, "environment");
-				yield new McpServerConfig.Local(command, cwd, environment, enabled, timeout, resultFilters);
+				yield new McpServerConfig.Local(command, cwd, environment, enabled, timeout, resultFilters, disabledTools);
 			}
 			case "remote" -> {
 				String rawUrl = requiredText(name, value, "url");
@@ -166,7 +167,7 @@ public final class McpConfigLoader {
 				}
 				if (oauth instanceof ObjectNode oauthObject) validateOAuth(name, oauthObject);
 				yield new McpServerConfig.Remote(
-						url, stringMap(name, value, "headers"), oauth, enabled, timeout, resultFilters);
+						url, stringMap(name, value, "headers"), oauth, enabled, timeout, resultFilters, disabledTools);
 			}
 			default -> throw invalid(name, "type must be local or remote");
 		};
@@ -198,6 +199,20 @@ public final class McpConfigLoader {
 			filters.add(new McpResultFilter(tool.asText(), keys));
 		}
 		return List.copyOf(filters);
+	}
+
+	private static List<String> disabledTools(String server, ObjectNode value) throws IOException {
+		JsonNode node = value.get("disabledTools");
+		if (node == null || node.isNull()) return List.of();
+		if (!node.isArray()) throw invalid(server, "disabledTools must be an array of non-empty strings");
+		List<String> tools = new ArrayList<>();
+		for (JsonNode tool : node) {
+			if (!tool.isTextual() || tool.asText().isBlank()) {
+				throw invalid(server, "disabledTools must contain non-empty strings");
+			}
+			tools.add(tool.asText());
+		}
+		return List.copyOf(tools);
 	}
 
 	private static void validateOAuth(String server, ObjectNode oauth) throws IOException {

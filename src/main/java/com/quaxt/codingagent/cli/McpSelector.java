@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.cli;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import com.quaxt.codingagent.mcp.McpManager;
@@ -11,13 +12,24 @@ import com.quaxt.codingagent.tui.TuiInput;
 
 /** Full-screen MCP server list with a drill-down for toggling individual tools. */
 final class McpSelector implements TuiComponent<Void> {
+	record Change(String serverName, String toolName, boolean enabled) {
+		boolean isToolChange() {
+			return toolName != null;
+		}
+	}
+
+	@FunctionalInterface
+	interface ChangeListener {
+		void onChange(Change change) throws IOException;
+	}
+
 	private enum View {
 		SERVERS,
 		TOOLS
 	}
 
 	private final McpManager manager;
-	private final Runnable onChange;
+	private final ChangeListener onChange;
 	private final List<String> names;
 	private List<String> filtered;
 	private List<McpManager.ToolStatus> filteredTools = List.of();
@@ -29,9 +41,10 @@ final class McpSelector implements TuiComponent<Void> {
 	private int optionStartRow;
 	private View view = View.SERVERS;
 	private String toolServer;
+	private String changeError;
 	private boolean complete;
 
-	McpSelector(McpManager manager, Runnable onChange) {
+	McpSelector(McpManager manager, ChangeListener onChange) {
 		this.manager = manager;
 		this.onChange = onChange;
 		this.names = manager.statuses().stream().map(McpManager.ServerStatus::name).toList();
@@ -69,9 +82,10 @@ final class McpSelector implements TuiComponent<Void> {
 			}
 		}
 		lines.add("");
-		String detail = detail();
+		String detail = changeError == null ? detail() : changeError;
 		if (detail != null) {
-			lines.add(theme.muted() + TerminalText.truncatePlain("  " + detail, width) + theme.reset());
+			String style = changeError == null ? theme.muted() : theme.warningStatus();
+			lines.add(style + TerminalText.truncatePlain("  " + detail, width) + theme.reset());
 		}
 		if (view == View.SERVERS && !filtered.isEmpty()) {
 			McpManager.ServerStatus selected = manager.status(filtered.get(selectedIndex));
@@ -182,8 +196,8 @@ final class McpSelector implements TuiComponent<Void> {
 	private void toggle() {
 		if (view == View.SERVERS) {
 			if (filtered.isEmpty()) return;
-			manager.toggleAsync(filtered.get(selectedIndex));
-			onChange.run();
+			McpManager.ServerStatus status = manager.toggleAsync(filtered.get(selectedIndex));
+			notifyChange(new Change(status.name(), null, manager.isEnabled(status.name())));
 		} else {
 			toggleTool();
 		}
@@ -193,12 +207,23 @@ final class McpSelector implements TuiComponent<Void> {
 		refreshTools();
 		if (filteredTools.isEmpty()) return;
 		try {
-			manager.toggleTool(toolServer, filteredTools.get(selectedIndex).name());
-			onChange.run();
+			McpManager.ToolStatus status = manager.toggleTool(toolServer, filteredTools.get(selectedIndex).name());
+			notifyChange(new Change(status.serverName(), status.name(), status.enabled()));
 			refreshTools();
 		} catch (IllegalStateException | IllegalArgumentException ignored) {
 			// The server or its catalog may have changed while this selector was open.
 			refreshTools();
+		}
+	}
+
+	private void notifyChange(Change change) {
+		try {
+			onChange.onChange(change);
+			changeError = null;
+		} catch (IOException error) {
+			String message = error.getMessage();
+			String detail = message == null || message.isBlank() ? error.toString() : message;
+			changeError = "Change applied, but not saved: " + detail.replaceAll("\\s+", " ").trim();
 		}
 	}
 

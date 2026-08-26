@@ -744,9 +744,21 @@ final class InteractiveShell implements AutoCloseable {
 			terminal.println("No MCP servers configured in ~/.codingagent/settings.json.");
 			return;
 		}
-		terminal.run(new McpSelector(mcp, this::syncMcpTools));
+		terminal.run(new McpSelector(mcp, this::persistMcpChange));
 		// An OAuth connection may finish asynchronously while the selector is open.
 		syncMcpTools();
+	}
+
+	private void persistMcpChange(McpSelector.Change change) throws IOException {
+		try {
+			if (change.isToolChange()) {
+				settingsStore.setMcpToolEnabled(change.serverName(), change.toolName(), change.enabled());
+			} else {
+				settingsStore.setMcpServerEnabled(change.serverName(), change.enabled());
+			}
+		} finally {
+			syncMcpTools();
+		}
 	}
 
 	private void selectSettings() throws IOException {

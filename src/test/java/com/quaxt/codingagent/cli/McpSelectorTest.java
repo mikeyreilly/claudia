@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -30,9 +31,13 @@ class McpSelectorTest {
 				true,
 				5_000L);
 		AtomicInteger changes = new AtomicInteger();
+		List<McpSelector.Change> persisted = new ArrayList<>();
 		try (McpManager manager = new McpManager(new McpConfiguration(Map.of("fixture", server), List.of()), tempDir)) {
 			manager.awaitReady();
-			McpSelector selector = new McpSelector(manager, changes::incrementAndGet);
+			McpSelector selector = new McpSelector(manager, change -> {
+				changes.incrementAndGet();
+				persisted.add(change);
+			});
 
 			assertTrue(String.join("\n", selector.render(100, 30, Theme.PLAIN)).contains("MCP Servers"));
 			selector.handle(new TuiInput.Key(TuiInput.KeyType.TAB));
@@ -51,8 +56,26 @@ class McpSelectorTest {
 			String servers = String.join("\n", selector.render(100, 30, Theme.PLAIN));
 			assertTrue(servers.contains("MCP Servers"));
 			assertTrue(servers.contains("Enabled · 1/2 tool(s)"));
+			selector.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
+			assertEquals(McpManager.State.DISABLED, manager.status("fixture").state());
+			assertEquals(2, changes.get());
 			selector.handle(new TuiInput.Key(TuiInput.KeyType.ESCAPE));
 			assertTrue(selector.isComplete());
+			assertEquals(
+					List.of(
+							new McpSelector.Change("fixture", "echo", false),
+							new McpSelector.Change("fixture", null, false)),
+					persisted);
+
+			assertEquals(McpManager.State.CONNECTED, manager.connect("fixture").state());
+			McpSelector unsaved = new McpSelector(manager, change -> {
+				throw new java.io.IOException("disk full");
+			});
+			unsaved.handle(new TuiInput.Key(TuiInput.KeyType.TAB));
+			unsaved.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
+			assertTrue(String.join("\n", unsaved.render(100, 30, Theme.PLAIN))
+					.contains("Change applied, but not saved: disk full"));
+			assertTrue(manager.toolStatuses("fixture").getFirst().enabled());
 		}
 	}
 }

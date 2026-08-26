@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.cli.settings;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -46,6 +47,39 @@ class SettingsStoreTest {
 		assertEquals(true, root.path("custom").path("enabled").asBoolean());
 		assertEquals("anthropic", root.path("defaultProvider").asText());
 		assertEquals("claude-haiku-4-5", root.path("defaultModel").asText());
+	}
+
+	@Test
+	void persistsMcpServerAndToolTogglesWithoutDiscardingOtherSettings() throws Exception {
+		Path path = tempDir.resolve("settings.json");
+		Files.writeString(path, """
+				{
+				  "custom": {"enabled": true},
+				  "mcp": {
+				    "fixture": {
+				      "type": "local",
+				      "command": ["tool"],
+				      "enabled": true,
+				      "disabledTools": ["already-disabled"]
+				    }
+				  }
+				}
+				""");
+		SettingsStore store = new SettingsStore(path);
+
+		store.setMcpServerEnabled("fixture", false);
+		store.setMcpToolEnabled("fixture", "echo", false);
+		store.setMcpToolEnabled("fixture", "already-disabled", true);
+
+		var root = Json.MAPPER.readTree(Files.readString(path));
+		assertTrue(root.path("custom").path("enabled").asBoolean());
+		assertFalse(root.path("mcp").path("fixture").path("enabled").asBoolean());
+		assertEquals(1, root.path("mcp").path("fixture").path("disabledTools").size());
+		assertEquals("echo", root.path("mcp").path("fixture").path("disabledTools").get(0).asText());
+
+		store.setMcpToolEnabled("fixture", "echo", true);
+		root = Json.MAPPER.readTree(Files.readString(path));
+		assertFalse(root.path("mcp").path("fixture").has("disabledTools"));
 	}
 
 	@Test

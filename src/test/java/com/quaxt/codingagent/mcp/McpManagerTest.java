@@ -26,17 +26,23 @@ class McpManagerTest {
 				Map.of(),
 				true,
 				5_000L,
-				List.of(new McpResultFilter("e*o", List.of("avatarUrls", "self"))));
+				List.of(new McpResultFilter("e*o", List.of("avatarUrls", "self"))),
+				List.of("reverse"));
 		try (McpManager manager = new McpManager(
 				new McpConfiguration(Map.of("fixture", server), List.of()), tempDir)) {
 			manager.awaitReady();
 
 			assertEquals(McpManager.State.CONNECTED, manager.status("fixture").state());
+			assertTrue(manager.isEnabled("fixture"));
 			assertEquals(2, manager.status("fixture").toolCount());
-			assertEquals(2, manager.status("fixture").enabledToolCount());
+			assertEquals(1, manager.status("fixture").enabledToolCount());
 			assertEquals(
 					List.of("echo", "reverse"),
 					manager.toolStatuses("fixture").stream().map(McpManager.ToolStatus::name).toList());
+			assertFalse(manager.toolStatuses("fixture").get(1).enabled());
+			assertEquals(List.of("fixture_echo"), manager.tools().stream().map(AgentTool::name).toList());
+			assertTrue(manager.toggleTool("fixture", "reverse").enabled());
+			assertEquals(2, manager.status("fixture").enabledToolCount());
 			AgentTool tool = manager.tools().getFirst();
 			assertEquals("fixture_echo", tool.name());
 			AgentTool.ToolResult result = tool.execute(
@@ -58,8 +64,10 @@ class McpManagerTest {
 			assertEquals(List.of("fixture_echo"), manager.tools().stream().map(AgentTool::name).toList());
 
 			assertEquals(McpManager.State.DISABLED, manager.disconnect("fixture").state());
+			assertFalse(manager.isEnabled("fixture"));
 			assertTrue(manager.tools().isEmpty());
 			assertEquals(McpManager.State.CONNECTED, manager.connect("fixture").state());
+			assertTrue(manager.isEnabled("fixture"));
 			assertEquals(List.of("fixture_echo"), manager.tools().stream().map(AgentTool::name).toList());
 			assertTrue(manager.toggleTool("fixture", "reverse").enabled());
 			assertEquals(2, manager.status("fixture").enabledToolCount());
