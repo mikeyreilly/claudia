@@ -1,34 +1,32 @@
 package com.quaxt.codingagent.ai.types;
 
 import java.util.List;
+import java.util.Objects;
 
 /** User message with text and/or image content. */
-public record UserMessage(List<UserContent> content, long timestamp) implements Message {
-	public UserMessage {
-		content = List.copyOf(content);
-	}
+public final class UserMessage implements Message {
+	public List<UserContent> content;
+	public long timestamp;
 
-	public static UserMessage of(String text) {
-		return new UserMessage(List.of(new TextContent(text)), System.currentTimeMillis());
-	}
-
-	public static UserMessage of(List<UserContent> content) {
-		return new UserMessage(content, System.currentTimeMillis());
-	}
-
-	/** Concatenated text of all text blocks. */
-	public String text() {
-		StringBuilder sb = new StringBuilder();
-		for (UserContent block : content) {
-			if (block instanceof TextContent(String text, String ignored)) {
-				sb.append(text);
-			}
-		}
-		return sb.toString();
+	public UserMessage(List<UserContent> content, long timestamp) {
+		this.content = content;
+		this.timestamp = timestamp;
 	}
 
 	@Override
-	public String role() {
-		return "user";
+	public boolean equals(Object other) {
+		return other instanceof UserMessage that
+				&& Objects.equals(content, that.content)
+				&& timestamp == that.timestamp;
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(content, timestamp);
+	}
+
+	@Override
+	public String toString() {
+		return "UserMessage[content=" + content + ", timestamp=" + timestamp + "]";
 	}
 }

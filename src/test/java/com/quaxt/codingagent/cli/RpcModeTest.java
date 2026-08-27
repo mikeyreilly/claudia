@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.json.Json;
 
 class RpcModeTest {
@@ -20,7 +21,7 @@ class RpcModeTest {
 			System.setIn(new ByteArrayInputStream("{\"id\":\"state-1\",\"type\":\"get_state\"}\n".getBytes(StandardCharsets.UTF_8)));
 			System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
 
-			assertEquals(0, Cli.run(new String[] {"--mode", "rpc", "--model", "anthropic/claude-haiku-4-5", "--no-session"}));
+			assertEquals(0, CodingAgentOperations.cliRun(new String[] {"--mode", "rpc", "--model", "anthropic/claude-haiku-4-5", "--no-session"}));
 		} finally {
 			System.setIn(originalInput);
 			System.setOut(originalOutput);

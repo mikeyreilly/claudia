@@ -9,7 +9,7 @@ import java.util.List;
  * same `partial` object is emitted with every event).
  */
 public final class AssistantMessage implements Message {
-	public final List<AssistantContent> content = new ArrayList<>();
+	public List<AssistantContent> content = new ArrayList<>();
 	public String api;
 	public String provider;
 	public String model;
@@ -29,47 +29,5 @@ public final class AssistantMessage implements Message {
 		this.api = api;
 		this.provider = provider;
 		this.model = model;
-	}
-
-	/** Concatenated text of all text blocks. */
-	public String text() {
-		StringBuilder sb = new StringBuilder();
-		for (AssistantContent block : content) {
-			if (block instanceof TextContent(String text, String ignored)) {
-				sb.append(text);
-			}
-		}
-		return sb.toString();
-	}
-
-	/** Concatenated text of all thinking blocks. */
-	public String thinking() {
-		StringBuilder sb = new StringBuilder();
-		for (AssistantContent block : content) {
-			if (block instanceof ThinkingContent tc) {
-				sb.append(tc.thinking());
-			}
-		}
-		return sb.toString();
-	}
-
-	public List<ToolCall> toolCalls() {
-		List<ToolCall> calls = new ArrayList<>();
-		for (AssistantContent block : content) {
-			if (block instanceof ToolCall call) {
-				calls.add(call);
-			}
-		}
-		return calls;
-	}
-
-	@Override
-	public long timestamp() {
-		return timestamp;
-	}
-
-	@Override
-	public String role() {
-		return "assistant";
 	}
 }

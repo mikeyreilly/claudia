@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
 
@@ -19,29 +20,29 @@ class SettingsStoreTest {
 	@Test
 	void persistsModelThinkingLevelAndThemeBetweenInstances() throws Exception {
 		Path path = tempDir.resolve("nested/settings.json");
-		SettingsStore first = new SettingsStore(path);
+		SettingsStore first = CodingAgentOperations.settingsStore(path);
 
-		assertEquals(SettingsStore.Settings.empty(), first.load());
-		first.setDefaultModelAndProvider("github-copilot", "gpt-5.4");
-		first.setDefaultThinkingLevel(ThinkingLevel.HIGH);
-		first.setTheme("light");
-		first.setHideThinkingBlock(true);
+		assertEquals(CodingAgentOperations.emptySettings(), CodingAgentOperations.loadSettings(first));
+		CodingAgentOperations.setSettingsDefaultModelAndProvider(first, "github-copilot", "gpt-5.4");
+		CodingAgentOperations.setSettingsDefaultThinkingLevel(first, ThinkingLevel.HIGH);
+		CodingAgentOperations.setSettingsTheme(first, "light");
+		CodingAgentOperations.setSettingsHideThinkingBlock(first, true);
 
-		var loaded = new SettingsStore(path).load();
-		assertEquals("github-copilot", loaded.defaultProvider());
-		assertEquals("gpt-5.4", loaded.defaultModel());
-		assertEquals(ThinkingLevel.HIGH, loaded.defaultThinkingLevel());
-		assertEquals("light", loaded.theme());
-		assertTrue(loaded.hideThinkingBlock());
+		var loaded = CodingAgentOperations.loadSettings(CodingAgentOperations.settingsStore(path));
+		assertEquals("github-copilot", loaded.defaultProvider);
+		assertEquals("gpt-5.4", loaded.defaultModel);
+		assertEquals(ThinkingLevel.HIGH, loaded.defaultThinkingLevel);
+		assertEquals("light", loaded.theme);
+		assertTrue(loaded.hideThinkingBlock);
 	}
 
 	@Test
 	void preservesUnknownSettingsWhenUpdatingKnownValues() throws Exception {
 		Path path = tempDir.resolve("settings.json");
 		Files.writeString(path, "{\"custom\":{\"enabled\":true},\"defaultModel\":\"old\"}\n");
-		SettingsStore store = new SettingsStore(path);
+		SettingsStore store = CodingAgentOperations.settingsStore(path);
 
-		store.setDefaultModelAndProvider("anthropic", "claude-haiku-4-5");
+		CodingAgentOperations.setSettingsDefaultModelAndProvider(store, "anthropic", "claude-haiku-4-5");
 
 		var root = Json.MAPPER.readTree(Files.readString(path));
 		assertEquals(true, root.path("custom").path("enabled").asBoolean());
@@ -65,11 +66,11 @@ class SettingsStoreTest {
 				  }
 				}
 				""");
-		SettingsStore store = new SettingsStore(path);
+		SettingsStore store = CodingAgentOperations.settingsStore(path);
 
-		store.setMcpServerEnabled("fixture", false);
-		store.setMcpToolEnabled("fixture", "echo", false);
-		store.setMcpToolEnabled("fixture", "already-disabled", true);
+		CodingAgentOperations.setSettingsMcpServerEnabled(store, "fixture", false);
+		CodingAgentOperations.setSettingsMcpToolEnabled(store, "fixture", "echo", false);
+		CodingAgentOperations.setSettingsMcpToolEnabled(store, "fixture", "already-disabled", true);
 
 		var root = Json.MAPPER.readTree(Files.readString(path));
 		assertTrue(root.path("custom").path("enabled").asBoolean());
@@ -77,7 +78,7 @@ class SettingsStoreTest {
 		assertEquals(1, root.path("mcp").path("fixture").path("disabledTools").size());
 		assertEquals("echo", root.path("mcp").path("fixture").path("disabledTools").get(0).asText());
 
-		store.setMcpToolEnabled("fixture", "echo", true);
+		CodingAgentOperations.setSettingsMcpToolEnabled(store, "fixture", "echo", true);
 		root = Json.MAPPER.readTree(Files.readString(path));
 		assertFalse(root.path("mcp").path("fixture").has("disabledTools"));
 	}
@@ -87,21 +88,21 @@ class SettingsStoreTest {
 		Path path = tempDir.resolve("settings.json");
 		Files.writeString(path, "{\"defaultProvider\":\"openai\"}\n");
 
-		var loaded = new SettingsStore(path).load();
-		assertEquals("openai", loaded.defaultProvider());
-		assertNull(loaded.defaultModel());
+		var loaded = CodingAgentOperations.loadSettings(CodingAgentOperations.settingsStore(path));
+		assertEquals("openai", loaded.defaultProvider);
+		assertNull(loaded.defaultModel);
 	}
 
 	@Test
 	void rejectsInvalidJsonAndSettingTypes() throws Exception {
 		Path path = tempDir.resolve("settings.json");
 		Files.writeString(path, "{ invalid json");
-		assertThrows(java.io.IOException.class, () -> new SettingsStore(path).load());
+		assertThrows(java.io.IOException.class, () -> CodingAgentOperations.loadSettings(CodingAgentOperations.settingsStore(path)));
 
 		Files.writeString(path, "{\"defaultThinkingLevel\":42}\n");
-		assertThrows(java.io.IOException.class, () -> new SettingsStore(path).load());
+		assertThrows(java.io.IOException.class, () -> CodingAgentOperations.loadSettings(CodingAgentOperations.settingsStore(path)));
 
 		Files.writeString(path, "{\"hideThinkingBlock\":\"yes\"}\n");
-		assertThrows(java.io.IOException.class, () -> new SettingsStore(path).load());
+		assertThrows(java.io.IOException.class, () -> CodingAgentOperations.loadSettings(CodingAgentOperations.settingsStore(path)));
 	}
 }

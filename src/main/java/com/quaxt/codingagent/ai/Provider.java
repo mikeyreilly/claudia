@@ -1,32 +1,12 @@
 package com.quaxt.codingagent.ai;
 
-import java.util.List;
-import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
-import com.quaxt.codingagent.ai.types.Context;
-import com.quaxt.codingagent.ai.types.Model;
-
 /**
- * An LLM provider: descriptive metadata, its model list, and a streaming
- * entry point. Mirrors the Provider shape in packages/ai/src/models.ts,
- * collapsed to the parts the Java port needs.
+ * Marker for an LLM provider carrier. Descriptive metadata, the model list, and
+ * the streaming entry point are exposed by the static operations in
+ * CodingAgentOperations, which dispatch over the concrete provider carriers.
  *
- * Contract for stream(): once invoked, failures must be encoded in the
- * returned stream (Error event with stopReason ERROR/ABORTED), not thrown.
+ * <p>Contract for the stream operation: once invoked, failures must be encoded
+ * in the returned stream (Error event with stopReason ERROR/ABORTED), not
+ * thrown.
  */
-public interface Provider {
-	String id();
-
-	String name();
-
-	/** API implementation id, e.g. "anthropic-messages", "openai-completions". */
-	String api();
-
-	List<Model> models();
-
-	/** Env var(s) that supply this provider's API key, in priority order. */
-	default List<String> apiKeyEnvVars() {
-		return List.of();
-	}
-
-	AssistantMessageEventStream stream(Model model, Context context, StreamOptions options);
-}
+public interface Provider {}

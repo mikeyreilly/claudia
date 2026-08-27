@@ -7,14 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
-import com.quaxt.codingagent.ai.json.Json;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ToolCall;
-import com.quaxt.codingagent.ai.types.ToolResultMessage;
-import com.quaxt.codingagent.ai.types.UserMessage;
-import com.quaxt.codingagent.tui.TerminalText;
 import com.quaxt.codingagent.tui.Theme;
 import com.quaxt.codingagent.tui.TuiInput;
 
@@ -23,12 +20,12 @@ class TurnDetailsComponentTest {
 	void rendersThinkingAndKeepsToolResultsCollapsedInitially() {
 		TurnDetailsComponent component = details(false);
 
-		String rendered = plain(component.render(100, 30, Theme.PLAIN));
+		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN));
 
-		assertEquals(3, component.sectionCount());
-		assertEquals(TurnDetailsComponent.Kind.THINKING, component.sectionKind(0));
-		assertTrue(component.sectionExpanded(0));
-		assertFalse(component.sectionExpanded(1));
+		assertEquals(3, component.sections.size());
+		assertEquals(TurnDetailsComponent.Kind.THINKING, component.sections.get(0).kind);
+		assertTrue(component.sections.get(0).expanded);
+		assertFalse(component.sections.get(1).expanded);
 		assertTrue(rendered.contains("Inspect the repository"));
 		assertTrue(rendered.contains("read  Reading README.md"));
 		assertFalse(rendered.contains("secret read output"));
@@ -37,38 +34,38 @@ class TurnDetailsComponentTest {
 	@Test
 	void expandsOneSelectedStepAndTogglesKindsGlobally() {
 		TurnDetailsComponent component = details(false);
-		component.render(100, 30, Theme.PLAIN);
+		CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN);
 
-		component.handle(new TuiInput.Key(TuiInput.KeyType.DOWN));
-		component.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
-		assertTrue(component.sectionExpanded(1));
-		assertFalse(component.sectionExpanded(2));
-		assertTrue(plain(component.render(100, 30, Theme.PLAIN)).contains("secret read output"));
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.DOWN));
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
+		assertTrue(component.sections.get(1).expanded);
+		assertFalse(component.sections.get(2).expanded);
+		assertTrue(plain(CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN)).contains("secret read output"));
 
-		component.handle(new TuiInput.Key(TuiInput.KeyType.EXPAND_TOOLS));
-		assertTrue(component.sectionExpanded(1));
-		assertTrue(component.sectionExpanded(2));
-		component.handle(new TuiInput.Key(TuiInput.KeyType.EXPAND_TOOLS));
-		assertFalse(component.sectionExpanded(1));
-		assertFalse(component.sectionExpanded(2));
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
+		assertTrue(component.sections.get(1).expanded);
+		assertTrue(component.sections.get(2).expanded);
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
+		assertFalse(component.sections.get(1).expanded);
+		assertFalse(component.sections.get(2).expanded);
 
-		component.handle(new TuiInput.Key(TuiInput.KeyType.TOGGLE_THINKING));
-		assertFalse(component.sectionExpanded(0));
-		assertTrue(component.result());
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.TOGGLE_THINKING));
+		assertFalse(component.sections.get(0).expanded);
+		assertTrue(component.thinkingHidden);
 	}
 
 	@Test
 	void scrollsWithinAnExpandedLongStep() {
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
-		assistant.content.add(new ThinkingContent(String.join("\n", IntStream.range(0, 30)
+		assistant.content.add(CodingAgentOperations.thinkingContent(String.join("\n", IntStream.range(0, 30)
 				.mapToObj(index -> "reasoning line " + index)
 				.toList())));
-		TurnDetailsComponent component = TurnDetailsComponent.forLatestTurn(
-				List.of(UserMessage.of("inspect"), assistant), false);
+		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(
+				List.of(CodingAgentOperations.userMessage("inspect"), assistant), false);
 
-		String firstPage = plain(component.render(60, 8, Theme.PLAIN));
-		component.handle(new TuiInput.Key(TuiInput.KeyType.PAGE_DOWN));
-		String secondPage = plain(component.render(60, 8, Theme.PLAIN));
+		String firstPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
+		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.PAGE_DOWN));
+		String secondPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
 
 		assertTrue(firstPage.contains("reasoning line 0"));
 		assertFalse(secondPage.contains("reasoning line 0"));
@@ -78,15 +75,15 @@ class TurnDetailsComponentTest {
 	@Test
 	void onlyInspectsTheLatestUserTurnAndSanitizesTerminalControls() {
 		AssistantMessage old = new AssistantMessage("faux", "faux", "old");
-		old.content.add(new ThinkingContent("old thought"));
+		old.content.add(CodingAgentOperations.thinkingContent("old thought"));
 		AssistantMessage latest = new AssistantMessage("faux", "faux", "new");
-		latest.content.add(new ThinkingContent("new \u001b[31mthought\u001b[0m"));
-		List<Message> messages = List.of(UserMessage.of("old"), old, UserMessage.of("new"), latest);
+		latest.content.add(CodingAgentOperations.thinkingContent("new \u001b[31mthought\u001b[0m"));
+		List<Message> messages = List.of(CodingAgentOperations.userMessage("old"), old, CodingAgentOperations.userMessage("new"), latest);
 
-		TurnDetailsComponent component = TurnDetailsComponent.forLatestTurn(messages, false);
-		String rendered = plain(component.render(80, 20, Theme.PLAIN));
+		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(messages, false);
+		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 80, 20, Theme.PLAIN));
 
-		assertEquals(1, component.sectionCount());
+		assertEquals(1, component.sections.size());
 		assertTrue(rendered.contains("new thought"));
 		assertFalse(rendered.contains("old thought"));
 		assertFalse(rendered.contains("\u001b"));
@@ -94,19 +91,19 @@ class TurnDetailsComponentTest {
 
 	private static TurnDetailsComponent details(boolean hideThinking) {
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
-		assistant.content.add(new ThinkingContent("Inspect the repository\nThen choose files"));
-		assistant.content.add(new ToolCall("read-1", "read", Json.object().put("path", "README.md")));
-		assistant.content.add(new ToolCall("bash-1", "bash", Json.object().put("command", "mvn test")));
-		return TurnDetailsComponent.forLatestTurn(
+		assistant.content.add(CodingAgentOperations.thinkingContent("Inspect the repository\nThen choose files"));
+		assistant.content.add(CodingAgentOperations.toolCall("read-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
+		assistant.content.add(CodingAgentOperations.toolCall("bash-1", "bash", CodingAgentOperations.jsonObject().put("command", "mvn test")));
+		return CodingAgentOperations.turnDetailsForLatestTurn(
 				List.of(
-						UserMessage.of("inspect"),
+						CodingAgentOperations.userMessage("inspect"),
 						assistant,
-						ToolResultMessage.text("read-1", "read", "secret read output", false),
-						ToolResultMessage.text("bash-1", "bash", "tests passed", false)),
+						CodingAgentOperations.toolResultMessage("read-1", "read", "secret read output", false),
+						CodingAgentOperations.toolResultMessage("bash-1", "bash", "tests passed", false)),
 				hideThinking);
 	}
 
 	private static String plain(List<String> lines) {
-		return TerminalText.stripAnsi(String.join("\n", lines));
+		return CodingAgentOperations.stripAnsi(String.join("\n", lines));
 	}
 }

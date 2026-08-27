@@ -13,22 +13,9 @@ public enum ThinkingLevel {
 	XHIGH("xhigh"),
 	MAX("max");
 
-	private final String wire;
+	public String wire;
 
 	ThinkingLevel(String wire) {
 		this.wire = wire;
-	}
-
-	public String wire() {
-		return wire;
-	}
-
-	public static ThinkingLevel fromWire(String value) {
-		for (ThinkingLevel level : values()) {
-			if (level.wire.equals(value)) {
-				return level;
-			}
-		}
-		throw new IllegalArgumentException("Unknown thinking level: " + value);
 	}
 }

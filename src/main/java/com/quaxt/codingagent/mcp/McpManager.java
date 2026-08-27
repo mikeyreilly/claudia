@@ -1,17 +1,18 @@
 package com.quaxt.codingagent.mcp;
 
-import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
-import com.quaxt.codingagent.agent.AgentTool;
 
-/** Owns configured MCP sessions and supports runtime server and tool toggles. */
-public final class McpManager implements AutoCloseable {
+/**
+ * Carrier for the configured MCP sessions of one process: the workspace root,
+ * the shared OAuth client, and the per-server runtime state. Connecting,
+ * filtering, toggling, and shutdown live in CodingAgentOperations; each
+ * runtime's {@code lock} guards its own mutable state.
+ */
+public final class McpManager {
 	public enum State {
 		CONNECTING,
 		AUTHENTICATING,
@@ -21,385 +22,74 @@ public final class McpManager implements AutoCloseable {
 		FAILED
 	}
 
-	public record ServerStatus(
-			String name,
-			State state,
-			String message,
-			int toolCount,
-			int enabledToolCount,
-			String target,
-			String authorizationUrl) {}
+	/** Snapshot of one configured server. */
+	public static final class ServerStatus {
+		public String name;
+		public State state;
+		public String message;
+		public int toolCount;
+		public int enabledToolCount;
+		public String target;
+		public String authorizationUrl;
+
+		public ServerStatus(
+				String name,
+				State state,
+				String message,
+				int toolCount,
+				int enabledToolCount,
+				String target,
+				String authorizationUrl) {
+			this.name = name;
+			this.state = state;
+			this.message = message;
+			this.toolCount = toolCount;
+			this.enabledToolCount = enabledToolCount;
+			this.target = target;
+			this.authorizationUrl = authorizationUrl;
+		}
+	}
 
 	/** One cached MCP tool and whether it is exposed to the model in this process. */
-	public record ToolStatus(String serverName, String name, String description, boolean enabled) {}
+	public static final class ToolStatus {
+		public String serverName;
+		public String name;
+		public String description;
+		public boolean enabled;
 
-	private final Path workspace;
-	private final McpOAuthClient oauth;
-	private final LinkedHashMap<String, Runtime> servers = new LinkedHashMap<>();
-	private volatile boolean closed;
-
-	public McpManager(McpConfiguration configuration, Path workspace) {
-		this(configuration, workspace, McpOAuthClient.defaultClient());
-	}
-
-	McpManager(McpConfiguration configuration, Path workspace, McpOAuthClient oauth) {
-		this.workspace = workspace.toAbsolutePath().normalize();
-		this.oauth = oauth;
-		configuration.servers().forEach((name, config) -> servers.put(name, new Runtime(name, config)));
-		for (Runtime runtime : servers.values()) {
-			// Startup may refresh an existing token, but never opens a browser unexpectedly.
-			if (runtime.config.enabled()) startConnect(runtime, false);
+		public ToolStatus(String serverName, String name, String description, boolean enabled) {
+			this.serverName = serverName;
+			this.name = name;
+			this.description = description;
+			this.enabled = enabled;
 		}
 	}
 
-	public static McpManager loadDefault(Path workspace) throws IOException {
-		return new McpManager(McpConfigLoader.loadDefault(), workspace);
-	}
+	/** Mutable state of one configured server; {@code lock} guards every field below it. */
+	public static final class Runtime {
+		public Object lock = new Object();
+		public String name;
+		public McpServerConfig config;
+		public long generation;
+		public boolean enabled;
+		public State state;
+		public String message;
+		public McpClient client;
+		public List<McpClient.ToolDefinition> tools = List.of();
+		public Set<String> disabledTools = new HashSet<>();
+		public Thread connector;
+		public String authorizationUrl;
 
-	public boolean isEmpty() {
-		return servers.isEmpty();
-	}
-
-	public List<ServerStatus> statuses() {
-		return servers.values().stream()
-				.sorted(Comparator.comparing(runtime -> runtime.name))
-				.map(this::snapshot)
-				.toList();
-	}
-
-	public ServerStatus status(String name) {
-		return snapshot(require(name));
-	}
-
-	/** Whether this server is enabled for the current and future manager connections. */
-	public boolean isEnabled(String name) {
-		Runtime runtime = require(name);
-		synchronized (runtime.lock) {
-			return runtime.enabled;
-		}
-	}
-
-	/**
-	 * Returns the current tool catalog for a connected server, including tools
-	 * disabled for this process. A disconnected server has no current catalog.
-	 */
-	public List<ToolStatus> toolStatuses(String serverName) {
-		Runtime runtime = require(serverName);
-		synchronized (runtime.lock) {
-			if (runtime.state != State.CONNECTED || runtime.client == null) return List.of();
-			return runtime.tools.stream()
-					.map(tool -> new ToolStatus(
-							runtime.name, tool.name(), tool.description(), !runtime.disabledTools.contains(tool.name())))
-					.toList();
-		}
-	}
-
-	/**
-	 * Enables a currently disabled tool or disables an enabled one without
-	 * disconnecting its server. The runtime choice survives a later reconnect
-	 * of that server.
-	 */
-	public ToolStatus toggleTool(String serverName, String toolName) {
-		Runtime runtime = require(serverName);
-		synchronized (runtime.lock) {
-			if (runtime.state != State.CONNECTED || runtime.client == null) {
-				throw new IllegalStateException("MCP server is not connected: " + serverName);
-			}
-			McpClient.ToolDefinition definition = runtime.tools.stream()
-					.filter(tool -> tool.name().equals(toolName))
-					.findFirst()
-					.orElseThrow(() -> new IllegalArgumentException(
-							"MCP tool is not available from " + serverName + ": " + toolName));
-			boolean enabled;
-			if (runtime.disabledTools.remove(toolName)) {
-				enabled = true;
-			} else {
-				runtime.disabledTools.add(toolName);
-				enabled = false;
-			}
-			return new ToolStatus(runtime.name, definition.name(), definition.description(), enabled);
-		}
-	}
-
-	/** Waits for all currently-starting configured servers. */
-	public void awaitReady() throws InterruptedException {
-		while (true) {
-			List<Thread> connecting = new ArrayList<>();
-			for (Runtime runtime : servers.values()) {
-				synchronized (runtime.lock) {
-					if (runtime.connector != null) connecting.add(runtime.connector);
-				}
-			}
-			if (connecting.isEmpty()) return;
-			for (Thread thread : connecting) thread.join();
-		}
-	}
-
-	/** Connects or retries a configured server and waits for that attempt. */
-	public ServerStatus connect(String name) throws InterruptedException {
-		Runtime runtime = require(name);
-		Thread thread = startConnect(runtime, true);
-		if (thread != null) thread.join();
-		return snapshot(runtime);
-	}
-
-	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
-	public ServerStatus connectAsync(String name) {
-		Runtime runtime = require(name);
-		startConnect(runtime, true);
-		return snapshot(runtime);
-	}
-
-	/** Disconnects a server and marks it disabled; callers may persist that choice. */
-	public ServerStatus disconnect(String name) {
-		Runtime runtime = require(name);
-		McpClient client;
-		Thread connector;
-		synchronized (runtime.lock) {
-			runtime.generation++;
-			connector = runtime.connector;
-			runtime.connector = null;
-			client = runtime.client;
-			runtime.client = null;
-			runtime.tools = List.of();
-			runtime.enabled = false;
-			runtime.state = State.DISABLED;
-			runtime.message = null;
-			runtime.authorizationUrl = null;
-		}
-		if (connector != null) connector.interrupt();
-		if (client != null) client.close();
-		return snapshot(runtime);
-	}
-
-	/** Connected/connecting means toggle off; disabled/failed means connect or retry. */
-	public ServerStatus toggle(String name) throws InterruptedException {
-		Runtime runtime = require(name);
-		State state;
-		synchronized (runtime.lock) {
-			state = runtime.state;
-		}
-		return state == State.CONNECTED || state == State.CONNECTING || state == State.AUTHENTICATING
-				? disconnect(name)
-				: connect(name);
-	}
-
-	/** Asynchronous variant used by the full-screen selector. */
-	public ServerStatus toggleAsync(String name) {
-		Runtime runtime = require(name);
-		State state;
-		synchronized (runtime.lock) {
-			state = runtime.state;
-		}
-		return state == State.CONNECTED || state == State.CONNECTING || state == State.AUTHENTICATING
-				? disconnect(name)
-				: connectAsync(name);
-	}
-
-	/** Returns the current model-visible tool adapters, with OpenCode-compatible names. */
-	public List<AgentTool> tools() {
-		LinkedHashMap<String, AgentTool> result = new LinkedHashMap<>();
-		for (Runtime runtime : servers.values()) {
-			McpClient client;
-			List<McpClient.ToolDefinition> definitions;
-			Set<String> disabledTools;
-			synchronized (runtime.lock) {
-				if (runtime.state != State.CONNECTED || runtime.client == null) continue;
-				client = runtime.client;
-				definitions = runtime.tools;
-				disabledTools = Set.copyOf(runtime.disabledTools);
-			}
-			for (McpClient.ToolDefinition definition : definitions) {
-				if (disabledTools.contains(definition.name())) continue;
-				McpAgentTool tool = new McpAgentTool(
-						runtime.name, definition, client, runtime.config.resultFilters());
-				result.put(tool.name(), tool);
-			}
-		}
-		return List.copyOf(result.values());
-	}
-
-	private Thread startConnect(Runtime runtime, boolean interactiveOAuth) {
-		McpClient previous;
-		Thread previousConnector;
-		long generation;
-		Thread connector;
-		synchronized (runtime.lock) {
-			if (closed) return null;
-			runtime.enabled = true;
-			if (runtime.state == State.CONNECTED && runtime.client != null) return null;
-			previous = runtime.client;
-			previousConnector = runtime.connector;
-			runtime.client = null;
-			runtime.tools = List.of();
-			runtime.state = State.CONNECTING;
-			runtime.message = null;
-			runtime.authorizationUrl = null;
-			generation = ++runtime.generation;
-			connector = Thread.ofVirtual()
-					.name("mcp-connect-" + McpAgentTool.sanitize(runtime.name))
-					.unstarted(() -> connectAttempt(runtime, generation, interactiveOAuth));
-			runtime.connector = connector;
-		}
-		if (previousConnector != null && previousConnector != connector) previousConnector.interrupt();
-		if (previous != null) previous.close();
-		connector.start();
-		return connector;
-	}
-
-	private void connectAttempt(Runtime runtime, long generation, boolean interactiveOAuth) {
-		McpClient candidate = null;
-		try {
-			candidate = McpClient.connect(
-					runtime.name,
-					runtime.config,
-					workspace,
-					oauth,
-					interactiveOAuth,
-					url -> authorizationStarted(runtime, generation, url.toString()));
-			List<McpClient.ToolDefinition> tools = candidate.listTools();
-			McpClient connected = candidate;
-			candidate.onNotification((method, params) -> {
-				if (method.equals("notifications/tools/list_changed")) refreshTools(runtime, generation, connected);
-			});
-			synchronized (runtime.lock) {
-				if (closed || runtime.generation != generation || Thread.currentThread().isInterrupted()) return;
-				runtime.client = candidate;
-				runtime.tools = List.copyOf(tools);
-				runtime.state = State.CONNECTED;
-				runtime.message = null;
-				runtime.authorizationUrl = null;
-				candidate = null;
-			}
-		} catch (McpOAuthRequiredException error) {
-			synchronized (runtime.lock) {
-				if (!closed && runtime.generation == generation) {
-					runtime.state = State.AUTH_REQUIRED;
-					runtime.message = message(error);
-					runtime.authorizationUrl = null;
-					runtime.client = null;
-					runtime.tools = List.of();
-				}
-			}
-		} catch (Exception error) {
-			synchronized (runtime.lock) {
-				if (!closed && runtime.generation == generation) {
-					runtime.state = State.FAILED;
-					runtime.message = message(error);
-					runtime.authorizationUrl = null;
-					runtime.client = null;
-					runtime.tools = List.of();
-				}
-			}
-		} finally {
-			if (candidate != null) candidate.close();
-			synchronized (runtime.lock) {
-				if (runtime.generation == generation && runtime.connector == Thread.currentThread()) {
-					runtime.connector = null;
-				}
-			}
-		}
-	}
-
-	private void authorizationStarted(Runtime runtime, long generation, String url) {
-		synchronized (runtime.lock) {
-			if (closed || runtime.generation != generation) return;
-			runtime.state = State.AUTHENTICATING;
-			runtime.message = "Complete OAuth authorization in your browser";
-			runtime.authorizationUrl = url;
-		}
-	}
-
-	private void refreshTools(Runtime runtime, long generation, McpClient client) {
-		Thread.ofVirtual().name("mcp-tools-refresh").start(() -> {
-			try {
-				List<McpClient.ToolDefinition> tools = client.listTools();
-				synchronized (runtime.lock) {
-					if (runtime.generation == generation && runtime.client == client && runtime.state == State.CONNECTED) {
-						runtime.tools = List.copyOf(tools);
-					}
-				}
-			} catch (Exception ignored) {
-				// Keep the last usable catalog when a list-changed refresh fails.
-			}
-		});
-	}
-
-	private ServerStatus snapshot(Runtime runtime) {
-		synchronized (runtime.lock) {
-			int enabledToolCount = (int) runtime.tools.stream()
-					.filter(tool -> !runtime.disabledTools.contains(tool.name()))
-					.count();
-			return new ServerStatus(
-					runtime.name,
-					runtime.state,
-					runtime.message,
-					runtime.tools.size(),
-					enabledToolCount,
-					target(runtime.config),
-					runtime.authorizationUrl);
-		}
-	}
-
-	private Runtime require(String name) {
-		Runtime runtime = servers.get(name);
-		if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
-		return runtime;
-	}
-
-	@Override
-	public void close() {
-		if (closed) return;
-		closed = true;
-		for (Runtime runtime : servers.values()) {
-			McpClient client;
-			Thread connector;
-			synchronized (runtime.lock) {
-				runtime.generation++;
-				connector = runtime.connector;
-				runtime.connector = null;
-				client = runtime.client;
-				runtime.client = null;
-				runtime.tools = List.of();
-				runtime.state = State.DISABLED;
-				runtime.authorizationUrl = null;
-			}
-			if (connector != null) connector.interrupt();
-			if (client != null) client.close();
-		}
-	}
-
-	private static String target(McpServerConfig config) {
-		if (config instanceof McpServerConfig.Local local) return String.join(" ", local.command());
-		return ((McpServerConfig.Remote) config).url().toString();
-	}
-
-	private static String message(Exception error) {
-		String value = error.getMessage();
-		if (value == null || value.isBlank()) value = error.toString();
-		return value.replaceAll("\\s+", " ").trim();
-	}
-
-	private static final class Runtime {
-		final Object lock = new Object();
-		final String name;
-		final McpServerConfig config;
-		long generation;
-		boolean enabled;
-		State state;
-		String message;
-		McpClient client;
-		List<McpClient.ToolDefinition> tools = List.of();
-		final Set<String> disabledTools;
-		Thread connector;
-		String authorizationUrl;
-
-		Runtime(String name, McpServerConfig config) {
+		public Runtime(String name, McpServerConfig config) {
 			this.name = name;
 			this.config = config;
-			this.disabledTools = new HashSet<>(config.disabledTools());
-			this.enabled = config.enabled();
-			this.state = config.enabled() ? State.CONNECTING : State.DISABLED;
 		}
 	}
+
+	public Path workspace;
+	public McpOAuthClient oauth;
+	public LinkedHashMap<String, Runtime> servers = new LinkedHashMap<>();
+	public volatile boolean closed;
+
+	public McpManager() {}
 }

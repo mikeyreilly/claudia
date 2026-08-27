@@ -14,7 +14,7 @@ public final class Usage {
 	public Long cacheWrite1h;
 	public Long reasoning;
 	public long totalTokens;
-	public final Cost cost = new Cost();
+	public Cost cost = new Cost();
 
 	public static final class Cost {
 		public double input;

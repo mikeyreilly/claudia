@@ -3,39 +3,52 @@ package com.quaxt.codingagent.cli.session;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
-import java.util.Objects;
 import com.quaxt.codingagent.ai.types.Message;
 
 /** Metadata, active conversation context, and complete transcript for one persisted session. */
-public record SessionSnapshot(
-		String id,
-		String name,
-		Path path,
-		Path cwd,
-		String provider,
-		String model,
-		Instant created,
-		Instant modified,
-		int messageCount,
-		String firstMessage,
-		String allMessagesText,
-		/** Compaction-aware message history to use when continuing the session. */
-		List<Message> messages,
-		/** Complete append-only transcript, retained for session display and search. */
-		List<Message> transcriptMessages) {
-	public SessionSnapshot {
-		id = Objects.requireNonNull(id, "id");
-		name = name == null ? null : name.strip();
-		if (name != null && name.isEmpty()) name = null;
-		path = Objects.requireNonNull(path, "path");
-		cwd = Objects.requireNonNull(cwd, "cwd");
-		provider = Objects.requireNonNull(provider, "provider");
-		model = Objects.requireNonNull(model, "model");
-		created = Objects.requireNonNull(created, "created");
-		modified = Objects.requireNonNull(modified, "modified");
-		firstMessage = Objects.requireNonNull(firstMessage, "firstMessage");
-		allMessagesText = Objects.requireNonNull(allMessagesText, "allMessagesText");
-		messages = List.copyOf(messages);
-		transcriptMessages = List.copyOf(transcriptMessages);
+public final class SessionSnapshot {
+	public String id;
+	public String name;
+	public Path path;
+	public Path cwd;
+	public String provider;
+	public String model;
+	public Instant created;
+	public Instant modified;
+	public int messageCount;
+	public String firstMessage;
+	public String allMessagesText;
+	/** Compaction-aware message history to use when continuing the session. */
+	public List<Message> messages;
+	/** Complete append-only transcript, retained for session display and search. */
+	public List<Message> transcriptMessages;
+
+	public SessionSnapshot(
+			String id,
+			String name,
+			Path path,
+			Path cwd,
+			String provider,
+			String model,
+			Instant created,
+			Instant modified,
+			int messageCount,
+			String firstMessage,
+			String allMessagesText,
+			List<Message> messages,
+			List<Message> transcriptMessages) {
+		this.id = id;
+		this.name = name;
+		this.path = path;
+		this.cwd = cwd;
+		this.provider = provider;
+		this.model = model;
+		this.created = created;
+		this.modified = modified;
+		this.messageCount = messageCount;
+		this.firstMessage = firstMessage;
+		this.allMessagesText = allMessagesText;
+		this.messages = messages;
+		this.transcriptMessages = transcriptMessages;
 	}
 }

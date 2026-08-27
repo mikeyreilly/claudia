@@ -10,8 +10,7 @@ import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import com.quaxt.codingagent.agent.AgentTool;
-import com.quaxt.codingagent.ai.json.Json;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.Model;
@@ -23,7 +22,6 @@ import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.Usage;
-import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.tui.Theme;
 
 class InteractiveShellTest {
@@ -32,8 +30,8 @@ class InteractiveShellTest {
 		Model fallback = model("claude-sonnet-4.5");
 		Model preferred = model("gpt-5.4");
 
-		assertEquals(preferred, InteractiveShell.preferredCopilotModel(List.of(fallback, preferred)));
-		assertEquals(fallback, InteractiveShell.preferredCopilotModel(List.of(fallback)));
+		assertEquals(preferred, CodingAgentOperations.preferredCopilotModel(List.of(fallback, preferred)));
+		assertEquals(fallback, CodingAgentOperations.preferredCopilotModel(List.of(fallback)));
 	}
 
 	@Test
@@ -41,25 +39,25 @@ class InteractiveShellTest {
 		Model fallback = model("gpt-5.4");
 		Model terra = model("gpt-5.6-terra");
 
-		assertEquals(terra, InteractiveShell.preferredChatGptModel(List.of(fallback, terra)));
-		assertEquals(fallback, InteractiveShell.preferredChatGptModel(List.of(fallback)));
+		assertEquals(terra, CodingAgentOperations.preferredChatGptModel(List.of(fallback, terra)));
+		assertEquals(fallback, CodingAgentOperations.preferredChatGptModel(List.of(fallback)));
 	}
 
 	@Test
 	void defaultsReasoningModelsToMediumThinking() {
 		Model reasoning = model("gpt-5.4", true);
 
-		assertEquals(ThinkingLevel.MEDIUM, InteractiveShell.initialThinkingLevel(reasoning, null));
-		assertEquals(ThinkingLevel.HIGH, InteractiveShell.initialThinkingLevel(reasoning, ThinkingLevel.HIGH));
-		assertEquals(ThinkingLevel.OFF, InteractiveShell.initialThinkingLevel(model("gpt-4.1"), null));
+		assertEquals(ThinkingLevel.MEDIUM, CodingAgentOperations.initialThinkingLevel(reasoning, null));
+		assertEquals(ThinkingLevel.HIGH, CodingAgentOperations.initialThinkingLevel(reasoning, ThinkingLevel.HIGH));
+		assertEquals(ThinkingLevel.OFF, CodingAgentOperations.initialThinkingLevel(model("gpt-4.1"), null));
 	}
 
 	@Test
 	void prepopulatesForkNamesFromTheCurrentSessionName() {
-		assertEquals("fork", InteractiveShell.forkName(null));
-		assertEquals("fork", InteractiveShell.forkName("  "));
-		assertEquals("investigation fork", InteractiveShell.forkName("investigation"));
-		assertEquals("investigation fork", InteractiveShell.forkName("  investigation  "));
+		assertEquals("fork", CodingAgentOperations.forkName(null));
+		assertEquals("fork", CodingAgentOperations.forkName("  "));
+		assertEquals("investigation fork", CodingAgentOperations.forkName("investigation"));
+		assertEquals("investigation fork", CodingAgentOperations.forkName("  investigation  "));
 	}
 
 	@Test
@@ -68,14 +66,14 @@ class InteractiveShellTest {
 		failed.stopReason = StopReason.ERROR;
 		AssistantMessage aborted = new AssistantMessage("faux", "faux", "faux-1");
 		aborted.stopReason = StopReason.ABORTED;
-		var user = UserMessage.of("hello");
-		var laterUser = UserMessage.of("retry");
-		var orphanedResult = ToolResultMessage.text("missing-call", "read", "result", false);
+		var user = CodingAgentOperations.userMessage("hello");
+		var laterUser = CodingAgentOperations.userMessage("retry");
+		var orphanedResult = CodingAgentOperations.toolResultMessage("missing-call", "read", "result", false);
 		AssistantMessage toolUse = new AssistantMessage("faux", "faux", "faux-1");
 		toolUse.stopReason = StopReason.TOOL_USE;
-		toolUse.content.add(new ToolCall("call-1", "read", Json.object().put("path", "README.md")));
+		toolUse.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
 
-		var restored = InteractiveShell.resumableMessages(
+		var restored = CodingAgentOperations.resumableMessages(
 				List.of(user, failed, orphanedResult, toolUse, laterUser, aborted));
 
 		assertEquals(4, restored.size());
@@ -83,27 +81,27 @@ class InteractiveShellTest {
 		assertEquals(toolUse, restored.get(1));
 		assertEquals(laterUser, restored.get(3));
 		ToolResultMessage synthetic = (ToolResultMessage) restored.get(2);
-		assertEquals("call-1", synthetic.toolCallId());
-		assertTrue(synthetic.isError());
+		assertEquals("call-1", synthetic.toolCallId);
+		assertTrue(synthetic.isError);
 	}
 
 	@Test
 	void rebuildsTheVisibleTranscriptWhenResumingASession() {
 		Model model = model("gpt-5.4", true);
 		AssistantMessage toolUse = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
-		toolUse.content.add(new ThinkingContent("Inspect the project"));
-		toolUse.content.add(new ToolCall("call-1", "read", Json.object().put("path", "README.md")));
+		toolUse.content.add(CodingAgentOperations.thinkingContent("Inspect the project"));
+		toolUse.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
 		AssistantMessage answer = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
-		answer.content.add(new TextContent("The project is ready."));
+		answer.content.add(CodingAgentOperations.textContent("The project is ready."));
 		List<Message> messages = List.of(
-				UserMessage.of("Check the project"),
+				CodingAgentOperations.userMessage("Check the project"),
 				toolUse,
-				ToolResultMessage.text("call-1", "read", "line one\nline two", false),
+				CodingAgentOperations.toolResultMessage("call-1", "read", "line one\nline two", false),
 				answer);
 
-		String visible = InteractiveShell.renderSessionScreen(model, messages, false, Theme.PLAIN);
-		String hidden = InteractiveShell.renderSessionScreen(model, messages, true, Theme.PLAIN);
-		String dark = InteractiveShell.renderSessionScreen(model, messages, true, Theme.DARK);
+		String visible = CodingAgentOperations.renderSessionScreen(model, messages, false, Theme.PLAIN);
+		String hidden = CodingAgentOperations.renderSessionScreen(model, messages, true, Theme.PLAIN);
+		String dark = CodingAgentOperations.renderSessionScreen(model, messages, true, Theme.DARK);
 
 		assertTrue(visible.startsWith("codingagent "));
 		assertTrue(visible.contains("\n> Check the project\n"));
@@ -121,16 +119,16 @@ class InteractiveShellTest {
 		failed.stopReason = StopReason.ERROR;
 		failed.errorMessage = "java.net.ConnectException";
 
-		assertEquals("Error: java.net.ConnectException", InteractiveShell.finalAssistantOutput(failed, true));
+		assertEquals("Error: java.net.ConnectException", CodingAgentOperations.finalAssistantOutput(failed, true));
 	}
 
 	@Test
 	void doesNotRepeatSuccessfulFinalOutputAfterItWasStreamed() {
 		AssistantMessage response = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
-		response.content.add(new TextContent("Done."));
+		response.content.add(CodingAgentOperations.textContent("Done."));
 
-		assertNull(InteractiveShell.finalAssistantOutput(response, true));
-		assertEquals("Done.", InteractiveShell.finalAssistantOutput(response, false));
+		assertNull(CodingAgentOperations.finalAssistantOutput(response, true));
+		assertEquals("Done.", CodingAgentOperations.finalAssistantOutput(response, false));
 	}
 
 	@Test
@@ -139,10 +137,10 @@ class InteractiveShellTest {
 		AssistantMessage failed = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
 		failed.stopReason = StopReason.ERROR;
 		failed.errorMessage = "OpenAI tool call arguments must be a JSON object";
-		failed.content.add(new TextContent("Checking the source."));
-		failed.content.add(new ToolCall("call-1", "read", Json.object().put("path", "README.md")));
+		failed.content.add(CodingAgentOperations.textContent("Checking the source."));
+		failed.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
 
-		String screen = InteractiveShell.renderSessionScreen(model, List.of(UserMessage.of("Check it"), failed), false, Theme.PLAIN);
+		String screen = CodingAgentOperations.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false, Theme.PLAIN);
 
 		assertTrue(screen.contains("Checking the source."));
 		assertTrue(screen.contains("[read] Reading README.md"));
@@ -151,43 +149,42 @@ class InteractiveShellTest {
 
 	@Test
 	void describesToolWorkAndSummarizesResults() {
-		var read = Json.object()
+		var read = CodingAgentOperations.jsonObject()
 				.put("path", "src/main/java/com.quaxt.codingagent/cli/Main.java")
 				.put("offset", 10)
 				.put("limit", 20);
-		var shell = Json.object().put("command", "mvn test");
+		var shell = CodingAgentOperations.jsonObject().put("command", "mvn test");
 
 		assertEquals(
 				"Reading src/main/java/com.quaxt.codingagent/cli/Main.java (lines 10-29)",
-				InteractiveShell.toolDescription("read", read));
-		assertEquals("mvn test", InteractiveShell.toolDescription("shell", shell));
+				CodingAgentOperations.toolCallDescription("read", read));
+		assertEquals("mvn test", CodingAgentOperations.toolCallDescription("shell", shell));
 		assertEquals(
 				"Read 2 line(s).",
-				InteractiveShell.toolResultSummary(
-						"read", AgentTool.ToolResult.text("package works.earendil;\npublic final class Main {}")));
+				CodingAgentOperations.toolResultSummary(
+						"read", CodingAgentOperations.toolResultText("package works.earendil;\npublic final class Main {}")));
 		assertEquals(
 				"Build completed successfully.",
-				InteractiveShell.toolResultSummary("shell", AgentTool.ToolResult.text("Build completed successfully.")));
+				CodingAgentOperations.toolResultSummary("shell", CodingAgentOperations.toolResultText("Build completed successfully.")));
 	}
 
 	@Test
 	void formatsModelThinkingLevelAndContextUseForTheStatusBar() {
-		Model model = Model.builder()
-				.id("gpt-5.6-sol")
-				.name("GPT-5.6 Sol")
-				.api("openai-responses")
-				.provider("github-copilot")
-				.baseUrl("https://example.test")
-				.reasoning(true)
-				.cost(ModelCost.FREE)
-				.contextWindow(1_000_000)
-				.maxTokens(1)
-				.build();
+		Model model = new Model();
+		model.id = "gpt-5.6-sol";
+		model.name = "GPT-5.6 Sol";
+		model.api = "openai-responses";
+		model.provider = "github-copilot";
+		model.baseUrl = "https://example.test";
+		model.reasoning = true;
+		model.cost = ModelCost.FREE;
+		model.contextWindow = 1_000_000;
+		model.maxTokens = 1;
 
-		assertEquals("GPT-5.6 Sol Max (0%)", InteractiveShell.modelStatus(model, ThinkingLevel.MAX, 0));
-		assertEquals("GPT-5.6 Sol Medium (25%)", InteractiveShell.modelStatus(model, ThinkingLevel.MEDIUM, 250_000));
-		assertEquals("GPT-5.6 Sol (100%)", InteractiveShell.modelStatus(model, ThinkingLevel.OFF, 1_000_000));
-		assertEquals("GPT-5.6 Sol (0%)", InteractiveShell.modelStatus(model, null, 0));
+		assertEquals("GPT-5.6 Sol Max (0%)", CodingAgentOperations.modelStatus(model, ThinkingLevel.MAX, 0));
+		assertEquals("GPT-5.6 Sol Medium (25%)", CodingAgentOperations.modelStatus(model, ThinkingLevel.MEDIUM, 250_000));
+		assertEquals("GPT-5.6 Sol (100%)", CodingAgentOperations.modelStatus(model, ThinkingLevel.OFF, 1_000_000));
+		assertEquals("GPT-5.6 Sol (0%)", CodingAgentOperations.modelStatus(model, null, 0));
 	}
 
 	@Test
@@ -203,10 +200,10 @@ class InteractiveShellTest {
 		failed.stopReason = StopReason.ERROR;
 		failed.usage.totalTokens = 9_999;
 
-		assertEquals(0, InteractiveShell.contextTokens(List.of(UserMessage.of("hi"))));
-		assertEquals(1_000, InteractiveShell.contextTokens(List.of(UserMessage.of("hi"), first)));
-		assertEquals(2_500, InteractiveShell.contextTokens(List.of(first, UserMessage.of("more"), second)));
-		assertEquals(2_500, InteractiveShell.contextTokens(List.of(first, second, failed)));
+		assertEquals(0, CodingAgentOperations.contextTokens(List.of(CodingAgentOperations.userMessage("hi"))));
+		assertEquals(1_000, CodingAgentOperations.contextTokens(List.of(CodingAgentOperations.userMessage("hi"), first)));
+		assertEquals(2_500, CodingAgentOperations.contextTokens(List.of(first, CodingAgentOperations.userMessage("more"), second)));
+		assertEquals(2_500, CodingAgentOperations.contextTokens(List.of(first, second, failed)));
 	}
 
 	@Test
@@ -215,25 +212,25 @@ class InteractiveShellTest {
 		Path elsewhere = Path.of("/opt/elsewhere");
 		String absoluteElsewhere = elsewhere.toAbsolutePath().normalize().toString();
 
-		assertEquals("~/xa/coding-agent", InteractiveShell.displayPath(home, Path.of("/Users/dev/xa/coding-agent")));
-		assertEquals("~", InteractiveShell.displayPath(home, Path.of("/Users/dev")));
-		assertEquals(absoluteElsewhere, InteractiveShell.displayPath(home, elsewhere));
-		assertEquals(absoluteElsewhere, InteractiveShell.displayPath(Path.of(""), elsewhere));
+		assertEquals("~/xa/coding-agent", CodingAgentOperations.displayPath(home, Path.of("/Users/dev/xa/coding-agent")));
+		assertEquals("~", CodingAgentOperations.displayPath(home, Path.of("/Users/dev")));
+		assertEquals(absoluteElsewhere, CodingAgentOperations.displayPath(home, elsewhere));
+		assertEquals(absoluteElsewhere, CodingAgentOperations.displayPath(Path.of(""), elsewhere));
 	}
 
 	@Test
 	void readsTheGitBranchFromHeadWithoutSpawningGit(@TempDir Path repo) throws Exception {
-		assertNull(InteractiveShell.gitBranch(repo));
+		assertNull(CodingAgentOperations.gitBranch(repo));
 
 		Path gitDir = Files.createDirectories(repo.resolve(".git"));
 		Files.writeString(gitDir.resolve("HEAD"), "ref: refs/heads/main\n");
-		assertEquals("main", InteractiveShell.gitBranch(repo));
+		assertEquals("main", CodingAgentOperations.gitBranch(repo));
 
 		Path nested = Files.createDirectories(repo.resolve("src/deep"));
-		assertEquals("main", InteractiveShell.gitBranch(nested));
+		assertEquals("main", CodingAgentOperations.gitBranch(nested));
 
 		Files.writeString(gitDir.resolve("HEAD"), "0123456789abcdef0123456789abcdef01234567\n");
-		assertEquals("0123456", InteractiveShell.gitBranch(repo));
+		assertEquals("0123456", CodingAgentOperations.gitBranch(repo));
 	}
 
 	@Test
@@ -243,7 +240,7 @@ class InteractiveShellTest {
 		Path worktree = Files.createDirectories(root.resolve("feature"));
 		Files.writeString(worktree.resolve(".git"), "gitdir: " + gitDir + "\n");
 
-		assertEquals("feature-branch", InteractiveShell.gitBranch(worktree));
+		assertEquals("feature-branch", CodingAgentOperations.gitBranch(worktree));
 	}
 
 	private static Model model(String id) {
@@ -251,15 +248,16 @@ class InteractiveShellTest {
 	}
 
 	private static Model model(String id, boolean reasoning) {
-		return Model.builder()
-				.id(id)
-				.api("openai-responses")
-				.provider("github-copilot")
-				.baseUrl("https://example.test")
-				.reasoning(reasoning)
-				.cost(ModelCost.FREE)
-				.contextWindow(1)
-				.maxTokens(1)
-				.build();
+		Model model = new Model();
+		model.id = id;
+		model.name = id;
+		model.api = "openai-responses";
+		model.provider = "github-copilot";
+		model.baseUrl = "https://example.test";
+		model.reasoning = reasoning;
+		model.cost = ModelCost.FREE;
+		model.contextWindow = 1;
+		model.maxTokens = 1;
+		return model;
 	}
 }

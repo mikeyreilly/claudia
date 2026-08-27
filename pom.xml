@@ -79,7 +79,7 @@
 							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<transformers>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<mainClass>com.quaxt.codingagent.cli.Main</mainClass>
+									<mainClass>com.quaxt.codingagent.CodingAgentOperations</mainClass>
 								</transformer>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
 							</transformers>
@@ -142,7 +142,7 @@
 						</executions>
 						<configuration>
 							<imageName>codingagent</imageName>
-							<mainClass>com.quaxt.codingagent.cli.Main</mainClass>
+							<mainClass>com.quaxt.codingagent.CodingAgentOperations</mainClass>
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>-Os</buildArg>

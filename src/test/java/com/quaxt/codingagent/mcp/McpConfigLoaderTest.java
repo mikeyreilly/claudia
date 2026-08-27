@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 
 class McpConfigLoaderTest {
 	@TempDir Path tempDir;
@@ -49,22 +50,23 @@ class McpConfigLoaderTest {
 				}
 				""");
 
-		McpConfiguration config = new McpConfigLoader(settingsPath, Map.of("TOOL_TOKEN", "abc123")).load();
+		McpConfiguration config = CodingAgentOperations.mcpLoadConfiguration(
+				CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of("TOOL_TOKEN", "abc123")));
 
-		assertEquals(2, config.servers().size());
-		McpServerConfig.Local local = assertInstanceOf(McpServerConfig.Local.class, config.servers().get("local"));
-		assertEquals(java.util.List.of("tool", "--token", "abc123"), local.command());
-		assertEquals("secret-value", local.environment().get("SECRET"));
-		assertFalse(local.enabled());
-		McpServerConfig.Remote remote = assertInstanceOf(McpServerConfig.Remote.class, config.servers().get("remote"));
-		assertEquals("Bearer abc123", remote.headers().get("Authorization"));
-		assertEquals("configured-client", remote.oauth().path("clientId").asText());
-		assertEquals("read write", remote.oauth().path("scope").asText());
-		assertEquals(23456, remote.oauth().path("callbackPort").asInt());
-		assertEquals("get*", remote.resultFilters().getFirst().tool());
-		assertEquals(java.util.List.of("avatarUrls", "self"), remote.resultFilters().getFirst().dropKeys());
-		assertEquals(java.util.List.of("deleteIssue"), remote.disabledTools());
-		assertEquals(java.util.List.of(settingsPath), config.sources());
+		assertEquals(2, config.servers.size());
+		McpServerConfig.Local local = assertInstanceOf(McpServerConfig.Local.class, config.servers.get("local"));
+		assertEquals(java.util.List.of("tool", "--token", "abc123"), local.command);
+		assertEquals("secret-value", local.environment.get("SECRET"));
+		assertFalse(local.enabled);
+		McpServerConfig.Remote remote = assertInstanceOf(McpServerConfig.Remote.class, config.servers.get("remote"));
+		assertEquals("Bearer abc123", remote.headers.get("Authorization"));
+		assertEquals("configured-client", remote.oauth.path("clientId").asText());
+		assertEquals("read write", remote.oauth.path("scope").asText());
+		assertEquals(23456, remote.oauth.path("callbackPort").asInt());
+		assertEquals("get*", remote.resultFilters.getFirst().tool);
+		assertEquals(java.util.List.of("avatarUrls", "self"), remote.resultFilters.getFirst().dropKeys);
+		assertEquals(java.util.List.of("deleteIssue"), remote.disabledTools);
+		assertEquals(java.util.List.of(settingsPath), config.sources);
 	}
 
 	@Test
@@ -76,7 +78,8 @@ class McpConfigLoaderTest {
 				""");
 
 		Exception error = assertThrows(
-				java.io.IOException.class, () -> new McpConfigLoader(settingsPath, Map.of()).load());
+				java.io.IOException.class,
+			() -> CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of())));
 		assertTrue(error.getMessage().contains("disabledTools"));
 	}
 
@@ -90,7 +93,8 @@ class McpConfigLoaderTest {
 				""");
 
 		Exception error = assertThrows(
-				java.io.IOException.class, () -> new McpConfigLoader(settingsPath, Map.of()).load());
+				java.io.IOException.class,
+			() -> CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of())));
 		assertTrue(error.getMessage().contains("HTTP loopback URL"));
 	}
 
@@ -103,9 +107,10 @@ class McpConfigLoaderTest {
 				{"mcp":{"ignored":{"type":"local","command":["ignored"]}}}
 				""");
 
-		McpConfiguration config = new McpConfigLoader(settingsPath, Map.of()).load();
+		McpConfiguration config =
+				CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of()));
 
-		assertTrue(config.servers().isEmpty());
-		assertTrue(config.sources().isEmpty());
+		assertTrue(config.servers.isEmpty());
+		assertTrue(config.sources.isEmpty());
 	}
 }

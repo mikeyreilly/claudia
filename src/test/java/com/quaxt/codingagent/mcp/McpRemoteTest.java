@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.TextContent;
@@ -32,20 +33,25 @@ class McpRemoteTest {
 		http.createContext("/mcp", exchange -> handle(exchange, sawSession, sawProtocol));
 		http.start();
 		try {
-			var remote = new McpServerConfig.Remote(
+			var remote = CodingAgentOperations.remoteMcpServerConfig(
 					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
 					Map.of("X-Test", "yes"),
 					null,
 					true,
-					5_000L);
-			try (McpManager manager = new McpManager(
-					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir)) {
-				manager.awaitReady();
-				assertEquals(McpManager.State.CONNECTED, manager.status("remote").state());
-				AgentTool tool = manager.tools().getFirst();
-				AgentTool.ToolResult result = tool.execute(
-						"id", Json.object().put("value", "over http"), new AbortSignal(), ignored -> {});
-				assertEquals("over http", ((TextContent) result.content().getFirst()).text());
+					5_000L,
+					List.of(),
+					List.of());
+			McpManager manager = CodingAgentOperations.mcpCreateManager(
+					CodingAgentOperations.mcpConfiguration(Map.of("remote", remote), List.of()), tempDir);
+			try {
+				CodingAgentOperations.mcpAwaitReady(manager);
+				assertEquals(McpManager.State.CONNECTED, CodingAgentOperations.mcpStatus(manager, "remote").state);
+				AgentTool tool = CodingAgentOperations.mcpTools(manager).getFirst();
+				AgentTool.ToolResult result = CodingAgentOperations.executeTool(
+						tool, "id", CodingAgentOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});
+				assertEquals("over http", ((TextContent) result.content.getFirst()).text);
+			} finally {
+				CodingAgentOperations.mcpCloseManager(manager);
 			}
 			assertTrue(sawSession.get());
 			assertTrue(sawProtocol.get());
@@ -71,7 +77,7 @@ class McpRemoteTest {
 				exchange.sendResponseHeaders(202, -1);
 				return;
 			}
-			ObjectNode response = Json.object().put("jsonrpc", "2.0");
+			ObjectNode response = CodingAgentOperations.jsonObject().put("jsonrpc", "2.0");
 			response.set("id", request.get("id"));
 			switch (method) {
 				case "initialize" -> {

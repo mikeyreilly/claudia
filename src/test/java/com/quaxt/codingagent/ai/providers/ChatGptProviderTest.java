@@ -6,13 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.quaxt.codingagent.ai.StreamOptions;
 import com.quaxt.codingagent.ai.auth.ChatGptAuth;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 
 class ChatGptProviderTest {
 	@Test
 	void configuresCodexHeadersAndSessionAffinity() {
-		StreamOptions options = new StreamOptions().sessionId("session-1");
+		StreamOptions options = new StreamOptions();
+		options.sessionId = "session-1";
 
-		ChatGptProvider.configureCodexRequest(
+		CodingAgentOperations.configureCodexRequest(
 				options, new ChatGptAuth.ChatGptToken("access-token", "account-1"));
 
 		assertEquals("access-token", options.apiKey);

@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.quaxt.codingagent.ai.json.Json;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -39,21 +39,21 @@ class ChatGptAuthTest {
 			});
 			server.start();
 
-			FileCredentialStore store = new FileCredentialStore(tempDir.resolve("auth.json"));
+			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"));
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			ChatGptAuth auth = new ChatGptAuth(store, base, "test-client");
-			ChatGptAuth.DeviceCode device = auth.beginLogin();
-			assertEquals("ABCD-EFGH", device.userCode());
-			auth.completeLogin(device);
-			assertTrue(auth.hasCredential());
+			ChatGptAuth auth = CodingAgentOperations.chatGptAuth(store, base, "test-client");
+			ChatGptAuth.DeviceCode device = CodingAgentOperations.chatGptBeginLogin(auth);
+			assertEquals("ABCD-EFGH", device.userCode);
+			CodingAgentOperations.chatGptCompleteLogin(auth, device);
+			assertTrue(CodingAgentOperations.chatGptHasCredential(auth));
 
-			ChatGptAuth.ChatGptToken refreshed = auth.resolveToken();
-			assertEquals("access-2", refreshed.accessToken());
-			assertEquals("account-123", refreshed.accountId());
+			ChatGptAuth.ChatGptToken refreshed = CodingAgentOperations.chatGptResolveToken(auth);
+			assertEquals("access-2", refreshed.accessToken);
+			assertEquals("account-123", refreshed.accountId);
 			assertEquals(2, tokenExchanges.get());
 
-			auth.logout();
-			assertFalse(auth.hasCredential());
+			CodingAgentOperations.chatGptLogout(auth);
+			assertFalse(CodingAgentOperations.chatGptHasCredential(auth));
 		} finally {
 			server.stop(0);
 		}
@@ -61,8 +61,8 @@ class ChatGptAuthTest {
 
 	private static String jwt(String accountId) throws IOException {
 		String header = Base64.getUrlEncoder().withoutPadding().encodeToString("{}".getBytes(StandardCharsets.UTF_8));
-		String claims = Json.object()
-				.set("https://api.openai.com/auth", Json.object().put("chatgpt_account_id", accountId))
+		String claims = CodingAgentOperations.jsonObject()
+				.set("https://api.openai.com/auth", CodingAgentOperations.jsonObject().put("chatgpt_account_id", accountId))
 				.toString();
 		return header + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(claims.getBytes(StandardCharsets.UTF_8)) + ".signature";
 	}

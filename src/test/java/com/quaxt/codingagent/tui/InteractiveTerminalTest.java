@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.jline.terminal.Attributes.LocalFlag;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.impl.DumbTerminal;
+import com.quaxt.codingagent.CodingAgentOperations;
 import org.junit.jupiter.api.Test;
 
 class InteractiveTerminalTest {
@@ -29,7 +30,9 @@ class InteractiveTerminalTest {
 		CountDownLatch interrupted = new CountDownLatch(1);
 		CountDownLatch inputMayFinish = new CountDownLatch(1);
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(terminal, () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				terminal, () -> null, false);
+		try {
 			Thread input = Thread.ofVirtual().start(() -> {
 				try {
 					started.await();
@@ -45,7 +48,7 @@ class InteractiveTerminalTest {
 			try {
 				result = assertTimeoutPreemptively(
 						Duration.ofSeconds(5),
-						() -> interactive.runInterruptibly(
+						() -> CodingAgentOperations.runInterruptibly(interactive,
 								() -> {
 									assertFalse(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
 									started.countDown();
@@ -61,6 +64,8 @@ class InteractiveTerminalTest {
 			assertEquals("stopped", result);
 			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
 			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -69,9 +74,13 @@ class InteractiveTerminalTest {
 		TerminalFixture fixture = terminal();
 		fixture.terminal().setSize(org.jline.terminal.Size.of(0, 0));
 
-		try (InteractiveTerminal ignored = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal ignored = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			assertEquals(80, fixture.terminal().getColumns());
 			assertEquals(24, fixture.terminal().getRows());
+		} finally {
+			CodingAgentOperations.closeTerminal(ignored);
 		}
 	}
 
@@ -79,15 +88,19 @@ class InteractiveTerminalTest {
 	void darkThemeFillsThePromptLineWithADarkGreyBackground() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write("hello\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("\n> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "\n> "));
 
 			assertEquals("hello", line);
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8)
 					.contains("\u001b[48;5;236m\u001b[K> hello"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -95,15 +108,20 @@ class InteractiveTerminalTest {
 	void submitsAPrepopulatedInputBuffer() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(
-					Duration.ofSeconds(5), () -> interactive.readLine("> ", "current session fork"));
+					Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(
+							interactive, "> ", "current session fork"));
 
 			assertEquals("current session fork", line);
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("> current session fork"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -111,14 +129,16 @@ class InteractiveTerminalTest {
 	void slashCommandPanelFiltersNavigatesAndInsertsWithoutSubmitting() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write(
 					"/\u001b[B\r\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(
 					Duration.ofSeconds(5),
-					() -> interactive.readLine(
+					() -> CodingAgentOperations.readLine(interactive,
 							"> ",
 							List.of("/models", "/help", "/compact", "/details", "/exit")));
 
@@ -127,6 +147,8 @@ class InteractiveTerminalTest {
 			assertTrue(written.contains("╭"));
 			assertTrue(written.contains("/compact"));
 			assertTrue(written.contains("/details"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -134,14 +156,18 @@ class InteractiveTerminalTest {
 	void shiftEnterVariantsInsertNewlinesAndEnterSubmitsThePrompt() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write(
 					"first\u001b[13;2usecond\u001b[27;2;13~third\nfourth\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("first\nsecond\nthird\nfourth", line);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -149,14 +175,18 @@ class InteractiveTerminalTest {
 	void bracketedPasteKeepsMultilineTextUntilEnter() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write(
 					"\u001b[200~first\r\nsecond\u001b[201~\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("first\nsecond", line);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -164,13 +194,17 @@ class InteractiveTerminalTest {
 	void unbracketedCrLfPasteDoesNotSubmitAtTheLineBreak() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write("first\r\nsecond\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("first\nsecond", line);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -178,15 +212,19 @@ class InteractiveTerminalTest {
 	void unbracketedMultilinePasteIsNotMistakenForACommandSelection() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
 			fixture.input().write("/help\rsecond\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(
 					Duration.ofSeconds(5),
-					() -> interactive.readLine("> ", List.of("/help", "/models")));
+					() -> CodingAgentOperations.readLine(interactive, "> ", List.of("/help", "/models")));
 
 			assertEquals("/help\nsecond", line);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -197,7 +235,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -206,12 +244,14 @@ class InteractiveTerminalTest {
 					fixture.output().writeBytes("shell activity\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write("d\r".getBytes(StandardCharsets.UTF_8));
 					fixture.input().flush();
+					return null;
 				},
-				true)) {
-			interactive.println("conversation before suspend");
+				true);
+		try {
+			CodingAgentOperations.println(interactive, "conversation before suspend");
 			fixture.input().write("abc\u001a".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("abcd", line);
 			assertTrue(suspended.get());
@@ -221,6 +261,8 @@ class InteractiveTerminalTest {
 			assertTrue(redraw > shellActivity);
 			assertTrue(written.indexOf("conversation before suspend", redraw) > redraw);
 			assertTrue(written.indexOf("abc", redraw) > redraw);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -228,8 +270,10 @@ class InteractiveTerminalTest {
 	void redrawsTheTrackedScreenAfterAnExternalContinueSignal() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, true)) {
-			interactive.println("conversation before external suspend");
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, true);
+		try {
+			CodingAgentOperations.println(interactive, "conversation before external suspend");
 			fixture.output().writeBytes("shell output after external suspend\n".getBytes(StandardCharsets.UTF_8));
 
 			fixture.terminal().raise(Terminal.Signal.CONT);
@@ -239,6 +283,8 @@ class InteractiveTerminalTest {
 			int redraw = written.indexOf("\u001b[2J\u001b[H\u001b[3J", shellOutput);
 			assertTrue(redraw > shellOutput);
 			assertTrue(written.indexOf("conversation before external suspend", redraw) > redraw);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -246,24 +292,29 @@ class InteractiveTerminalTest {
 	void replacesTheTrackedMainScreenDocument() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
 				fixture.terminal(),
 				() -> {
 					fixture.input().write('\r');
 					fixture.input().flush();
+					return null;
 				},
-				true)) {
-			interactive.println("discarded session");
-			interactive.replaceScreen("restored session\n");
+				true);
+		try {
+			CodingAgentOperations.println(interactive, "discarded session");
+			CodingAgentOperations.replaceScreen(interactive, "restored session\n");
 			fixture.input().write(0x1a);
 			fixture.input().flush();
 
-			assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(
+					interactive, "> "));
 
 			String written = fixture.output().toString(StandardCharsets.UTF_8);
 			String finalFrame = written.substring(written.lastIndexOf("\u001b[2J\u001b[H\u001b[3J"));
 			assertTrue(finalFrame.contains("restored session"));
 			assertFalse(finalFrame.contains("discarded session"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -272,24 +323,28 @@ class InteractiveTerminalTest {
 		TerminalFixture fixture = terminal();
 		AtomicBoolean invoked = new AtomicBoolean();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
-			interactive.bindAppAction("expandTools", () -> {
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
+			CodingAgentOperations.bindAppAction(interactive, "expandTools", () -> {
 				invoked.set(true);
 				try {
-					interactive.run(new ImmediateComponent());
+					CodingAgentOperations.runComponent(interactive, immediateComponent());
 				} catch (java.io.IOException error) {
 					throw new AssertionError(error);
 				}
-				interactive.printAbove("details opened");
+				CodingAgentOperations.printAbove(interactive, "details opened");
 			});
 			fixture.input().write("ab\u000fcd\r".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("abcd", line);
 			assertTrue(invoked.get());
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("details opened"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -300,7 +355,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -309,13 +364,17 @@ class InteractiveTerminalTest {
 					fixture.output().writeBytes("nested shell activity\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write("\rcd\r".getBytes(StandardCharsets.UTF_8));
 					fixture.input().flush();
+					return null;
 				},
-				true)) {
-			interactive.println("conversation behind nested selector");
-			interactive.bindAppAction("expandTools", () -> {
+				true);
+		try {
+			CodingAgentOperations.println(interactive, "conversation behind nested selector");
+			CodingAgentOperations.bindAppAction(interactive, "expandTools", () -> {
 				try {
-					interactive.run(new FuzzySelector<>(
-							"Details", List.of(new SelectItem<>("done", "Done")), 0, false));
+					CodingAgentOperations.runComponent(
+							interactive,
+							CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
+									"Details", List.of(CodingAgentOperations.selectItem("done", "Done")), 0, false)));
 				} catch (java.io.IOException error) {
 					throw new AssertionError(error);
 				}
@@ -323,7 +382,7 @@ class InteractiveTerminalTest {
 			fixture.input().write("ab\u000f\u001a".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
-			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> CodingAgentOperations.readLine(interactive, "> "));
 
 			assertEquals("abcd", line);
 			assertTrue(suspended.get());
@@ -332,6 +391,8 @@ class InteractiveTerminalTest {
 			int redraw = written.indexOf("\u001b[2J\u001b[H\u001b[3J", shellActivity);
 			assertTrue(redraw > shellActivity);
 			assertTrue(written.indexOf("conversation behind nested selector", redraw) > redraw);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
@@ -342,7 +403,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -351,18 +412,22 @@ class InteractiveTerminalTest {
 					fixture.output().writeBytes("shell activity in full screen\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write('\r');
 					fixture.input().flush();
+					return null;
 				},
-				true)) {
-			interactive.println("conversation behind selector");
+				true);
+		try {
+			CodingAgentOperations.println(interactive, "conversation behind selector");
 			fixture.input().write(0x1a);
 			fixture.input().flush();
 			String selected = assertTimeoutPreemptively(
 					Duration.ofSeconds(5),
-					() -> interactive.run(new FuzzySelector<>(
-							"Models",
-							List.of(new SelectItem<>("gpt", "gpt-5.6-terra")),
-							0,
-							true)));
+					() -> CodingAgentOperations.runComponent(
+							interactive,
+							CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
+									"Models",
+									List.of(CodingAgentOperations.selectItem("gpt", "gpt-5.6-terra")),
+									0,
+									true))));
 
 			assertEquals("gpt", selected);
 			assertTrue(suspended.get());
@@ -373,41 +438,43 @@ class InteractiveTerminalTest {
 			int mainScreenRedraw = written.indexOf("\u001b[2J\u001b[H\u001b[3J", shellActivity);
 			assertTrue(mainScreenRedraw > shellActivity);
 			assertTrue(written.indexOf("conversation behind selector", mainScreenRedraw) > mainScreenRedraw);
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
 	@Test
 	void alignsStatusBarSegmentsToTheFullTerminalWidth() {
-		String line = InteractiveTerminal.statusBarLine(
+		String line = CodingAgentOperations.statusBarLine(
 				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60, Theme.PLAIN);
 
 		assertEquals(60, line.length());
 		assertTrue(line.startsWith("~/xa/coding-agent [main]"));
 		assertTrue(line.endsWith("GPT-5.6 Sol Max (0%)"));
 
-		String styled = InteractiveTerminal.statusBarLine("left", "right", 20, Theme.DARK);
-		assertTrue(styled.startsWith(Theme.DARK.muted()));
-		assertTrue(styled.endsWith(Theme.DARK.reset()));
+		String styled = CodingAgentOperations.statusBarLine("left", "right", 20, Theme.DARK);
+		assertTrue(styled.startsWith(Theme.DARK.muted));
+		assertTrue(styled.endsWith(Theme.DARK.reset));
 
-		String narrow = InteractiveTerminal.statusBarLine(
+		String narrow = CodingAgentOperations.statusBarLine(
 				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30, Theme.PLAIN);
-		assertTrue(TerminalText.visibleWidth(narrow) <= 30);
+		assertTrue(CodingAgentOperations.visibleWidth(narrow) <= 30);
 		assertTrue(narrow.endsWith("GPT-5.6 Sol Max (0%)"));
 
-		assertEquals("left only", InteractiveTerminal.statusBarLine("left only", "", 20, Theme.PLAIN));
-		assertEquals("", InteractiveTerminal.statusBarLine("", "", 20, Theme.PLAIN));
+		assertEquals("left only", CodingAgentOperations.statusBarLine("left only", "", 20, Theme.PLAIN));
+		assertEquals("", CodingAgentOperations.statusBarLine("", "", 20, Theme.PLAIN));
 	}
 
 	@Test
 	void activityHasPriorityAndOnlyReadyUsesTheGreenAccent() {
-		String ready = InteractiveTerminal.statusBarLine(
+		String ready = CodingAgentOperations.statusBarLine(
 				"● Ready",
 				InteractiveTerminal.StatusAccent.READY,
 				"~/xa/coding-agent [main]",
 				"GPT-5.6 Sol Max (24%)",
 				80,
 				Theme.DARK);
-		String waiting = InteractiveTerminal.statusBarLine(
+		String waiting = CodingAgentOperations.statusBarLine(
 				"◐ Waiting for model · 12s",
 				InteractiveTerminal.StatusAccent.ACTIVE,
 				"~/xa/coding-agent [main]",
@@ -415,35 +482,37 @@ class InteractiveTerminalTest {
 				80,
 				Theme.DARK);
 
-		assertTrue(ready.startsWith(Theme.DARK.readyStatus() + "● Ready"));
-		assertTrue(ready.contains(Theme.DARK.reset() + Theme.DARK.muted() + " │ "));
-		assertTrue(waiting.startsWith(Theme.DARK.activeStatus() + "◐ Waiting for model"));
-		assertFalse(waiting.contains(Theme.DARK.readyStatus()));
-		String lightReady = InteractiveTerminal.statusBarLine(
+		assertTrue(ready.startsWith(CodingAgentOperations.readyStatus(Theme.DARK) + "● Ready"));
+		assertTrue(ready.contains(Theme.DARK.reset + Theme.DARK.muted + " │ "));
+		assertTrue(waiting.startsWith(CodingAgentOperations.activeStatus(
+				Theme.DARK) + "◐ Waiting for model"));
+		assertFalse(waiting.contains(CodingAgentOperations.readyStatus(Theme.DARK)));
+		String lightReady = CodingAgentOperations.statusBarLine(
 				"● Ready", InteractiveTerminal.StatusAccent.READY, "path", "model", 30, Theme.LIGHT);
-		String lightWaiting = InteractiveTerminal.statusBarLine(
+		String lightWaiting = CodingAgentOperations.statusBarLine(
 				"Waiting", InteractiveTerminal.StatusAccent.ACTIVE, "path", "model", 30, Theme.LIGHT);
-		assertTrue(lightReady.startsWith(Theme.LIGHT.readyStatus() + "● Ready"));
-		assertFalse(lightWaiting.contains(Theme.LIGHT.readyStatus()));
-		String plainReady = InteractiveTerminal.statusBarLine(
+		assertTrue(lightReady.startsWith(CodingAgentOperations.readyStatus(Theme.LIGHT) + "● Ready"));
+		assertFalse(lightWaiting.contains(CodingAgentOperations.readyStatus(Theme.LIGHT)));
+		String plainReady = CodingAgentOperations.statusBarLine(
 				"● Ready", InteractiveTerminal.StatusAccent.READY, "path", "model", 30, Theme.PLAIN);
 		assertFalse(plainReady.contains("\u001b"));
-		assertEquals(80, TerminalText.visibleWidth(ready));
-		assertEquals(80, TerminalText.visibleWidth(waiting));
+		assertEquals(80, CodingAgentOperations.visibleWidth(ready));
+		assertEquals(80, CodingAgentOperations.visibleWidth(waiting));
 
 		for (InteractiveTerminal.StatusAccent accent : List.of(
 				InteractiveTerminal.StatusAccent.NONE,
 				InteractiveTerminal.StatusAccent.ACTIVE,
 				InteractiveTerminal.StatusAccent.TOOL,
 				InteractiveTerminal.StatusAccent.WARNING)) {
-			String line = InteractiveTerminal.statusBarLine("Busy", accent, "path", "model", 30, Theme.DARK);
-			assertFalse(line.contains(Theme.DARK.readyStatus()), accent.toString());
+			String line = CodingAgentOperations.statusBarLine(
+					"Busy", accent, "path", "model", 30, Theme.DARK);
+			assertFalse(line.contains(CodingAgentOperations.readyStatus(Theme.DARK)), accent.toString());
 		}
 	}
 
 	@Test
 	void narrowStatusBarsKeepActivityBeforeMetadata() {
-		String line = InteractiveTerminal.statusBarLine(
+		String line = CodingAgentOperations.statusBarLine(
 				"◐ Waiting for model · 12s",
 				InteractiveTerminal.StatusAccent.ACTIVE,
 				"~/a/very/long/working/directory",
@@ -454,39 +523,27 @@ class InteractiveTerminalTest {
 		assertEquals("◐ Waiting for mod...", line);
 		assertFalse(line.contains("GPT"));
 		assertFalse(line.contains("~/"));
-		assertEquals(20, TerminalText.visibleWidth(line));
+		assertEquals(20, CodingAgentOperations.visibleWidth(line));
 	}
 
 	@Test
 	void statusBarUpdatesAreIgnoredOnTerminalsWithoutCursorAddressing() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		try (InteractiveTerminal interactive = new InteractiveTerminal(fixture.terminal(), () -> {}, false)) {
-			interactive.setStatus("~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
-			interactive.println("conversation output");
+		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
+				fixture.terminal(), () -> null, false);
+		try {
+			CodingAgentOperations.setStatus(interactive, "~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
+			CodingAgentOperations.println(interactive, "conversation output");
 
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("conversation output"));
+		} finally {
+			CodingAgentOperations.closeTerminal(interactive);
 		}
 	}
 
-	private static final class ImmediateComponent implements TuiComponent<Void> {
-		@Override
-		public List<String> render(int width, int height, Theme theme) {
-			return List.of("details");
-		}
-
-		@Override
-		public void handle(TuiInput input) {}
-
-		@Override
-		public boolean isComplete() {
-			return true;
-		}
-
-		@Override
-		public Void result() {
-			return null;
-		}
+	private static TuiComponent<Void> immediateComponent() {
+		return new TuiComponent<>(frame -> List.of("details"), input -> {}, () -> true, () -> null);
 	}
 
 	private static TerminalFixture terminal() throws Exception {

@@ -1,33 +1,25 @@
 package com.quaxt.codingagent.agent;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.util.function.Consumer;
-import com.quaxt.codingagent.ai.types.ImageContent;
-import com.quaxt.codingagent.ai.types.TextContent;
-import com.quaxt.codingagent.ai.util.AbortSignal;
+import java.util.List;
+import com.quaxt.codingagent.ai.types.UserContent;
 
-/** A model-visible tool and its local execution implementation. */
+/**
+ * Marker for a model-visible tool carrier. Tool metadata (name, description,
+ * parameters) and execution are supplied by the static operations in
+ * CodingAgentOperations, which dispatch over the concrete tool carriers.
+ */
 public interface AgentTool {
-	String name();
 
-	String description();
+	/** Result of one tool execution. */
+	final class ToolResult {
+		public List<UserContent> content;
+		public Object details;
+		public boolean isError;
 
-	ObjectNode parameters();
-
-	ToolResult execute(String toolCallId, ObjectNode arguments, AbortSignal signal, Consumer<ToolResult> onUpdate)
-			throws Exception;
-
-	record ToolResult(java.util.List<com.quaxt.codingagent.ai.types.UserContent> content, Object details, boolean isError) {
-		public ToolResult {
-			content = java.util.List.copyOf(content);
-		}
-
-		public static ToolResult text(String text) {
-			return new ToolResult(java.util.List.of(new TextContent(text)), null, false);
-		}
-
-		public static ToolResult error(String text) {
-			return new ToolResult(java.util.List.of(new TextContent(text)), null, true);
+		public ToolResult(List<UserContent> content, Object details, boolean isError) {
+			this.content = content;
+			this.details = details;
+			this.isError = isError;
 		}
 	}
 }

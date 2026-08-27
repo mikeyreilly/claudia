@@ -12,8 +12,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.Retry;
-import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
@@ -25,48 +25,33 @@ import com.quaxt.codingagent.ai.types.UserMessage;
 class AgentTest {
 	@Test
 	void runsToolCallsThenContinuesUntilFinalAnswer() throws Exception {
-		FauxProvider provider = new FauxProvider();
-		ObjectNode arguments = Json.object().put("path", "README.md");
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.toolCall("read", arguments)),
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
+		ObjectNode arguments = CodingAgentOperations.jsonObject().put("path", "README.md");
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxToolCall("read", arguments)),
 				new FauxProvider.ResponseStep.Factory(request -> {
-					assertEquals(3, request.context().messages.size());
-					assertInstanceOf(ToolResultMessage.class, request.context().messages.getLast());
-					return FauxProvider.text("The README was read.");
+					assertEquals(3, request.context.messages.size());
+					assertInstanceOf(ToolResultMessage.class, request.context.messages.getLast());
+					return CodingAgentOperations.fauxText("The README was read.");
 				})));
-		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
+		Agent agent = CodingAgentOperations.newAgent("system", provider.models.getFirst(), provider);
 		List<AgentEvent> events = new ArrayList<>();
-		agent.subscribe(events::add);
-		agent.state().tools.add(new AgentTool() {
-			@Override
-			public String name() {
-				return "read";
-			}
+		CodingAgentOperations.subscribe(agent, events::add);
+		agent.state.tools.add(new FunctionTool(
+				"read",
+				"Read a file",
+				CodingAgentOperations.jsonObject().put("type", "object"),
+				invocation -> {
+					assertEquals("README.md", invocation.arguments.path("path").asText());
+					invocation.onUpdate.accept(CodingAgentOperations.toolResultText("partial"));
+					return CodingAgentOperations.toolResultText("contents");
+				}));
 
-			@Override
-			public String description() {
-				return "Read a file";
-			}
-
-			@Override
-			public ObjectNode parameters() {
-				return Json.object().put("type", "object");
-			}
-
-			@Override
-			public ToolResult execute(String toolCallId, ObjectNode args, com.quaxt.codingagent.ai.util.AbortSignal signal,
-					java.util.function.Consumer<ToolResult> onUpdate) {
-				assertEquals("README.md", args.path("path").asText());
-				onUpdate.accept(ToolResult.text("partial"));
-				return ToolResult.text("contents");
-			}
-		});
-
-		List<Message> created = agent.prompt("Please read the README");
+		List<Message> created = CodingAgentOperations.prompt(agent, "Please read the README");
 
 		assertEquals(4, created.size());
-		assertEquals("The README was read.", agent.state().messages.getLast() instanceof com.quaxt.codingagent.ai.types.AssistantMessage a
-				? a.text()
+		assertEquals("The README was read.", agent.state.messages.getLast() instanceof com.quaxt.codingagent.ai.types.AssistantMessage a
+				? CodingAgentOperations.text(a)
 				: "");
 		assertTrue(events.stream().anyMatch(AgentEvent.ToolExecutionStart.class::isInstance));
 		assertTrue(events.stream().anyMatch(AgentEvent.ToolExecutionUpdate.class::isInstance));
@@ -76,106 +61,100 @@ class AgentTest {
 
 	@Test
 	void retriesATransientFailureWithoutRepeatingCompletedTools() throws Exception {
-		FauxProvider provider = new FauxProvider();
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
 		AssistantMessage transientFailure = new AssistantMessage("faux", "faux", "faux-1");
 		transientFailure.stopReason = StopReason.ERROR;
 		transientFailure.errorMessage =
 				"503: upstream connect error or disconnect/reset before headers. reset reason: connection termination";
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.toolCall("read", Json.object().put("path", "README.md"))),
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxToolCall("read", CodingAgentOperations.jsonObject().put("path", "README.md"))),
 				new FauxProvider.ResponseStep.Message(transientFailure),
 				new FauxProvider.ResponseStep.Factory(request -> {
-					assertEquals(3, request.context().messages.size());
-					assertInstanceOf(ToolResultMessage.class, request.context().messages.getLast());
-					return FauxProvider.text("Recovered and finished.");
+					assertEquals(3, request.context.messages.size());
+					assertInstanceOf(ToolResultMessage.class, request.context.messages.getLast());
+					return CodingAgentOperations.fauxText("Recovered and finished.");
 				})));
-		Agent agent = new Agent("", provider.models().getFirst(), provider::stream);
-		agent.setRetryPolicy(new Retry.Policy(true, 2, 0));
+		Agent agent = CodingAgentOperations.newAgent("", provider.models.getFirst(), provider);
+		agent.retryPolicy = new Retry.Policy(true, 2, 0);
 		AtomicInteger toolCalls = new AtomicInteger();
-		agent.state().tools.add(new AgentTool() {
-			@Override public String name() { return "read"; }
-			@Override public String description() { return "Read a file"; }
-			@Override public ObjectNode parameters() { return Json.object().put("type", "object"); }
-			@Override
-			public ToolResult execute(
-					String toolCallId,
-					ObjectNode arguments,
-					com.quaxt.codingagent.ai.util.AbortSignal signal,
-					java.util.function.Consumer<ToolResult> onUpdate) {
-				toolCalls.incrementAndGet();
-				return ToolResult.text("contents");
-			}
-		});
+		agent.state.tools.add(new FunctionTool(
+				"read",
+				"Read a file",
+				CodingAgentOperations.jsonObject().put("type", "object"),
+				invocation -> {
+					toolCalls.incrementAndGet();
+					return CodingAgentOperations.toolResultText("contents");
+				}));
 		List<AgentEvent> events = new ArrayList<>();
-		agent.subscribe(events::add);
+		CodingAgentOperations.subscribe(agent, events::add);
 
-		List<Message> created = agent.prompt("Finish the task");
+		List<Message> created = CodingAgentOperations.prompt(agent, "Finish the task");
 
-		assertEquals(3, provider.state().callCount());
+		assertEquals(3, CodingAgentOperations.fauxCallCount(provider));
 		assertEquals(1, toolCalls.get());
 		assertEquals(4, created.size());
-		assertEquals(4, agent.state().messages.size());
-		assertEquals("Recovered and finished.", ((AssistantMessage) agent.state().messages.getLast()).text());
+		assertEquals(4, agent.state.messages.size());
+		assertEquals("Recovered and finished.", CodingAgentOperations.text(((AssistantMessage) agent.state.messages.getLast())));
 		AgentEvent.AutoRetryStart retry = assertInstanceOf(
 				AgentEvent.AutoRetryStart.class,
 				events.stream().filter(AgentEvent.AutoRetryStart.class::isInstance).findFirst().orElseThrow());
-		assertEquals(1, retry.attempt());
-		assertEquals(2, retry.maxAttempts());
+		assertEquals(1, retry.attempt);
+		assertEquals(2, retry.maxAttempts);
 		assertTrue(events.stream()
 				.filter(AgentEvent.AutoRetryEnd.class::isInstance)
 				.map(AgentEvent.AutoRetryEnd.class::cast)
-				.anyMatch(AgentEvent.AutoRetryEnd::success));
+				.anyMatch(end -> end.success));
 	}
 
 	@Test
 	void reportsUnknownToolWithoutThrowing() throws Exception {
-		FauxProvider provider = new FauxProvider();
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.toolCall("missing", Json.object())),
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("recovered"))));
-		Agent agent = new Agent("", provider.models().getFirst(), provider::stream);
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxToolCall("missing", CodingAgentOperations.jsonObject())),
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("recovered"))));
+		Agent agent = CodingAgentOperations.newAgent("", provider.models.getFirst(), provider);
 
-		agent.prompt("run missing tool");
+		CodingAgentOperations.prompt(agent, "run missing tool");
 
 		ToolResultMessage result = assertInstanceOf(
 				ToolResultMessage.class,
-				agent.state().messages.stream().filter(ToolResultMessage.class::isInstance).findFirst().orElseThrow());
-		assertTrue(result.isError());
-		assertEquals("Unknown tool: missing", ((TextContent) result.content().getFirst()).text());
+				agent.state.messages.stream().filter(ToolResultMessage.class::isInstance).findFirst().orElseThrow());
+		assertTrue(result.isError);
+		assertEquals("Unknown tool: missing", ((TextContent) result.content.getFirst()).text);
 	}
 
 	@Test
 	void compactsActiveContextIntoASummaryCheckpoint() throws Exception {
-		FauxProvider provider = new FauxProvider();
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("Initial response.")),
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("## Goal\nPreserve the important context."))));
-		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
-		agent.prompt("Explain the current project. ".repeat(100));
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("Initial response.")),
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("## Goal\nPreserve the important context."))));
+		Agent agent = CodingAgentOperations.newAgent("system", provider.models.getFirst(), provider);
+		CodingAgentOperations.prompt(agent, "Explain the current project. ".repeat(100));
 
-		CompactionResult result = agent.compact("Preserve the goal");
+		CompactionResult result = CodingAgentOperations.compact(agent, "Preserve the goal");
 
-		assertEquals(2, provider.state().callCount());
-		assertEquals("## Goal\nPreserve the important context.", result.summary());
-		assertEquals(1, agent.state().messages.size());
-		UserMessage checkpoint = assertInstanceOf(UserMessage.class, agent.state().messages.getFirst());
-		assertTrue(checkpoint.text().startsWith("[Conversation checkpoint]\n## Goal"));
-		assertTrue(result.estimatedTokensAfter() < result.tokensBefore());
+		assertEquals(2, CodingAgentOperations.fauxCallCount(provider));
+		assertEquals("## Goal\nPreserve the important context.", result.summary);
+		assertEquals(1, agent.state.messages.size());
+		UserMessage checkpoint = assertInstanceOf(UserMessage.class, agent.state.messages.getFirst());
+		assertTrue(CodingAgentOperations.text(checkpoint).startsWith("[Conversation checkpoint]\n## Goal"));
+		assertTrue(result.estimatedTokensAfter < result.tokensBefore);
 	}
 
 	@Test
 	void rejectsPromptsTriggeredWhileCompactionIsInProgress() throws Exception {
-		FauxProvider provider = new FauxProvider();
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("Initial response.")),
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("Checkpoint summary."))));
-		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
-		agent.prompt("initial prompt");
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("Initial response.")),
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("Checkpoint summary."))));
+		Agent agent = CodingAgentOperations.newAgent("system", provider.models.getFirst(), provider);
+		CodingAgentOperations.prompt(agent, "initial prompt");
 		AtomicReference<IllegalStateException> rejection = new AtomicReference<>();
-		agent.subscribe(event -> {
+		CodingAgentOperations.subscribe(agent, event -> {
 			if (event instanceof AgentEvent.CompactionStart) {
 				try {
-					agent.prompt("queued during compaction");
+					CodingAgentOperations.prompt(agent, "queued during compaction");
 				} catch (IllegalStateException error) {
 					rejection.set(error);
 				} catch (InterruptedException error) {
@@ -185,39 +164,39 @@ class AgentTest {
 			}
 		});
 
-		agent.compact(null);
+		CodingAgentOperations.compact(agent, null);
 
 		assertNotNull(rejection.get());
-		assertEquals(2, provider.state().callCount());
+		assertEquals(2, CodingAgentOperations.fauxCallCount(provider));
 	}
 
 	@Test
 	void sendsOnlyTheCheckpointAndNewPromptAfterManualCompaction() throws Exception {
-		FauxProvider provider = new FauxProvider();
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
 		AtomicReference<List<Message>> followUpRequest = new AtomicReference<>();
-		provider.setResponses(List.of(
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("Initial response.")),
-				new FauxProvider.ResponseStep.Message(FauxProvider.text("Checkpoint summary.")),
+		CodingAgentOperations.setFauxResponses(provider, List.of(
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("Initial response.")),
+				new FauxProvider.ResponseStep.Message(CodingAgentOperations.fauxText("Checkpoint summary.")),
 				new FauxProvider.ResponseStep.Factory(request -> {
-					followUpRequest.set(List.copyOf(request.context().messages));
-					return FauxProvider.text("Follow-up response.");
+					followUpRequest.set(List.copyOf(request.context.messages));
+					return CodingAgentOperations.fauxText("Follow-up response.");
 				})));
-		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
+		Agent agent = CodingAgentOperations.newAgent("system", provider.models.getFirst(), provider);
 
-		agent.prompt("PRE-COMPACTION-SENTINEL");
-		agent.compact(null);
-		agent.prompt("POST-COMPACTION-SENTINEL");
+		CodingAgentOperations.prompt(agent, "PRE-COMPACTION-SENTINEL");
+		CodingAgentOperations.compact(agent, null);
+		CodingAgentOperations.prompt(agent, "POST-COMPACTION-SENTINEL");
 
 		List<Message> messages = followUpRequest.get();
 		assertEquals(2, messages.size());
 		UserMessage checkpoint = assertInstanceOf(UserMessage.class, messages.getFirst());
-		assertEquals("[Conversation checkpoint]\nCheckpoint summary.", checkpoint.text());
+		assertEquals("[Conversation checkpoint]\nCheckpoint summary.", CodingAgentOperations.text(checkpoint));
 		UserMessage prompt = assertInstanceOf(UserMessage.class, messages.getLast());
-		assertEquals("POST-COMPACTION-SENTINEL", prompt.text());
+		assertEquals("POST-COMPACTION-SENTINEL", CodingAgentOperations.text(prompt));
 		assertFalse(messages.stream()
 				.filter(UserMessage.class::isInstance)
 				.map(UserMessage.class::cast)
-				.map(UserMessage::text)
+				.map(CodingAgentOperations::text)
 				.anyMatch(text -> text.contains("PRE-COMPACTION-SENTINEL")));
 	}
 }

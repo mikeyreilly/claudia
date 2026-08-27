@@ -1,41 +1,58 @@
 package com.quaxt.codingagent.ai.types;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Result of executing a tool call. `details` carries tool-specific structured
  * data that never goes to the model (rendered by UIs instead).
  */
-public record ToolResultMessage(
-		String toolCallId,
-		String toolName,
-		List<UserContent> content,
-		Object details,
-		boolean isError,
-		long timestamp)
-		implements Message {
-	public ToolResultMessage {
-		content = List.copyOf(content);
-	}
+public final class ToolResultMessage implements Message {
+	public String toolCallId;
+	public String toolName;
+	public List<UserContent> content;
+	public Object details;
+	public boolean isError;
+	public long timestamp;
 
-	public static ToolResultMessage text(String toolCallId, String toolName, String text, boolean isError) {
-		return new ToolResultMessage(
-				toolCallId, toolName, List.of(new TextContent(text)), null, isError, System.currentTimeMillis());
-	}
-
-	/** Concatenated text of all text blocks. */
-	public String text() {
-		StringBuilder sb = new StringBuilder();
-		for (UserContent block : content) {
-			if (block instanceof TextContent(String t, String ignored)) {
-				sb.append(t);
-			}
-		}
-		return sb.toString();
+	public ToolResultMessage(
+			String toolCallId,
+			String toolName,
+			List<UserContent> content,
+			Object details,
+			boolean isError,
+			long timestamp) {
+		this.toolCallId = toolCallId;
+		this.toolName = toolName;
+		this.content = content;
+		this.details = details;
+		this.isError = isError;
+		this.timestamp = timestamp;
 	}
 
 	@Override
-	public String role() {
-		return "toolResult";
+	public boolean equals(Object other) {
+		return other instanceof ToolResultMessage that
+				&& Objects.equals(toolCallId, that.toolCallId)
+				&& Objects.equals(toolName, that.toolName)
+				&& Objects.equals(content, that.content)
+				&& Objects.equals(details, that.details)
+				&& isError == that.isError
+				&& timestamp == that.timestamp;
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(toolCallId, toolName, content, details, isError, timestamp);
+	}
+
+	@Override
+	public String toString() {
+		return "ToolResultMessage[toolCallId=" + toolCallId
+				+ ", toolName=" + toolName
+				+ ", content=" + content
+				+ ", details=" + details
+				+ ", isError=" + isError
+				+ ", timestamp=" + timestamp + "]";
 	}
 }

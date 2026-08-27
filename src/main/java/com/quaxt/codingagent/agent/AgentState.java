@@ -14,19 +14,19 @@ public final class AgentState {
 	public String systemPrompt;
 	public Model model;
 	public ThinkingLevel thinkingLevel = ThinkingLevel.OFF;
-	public final List<AgentTool> tools = new ArrayList<>();
-	public final List<Message> messages = new ArrayList<>();
+	public List<AgentTool> tools = new ArrayList<>();
+	public List<Message> messages = new ArrayList<>();
 	public boolean isStreaming;
 	public AssistantMessage streamingMessage;
-	public final Set<String> pendingToolCalls = new LinkedHashSet<>();
+	public Set<String> pendingToolCalls = new LinkedHashSet<>();
 	public String errorMessage;
 	public boolean isCompacting;
 	public boolean autoCompactionEnabled = true;
 	public int compactionReserveTokens = 16_384;
 	public String compactionSummary;
 
-	AgentState(String systemPrompt, Model model) {
-		this.systemPrompt = systemPrompt == null ? "" : systemPrompt;
+	public AgentState(String systemPrompt, Model model) {
+		this.systemPrompt = systemPrompt;
 		this.model = model;
 	}
 }
