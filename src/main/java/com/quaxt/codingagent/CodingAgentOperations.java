@@ -253,57 +253,57 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	// ---------------------------------------------------------------- uuid
 
 	/** Generates a time-ordered UUIDv7 string. */
-//	public static String uuidv7() {
-//		byte[] random = new byte[16];
-//		Uuid.RANDOM.nextBytes(random);
-//		long timestampMs;
-//		long seq;
-//		synchronized (Uuid.class) {
-//			long now = System.currentTimeMillis();
-//			if (now > Uuid.lastTimestamp) {
-//				Uuid.sequence = ((random[6] & 0xFFL) << 24)
-//						| ((random[7] & 0xFFL) << 16)
-//						| ((random[8] & 0xFFL) << 8)
-//						| (random[9] & 0xFFL);
-//				Uuid.lastTimestamp = now;
-//			} else {
-//				Uuid.sequence = (Uuid.sequence + 1) & 0xFFFFFFFFL;
-//				if (Uuid.sequence == 0) {
-//					Uuid.lastTimestamp++;
-//				}
-//			}
-//			timestampMs = Uuid.lastTimestamp;
-//			seq = Uuid.sequence;
-//		}
-//
-//		byte[] bytes = new byte[16];
-//		bytes[0] = (byte) (timestampMs >>> 40);
-//		bytes[1] = (byte) (timestampMs >>> 32);
-//		bytes[2] = (byte) (timestampMs >>> 24);
-//		bytes[3] = (byte) (timestampMs >>> 16);
-//		bytes[4] = (byte) (timestampMs >>> 8);
-//		bytes[5] = (byte) timestampMs;
-//		bytes[6] = (byte) (0x70 | ((seq >>> 28) & 0x0F));
-//		bytes[7] = (byte) ((seq >>> 20) & 0xFF);
-//		bytes[8] = (byte) (0x80 | ((seq >>> 14) & 0x3F));
-//		bytes[9] = (byte) ((seq >>> 6) & 0xFF);
-//		bytes[10] = (byte) (((seq & 0x3F) << 2) | (random[10] & 0x03));
-//		bytes[11] = random[11];
-//		bytes[12] = random[12];
-//		bytes[13] = random[13];
-//		bytes[14] = random[14];
-//		bytes[15] = random[15];
-//
-//		StringBuilder sb = new StringBuilder(36);
-//		for (int i = 0; i < 16; i++) {
-//			if (i == 4 || i == 6 || i == 8 || i == 10) {
-//				sb.append('-');
-//			}
-//			sb.append(Character.forDigit((bytes[i] >> 4) & 0xF, 16));
-//			sb.append(Character.forDigit(bytes[i] & 0xF, 16));
-//		}
-//		return sb.toString();
-//	}
+	public static String uuidv7() {
+		byte[] random = new byte[16];
+		Uuid.RANDOM.nextBytes(random);
+		long timestampMs;
+		long seq;
+		synchronized (Uuid.class) {
+			long now = System.currentTimeMillis();
+			if (now > Uuid.lastTimestamp) {
+				Uuid.sequence = ((random[6] & 0xFFL) << 24)
+						| ((random[7] & 0xFFL) << 16)
+						| ((random[8] & 0xFFL) << 8)
+						| (random[9] & 0xFFL);
+				Uuid.lastTimestamp = now;
+			} else {
+				Uuid.sequence = (Uuid.sequence + 1) & 0xFFFFFFFFL;
+				if (Uuid.sequence == 0) {
+					Uuid.lastTimestamp++;
+				}
+			}
+			timestampMs = Uuid.lastTimestamp;
+			seq = Uuid.sequence;
+		}
+
+		byte[] bytes = new byte[16];
+		bytes[0] = (byte) (timestampMs >>> 40);
+		bytes[1] = (byte) (timestampMs >>> 32);
+		bytes[2] = (byte) (timestampMs >>> 24);
+		bytes[3] = (byte) (timestampMs >>> 16);
+		bytes[4] = (byte) (timestampMs >>> 8);
+		bytes[5] = (byte) timestampMs;
+		bytes[6] = (byte) (0x70 | ((seq >>> 28) & 0x0F));
+		bytes[7] = (byte) ((seq >>> 20) & 0xFF);
+		bytes[8] = (byte) (0x80 | ((seq >>> 14) & 0x3F));
+		bytes[9] = (byte) ((seq >>> 6) & 0xFF);
+		bytes[10] = (byte) (((seq & 0x3F) << 2) | (random[10] & 0x03));
+		bytes[11] = random[11];
+		bytes[12] = random[12];
+		bytes[13] = random[13];
+		bytes[14] = random[14];
+		bytes[15] = random[15];
+
+		StringBuilder sb = new StringBuilder(36);
+		for (int i = 0; i < 16; i++) {
+			if (i == 4 || i == 6 || i == 8 || i == 10) {
+				sb.append('-');
+			}
+			sb.append(Character.forDigit((bytes[i] >> 4) & 0xF, 16));
+			sb.append(Character.forDigit(bytes[i] & 0xF, 16));
+		}
+		return sb.toString();
+	}
 
 	// --------------------------------------------------------- abort signal
 
@@ -445,14 +445,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-//	/** Unix timestamp in milliseconds. */
-//	public static long timestamp(Message message) {
-//		return switch (message) {
-//			case UserMessage user -> user.timestamp;
-//			case AssistantMessage assistant -> assistant.timestamp;
-//			case ToolResultMessage result -> result.timestamp;
-//		};
-//	}
+	/** Unix timestamp in milliseconds. */
+	public static long timestamp(Message message) {
+		return switch (message) {
+			case UserMessage user -> user.timestamp;
+			case AssistantMessage assistant -> assistant.timestamp;
+			case ToolResultMessage result -> result.timestamp;
+		};
+	}
 
 	/** Concatenated text of all text blocks. */
 	public static String text(AssistantMessage message) {
@@ -654,14 +654,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
 	// ------------------------------------------------------------ wire enums
 
-//	public static StopReason stopReasonFromWire(String value) {
-//		for (StopReason reason : StopReason.values()) {
-//			if (reason.wire.equals(value)) {
-//				return reason;
-//			}
-//		}
-//		throw new IllegalArgumentException("Unknown stop reason: " + value);
-//	}
+	public static StopReason stopReasonFromWire(String value) {
+		for (StopReason reason : StopReason.values()) {
+			if (reason.wire.equals(value)) {
+				return reason;
+			}
+		}
+		throw new IllegalArgumentException("Unknown stop reason: " + value);
+	}
 
 	public static ThinkingLevel thinkingLevelFromWire(String value) {
 		for (ThinkingLevel level : ThinkingLevel.values()) {
@@ -674,30 +674,30 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
 	// ------------------------------------------------------------------ http
 
-//	public static ProxySelector proxySelectorFromEnv() {
-//		String httpsProxy = envAnyCase("https_proxy");
-//		String httpProxy = envAnyCase("http_proxy");
-//		if (httpsProxy.isEmpty() && httpProxy.isEmpty()) {
-//			return ProxySelector.getDefault();
-//		}
-//		String chosen = !httpsProxy.isEmpty() ? httpsProxy : httpProxy;
-//		try {
-//			URI proxyUri = URI.create(chosen);
-//			int port = proxyUri.getPort() != -1 ? proxyUri.getPort() : 80;
-//			return ProxySelector.of(new InetSocketAddress(proxyUri.getHost(), port));
-//		} catch (IllegalArgumentException e) {
-//			return ProxySelector.getDefault();
-//		}
-//	}
-//
-//	public static String envAnyCase(String key) {
-//		String lower = System.getenv(key.toLowerCase(Locale.ROOT));
-//		if (lower != null && !lower.isEmpty()) {
-//			return lower;
-//		}
-//		String upper = System.getenv(key.toUpperCase(Locale.ROOT));
-//		return upper != null ? upper : "";
-//	}
+	public static ProxySelector proxySelectorFromEnv() {
+		String httpsProxy = envAnyCase("https_proxy");
+		String httpProxy = envAnyCase("http_proxy");
+		if (httpsProxy.isEmpty() && httpProxy.isEmpty()) {
+			return ProxySelector.getDefault();
+		}
+		String chosen = !httpsProxy.isEmpty() ? httpsProxy : httpProxy;
+		try {
+			URI proxyUri = URI.create(chosen);
+			int port = proxyUri.getPort() != -1 ? proxyUri.getPort() : 80;
+			return ProxySelector.of(new InetSocketAddress(proxyUri.getHost(), port));
+		} catch (IllegalArgumentException e) {
+			return ProxySelector.getDefault();
+		}
+	}
+
+	public static String envAnyCase(String key) {
+		String lower = System.getenv(key.toLowerCase(Locale.ROOT));
+		if (lower != null && !lower.isEmpty()) {
+			return lower;
+		}
+		String upper = System.getenv(key.toUpperCase(Locale.ROOT));
+		return upper != null ? upper : "";
+	}
 
 	public static String httpErrorMessage(int status, String body) {
 		String trimmed = body == null ? "" : body.trim();
@@ -1852,22 +1852,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new ModelCatalog(Map.copyOf(models), Map.copyOf(immutableByProvider));
 	}
 
-//	/**
-//	 * Finds a model by its provider and id, returning null if it is absent. Use
-//	 * {@link #requireCatalogModel} when absence is a user-facing error.
-//	 */
-//	public static Model findCatalogModel(ModelCatalog catalog, String provider, String id) {
-//		return catalog.byProviderAndId.get(modelCatalogKey(provider, id));
-//	}
-//
-//	/** Finds a model or throws a clear error that includes the provider/id pair. */
-//	public static Model requireCatalogModel(ModelCatalog catalog, String provider, String id) {
-//		Model model = findCatalogModel(catalog, provider, id);
-//		if (model == null) {
-//			throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
-//		}
-//		return model;
-//	}
+	/**
+	 * Finds a model by its provider and id, returning null if it is absent. Use
+	 * {@link #requireCatalogModel} when absence is a user-facing error.
+	 */
+	public static Model findCatalogModel(ModelCatalog catalog, String provider, String id) {
+		return catalog.byProviderAndId.get(modelCatalogKey(provider, id));
+	}
+
+	/** Finds a model or throws a clear error that includes the provider/id pair. */
+	public static Model requireCatalogModel(ModelCatalog catalog, String provider, String id) {
+		Model model = findCatalogModel(catalog, provider, id);
+		if (model == null) {
+			throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
+		}
+		return model;
+	}
 
 	/** Returns every bundled model from a provider, preserving source-file order. */
 	public static List<Model> catalogModelsForProvider(ModelCatalog catalog, String provider) {
@@ -5949,13 +5949,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-//	/** Human-readable command line or URL this server connects to. */
-//	public static String mcpConfigTarget(McpServerConfig config) {
-//		return switch (config) {
-//			case McpServerConfig.Local local -> String.join(" ", local.command);
-//			case McpServerConfig.Remote remote -> remote.url.toString();
-//		};
-//	}
+	/** Human-readable command line or URL this server connects to. */
+	public static String mcpConfigTarget(McpServerConfig config) {
+		return switch (config) {
+			case McpServerConfig.Local local -> String.join(" ", local.command);
+			case McpServerConfig.Remote remote -> remote.url.toString();
+		};
+	}
 
 	/** Whether a result filter's glob pattern selects this raw MCP tool name. */
 	public static boolean mcpFilterMatches(McpResultFilter filter, String toolName) {
@@ -7412,73 +7412,73 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return manager;
 	}
 
-//	/** Whether the manager has no configured servers at all. */
-//	public static boolean mcpIsEmpty(McpManager manager) {
-//		return manager.servers.isEmpty();
-//	}
-//
-//	/** Snapshots every configured server, ordered by name. */
-//	public static List<McpManager.ServerStatus> mcpStatuses(McpManager manager) {
-//		return manager.servers.values().stream()
-//				.sorted(Comparator.comparing(runtime -> runtime.name))
-//				.map(CodingAgentOperations::mcpSnapshot)
-//				.toList();
-//	}
-//
-//	/** Snapshots one configured server. */
-//	public static McpManager.ServerStatus mcpStatus(McpManager manager, String name) {
-//		return mcpSnapshot(mcpRequireRuntime(manager, name));
-//	}
-//
-//	/** Whether this server is enabled for the current and future manager connections. */
-//	public static boolean mcpIsEnabled(McpManager manager, String name) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		synchronized (runtime.lock) {
-//			return runtime.enabled;
-//		}
-//	}
-//
-//	/**
-//	 * Returns the current tool catalog for a connected server, including tools
-//	 * disabled for this process. A disconnected server has no current catalog.
-//	 */
-//	public static List<McpManager.ToolStatus> mcpToolStatuses(McpManager manager, String serverName) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
-//		synchronized (runtime.lock) {
-//			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) return List.of();
-//			return runtime.tools.stream()
-//					.map(tool -> new McpManager.ToolStatus(
-//							runtime.name, tool.name, tool.description, !runtime.disabledTools.contains(tool.name)))
-//					.toList();
-//		}
-//	}
-//
-//	/**
-//	 * Enables a currently disabled tool or disables an enabled one without
-//	 * disconnecting its server. The runtime choice survives a later reconnect
-//	 * of that server.
-//	 */
-//	public static McpManager.ToolStatus mcpToggleTool(McpManager manager, String serverName, String toolName) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
-//		synchronized (runtime.lock) {
-//			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
-//				throw new IllegalStateException("MCP server is not connected: " + serverName);
-//			}
-//			McpClient.ToolDefinition definition = runtime.tools.stream()
-//					.filter(tool -> tool.name.equals(toolName))
-//					.findFirst()
-//					.orElseThrow(() -> new IllegalArgumentException(
-//							"MCP tool is not available from " + serverName + ": " + toolName));
-//			boolean enabled;
-//			if (runtime.disabledTools.remove(toolName)) {
-//				enabled = true;
-//			} else {
-//				runtime.disabledTools.add(toolName);
-//				enabled = false;
-//			}
-//			return new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
-//		}
-//	}
+	/** Whether the manager has no configured servers at all. */
+	public static boolean mcpIsEmpty(McpManager manager) {
+		return manager.servers.isEmpty();
+	}
+
+	/** Snapshots every configured server, ordered by name. */
+	public static List<McpManager.ServerStatus> mcpStatuses(McpManager manager) {
+		return manager.servers.values().stream()
+				.sorted(Comparator.comparing(runtime -> runtime.name))
+				.map(CodingAgentOperations::mcpSnapshot)
+				.toList();
+	}
+
+	/** Snapshots one configured server. */
+	public static McpManager.ServerStatus mcpStatus(McpManager manager, String name) {
+		return mcpSnapshot(mcpRequireRuntime(manager, name));
+	}
+
+	/** Whether this server is enabled for the current and future manager connections. */
+	public static boolean mcpIsEnabled(McpManager manager, String name) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+		synchronized (runtime.lock) {
+			return runtime.enabled;
+		}
+	}
+
+	/**
+	 * Returns the current tool catalog for a connected server, including tools
+	 * disabled for this process. A disconnected server has no current catalog.
+	 */
+	public static List<McpManager.ToolStatus> mcpToolStatuses(McpManager manager, String serverName) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
+		synchronized (runtime.lock) {
+			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) return List.of();
+			return runtime.tools.stream()
+					.map(tool -> new McpManager.ToolStatus(
+							runtime.name, tool.name, tool.description, !runtime.disabledTools.contains(tool.name)))
+					.toList();
+		}
+	}
+
+	/**
+	 * Enables a currently disabled tool or disables an enabled one without
+	 * disconnecting its server. The runtime choice survives a later reconnect
+	 * of that server.
+	 */
+	public static McpManager.ToolStatus mcpToggleTool(McpManager manager, String serverName, String toolName) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
+		synchronized (runtime.lock) {
+			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
+				throw new IllegalStateException("MCP server is not connected: " + serverName);
+			}
+			McpClient.ToolDefinition definition = runtime.tools.stream()
+					.filter(tool -> tool.name.equals(toolName))
+					.findFirst()
+					.orElseThrow(() -> new IllegalArgumentException(
+							"MCP tool is not available from " + serverName + ": " + toolName));
+			boolean enabled;
+			if (runtime.disabledTools.remove(toolName)) {
+				enabled = true;
+			} else {
+				runtime.disabledTools.add(toolName);
+				enabled = false;
+			}
+			return new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
+		}
+	}
 
 	/** Waits for all currently-starting configured servers. */
 	public static void mcpAwaitReady(McpManager manager) throws InterruptedException {
@@ -7502,36 +7502,36 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 //		if (thread != null) thread.join();
 //		return mcpSnapshot(runtime);
 //	}
-//
-//	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
-//	public static McpManager.ServerStatus mcpConnectServerAsync(McpManager manager, String name) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		mcpStartConnect(manager, runtime, true);
-//		return mcpSnapshot(runtime);
-//	}
-//
-//	/** Disconnects a server and marks it disabled; callers may persist that choice. */
-//	public static McpManager.ServerStatus mcpDisconnectServer(McpManager manager, String name) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		McpClient client;
-//		Thread connector;
-//		synchronized (runtime.lock) {
-//			runtime.generation++;
-//			connector = runtime.connector;
-//			runtime.connector = null;
-//			client = runtime.client;
-//			runtime.client = null;
-//			runtime.tools = List.of();
-//			runtime.enabled = false;
-//			runtime.state = McpManager.State.DISABLED;
-//			runtime.message = null;
-//			runtime.authorizationUrl = null;
-//		}
-//		if (connector != null) connector.interrupt();
-//		if (client != null) mcpCloseClient(client);
-//		return mcpSnapshot(runtime);
-//	}
-//
+
+	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
+	public static McpManager.ServerStatus mcpConnectServerAsync(McpManager manager, String name) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+		mcpStartConnect(manager, runtime, true);
+		return mcpSnapshot(runtime);
+	}
+
+	/** Disconnects a server and marks it disabled; callers may persist that choice. */
+	public static McpManager.ServerStatus mcpDisconnectServer(McpManager manager, String name) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+		McpClient client;
+		Thread connector;
+		synchronized (runtime.lock) {
+			runtime.generation++;
+			connector = runtime.connector;
+			runtime.connector = null;
+			client = runtime.client;
+			runtime.client = null;
+			runtime.tools = List.of();
+			runtime.enabled = false;
+			runtime.state = McpManager.State.DISABLED;
+			runtime.message = null;
+			runtime.authorizationUrl = null;
+		}
+		if (connector != null) connector.interrupt();
+		if (client != null) mcpCloseClient(client);
+		return mcpSnapshot(runtime);
+	}
+
 //	/** Connected/connecting means toggle off; disabled/failed means connect or retry. */
 //	public static McpManager.ServerStatus mcpToggleServer(McpManager manager, String name)
 //			throws InterruptedException {
@@ -7546,20 +7546,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 //				? mcpDisconnectServer(manager, name)
 //				: mcpConnectServer(manager, name);
 //	}
-//
-//	/** Asynchronous variant used by the full-screen selector. */
-//	public static McpManager.ServerStatus mcpToggleServerAsync(McpManager manager, String name) {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		McpManager.State state;
-//		synchronized (runtime.lock) {
-//			state = runtime.state;
-//		}
-//		return state == McpManager.State.CONNECTED
-//						|| state == McpManager.State.CONNECTING
-//						|| state == McpManager.State.AUTHENTICATING
-//				? mcpDisconnectServer(manager, name)
-//				: mcpConnectServerAsync(manager, name);
-//	}
+
+	/** Asynchronous variant used by the full-screen selector. */
+	public static McpManager.ServerStatus mcpToggleServerAsync(McpManager manager, String name) {
+		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+		McpManager.State state;
+		synchronized (runtime.lock) {
+			state = runtime.state;
+		}
+		return state == McpManager.State.CONNECTED
+						|| state == McpManager.State.CONNECTING
+						|| state == McpManager.State.AUTHENTICATING
+				? mcpDisconnectServer(manager, name)
+				: mcpConnectServerAsync(manager, name);
+	}
 
 	/** Returns the current model-visible tool adapters, with OpenCode-compatible names. */
 	public static List<AgentTool> mcpTools(McpManager manager) {
@@ -7721,26 +7721,26 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		});
 	}
 
-//	private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
-//		synchronized (runtime.lock) {
-//			int enabledToolCount =
-//					(int) runtime.tools.stream().filter(tool -> !runtime.disabledTools.contains(tool.name)).count();
-//			return new McpManager.ServerStatus(
-//					runtime.name,
-//					runtime.state,
-//					runtime.message,
-//					runtime.tools.size(),
-//					enabledToolCount,
-//					mcpConfigTarget(runtime.config),
-//					runtime.authorizationUrl);
-//		}
-//	}
-//
-//	private static McpManager.Runtime mcpRequireRuntime(McpManager manager, String name) {
-//		McpManager.Runtime runtime = manager.servers.get(name);
-//		if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
-//		return runtime;
-//	}
+	private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
+		synchronized (runtime.lock) {
+			int enabledToolCount =
+					(int) runtime.tools.stream().filter(tool -> !runtime.disabledTools.contains(tool.name)).count();
+			return new McpManager.ServerStatus(
+					runtime.name,
+					runtime.state,
+					runtime.message,
+					runtime.tools.size(),
+					enabledToolCount,
+					mcpConfigTarget(runtime.config),
+					runtime.authorizationUrl);
+		}
+	}
+
+	private static McpManager.Runtime mcpRequireRuntime(McpManager manager, String name) {
+		McpManager.Runtime runtime = manager.servers.get(name);
+		if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
+		return runtime;
+	}
 
 	private static String mcpErrorMessage(Exception error) {
 		String value = error.getMessage();
@@ -8955,44 +8955,44 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return output + ellipsis;
 	}
 
-//	/** Hard-wraps plain text to terminal cell width while preserving explicit blank lines. */
-//	public static List<String> wrapPlain(String value, int maximumWidth) {
-//		if (maximumWidth <= 0) {
-//			return List.of("");
-//		}
-//		String normalized = value.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
-//		List<String> lines = new ArrayList<>();
-//		for (String sourceLine : normalized.split("\n", -1)) {
-//			if (sourceLine.isEmpty()) {
-//				lines.add("");
-//				continue;
-//			}
-//			StringBuilder line = new StringBuilder();
-//			int width = 0;
-//			for (int index = 0; index < sourceLine.length(); ) {
-//				int codePoint = sourceLine.codePointAt(index);
-//				int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
-//				if (!line.isEmpty() && width + codePointWidth > maximumWidth) {
-//					lines.add(line.toString());
-//					line.setLength(0);
-//					width = 0;
-//				}
-//				line.appendCodePoint(codePoint);
-//				width += codePointWidth;
-//				index += Character.charCount(codePoint);
-//			}
-//			if (!line.isEmpty()) {
-//				lines.add(line.toString());
-//			}
-//		}
-//		return List.copyOf(lines);
-//	}
-//
-//	/** Wraps text in an OSC 8 hyperlink. */
-//	public static String hyperlink(String text, String url) {
-//		String safeUrl = url.replace("\u001b", "").replace("\u0007", "");
-//		return "\u001b]8;;" + safeUrl + "\u001b\\" + text + "\u001b]8;;\u001b\\";
-//	}
+	/** Hard-wraps plain text to terminal cell width while preserving explicit blank lines. */
+	public static List<String> wrapPlain(String value, int maximumWidth) {
+		if (maximumWidth <= 0) {
+			return List.of("");
+		}
+		String normalized = value.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
+		List<String> lines = new ArrayList<>();
+		for (String sourceLine : normalized.split("\n", -1)) {
+			if (sourceLine.isEmpty()) {
+				lines.add("");
+				continue;
+			}
+			StringBuilder line = new StringBuilder();
+			int width = 0;
+			for (int index = 0; index < sourceLine.length(); ) {
+				int codePoint = sourceLine.codePointAt(index);
+				int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+				if (!line.isEmpty() && width + codePointWidth > maximumWidth) {
+					lines.add(line.toString());
+					line.setLength(0);
+					width = 0;
+				}
+				line.appendCodePoint(codePoint);
+				width += codePointWidth;
+				index += Character.charCount(codePoint);
+			}
+			if (!line.isEmpty()) {
+				lines.add(line.toString());
+			}
+		}
+		return List.copyOf(lines);
+	}
+
+	/** Wraps text in an OSC 8 hyperlink. */
+	public static String hyperlink(String text, String url) {
+		String safeUrl = url.replace("\u001b", "").replace("\u0007", "");
+		return "\u001b]8;;" + safeUrl + "\u001b\\" + text + "\u001b]8;;\u001b\\";
+	}
 
 	public static String stripAnsi(String value) {
 		return TERMINAL_ANSI.matcher(value).replaceAll("");
@@ -10481,14 +10481,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/** Replaces the main-screen document and redraws it from the top. */
-//	public static void replaceScreen(InteractiveTerminal interactive, String document) {
-//		synchronized (interactive) {
-//			interactive.screenDocument.setLength(0);
-//			interactive.screenDocument.append(document == null ? "" : document);
-//			repaintScreen(interactive);
-//		}
-//	}
+	/** Replaces the main-screen document and redraws it from the top. */
+	public static void replaceScreen(InteractiveTerminal interactive, String document) {
+		synchronized (interactive) {
+			interactive.screenDocument.setLength(0);
+			interactive.screenDocument.append(document == null ? "" : document);
+			repaintScreen(interactive);
+		}
+	}
 
 	public static Theme terminalTheme(InteractiveTerminal interactive) {
 		return interactive.theme;
@@ -10498,27 +10498,27 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		interactive.theme = theme;
 	}
 
-//	/** Shows or updates the status bar pinned to the bottom terminal row. */
-//	public static void setStatus(InteractiveTerminal interactive, String left, String right) {
-//		setStatus(interactive, "", InteractiveTerminal.StatusAccent.NONE, left, right);
-//	}
-//
-//	/** Shows activity first so it remains visible when workspace/model details need truncation. */
-//	public static void setStatus(
-//			InteractiveTerminal interactive,
-//			String activity,
-//			InteractiveTerminal.StatusAccent accent,
-//			String left,
-//			String right) {
-//		synchronized (interactive) {
-//			interactive.statusActivity = activity == null ? "" : activity;
-//			interactive.statusAccent =
-//					accent == null ? InteractiveTerminal.StatusAccent.NONE : accent;
-//			interactive.statusLeft = left == null ? "" : left;
-//			interactive.statusRight = right == null ? "" : right;
-//			renderStatusBar(interactive);
-//		}
-//	}
+	/** Shows or updates the status bar pinned to the bottom terminal row. */
+	public static void setStatus(InteractiveTerminal interactive, String left, String right) {
+		setStatus(interactive, "", InteractiveTerminal.StatusAccent.NONE, left, right);
+	}
+
+	/** Shows activity first so it remains visible when workspace/model details need truncation. */
+	public static void setStatus(
+			InteractiveTerminal interactive,
+			String activity,
+			InteractiveTerminal.StatusAccent accent,
+			String left,
+			String right) {
+		synchronized (interactive) {
+			interactive.statusActivity = activity == null ? "" : activity;
+			interactive.statusAccent =
+					accent == null ? InteractiveTerminal.StatusAccent.NONE : accent;
+			interactive.statusLeft = left == null ? "" : left;
+			interactive.statusRight = right == null ? "" : right;
+			renderStatusBar(interactive);
+		}
+	}
 
 	private static void handleTerminalResize(InteractiveTerminal interactive, Terminal.Signal signal) {
 		if (interactive.previousResizeHandler != null
@@ -11137,16 +11137,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return activityStatus(phase, detail, 0, 0, nowNanos, 0);
 	}
 
-//	public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
-//		long delayNanos;
-//		try {
-//			delayNanos = Math.multiplyExact(Math.max(0, delayMs), 1_000_000L);
-//		} catch (ArithmeticException ignored) {
-//			delayNanos = Long.MAX_VALUE;
-//		}
-//		return activityStatus(
-//				ActivityStatus.Phase.RETRYING, "", attempt, maxAttempts, nowNanos, delayNanos);
-//	}
+	public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
+		long delayNanos;
+		try {
+			delayNanos = Math.multiplyExact(Math.max(0, delayMs), 1_000_000L);
+		} catch (ArithmeticException ignored) {
+			delayNanos = Long.MAX_VALUE;
+		}
+		return activityStatus(
+				ActivityStatus.Phase.RETRYING, "", attempt, maxAttempts, nowNanos, delayNanos);
+	}
 
 	/** Whether a repeated event describes the same phase and should retain its elapsed timer. */
 	public static boolean sameActivity(ActivityStatus status, ActivityStatus other) {
@@ -11187,14 +11187,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-//	public static InteractiveTerminal.StatusAccent activityAccent(ActivityStatus status) {
-//		return switch (status.phase) {
-//			case READY -> InteractiveTerminal.StatusAccent.READY;
-//			case NO_MODEL, RETRYING, STOPPING -> InteractiveTerminal.StatusAccent.WARNING;
-//			case RUNNING_TOOL -> InteractiveTerminal.StatusAccent.TOOL;
-//			default -> InteractiveTerminal.StatusAccent.ACTIVE;
-//		};
-//	}
+	public static InteractiveTerminal.StatusAccent activityAccent(ActivityStatus status) {
+		return switch (status.phase) {
+			case READY -> InteractiveTerminal.StatusAccent.READY;
+			case NO_MODEL, RETRYING, STOPPING -> InteractiveTerminal.StatusAccent.WARNING;
+			case RUNNING_TOOL -> InteractiveTerminal.StatusAccent.TOOL;
+			default -> InteractiveTerminal.StatusAccent.ACTIVE;
+		};
+	}
 
 	private static String activityBusyLabel(ActivityStatus status, String description, long nowNanos) {
 		return activitySpinner(status, nowNanos) + " " + description + " · "
@@ -11837,11 +11837,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		println(shell.terminal, "Forked session " + name + " with " + forkMessages.size() + " message(s).");
 	}
 
-//	public static String forkName(String currentSessionName) {
-//		return currentSessionName == null || currentSessionName.isBlank()
-//				? "fork"
-//				: currentSessionName.strip() + " fork";
-//	}
+	public static String forkName(String currentSessionName) {
+		return currentSessionName == null || currentSessionName.isBlank()
+				? "fork"
+				: currentSessionName.strip() + " fork";
+	}
 
 	private static void resumeShellSnapshot(
 			InteractiveShell shell, SessionStore store, SessionSnapshot session) throws IOException {
@@ -11910,29 +11910,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				+ " message(s) using " + model + ".");
 	}
 
-//	/** Rebuilds the visible transcript for a resumed session. */
-//	public static String renderSessionScreen(
-//			Model model, List<Message> messages, boolean hideThinking, Theme theme) {
-//		StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
-//		Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
-//		for (Message message : messages) {
-//			if (message instanceof ToolResultMessage result) toolResults.put(result.toolCallId, result);
-//		}
-//		Set<String> renderedToolResults = new HashSet<>();
-//		for (Message message : messages) {
-//			switch (message) {
-//				case UserMessage user -> screen.append('\n')
-//						.append(promptArea(theme, "> " + text(user)))
-//						.append('\n');
-//				case AssistantMessage assistant -> appendSessionAssistant(
-//						screen, assistant, hideThinking, theme, toolResults, renderedToolResults);
-//				case ToolResultMessage result -> {
-//					if (renderedToolResults.add(result.toolCallId)) appendSessionToolResult(screen, result);
-//				}
-//			}
-//		}
-//		return screen.toString();
-//	}
+	/** Rebuilds the visible transcript for a resumed session. */
+	public static String renderSessionScreen(
+			Model model, List<Message> messages, boolean hideThinking, Theme theme) {
+		StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
+		Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
+		for (Message message : messages) {
+			if (message instanceof ToolResultMessage result) toolResults.put(result.toolCallId, result);
+		}
+		Set<String> renderedToolResults = new HashSet<>();
+		for (Message message : messages) {
+			switch (message) {
+				case UserMessage user -> screen.append('\n')
+						.append(promptArea(theme, "> " + text(user)))
+						.append('\n');
+				case AssistantMessage assistant -> appendSessionAssistant(
+						screen, assistant, hideThinking, theme, toolResults, renderedToolResults);
+				case ToolResultMessage result -> {
+					if (renderedToolResults.add(result.toolCallId)) appendSessionToolResult(screen, result);
+				}
+			}
+		}
+		return screen.toString();
+	}
 
 	private static String sessionScreenHeader(Model model) {
 		StringBuilder header = new StringBuilder("codingagent ").append(Cli.VERSION);
@@ -11945,76 +11945,76 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return header.toString();
 	}
 
-//	private static void appendSessionAssistant(
-//			StringBuilder screen,
-//			AssistantMessage assistant,
-//			boolean hideThinking,
-//			Theme theme,
-//			Map<String, ToolResultMessage> toolResults,
-//			Set<String> renderedToolResults) {
-//		for (AssistantContent content : assistant.content) {
-//			if (content instanceof ThinkingContent thinking) {
-//				if (!hideThinking && !thinking.thinking.isBlank()) {
-//					screen.append("\n").append(theme.muted).append("Thinking:").append(theme.reset).append('\n');
-//					screen.append(theme.muted).append(thinking.thinking).append(theme.reset).append('\n');
-//				}
-//			} else if (content instanceof TextContent text) {
-//				screen.append(text.text).append('\n');
-//			} else if (content instanceof ToolCall call) {
-//				screen.append("\n[")
-//						.append(call.name)
-//						.append("] ")
-//						.append(toolCallDescription(call.name, call.arguments))
-//						.append('\n');
-//				ToolResultMessage result = toolResults.get(call.id);
-//				if (result != null) {
-//					renderedToolResults.add(result.toolCallId);
-//					appendSessionToolResult(screen, result);
-//				}
-//			}
-//		}
-//		if (assistant.errorMessage != null) {
-//			screen.append("Error: ").append(assistant.errorMessage).append('\n');
-//		}
-//	}
-//
-//	private static void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
-//		screen.append("  ")
-//				.append(result.isError ? "Error" : "Done")
-//				.append(": ")
-//				.append(toolResultSummary(result.toolName, text(result), result.isError))
-//				.append('\n');
-//	}
-//
-//	/** Drops failed turns and synthesizes results for tool calls that never completed. */
-//	public static List<Message> resumableMessages(List<Message> messages) {
-//		List<Message> result = new ArrayList<>();
-//		Map<String, String> pendingToolCalls = new LinkedHashMap<>();
-//		for (Message message : messages) {
-//			if (message instanceof AssistantMessage assistant) {
-//				appendMissingToolResults(result, pendingToolCalls);
-//				if (assistant.stopReason == StopReason.ERROR || assistant.stopReason == StopReason.ABORTED) continue;
-//				toolCalls(assistant).forEach(call -> pendingToolCalls.put(call.id, call.name));
-//				result.add(message);
-//			} else if (message instanceof ToolResultMessage toolResult) {
-//				if (pendingToolCalls.remove(toolResult.toolCallId) != null) result.add(message);
-//			} else {
-//				appendMissingToolResults(result, pendingToolCalls);
-//				result.add(message);
-//			}
-//		}
-//		appendMissingToolResults(result, pendingToolCalls);
-//		return List.copyOf(result);
-//	}
-//
-//	private static void appendMissingToolResults(
-//			List<Message> messages, Map<String, String> pendingToolCalls) {
-//		for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
-//			messages.add(toolResultMessage(
-//					toolCall.getKey(), toolCall.getValue(), "No result provided", true));
-//		}
-//		pendingToolCalls.clear();
-//	}
+	private static void appendSessionAssistant(
+			StringBuilder screen,
+			AssistantMessage assistant,
+			boolean hideThinking,
+			Theme theme,
+			Map<String, ToolResultMessage> toolResults,
+			Set<String> renderedToolResults) {
+		for (AssistantContent content : assistant.content) {
+			if (content instanceof ThinkingContent thinking) {
+				if (!hideThinking && !thinking.thinking.isBlank()) {
+					screen.append("\n").append(theme.muted).append("Thinking:").append(theme.reset).append('\n');
+					screen.append(theme.muted).append(thinking.thinking).append(theme.reset).append('\n');
+				}
+			} else if (content instanceof TextContent text) {
+				screen.append(text.text).append('\n');
+			} else if (content instanceof ToolCall call) {
+				screen.append("\n[")
+						.append(call.name)
+						.append("] ")
+						.append(toolCallDescription(call.name, call.arguments))
+						.append('\n');
+				ToolResultMessage result = toolResults.get(call.id);
+				if (result != null) {
+					renderedToolResults.add(result.toolCallId);
+					appendSessionToolResult(screen, result);
+				}
+			}
+		}
+		if (assistant.errorMessage != null) {
+			screen.append("Error: ").append(assistant.errorMessage).append('\n');
+		}
+	}
+
+	private static void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
+		screen.append("  ")
+				.append(result.isError ? "Error" : "Done")
+				.append(": ")
+				.append(toolResultSummary(result.toolName, text(result), result.isError))
+				.append('\n');
+	}
+
+	/** Drops failed turns and synthesizes results for tool calls that never completed. */
+	public static List<Message> resumableMessages(List<Message> messages) {
+		List<Message> result = new ArrayList<>();
+		Map<String, String> pendingToolCalls = new LinkedHashMap<>();
+		for (Message message : messages) {
+			if (message instanceof AssistantMessage assistant) {
+				appendMissingToolResults(result, pendingToolCalls);
+				if (assistant.stopReason == StopReason.ERROR || assistant.stopReason == StopReason.ABORTED) continue;
+				toolCalls(assistant).forEach(call -> pendingToolCalls.put(call.id, call.name));
+				result.add(message);
+			} else if (message instanceof ToolResultMessage toolResult) {
+				if (pendingToolCalls.remove(toolResult.toolCallId) != null) result.add(message);
+			} else {
+				appendMissingToolResults(result, pendingToolCalls);
+				result.add(message);
+			}
+		}
+		appendMissingToolResults(result, pendingToolCalls);
+		return List.copyOf(result);
+	}
+
+	private static void appendMissingToolResults(
+			List<Message> messages, Map<String, String> pendingToolCalls) {
+		for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
+			messages.add(toolResultMessage(
+					toolCall.getKey(), toolCall.getValue(), "No result provided", true));
+		}
+		pendingToolCalls.clear();
+	}
 
 	private static SelectItem<SessionSnapshot> sessionSelectItem(SessionSnapshot session) {
 		String message = abbreviateShellText(sessionDisplayName(session).replaceAll("[\\p{Cntrl}]", " "), 90);
@@ -12038,11 +12038,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return emittedText ? null : text(response);
 	}
 
-//	private static String formatRetryDelay(long delayMs) {
-//		if (delayMs < 1_000) return delayMs + "ms";
-//		if (delayMs % 1_000 == 0) return delayMs / 1_000 + "s";
-//		return String.format(Locale.ROOT, "%.1fs", delayMs / 1_000.0);
-//	}
+	private static String formatRetryDelay(long delayMs) {
+		if (delayMs < 1_000) return delayMs + "ms";
+		if (delayMs % 1_000 == 0) return delayMs / 1_000 + "s";
+		return String.format(Locale.ROOT, "%.1fs", delayMs / 1_000.0);
+	}
 
 	private static String formatSessionAge(Instant instant) {
 		long minutes = Math.max(0, Duration.between(instant, Instant.now()).toMinutes());
@@ -12082,20 +12082,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		syncShellMcpTools(shell);
 	}
 
-//	private static void persistShellMcpChange(InteractiveShell shell, McpSelector.Change change) {
-//		try {
-//			if (change.toolName != null) {
-//				setSettingsMcpToolEnabled(
-//						shell.settingsStore, change.serverName, change.toolName, change.enabled);
-//			} else {
-//				setSettingsMcpServerEnabled(shell.settingsStore, change.serverName, change.enabled);
-//			}
-//		} catch (IOException error) {
-//			throw new UncheckedIOException(error);
-//		} finally {
-//			syncShellMcpTools(shell);
-//		}
-//	}
+	private static void persistShellMcpChange(InteractiveShell shell, McpSelector.Change change) {
+		try {
+			if (change.toolName != null) {
+				setSettingsMcpToolEnabled(
+						shell.settingsStore, change.serverName, change.toolName, change.enabled);
+			} else {
+				setSettingsMcpServerEnabled(shell.settingsStore, change.serverName, change.enabled);
+			}
+		} catch (IOException error) {
+			throw new UncheckedIOException(error);
+		} finally {
+			syncShellMcpTools(shell);
+		}
+	}
 
 	private static void selectShellSettings(InteractiveShell shell) throws IOException {
 		if (shell.agent == null) {
@@ -12146,28 +12146,28 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-//	private static List<Model> shellSelectableModels(InteractiveShell shell) {
-//		List<Model> models = new ArrayList<>();
-//		for (Model model : allCatalogModels(shell.providers.catalog)) {
-//			if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-//				models.add(model);
-//			}
-//		}
-//		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-//		try {
-//			if (gitHubCopilotHasCredential(copilot.auth)) {
-//				println(shell.terminal, "Refreshing GitHub Copilot models...");
-//				models.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
-//			} else {
-//				models.addAll(copilot.models);
-//			}
-//		} catch (IOException error) {
-//			println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
-//			models.addAll(copilot.models);
-//		}
-//		models.addAll(shellChatGptProvider(shell).models);
-//		return List.copyOf(models);
-//	}
+	private static List<Model> shellSelectableModels(InteractiveShell shell) {
+		List<Model> models = new ArrayList<>();
+		for (Model model : allCatalogModels(shell.providers.catalog)) {
+			if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+				models.add(model);
+			}
+		}
+		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+		try {
+			if (gitHubCopilotHasCredential(copilot.auth)) {
+				println(shell.terminal, "Refreshing GitHub Copilot models...");
+				models.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
+			} else {
+				models.addAll(copilot.models);
+			}
+		} catch (IOException error) {
+			println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
+			models.addAll(copilot.models);
+		}
+		models.addAll(shellChatGptProvider(shell).models);
+		return List.copyOf(models);
+	}
 
 	private static void configureShellModel(InteractiveShell shell, Model model, boolean persistModel)
 			throws IOException {
@@ -12192,29 +12192,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	private static void configureShellAgent(
-//			InteractiveShell shell,
-//			Model model,
-//			Path configuredCwd,
-//			SessionRecorder nextRecorder,
-//			String nextSessionName) {
-//		Provider provider = requireCoreProvider(shell.providers, model.provider);
-//		Agent configured = newAgent(shell.arguments.systemPrompt, model, provider);
-//		configured.apiKey = shell.arguments.apiKey;
-//		configured.state.thinkingLevel =
-//				initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
-//		configureBuiltInTools(configured, configuredCwd, shell.arguments.systemPrompt);
-//		configured.state.tools.addAll(mcpTools(shell.mcp));
-//		subscribe(configured, event -> onShellAgentEvent(shell, event));
-//		shell.cwd = configuredCwd.toAbsolutePath().normalize();
-//		shell.agent = configured;
-//		shell.recorder = nextRecorder;
-//		shell.sessionName = nextSessionName;
-//		if (shell.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
-//			setShellActivity(shell, readyActivity(System.nanoTime()));
-//		}
-//		refreshShellStatus(shell);
-//	}
+	private static void configureShellAgent(
+			InteractiveShell shell,
+			Model model,
+			Path configuredCwd,
+			SessionRecorder nextRecorder,
+			String nextSessionName) {
+		Provider provider = requireCoreProvider(shell.providers, model.provider);
+		Agent configured = newAgent(shell.arguments.systemPrompt, model, provider);
+		configured.apiKey = shell.arguments.apiKey;
+		configured.state.thinkingLevel =
+				initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
+		configureBuiltInTools(configured, configuredCwd, shell.arguments.systemPrompt);
+		configured.state.tools.addAll(mcpTools(shell.mcp));
+		subscribe(configured, event -> onShellAgentEvent(shell, event));
+		shell.cwd = configuredCwd.toAbsolutePath().normalize();
+		shell.agent = configured;
+		shell.recorder = nextRecorder;
+		shell.sessionName = nextSessionName;
+		if (shell.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
+			setShellActivity(shell, readyActivity(System.nanoTime()));
+		}
+		refreshShellStatus(shell);
+	}
 
 	/** Updates cached workspace/model details, then redraws the live activity status. */
 	private static void refreshShellStatus(InteractiveShell shell) {
@@ -12279,29 +12279,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return trimmed;
 	}
 
-//	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
-//	public static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
-//		StringBuilder status = new StringBuilder(model.name);
-//		if (level != null && level != ThinkingLevel.OFF) {
-//			status.append(' ').append(shellThinkingLabel(level));
-//		}
-//		long percent = model.contextWindow > 0
-//				? Math.max(0, Math.round(100.0 * contextTokens / model.contextWindow))
-//				: 0;
-//		return status.append(" (").append(percent).append("%)").toString();
-//	}
-//
-//	private static String shellThinkingLabel(ThinkingLevel level) {
-//		return switch (level) {
-//			case OFF -> "Off";
-//			case MINIMAL -> "Minimal";
-//			case LOW -> "Low";
-//			case MEDIUM -> "Medium";
-//			case HIGH -> "High";
-//			case XHIGH -> "XHigh";
-//			case MAX -> "Max";
-//		};
-//	}
+	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
+	public static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
+		StringBuilder status = new StringBuilder(model.name);
+		if (level != null && level != ThinkingLevel.OFF) {
+			status.append(' ').append(shellThinkingLabel(level));
+		}
+		long percent = model.contextWindow > 0
+				? Math.max(0, Math.round(100.0 * contextTokens / model.contextWindow))
+				: 0;
+		return status.append(" (").append(percent).append("%)").toString();
+	}
+
+	private static String shellThinkingLabel(ThinkingLevel level) {
+		return switch (level) {
+			case OFF -> "Off";
+			case MINIMAL -> "Minimal";
+			case LOW -> "Low";
+			case MEDIUM -> "Medium";
+			case HIGH -> "High";
+			case XHIGH -> "XHigh";
+			case MAX -> "Max";
+		};
+	}
 
 	/** Context tokens consumed by the most recent successful assistant response. */
 	public static long contextTokens(List<Message> messages) {
@@ -12319,49 +12319,49 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return 0;
 	}
 
-//	/** Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}. */
-//	public static String displayPath(Path home, Path cwd) {
-//		Path absolute = cwd.toAbsolutePath().normalize();
-//		if (home != null && !home.toString().isEmpty()) {
-//			Path absoluteHome = home.toAbsolutePath().normalize();
-//			if (absolute.startsWith(absoluteHome)) {
-//				String relative = absoluteHome.relativize(absolute).toString().replace('\\', '/');
-//				return relative.isEmpty() ? "~" : "~/" + relative;
-//			}
-//		}
-//		return absolute.toString();
-//	}
-//
-//	/** Reads the checked-out branch (or short detached commit) without spawning git. */
-//	public static String gitBranch(Path directory) {
-//		try {
-//			for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
-//				Path gitPath = current.resolve(".git");
-//				if (Files.isRegularFile(gitPath)) {
-//					// Worktree or submodule: .git is a file pointing at the real git dir.
-//					String content = Files.readString(gitPath).trim();
-//					if (!content.startsWith("gitdir:")) return null;
-//					return readGitHead(current.resolve(content.substring("gitdir:".length()).trim()).normalize());
-//				}
-//				if (Files.isDirectory(gitPath)) return readGitHead(gitPath);
-//			}
-//		} catch (IOException | InvalidPathException ignored) {
-//			// A missing or unreadable repository simply hides the branch segment.
-//		}
-//		return null;
-//	}
-//
-//	private static String readGitHead(Path gitDir) throws IOException {
-//		Path head = gitDir.resolve("HEAD");
-//		if (!Files.isRegularFile(head)) return null;
-//		String content = Files.readString(head).trim();
-//		if (content.startsWith("ref:")) {
-//			String ref = content.substring("ref:".length()).trim();
-//			return ref.startsWith("refs/heads/") ? ref.substring("refs/heads/".length()) : ref;
-//		}
-//		if (content.isEmpty()) return null;
-//		return content.length() > 7 ? content.substring(0, 7) : content;
-//	}
+	/** Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}. */
+	public static String displayPath(Path home, Path cwd) {
+		Path absolute = cwd.toAbsolutePath().normalize();
+		if (home != null && !home.toString().isEmpty()) {
+			Path absoluteHome = home.toAbsolutePath().normalize();
+			if (absolute.startsWith(absoluteHome)) {
+				String relative = absoluteHome.relativize(absolute).toString().replace('\\', '/');
+				return relative.isEmpty() ? "~" : "~/" + relative;
+			}
+		}
+		return absolute.toString();
+	}
+
+	/** Reads the checked-out branch (or short detached commit) without spawning git. */
+	public static String gitBranch(Path directory) {
+		try {
+			for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
+				Path gitPath = current.resolve(".git");
+				if (Files.isRegularFile(gitPath)) {
+					// Worktree or submodule: .git is a file pointing at the real git dir.
+					String content = Files.readString(gitPath).trim();
+					if (!content.startsWith("gitdir:")) return null;
+					return readGitHead(current.resolve(content.substring("gitdir:".length()).trim()).normalize());
+				}
+				if (Files.isDirectory(gitPath)) return readGitHead(gitPath);
+			}
+		} catch (IOException | InvalidPathException ignored) {
+			// A missing or unreadable repository simply hides the branch segment.
+		}
+		return null;
+	}
+
+	private static String readGitHead(Path gitDir) throws IOException {
+		Path head = gitDir.resolve("HEAD");
+		if (!Files.isRegularFile(head)) return null;
+		String content = Files.readString(head).trim();
+		if (content.startsWith("ref:")) {
+			String ref = content.substring("ref:".length()).trim();
+			return ref.startsWith("refs/heads/") ? ref.substring("refs/heads/".length()) : ref;
+		}
+		if (content.isEmpty()) return null;
+		return content.length() > 7 ? content.substring(0, 7) : content;
+	}
 
 	private static void syncShellMcpTools(InteractiveShell shell) {
 		if (shell.agent == null || shell.agent.state.isStreaming) return;
@@ -12383,10 +12383,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return findModelIn(models, shell.settings.defaultProvider, shell.settings.defaultModel);
 	}
 
-//	/** Clamps the configured (or default) thinking level to what the model supports. */
-//	public static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
-//		return clampThinkingLevel(model, configuredLevel == null ? ThinkingLevel.MEDIUM : configuredLevel);
-//	}
+	/** Clamps the configured (or default) thinking level to what the model supports. */
+	public static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
+		return clampThinkingLevel(model, configuredLevel == null ? ThinkingLevel.MEDIUM : configuredLevel);
+	}
 
 	public static Model preferredCopilotModel(List<Model> models) {
 		for (Model model : models) {
@@ -12471,153 +12471,153 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		else println(shell.terminal, status);
 	}
 
-//	private static void onShellAgentEvent(InteractiveShell shell, AgentEvent event) {
-//		switch (event) {
-//			case AgentEvent.AgentStart ignored -> setShellActivity(
-//					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-//			case AgentEvent.AgentEnd ignored -> setShellActivity(shell, readyActivity(System.nanoTime()));
-//			case AgentEvent.InstructionLoaded loaded -> {
-//				finishShellStreamOutput(shell);
-//				println(shell.terminal, instructionLoadedMessage(loaded.path));
-//			}
-//			case AgentEvent.CompactionStart ignored -> setShellActivity(
-//					shell, activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
-//			case AgentEvent.CompactionEnd end -> {
-//				persistShellCompaction(shell, end.result);
-//				if (shell.agent != null && shell.agent.state.isStreaming) {
-//					setShellActivity(
-//							shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-//				} else {
-//					setShellActivity(shell, readyActivity(System.nanoTime()));
-//				}
-//				refreshShellStatus(shell);
-//			}
-//			case AgentEvent.TurnStart ignored -> setShellActivity(
-//					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-//			case AgentEvent.MessageUpdate update -> onShellMessageUpdate(shell, update.providerEvent);
-//			case AgentEvent.MessageEnd end -> {
-//				if (end.message instanceof AssistantMessage) {
-//					finishShellStreamOutput(shell);
-//					refreshShellStatus(shell);
-//				}
-//			}
-//			case AgentEvent.AutoRetryStart retry -> {
-//				setShellActivity(shell, retryingActivity(
-//						retry.attempt, retry.maxAttempts, retry.delayMs, System.nanoTime()));
-//				finishShellStreamOutput(shell);
-//				println(shell.terminal, "\nTransient provider error; retrying in "
-//						+ formatRetryDelay(retry.delayMs)
-//						+ " (" + retry.attempt + "/" + retry.maxAttempts + "): "
-//						+ retry.errorMessage);
-//			}
-//			case AgentEvent.ToolExecutionStart start -> {
-//				setShellActivity(shell, activeActivity(
-//						ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
-//				finishShellStreamOutput(shell);
-//				println(shell.terminal, "\n[" + start.toolName + "] "
-//						+ toolCallDescription(start.toolName, start.arguments));
-//			}
-//			case AgentEvent.ToolExecutionEnd end -> {
-//				String label = end.result.isError ? "Error" : "Done";
-//				println(shell.terminal, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
-//			}
-//			default -> {
-//				// Turn-end and low-level update events do not change the presentation phase.
-//			}
-//		}
-//	}
-//
-//	/** Saves every successful manual or automatic compaction as a resume boundary. */
-//	private static void persistShellCompaction(InteractiveShell shell, CompactionResult result) {
-//		if (shell.recorder == null) return;
-//		try {
-//			appendSessionCompaction(shell.recorder, result);
-//		} catch (IOException error) {
-//			// The live agent state has already been compacted. Keep the turn usable,
-//			// but make the loss of the resume boundary visible to the user.
-//			println(shell.terminal, "Warning: compacted context could not be saved for resume: " + error.getMessage());
-//		}
-//	}
-//
-//	private static void onShellMessageUpdate(InteractiveShell shell, AssistantMessageEvent event) {
-//		updateShellStreamingActivity(shell, event);
-//		Theme theme = terminalTheme(shell.terminal);
-//		switch (event) {
-//			case AssistantMessageEvent.ThinkingStart ignored -> {
-//				if (!shell.hideThinkingBlock) {
-//					finishShellStreamOutput(shell);
-//					print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-//					shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
-//					shell.streamedThinkingCharacters = 0;
-//				}
-//			}
-//			case AssistantMessageEvent.ThinkingDelta delta -> {
-//				if (!shell.hideThinkingBlock) {
-//					if (shell.streamOutput != InteractiveShell.StreamOutput.THINKING) {
-//						print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-//						shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
-//						shell.streamedThinkingCharacters = 0;
-//					}
-//					print(shell.terminal, theme.muted + delta.delta + theme.reset);
-//					shell.streamedThinkingCharacters += delta.delta.length();
-//				}
-//			}
-//			case AssistantMessageEvent.ThinkingEnd end -> {
-//				if (!shell.hideThinkingBlock
-//						&& shell.streamOutput == InteractiveShell.StreamOutput.THINKING) {
-//					if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-//						print(shell.terminal, theme.muted + end.content + theme.reset);
-//					}
-//					finishShellStreamOutput(shell);
-//				}
-//			}
-//			case AssistantMessageEvent.TextStart ignored -> {
-//				finishShellStreamOutput(shell);
-//				shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
-//			}
-//			case AssistantMessageEvent.TextDelta delta -> {
-//				if (shell.streamOutput != InteractiveShell.StreamOutput.TEXT) {
-//					finishShellStreamOutput(shell);
-//					shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
-//				}
-//				print(shell.terminal, delta.delta);
-//				shell.emittedText = true;
-//			}
-//			case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput(shell);
-//			default -> {
-//				// Tool-call argument streaming is rendered once execution starts.
-//			}
-//		}
-//	}
-//
-//	private static void updateShellStreamingActivity(
-//			InteractiveShell shell, AssistantMessageEvent event) {
-//		long now = System.nanoTime();
-//		switch (event) {
-//			case AssistantMessageEvent.ThinkingStart ignored -> setShellActivity(
-//					shell, activeActivity(ActivityStatus.Phase.REASONING, now));
-//			case AssistantMessageEvent.TextStart ignored -> setShellActivity(
-//					shell, activeActivity(ActivityStatus.Phase.RESPONDING, now));
-//			case AssistantMessageEvent.ToolCallStart start -> setShellActivity(shell, activeActivity(
-//					ActivityStatus.Phase.PREPARING_TOOL,
-//					streamedToolName(start.contentIndex, start.partial),
-//					now));
-//			case AssistantMessageEvent.ToolCallEnd end -> setShellActivity(shell, activeActivity(
-//					ActivityStatus.Phase.PREPARING_TOOL, end.toolCall.name, now));
-//			default -> {
-//				// End events retain the current phase until another block or AgentEnd.
-//			}
-//		}
-//	}
-//
-//	private static String streamedToolName(int contentIndex, AssistantMessage message) {
-//		if (contentIndex >= 0
-//				&& contentIndex < message.content.size()
-//				&& message.content.get(contentIndex) instanceof ToolCall call) {
-//			return call.name;
-//		}
-//		return "";
-//	}
+	private static void onShellAgentEvent(InteractiveShell shell, AgentEvent event) {
+		switch (event) {
+			case AgentEvent.AgentStart ignored -> setShellActivity(
+					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+			case AgentEvent.AgentEnd ignored -> setShellActivity(shell, readyActivity(System.nanoTime()));
+			case AgentEvent.InstructionLoaded loaded -> {
+				finishShellStreamOutput(shell);
+				println(shell.terminal, instructionLoadedMessage(loaded.path));
+			}
+			case AgentEvent.CompactionStart ignored -> setShellActivity(
+					shell, activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
+			case AgentEvent.CompactionEnd end -> {
+				persistShellCompaction(shell, end.result);
+				if (shell.agent != null && shell.agent.state.isStreaming) {
+					setShellActivity(
+							shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+				} else {
+					setShellActivity(shell, readyActivity(System.nanoTime()));
+				}
+				refreshShellStatus(shell);
+			}
+			case AgentEvent.TurnStart ignored -> setShellActivity(
+					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+			case AgentEvent.MessageUpdate update -> onShellMessageUpdate(shell, update.providerEvent);
+			case AgentEvent.MessageEnd end -> {
+				if (end.message instanceof AssistantMessage) {
+					finishShellStreamOutput(shell);
+					refreshShellStatus(shell);
+				}
+			}
+			case AgentEvent.AutoRetryStart retry -> {
+				setShellActivity(shell, retryingActivity(
+						retry.attempt, retry.maxAttempts, retry.delayMs, System.nanoTime()));
+				finishShellStreamOutput(shell);
+				println(shell.terminal, "\nTransient provider error; retrying in "
+						+ formatRetryDelay(retry.delayMs)
+						+ " (" + retry.attempt + "/" + retry.maxAttempts + "): "
+						+ retry.errorMessage);
+			}
+			case AgentEvent.ToolExecutionStart start -> {
+				setShellActivity(shell, activeActivity(
+						ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
+				finishShellStreamOutput(shell);
+				println(shell.terminal, "\n[" + start.toolName + "] "
+						+ toolCallDescription(start.toolName, start.arguments));
+			}
+			case AgentEvent.ToolExecutionEnd end -> {
+				String label = end.result.isError ? "Error" : "Done";
+				println(shell.terminal, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
+			}
+			default -> {
+				// Turn-end and low-level update events do not change the presentation phase.
+			}
+		}
+	}
+
+	/** Saves every successful manual or automatic compaction as a resume boundary. */
+	private static void persistShellCompaction(InteractiveShell shell, CompactionResult result) {
+		if (shell.recorder == null) return;
+		try {
+			appendSessionCompaction(shell.recorder, result);
+		} catch (IOException error) {
+			// The live agent state has already been compacted. Keep the turn usable,
+			// but make the loss of the resume boundary visible to the user.
+			println(shell.terminal, "Warning: compacted context could not be saved for resume: " + error.getMessage());
+		}
+	}
+
+	private static void onShellMessageUpdate(InteractiveShell shell, AssistantMessageEvent event) {
+		updateShellStreamingActivity(shell, event);
+		Theme theme = terminalTheme(shell.terminal);
+		switch (event) {
+			case AssistantMessageEvent.ThinkingStart ignored -> {
+				if (!shell.hideThinkingBlock) {
+					finishShellStreamOutput(shell);
+					print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+					shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+					shell.streamedThinkingCharacters = 0;
+				}
+			}
+			case AssistantMessageEvent.ThinkingDelta delta -> {
+				if (!shell.hideThinkingBlock) {
+					if (shell.streamOutput != InteractiveShell.StreamOutput.THINKING) {
+						print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+						shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+						shell.streamedThinkingCharacters = 0;
+					}
+					print(shell.terminal, theme.muted + delta.delta + theme.reset);
+					shell.streamedThinkingCharacters += delta.delta.length();
+				}
+			}
+			case AssistantMessageEvent.ThinkingEnd end -> {
+				if (!shell.hideThinkingBlock
+						&& shell.streamOutput == InteractiveShell.StreamOutput.THINKING) {
+					if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
+						print(shell.terminal, theme.muted + end.content + theme.reset);
+					}
+					finishShellStreamOutput(shell);
+				}
+			}
+			case AssistantMessageEvent.TextStart ignored -> {
+				finishShellStreamOutput(shell);
+				shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+			}
+			case AssistantMessageEvent.TextDelta delta -> {
+				if (shell.streamOutput != InteractiveShell.StreamOutput.TEXT) {
+					finishShellStreamOutput(shell);
+					shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+				}
+				print(shell.terminal, delta.delta);
+				shell.emittedText = true;
+			}
+			case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput(shell);
+			default -> {
+				// Tool-call argument streaming is rendered once execution starts.
+			}
+		}
+	}
+
+	private static void updateShellStreamingActivity(
+			InteractiveShell shell, AssistantMessageEvent event) {
+		long now = System.nanoTime();
+		switch (event) {
+			case AssistantMessageEvent.ThinkingStart ignored -> setShellActivity(
+					shell, activeActivity(ActivityStatus.Phase.REASONING, now));
+			case AssistantMessageEvent.TextStart ignored -> setShellActivity(
+					shell, activeActivity(ActivityStatus.Phase.RESPONDING, now));
+			case AssistantMessageEvent.ToolCallStart start -> setShellActivity(shell, activeActivity(
+					ActivityStatus.Phase.PREPARING_TOOL,
+					streamedToolName(start.contentIndex, start.partial),
+					now));
+			case AssistantMessageEvent.ToolCallEnd end -> setShellActivity(shell, activeActivity(
+					ActivityStatus.Phase.PREPARING_TOOL, end.toolCall.name, now));
+			default -> {
+				// End events retain the current phase until another block or AgentEnd.
+			}
+		}
+	}
+
+	private static String streamedToolName(int contentIndex, AssistantMessage message) {
+		if (contentIndex >= 0
+				&& contentIndex < message.content.size()
+				&& message.content.get(contentIndex) instanceof ToolCall call) {
+			return call.name;
+		}
+		return "";
+	}
 
 	private static void finishShellStreamOutput(InteractiveShell shell) {
 		if (shell.streamOutput != InteractiveShell.StreamOutput.NONE) {
@@ -12626,62 +12626,62 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/** One-line description of the work a tool call is about to perform. */
-//	public static String toolCallDescription(String toolName, ObjectNode arguments) {
-//		return switch (toolName) {
-//			case "read" -> {
-//				int offset = arguments.path("offset").asInt(1);
-//				int limit = arguments.path("limit").asInt();
-//				yield "Reading " + toolTextArgument(arguments, "path", ".")
-//						+ (limit > 0 ? " (lines " + offset + "-" + (offset + limit - 1) + ")" : " (from line " + offset + ")");
-//			}
-//			case "write" -> "Writing " + toolTextArgument(arguments, "path", ".") + " (" + toolTextArgument(arguments, "content", "").length() + " characters)";
-//			case "edit" -> "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
-//			case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
-//			case "grep" -> "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-//			case "find" -> "Finding " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-//			case "ls" -> "Listing " + toolTextArgument(arguments, "path", ".");
-//			default -> abbreviateShellText(arguments.toString(), 240);
-//		};
-//	}
-//
-//	/** One-line summary of a completed tool result. */
-//	public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
-//		return toolResultSummary(toolName, toolResultContentText(result.content), result.isError);
-//	}
-//
-//	private static String toolResultSummary(String toolName, String output, boolean error) {
-//		if (output.isBlank()) {
-//			return error ? "Tool failed without an error message." : "Completed.";
-//		}
-//		if (toolName.equals("read") && !error) {
-//			return "Read " + output.lines().count() + " line(s).";
-//		}
-//		return abbreviateShellText(output, error ? 480 : 320);
-//	}
-//
-//	private static String toolResultContentText(List<UserContent> content) {
-//		StringBuilder text = new StringBuilder();
-//		for (UserContent block : content) {
-//			if (block instanceof TextContent value) {
-//				if (!text.isEmpty()) {
-//					text.append('\n');
-//				}
-//				text.append(value.text);
-//			}
-//		}
-//		return text.toString();
-//	}
-//
-//	private static String toolTextArgument(ObjectNode arguments, String name, String fallback) {
-//		JsonNode value = arguments.get(name);
-//		return value != null && value.isTextual() ? value.asText() : fallback;
-//	}
-//
-//	private static String abbreviateShellText(String value, int maximumLength) {
-//		String normalized = value.replaceAll("\\s+", " ").trim();
-//		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
-//	}
+	/** One-line description of the work a tool call is about to perform. */
+	public static String toolCallDescription(String toolName, ObjectNode arguments) {
+		return switch (toolName) {
+			case "read" -> {
+				int offset = arguments.path("offset").asInt(1);
+				int limit = arguments.path("limit").asInt();
+				yield "Reading " + toolTextArgument(arguments, "path", ".")
+						+ (limit > 0 ? " (lines " + offset + "-" + (offset + limit - 1) + ")" : " (from line " + offset + ")");
+			}
+			case "write" -> "Writing " + toolTextArgument(arguments, "path", ".") + " (" + toolTextArgument(arguments, "content", "").length() + " characters)";
+			case "edit" -> "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
+			case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
+			case "grep" -> "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
+			case "find" -> "Finding " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
+			case "ls" -> "Listing " + toolTextArgument(arguments, "path", ".");
+			default -> abbreviateShellText(arguments.toString(), 240);
+		};
+	}
+
+	/** One-line summary of a completed tool result. */
+	public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
+		return toolResultSummary(toolName, toolResultContentText(result.content), result.isError);
+	}
+
+	private static String toolResultSummary(String toolName, String output, boolean error) {
+		if (output.isBlank()) {
+			return error ? "Tool failed without an error message." : "Completed.";
+		}
+		if (toolName.equals("read") && !error) {
+			return "Read " + output.lines().count() + " line(s).";
+		}
+		return abbreviateShellText(output, error ? 480 : 320);
+	}
+
+	private static String toolResultContentText(List<UserContent> content) {
+		StringBuilder text = new StringBuilder();
+		for (UserContent block : content) {
+			if (block instanceof TextContent value) {
+				if (!text.isEmpty()) {
+					text.append('\n');
+				}
+				text.append(value.text);
+			}
+		}
+		return text.toString();
+	}
+
+	private static String toolTextArgument(ObjectNode arguments, String name, String fallback) {
+		JsonNode value = arguments.get(name);
+		return value != null && value.isTextual() ? value.asText() : fallback;
+	}
+
+	private static String abbreviateShellText(String value, int maximumLength) {
+		String normalized = value.replaceAll("\\s+", " ").trim();
+		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
+	}
 
 	// ------------------------------------------------------------- rpc server
 
@@ -12789,157 +12789,157 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	private static void promptRpc(RpcServer server, String id, ObjectNode command)
-//			throws InterruptedException, IOException {
-//		JsonNode message = command.get("message");
-//		if (message == null || !message.isTextual() || message.asText().isBlank()) {
-//			throw new IllegalArgumentException("prompt requires a non-empty string message");
-//		}
-//		mcpAwaitReady(server.mcp);
-//		syncRpcMcpTools(server);
-//		List<Message> messages = prompt(server.agent, message.asText());
-//		if (server.recorder != null) appendSessionMessages(server.recorder, messages);
-//		respondRpc(id, "prompt", true, null, null);
-//	}
-//
-//	private static void setRpcModel(RpcServer server, String id, ObjectNode command) throws IOException {
-//		String provider = requiredRpcText(command, "provider");
-//		String modelId = requiredRpcText(command, "modelId");
-//		Model model = requireCatalogModel(server.providers.catalog, provider, modelId);
-//		resetRpcAgent(server, model);
-//		respondRpc(id, "set_model", true, Json.MAPPER.valueToTree(model), null);
-//	}
-//
-//	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
-//		Provider provider = requireCoreProvider(server.providers, model.provider);
-//		server.agent = newAgent(server.arguments.systemPrompt, model, provider);
-//		server.agent.apiKey = server.arguments.apiKey;
-//		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
-//		server.agent.state.tools.addAll(mcpTools(server.mcp));
-//		subscribe(server.agent, event -> onRpcAgentEvent(server, event));
-//		server.recorder = server.arguments.noSession
-//				? null
-//				: createSessionRecorder(defaultSessionStore(), Path.of("."), model.provider, model.id);
-//	}
-//
-//	private static void syncRpcMcpTools(RpcServer server) {
-//		server.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
-//		server.agent.state.tools.addAll(mcpTools(server.mcp));
-//	}
-//
-//	private static Model resolveRpcModel(CoreProviders providers, String providerArg, String modelArg) {
-//		if (modelArg == null) {
-//			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
-//		}
-//		if (modelArg.contains("/")) {
-//			String[] parts = modelArg.split("/", 2);
-//			if (providerArg != null && !providerArg.equals(parts[0])) {
-//				throw new IllegalArgumentException("--provider conflicts with the provider in --model");
-//			}
-//			return requireCatalogModel(providers.catalog, parts[0], parts[1]);
-//		}
-//		if (providerArg == null) {
-//			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
-//		}
-//		return requireCatalogModel(providers.catalog, providerArg, modelArg);
-//	}
-//
-//	private static ObjectNode rpcState(RpcServer server) {
-//		ObjectNode data = jsonObject();
-//		data.set("model", Json.MAPPER.valueToTree(server.agent.state.model));
-//		data.put("isStreaming", server.agent.state.isStreaming);
-//		data.put("isCompacting", server.agent.state.isCompacting);
-//		data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
-//		data.put("messageCount", server.agent.state.messages.size());
-//		data.put("sessionId", server.recorder == null ? "" : server.recorder.sessionId);
-//		return data;
-//	}
-//
-//	private static void onRpcAgentEvent(RpcServer server, AgentEvent event) {
-//		ObjectNode node = jsonObject();
-//		switch (event) {
-//			case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
-//			case AgentEvent.AgentEnd end -> {
-//				node.put("type", "agent_settled");
-//				node.put("messageCount", end.newMessages.size());
-//			}
-//			case AgentEvent.InstructionLoaded loaded -> {
-//				node.put("type", "instruction_loaded");
-//				node.put("path", loaded.path.toString());
-//			}
-//			case AgentEvent.CompactionStart start -> {
-//				node.put("type", "compaction_start");
-//				node.put("tokensBefore", start.tokensBefore);
-//			}
-//			case AgentEvent.CompactionEnd end -> {
-//				persistRpcCompaction(server, end.result);
-//				node.put("type", "compaction_end");
-//				node.put("tokensBefore", end.result.tokensBefore);
-//				node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
-//			}
-//			case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
-//			case AgentEvent.TurnEnd end -> {
-//				node.put("type", "turn_end");
-//				node.put("toolResultCount", end.toolResults.size());
-//			}
-//			case AgentEvent.AutoRetryStart retry -> {
-//				node.put("type", "auto_retry_start");
-//				node.put("attempt", retry.attempt);
-//				node.put("maxAttempts", retry.maxAttempts);
-//				node.put("delayMs", retry.delayMs);
-//				node.put("error", retry.errorMessage);
-//			}
-//			case AgentEvent.AutoRetryEnd retry -> {
-//				node.put("type", "auto_retry_end");
-//				node.put("success", retry.success);
-//				node.put("attempt", retry.attempt);
-//				if (retry.finalError != null) node.put("error", retry.finalError);
-//			}
-//			case AgentEvent.MessageStart start -> {
-//				node.put("type", "message_start");
-//				node.put("role", role(start.message));
-//			}
-//			case AgentEvent.MessageEnd end -> {
-//				node.put("type", "message_end");
-//				node.put("role", role(end.message));
-//				if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
-//			}
-//			case AgentEvent.MessageUpdate update -> {
-//				if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
-//					node.put("type", "message_update");
-//					node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
-//				} else return;
-//			}
-//			case AgentEvent.ToolExecutionStart start -> {
-//				node.put("type", "tool_execution_start");
-//				node.put("toolCallId", start.toolCallId);
-//				node.put("toolName", start.toolName);
-//				node.set("arguments", start.arguments);
-//			}
-//			case AgentEvent.ToolExecutionUpdate ignored -> {
-//				return;
-//			}
-//			case AgentEvent.ToolExecutionEnd end -> {
-//				node.put("type", "tool_execution_end");
-//				node.put("toolCallId", end.toolCallId);
-//				node.put("toolName", end.toolName);
-//				node.put("isError", end.result.isError);
-//			}
-//		}
-//		outputRpc(node);
-//	}
-//
-//	/** Saves every successful manual or automatic compaction as a resume boundary. */
-//	private static void persistRpcCompaction(RpcServer server, CompactionResult result) {
-//		if (server.recorder == null) return;
-//		try {
-//			appendSessionCompaction(server.recorder, result);
-//		} catch (IOException error) {
-//			// Never contaminate the JSONL protocol on stdout. The live state remains
-//			// valid even if its append-only resume marker could not be written.
-//			System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
-//		}
-//	}
+	private static void promptRpc(RpcServer server, String id, ObjectNode command)
+			throws InterruptedException, IOException {
+		JsonNode message = command.get("message");
+		if (message == null || !message.isTextual() || message.asText().isBlank()) {
+			throw new IllegalArgumentException("prompt requires a non-empty string message");
+		}
+		mcpAwaitReady(server.mcp);
+		syncRpcMcpTools(server);
+		List<Message> messages = prompt(server.agent, message.asText());
+		if (server.recorder != null) appendSessionMessages(server.recorder, messages);
+		respondRpc(id, "prompt", true, null, null);
+	}
+
+	private static void setRpcModel(RpcServer server, String id, ObjectNode command) throws IOException {
+		String provider = requiredRpcText(command, "provider");
+		String modelId = requiredRpcText(command, "modelId");
+		Model model = requireCatalogModel(server.providers.catalog, provider, modelId);
+		resetRpcAgent(server, model);
+		respondRpc(id, "set_model", true, Json.MAPPER.valueToTree(model), null);
+	}
+
+	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
+		Provider provider = requireCoreProvider(server.providers, model.provider);
+		server.agent = newAgent(server.arguments.systemPrompt, model, provider);
+		server.agent.apiKey = server.arguments.apiKey;
+		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
+		server.agent.state.tools.addAll(mcpTools(server.mcp));
+		subscribe(server.agent, event -> onRpcAgentEvent(server, event));
+		server.recorder = server.arguments.noSession
+				? null
+				: createSessionRecorder(defaultSessionStore(), Path.of("."), model.provider, model.id);
+	}
+
+	private static void syncRpcMcpTools(RpcServer server) {
+		server.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
+		server.agent.state.tools.addAll(mcpTools(server.mcp));
+	}
+
+	private static Model resolveRpcModel(CoreProviders providers, String providerArg, String modelArg) {
+		if (modelArg == null) {
+			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
+		}
+		if (modelArg.contains("/")) {
+			String[] parts = modelArg.split("/", 2);
+			if (providerArg != null && !providerArg.equals(parts[0])) {
+				throw new IllegalArgumentException("--provider conflicts with the provider in --model");
+			}
+			return requireCatalogModel(providers.catalog, parts[0], parts[1]);
+		}
+		if (providerArg == null) {
+			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
+		}
+		return requireCatalogModel(providers.catalog, providerArg, modelArg);
+	}
+
+	private static ObjectNode rpcState(RpcServer server) {
+		ObjectNode data = jsonObject();
+		data.set("model", Json.MAPPER.valueToTree(server.agent.state.model));
+		data.put("isStreaming", server.agent.state.isStreaming);
+		data.put("isCompacting", server.agent.state.isCompacting);
+		data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
+		data.put("messageCount", server.agent.state.messages.size());
+		data.put("sessionId", server.recorder == null ? "" : server.recorder.sessionId);
+		return data;
+	}
+
+	private static void onRpcAgentEvent(RpcServer server, AgentEvent event) {
+		ObjectNode node = jsonObject();
+		switch (event) {
+			case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
+			case AgentEvent.AgentEnd end -> {
+				node.put("type", "agent_settled");
+				node.put("messageCount", end.newMessages.size());
+			}
+			case AgentEvent.InstructionLoaded loaded -> {
+				node.put("type", "instruction_loaded");
+				node.put("path", loaded.path.toString());
+			}
+			case AgentEvent.CompactionStart start -> {
+				node.put("type", "compaction_start");
+				node.put("tokensBefore", start.tokensBefore);
+			}
+			case AgentEvent.CompactionEnd end -> {
+				persistRpcCompaction(server, end.result);
+				node.put("type", "compaction_end");
+				node.put("tokensBefore", end.result.tokensBefore);
+				node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
+			}
+			case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
+			case AgentEvent.TurnEnd end -> {
+				node.put("type", "turn_end");
+				node.put("toolResultCount", end.toolResults.size());
+			}
+			case AgentEvent.AutoRetryStart retry -> {
+				node.put("type", "auto_retry_start");
+				node.put("attempt", retry.attempt);
+				node.put("maxAttempts", retry.maxAttempts);
+				node.put("delayMs", retry.delayMs);
+				node.put("error", retry.errorMessage);
+			}
+			case AgentEvent.AutoRetryEnd retry -> {
+				node.put("type", "auto_retry_end");
+				node.put("success", retry.success);
+				node.put("attempt", retry.attempt);
+				if (retry.finalError != null) node.put("error", retry.finalError);
+			}
+			case AgentEvent.MessageStart start -> {
+				node.put("type", "message_start");
+				node.put("role", role(start.message));
+			}
+			case AgentEvent.MessageEnd end -> {
+				node.put("type", "message_end");
+				node.put("role", role(end.message));
+				if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
+			}
+			case AgentEvent.MessageUpdate update -> {
+				if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
+					node.put("type", "message_update");
+					node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
+				} else return;
+			}
+			case AgentEvent.ToolExecutionStart start -> {
+				node.put("type", "tool_execution_start");
+				node.put("toolCallId", start.toolCallId);
+				node.put("toolName", start.toolName);
+				node.set("arguments", start.arguments);
+			}
+			case AgentEvent.ToolExecutionUpdate ignored -> {
+				return;
+			}
+			case AgentEvent.ToolExecutionEnd end -> {
+				node.put("type", "tool_execution_end");
+				node.put("toolCallId", end.toolCallId);
+				node.put("toolName", end.toolName);
+				node.put("isError", end.result.isError);
+			}
+		}
+		outputRpc(node);
+	}
+
+	/** Saves every successful manual or automatic compaction as a resume boundary. */
+	private static void persistRpcCompaction(RpcServer server, CompactionResult result) {
+		if (server.recorder == null) return;
+		try {
+			appendSessionCompaction(server.recorder, result);
+		} catch (IOException error) {
+			// Never contaminate the JSONL protocol on stdout. The live state remains
+			// valid even if its append-only resume marker could not be written.
+			System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
+		}
+	}
 
 	private static void respondRpc(
 			String id, String command, boolean success, JsonNode data, String error) {
@@ -12953,328 +12953,328 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		outputRpc(response);
 	}
 
-//	private static String requiredRpcText(ObjectNode command, String field) {
-//		JsonNode value = command.get(field);
-//		if (value == null || !value.isTextual() || value.asText().isBlank()) {
-//			throw new IllegalArgumentException(field + " must be a non-empty string");
-//		}
-//		return value.asText();
-//	}
+	private static String requiredRpcText(ObjectNode command, String field) {
+		JsonNode value = command.get(field);
+		if (value == null || !value.isTextual() || value.asText().isBlank()) {
+			throw new IllegalArgumentException(field + " must be a non-empty string");
+		}
+		return value.asText();
+	}
 
 	private static synchronized void outputRpc(ObjectNode node) {
 		System.out.println(node);
 		System.out.flush();
 	}
 
-//	// ----------------------------------------------------------- mcp selector
-//
-//	/**
-//	 * Creates the MCP server/tool selector. Every applied change is passed to
-//	 * {@code onChange}, which reports a failed save with UncheckedIOException.
-//	 */
-//	public static McpSelector newMcpSelector(McpManager manager, Consumer<McpSelector.Change> onChange) {
-//		McpSelector selector = new McpSelector();
-//		selector.manager = manager;
-//		selector.onChange = onChange;
-//		selector.names = mcpStatuses(manager).stream().map(status -> status.name).toList();
-//		selector.filtered = selector.names;
-//		return selector;
-//	}
-//
-//	/** Binds a selector carrier to the full-screen host. */
-//	public static TuiComponent<Void> mcpSelectorComponent(McpSelector selector) {
-//		return new TuiComponent<>(
-//				frame -> renderMcpSelector(selector, frame.width, frame.height, frame.theme),
-//				input -> handleMcpSelectorInput(selector, input),
-//				() -> selector.complete,
-//				() -> null);
-//	}
-//
-//	public static List<String> renderMcpSelector(McpSelector selector, int width, int height, Theme theme) {
-//		if (selector.view == McpSelector.View.TOOLS) refreshMcpSelectorTools(selector);
-//
-//		List<String> lines = new ArrayList<>();
-//		String title = selector.view == McpSelector.View.SERVERS
-//				? "MCP Servers"
-//				: "MCP Tools: " + selector.toolServer;
-//		lines.add(theme.heading + truncatePlain(title, width) + theme.reset);
-//		lines.add("");
-//		String before = selector.query.substring(0, selector.queryCursor);
-//		String after = selector.query.substring(selector.queryCursor);
-//		lines.add(truncatePlain("Search: " + before + "|" + after, width));
-//		lines.add("");
-//		selector.optionStartRow = lines.size();
-//		selector.visibleCount = Math.max(1, Math.min(10, height - 9));
-//		int itemCount = mcpSelectorItemCount(selector);
-//		selector.visibleStart = Math.max(0, Math.min(
-//				selector.selectedIndex - selector.visibleCount / 2,
-//				Math.max(0, itemCount - selector.visibleCount)));
-//		int end = Math.min(itemCount, selector.visibleStart + selector.visibleCount);
-//		if (itemCount == 0) {
-//			String empty = selector.view == McpSelector.View.SERVERS
-//					? "  No matching servers"
-//					: "  No tools available";
-//			lines.add(theme.muted + empty + theme.reset);
-//		} else {
-//			for (int index = selector.visibleStart; index < end; index++) {
-//				String row = (index == selector.selectedIndex ? "> " : "  ")
-//						+ mcpSelectorStatusLine(selector, index);
-//				row = truncatePlain(row, width);
-//				lines.add(index == selector.selectedIndex ? theme.heading + row + theme.reset : row);
-//			}
-//			if (selector.visibleStart > 0 || end < itemCount) {
-//				lines.add(theme.muted + "  " + (selector.selectedIndex + 1) + "/" + itemCount + theme.reset);
-//			}
-//		}
-//		lines.add("");
-//		String detail = selector.changeError == null ? mcpSelectorDetail(selector) : selector.changeError;
-//		if (detail != null) {
-//			String style = selector.changeError == null ? theme.muted : warningStatus(theme);
-//			lines.add(style + truncatePlain("  " + detail, width) + theme.reset);
-//		}
-//		if (selector.view == McpSelector.View.SERVERS && !selector.filtered.isEmpty()) {
-//			McpManager.ServerStatus selected =
-//					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
-//			if (selected.authorizationUrl != null) {
-//				String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, width - 2));
-//				String link = hyperlink(label, selected.authorizationUrl);
-//				lines.add(theme.muted + "  " + link + theme.reset);
-//			}
-//		}
-//		String hint = selector.view == McpSelector.View.SERVERS
-//				? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
-//				: "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
-//		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
-//		return lines;
-//	}
-//
-//	private static int mcpSelectorItemCount(McpSelector selector) {
-//		return selector.view == McpSelector.View.SERVERS
-//				? selector.filtered.size()
-//				: selector.filteredTools.size();
-//	}
-//
-//	private static String mcpSelectorStatusLine(McpSelector selector, int index) {
-//		return selector.view == McpSelector.View.SERVERS
-//				? mcpServerStatusLine(mcpStatus(selector.manager, selector.filtered.get(index)))
-//				: mcpToolStatusLine(selector.filteredTools.get(index));
-//	}
-//
-//	private static String mcpServerStatusLine(McpManager.ServerStatus status) {
-//		return switch (status.state) {
-//			case CONNECTING -> "⋯ " + status.name + "  Connecting";
-//			case AUTHENTICATING -> "⋯ " + status.name + "  Waiting for OAuth";
-//			case AUTH_REQUIRED -> "! " + status.name + "  Authentication required";
-//			case CONNECTED -> "✓ " + status.name + "  Enabled · " + mcpServerToolCount(status);
-//			case DISABLED -> "○ " + status.name + "  Disabled";
-//			case FAILED -> "✗ " + status.name + "  Failed";
-//		};
-//	}
-//
-//	private static String mcpServerToolCount(McpManager.ServerStatus status) {
-//		if (status.enabledToolCount == status.toolCount) return status.toolCount + " tool(s)";
-//		return status.enabledToolCount + "/" + status.toolCount + " tool(s)";
-//	}
-//
-//	private static String mcpToolStatusLine(McpManager.ToolStatus status) {
-//		return (status.enabled ? "✓ " : "○ ") + status.name + "  " + (status.enabled ? "Enabled" : "Disabled");
-//	}
-//
-//	private static String mcpSelectorDetail(McpSelector selector) {
-//		if (selector.view == McpSelector.View.SERVERS) {
-//			if (selector.filtered.isEmpty()) return null;
-//			McpManager.ServerStatus selected =
-//					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
-//			return selected.message == null ? selected.target : selected.message;
-//		}
-//		if (selector.filteredTools.isEmpty()) return null;
-//		String description = selector.filteredTools.get(selector.selectedIndex).description;
-//		return description.isBlank() ? "No description" : description;
-//	}
-//
-//	public static void handleMcpSelectorInput(McpSelector selector, TuiInput input) {
-//		switch (input) {
-//			case TuiInput.Key key -> handleMcpSelectorKey(selector, key);
-//			case TuiInput.Mouse mouse -> handleMcpSelectorMouse(selector, mouse);
-//			case TuiInput.Resize ignored -> {}
-//		}
-//	}
-//
-//	private static void handleMcpSelectorKey(McpSelector selector, TuiInput.Key key) {
-//		switch (key.type) {
-//			case UP -> moveMcpSelector(selector, -1);
-//			case DOWN -> moveMcpSelector(selector, 1);
-//			case PAGE_UP -> moveMcpSelector(selector, -Math.max(1, selector.visibleCount));
-//			case PAGE_DOWN -> moveMcpSelector(selector, Math.max(1, selector.visibleCount));
-//			case ENTER -> toggleMcpSelectorItem(selector);
-//			case TAB -> toggleMcpSelectorView(selector);
-//			case ESCAPE, CANCEL -> {
-//				if (selector.view == McpSelector.View.TOOLS) closeMcpSelectorTools(selector);
-//				else selector.complete = true;
-//			}
-//			case CHARACTER, PASTE -> insertMcpSelectorQuery(selector, key.text);
-//			case BACKSPACE -> backspaceMcpSelectorQuery(selector);
-//			case DELETE -> deleteMcpSelectorQuery(selector);
-//			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
-//			case RIGHT -> selector.queryCursor = Math.min(selector.query.length(), selector.queryCursor + 1);
-//			case HOME -> selector.queryCursor = 0;
-//			case END -> selector.queryCursor = selector.query.length();
-//			case CLEAR -> {
-//				selector.query.setLength(0);
-//				selector.queryCursor = 0;
-//				filterMcpSelector(selector);
-//			}
-//			default -> {}
-//		}
-//	}
-//
-//	private static void handleMcpSelectorMouse(McpSelector selector, TuiInput.Mouse mouse) {
-//		switch (mouse.action) {
-//			case SCROLL_UP -> moveMcpSelector(selector, -1);
-//			case SCROLL_DOWN -> moveMcpSelector(selector, 1);
-//			case PRESS -> {
-//				int offset = mouse.y - 1 - selector.optionStartRow;
-//				int index = selector.visibleStart + offset;
-//				if (mouse.button == 0
-//						&& offset >= 0
-//						&& offset < selector.visibleCount
-//						&& index < mcpSelectorItemCount(selector)) {
-//					selector.selectedIndex = index;
-//				}
-//			}
-//			default -> {}
-//		}
-//	}
-//
-//	private static void toggleMcpSelectorItem(McpSelector selector) {
-//		if (selector.view == McpSelector.View.SERVERS) {
-//			if (selector.filtered.isEmpty()) return;
-//			McpManager.ServerStatus status = mcpToggleServerAsync(
-//					selector.manager, selector.filtered.get(selector.selectedIndex));
-//			notifyMcpSelectorChange(selector, new McpSelector.Change(
-//					status.name, null, mcpIsEnabled(selector.manager, status.name)));
-//		} else {
-//			toggleMcpSelectorTool(selector);
-//		}
-//	}
-//
-//	private static void toggleMcpSelectorTool(McpSelector selector) {
-//		refreshMcpSelectorTools(selector);
-//		if (selector.filteredTools.isEmpty()) return;
-//		try {
-//			McpManager.ToolStatus status = mcpToggleTool(
-//					selector.manager,
-//					selector.toolServer,
-//					selector.filteredTools.get(selector.selectedIndex).name);
-//			notifyMcpSelectorChange(
-//					selector, new McpSelector.Change(status.serverName, status.name, status.enabled));
-//			refreshMcpSelectorTools(selector);
-//		} catch (IllegalStateException | IllegalArgumentException ignored) {
-//			// The server or its catalog may have changed while this selector was open.
-//			refreshMcpSelectorTools(selector);
-//		}
-//	}
-//
-//	private static void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
-//		try {
-//			selector.onChange.accept(change);
-//			selector.changeError = null;
-//		} catch (UncheckedIOException error) {
-//			IOException cause = error.getCause();
-//			String message = cause == null ? error.getMessage() : cause.getMessage();
-//			String detail = message == null || message.isBlank()
-//					? String.valueOf(cause == null ? error : cause)
-//					: message;
-//			selector.changeError =
-//					"Change applied, but not saved: " + detail.replaceAll("\\s+", " ").trim();
-//		}
-//	}
-//
-//	private static void toggleMcpSelectorView(McpSelector selector) {
-//		if (selector.view == McpSelector.View.SERVERS) openMcpSelectorTools(selector);
-//		else closeMcpSelectorTools(selector);
-//	}
-//
-//	private static void openMcpSelectorTools(McpSelector selector) {
-//		if (selector.view == McpSelector.View.TOOLS || selector.filtered.isEmpty()) return;
-//		String server = selector.filtered.get(selector.selectedIndex);
-//		if (mcpStatus(selector.manager, server).state != McpManager.State.CONNECTED) return;
-//		selector.view = McpSelector.View.TOOLS;
-//		selector.toolServer = server;
-//		clearMcpSelectorQuery(selector);
-//		refreshMcpSelectorTools(selector);
-//	}
-//
-//	private static void closeMcpSelectorTools(McpSelector selector) {
-//		if (selector.view != McpSelector.View.TOOLS) return;
-//		String server = selector.toolServer;
-//		selector.view = McpSelector.View.SERVERS;
-//		selector.toolServer = null;
-//		clearMcpSelectorQuery(selector);
-//		filterMcpSelector(selector);
-//		int index = selector.filtered.indexOf(server);
-//		if (index >= 0) selector.selectedIndex = index;
-//	}
-//
-//	private static void moveMcpSelector(McpSelector selector, int delta) {
-//		int itemCount = mcpSelectorItemCount(selector);
-//		if (itemCount > 0) selector.selectedIndex = Math.floorMod(selector.selectedIndex + delta, itemCount);
-//	}
-//
-//	private static void insertMcpSelectorQuery(McpSelector selector, String text) {
-//		if (text == null || text.isEmpty()) return;
-//		String normalized = text.replace('\r', ' ').replace('\n', ' ');
-//		selector.query.insert(selector.queryCursor, normalized);
-//		selector.queryCursor += normalized.length();
-//		filterMcpSelector(selector);
-//	}
-//
-//	private static void backspaceMcpSelectorQuery(McpSelector selector) {
-//		if (selector.queryCursor == 0) return;
-//		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
-//		selector.query.delete(start, selector.queryCursor);
-//		selector.queryCursor = start;
-//		filterMcpSelector(selector);
-//	}
-//
-//	private static void deleteMcpSelectorQuery(McpSelector selector) {
-//		if (selector.queryCursor >= selector.query.length()) return;
-//		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
-//		selector.query.delete(selector.queryCursor, end);
-//		filterMcpSelector(selector);
-//	}
-//
-//	private static void clearMcpSelectorQuery(McpSelector selector) {
-//		selector.query.setLength(0);
-//		selector.queryCursor = 0;
-//	}
-//
-//	private static void filterMcpSelector(McpSelector selector) {
-//		if (selector.view == McpSelector.View.SERVERS) {
-//			selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
-//				McpManager.ServerStatus status = mcpStatus(selector.manager, name);
-//				return name + " " + status.state + " " + status.target;
-//			});
-//		} else {
-//			refreshMcpSelectorTools(selector);
-//		}
-//		selector.selectedIndex = 0;
-//	}
-//
-//	private static void refreshMcpSelectorTools(McpSelector selector) {
-//		if (selector.toolServer == null) {
-//			selector.filteredTools = List.of();
-//			return;
-//		}
-//		List<McpManager.ToolStatus> tools = mcpToolStatuses(selector.manager, selector.toolServer);
-//		selector.filteredTools = fuzzyFilter(
-//				tools,
-//				selector.query.toString(),
-//				tool -> tool.name + " " + tool.description + " " + (tool.enabled ? "enabled" : "disabled"));
-//		if (selector.selectedIndex >= selector.filteredTools.size()) {
-//			selector.selectedIndex = Math.max(0, selector.filteredTools.size() - 1);
-//		}
-//	}
+	// ----------------------------------------------------------- mcp selector
+
+	/**
+	 * Creates the MCP server/tool selector. Every applied change is passed to
+	 * {@code onChange}, which reports a failed save with UncheckedIOException.
+	 */
+	public static McpSelector newMcpSelector(McpManager manager, Consumer<McpSelector.Change> onChange) {
+		McpSelector selector = new McpSelector();
+		selector.manager = manager;
+		selector.onChange = onChange;
+		selector.names = mcpStatuses(manager).stream().map(status -> status.name).toList();
+		selector.filtered = selector.names;
+		return selector;
+	}
+
+	/** Binds a selector carrier to the full-screen host. */
+	public static TuiComponent<Void> mcpSelectorComponent(McpSelector selector) {
+		return new TuiComponent<>(
+				frame -> renderMcpSelector(selector, frame.width, frame.height, frame.theme),
+				input -> handleMcpSelectorInput(selector, input),
+				() -> selector.complete,
+				() -> null);
+	}
+
+	public static List<String> renderMcpSelector(McpSelector selector, int width, int height, Theme theme) {
+		if (selector.view == McpSelector.View.TOOLS) refreshMcpSelectorTools(selector);
+
+		List<String> lines = new ArrayList<>();
+		String title = selector.view == McpSelector.View.SERVERS
+				? "MCP Servers"
+				: "MCP Tools: " + selector.toolServer;
+		lines.add(theme.heading + truncatePlain(title, width) + theme.reset);
+		lines.add("");
+		String before = selector.query.substring(0, selector.queryCursor);
+		String after = selector.query.substring(selector.queryCursor);
+		lines.add(truncatePlain("Search: " + before + "|" + after, width));
+		lines.add("");
+		selector.optionStartRow = lines.size();
+		selector.visibleCount = Math.max(1, Math.min(10, height - 9));
+		int itemCount = mcpSelectorItemCount(selector);
+		selector.visibleStart = Math.max(0, Math.min(
+				selector.selectedIndex - selector.visibleCount / 2,
+				Math.max(0, itemCount - selector.visibleCount)));
+		int end = Math.min(itemCount, selector.visibleStart + selector.visibleCount);
+		if (itemCount == 0) {
+			String empty = selector.view == McpSelector.View.SERVERS
+					? "  No matching servers"
+					: "  No tools available";
+			lines.add(theme.muted + empty + theme.reset);
+		} else {
+			for (int index = selector.visibleStart; index < end; index++) {
+				String row = (index == selector.selectedIndex ? "> " : "  ")
+						+ mcpSelectorStatusLine(selector, index);
+				row = truncatePlain(row, width);
+				lines.add(index == selector.selectedIndex ? theme.heading + row + theme.reset : row);
+			}
+			if (selector.visibleStart > 0 || end < itemCount) {
+				lines.add(theme.muted + "  " + (selector.selectedIndex + 1) + "/" + itemCount + theme.reset);
+			}
+		}
+		lines.add("");
+		String detail = selector.changeError == null ? mcpSelectorDetail(selector) : selector.changeError;
+		if (detail != null) {
+			String style = selector.changeError == null ? theme.muted : warningStatus(theme);
+			lines.add(style + truncatePlain("  " + detail, width) + theme.reset);
+		}
+		if (selector.view == McpSelector.View.SERVERS && !selector.filtered.isEmpty()) {
+			McpManager.ServerStatus selected =
+					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+			if (selected.authorizationUrl != null) {
+				String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, width - 2));
+				String link = hyperlink(label, selected.authorizationUrl);
+				lines.add(theme.muted + "  " + link + theme.reset);
+			}
+		}
+		String hint = selector.view == McpSelector.View.SERVERS
+				? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
+				: "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
+		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
+		return lines;
+	}
+
+	private static int mcpSelectorItemCount(McpSelector selector) {
+		return selector.view == McpSelector.View.SERVERS
+				? selector.filtered.size()
+				: selector.filteredTools.size();
+	}
+
+	private static String mcpSelectorStatusLine(McpSelector selector, int index) {
+		return selector.view == McpSelector.View.SERVERS
+				? mcpServerStatusLine(mcpStatus(selector.manager, selector.filtered.get(index)))
+				: mcpToolStatusLine(selector.filteredTools.get(index));
+	}
+
+	private static String mcpServerStatusLine(McpManager.ServerStatus status) {
+		return switch (status.state) {
+			case CONNECTING -> "⋯ " + status.name + "  Connecting";
+			case AUTHENTICATING -> "⋯ " + status.name + "  Waiting for OAuth";
+			case AUTH_REQUIRED -> "! " + status.name + "  Authentication required";
+			case CONNECTED -> "✓ " + status.name + "  Enabled · " + mcpServerToolCount(status);
+			case DISABLED -> "○ " + status.name + "  Disabled";
+			case FAILED -> "✗ " + status.name + "  Failed";
+		};
+	}
+
+	private static String mcpServerToolCount(McpManager.ServerStatus status) {
+		if (status.enabledToolCount == status.toolCount) return status.toolCount + " tool(s)";
+		return status.enabledToolCount + "/" + status.toolCount + " tool(s)";
+	}
+
+	private static String mcpToolStatusLine(McpManager.ToolStatus status) {
+		return (status.enabled ? "✓ " : "○ ") + status.name + "  " + (status.enabled ? "Enabled" : "Disabled");
+	}
+
+	private static String mcpSelectorDetail(McpSelector selector) {
+		if (selector.view == McpSelector.View.SERVERS) {
+			if (selector.filtered.isEmpty()) return null;
+			McpManager.ServerStatus selected =
+					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+			return selected.message == null ? selected.target : selected.message;
+		}
+		if (selector.filteredTools.isEmpty()) return null;
+		String description = selector.filteredTools.get(selector.selectedIndex).description;
+		return description.isBlank() ? "No description" : description;
+	}
+
+	public static void handleMcpSelectorInput(McpSelector selector, TuiInput input) {
+		switch (input) {
+			case TuiInput.Key key -> handleMcpSelectorKey(selector, key);
+			case TuiInput.Mouse mouse -> handleMcpSelectorMouse(selector, mouse);
+			case TuiInput.Resize ignored -> {}
+		}
+	}
+
+	private static void handleMcpSelectorKey(McpSelector selector, TuiInput.Key key) {
+		switch (key.type) {
+			case UP -> moveMcpSelector(selector, -1);
+			case DOWN -> moveMcpSelector(selector, 1);
+			case PAGE_UP -> moveMcpSelector(selector, -Math.max(1, selector.visibleCount));
+			case PAGE_DOWN -> moveMcpSelector(selector, Math.max(1, selector.visibleCount));
+			case ENTER -> toggleMcpSelectorItem(selector);
+			case TAB -> toggleMcpSelectorView(selector);
+			case ESCAPE, CANCEL -> {
+				if (selector.view == McpSelector.View.TOOLS) closeMcpSelectorTools(selector);
+				else selector.complete = true;
+			}
+			case CHARACTER, PASTE -> insertMcpSelectorQuery(selector, key.text);
+			case BACKSPACE -> backspaceMcpSelectorQuery(selector);
+			case DELETE -> deleteMcpSelectorQuery(selector);
+			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
+			case RIGHT -> selector.queryCursor = Math.min(selector.query.length(), selector.queryCursor + 1);
+			case HOME -> selector.queryCursor = 0;
+			case END -> selector.queryCursor = selector.query.length();
+			case CLEAR -> {
+				selector.query.setLength(0);
+				selector.queryCursor = 0;
+				filterMcpSelector(selector);
+			}
+			default -> {}
+		}
+	}
+
+	private static void handleMcpSelectorMouse(McpSelector selector, TuiInput.Mouse mouse) {
+		switch (mouse.action) {
+			case SCROLL_UP -> moveMcpSelector(selector, -1);
+			case SCROLL_DOWN -> moveMcpSelector(selector, 1);
+			case PRESS -> {
+				int offset = mouse.y - 1 - selector.optionStartRow;
+				int index = selector.visibleStart + offset;
+				if (mouse.button == 0
+						&& offset >= 0
+						&& offset < selector.visibleCount
+						&& index < mcpSelectorItemCount(selector)) {
+					selector.selectedIndex = index;
+				}
+			}
+			default -> {}
+		}
+	}
+
+	private static void toggleMcpSelectorItem(McpSelector selector) {
+		if (selector.view == McpSelector.View.SERVERS) {
+			if (selector.filtered.isEmpty()) return;
+			McpManager.ServerStatus status = mcpToggleServerAsync(
+					selector.manager, selector.filtered.get(selector.selectedIndex));
+			notifyMcpSelectorChange(selector, new McpSelector.Change(
+					status.name, null, mcpIsEnabled(selector.manager, status.name)));
+		} else {
+			toggleMcpSelectorTool(selector);
+		}
+	}
+
+	private static void toggleMcpSelectorTool(McpSelector selector) {
+		refreshMcpSelectorTools(selector);
+		if (selector.filteredTools.isEmpty()) return;
+		try {
+			McpManager.ToolStatus status = mcpToggleTool(
+					selector.manager,
+					selector.toolServer,
+					selector.filteredTools.get(selector.selectedIndex).name);
+			notifyMcpSelectorChange(
+					selector, new McpSelector.Change(status.serverName, status.name, status.enabled));
+			refreshMcpSelectorTools(selector);
+		} catch (IllegalStateException | IllegalArgumentException ignored) {
+			// The server or its catalog may have changed while this selector was open.
+			refreshMcpSelectorTools(selector);
+		}
+	}
+
+	private static void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
+		try {
+			selector.onChange.accept(change);
+			selector.changeError = null;
+		} catch (UncheckedIOException error) {
+			IOException cause = error.getCause();
+			String message = cause == null ? error.getMessage() : cause.getMessage();
+			String detail = message == null || message.isBlank()
+					? String.valueOf(cause == null ? error : cause)
+					: message;
+			selector.changeError =
+					"Change applied, but not saved: " + detail.replaceAll("\\s+", " ").trim();
+		}
+	}
+
+	private static void toggleMcpSelectorView(McpSelector selector) {
+		if (selector.view == McpSelector.View.SERVERS) openMcpSelectorTools(selector);
+		else closeMcpSelectorTools(selector);
+	}
+
+	private static void openMcpSelectorTools(McpSelector selector) {
+		if (selector.view == McpSelector.View.TOOLS || selector.filtered.isEmpty()) return;
+		String server = selector.filtered.get(selector.selectedIndex);
+		if (mcpStatus(selector.manager, server).state != McpManager.State.CONNECTED) return;
+		selector.view = McpSelector.View.TOOLS;
+		selector.toolServer = server;
+		clearMcpSelectorQuery(selector);
+		refreshMcpSelectorTools(selector);
+	}
+
+	private static void closeMcpSelectorTools(McpSelector selector) {
+		if (selector.view != McpSelector.View.TOOLS) return;
+		String server = selector.toolServer;
+		selector.view = McpSelector.View.SERVERS;
+		selector.toolServer = null;
+		clearMcpSelectorQuery(selector);
+		filterMcpSelector(selector);
+		int index = selector.filtered.indexOf(server);
+		if (index >= 0) selector.selectedIndex = index;
+	}
+
+	private static void moveMcpSelector(McpSelector selector, int delta) {
+		int itemCount = mcpSelectorItemCount(selector);
+		if (itemCount > 0) selector.selectedIndex = Math.floorMod(selector.selectedIndex + delta, itemCount);
+	}
+
+	private static void insertMcpSelectorQuery(McpSelector selector, String text) {
+		if (text == null || text.isEmpty()) return;
+		String normalized = text.replace('\r', ' ').replace('\n', ' ');
+		selector.query.insert(selector.queryCursor, normalized);
+		selector.queryCursor += normalized.length();
+		filterMcpSelector(selector);
+	}
+
+	private static void backspaceMcpSelectorQuery(McpSelector selector) {
+		if (selector.queryCursor == 0) return;
+		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
+		selector.query.delete(start, selector.queryCursor);
+		selector.queryCursor = start;
+		filterMcpSelector(selector);
+	}
+
+	private static void deleteMcpSelectorQuery(McpSelector selector) {
+		if (selector.queryCursor >= selector.query.length()) return;
+		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
+		selector.query.delete(selector.queryCursor, end);
+		filterMcpSelector(selector);
+	}
+
+	private static void clearMcpSelectorQuery(McpSelector selector) {
+		selector.query.setLength(0);
+		selector.queryCursor = 0;
+	}
+
+	private static void filterMcpSelector(McpSelector selector) {
+		if (selector.view == McpSelector.View.SERVERS) {
+			selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
+				McpManager.ServerStatus status = mcpStatus(selector.manager, name);
+				return name + " " + status.state + " " + status.target;
+			});
+		} else {
+			refreshMcpSelectorTools(selector);
+		}
+		selector.selectedIndex = 0;
+	}
+
+	private static void refreshMcpSelectorTools(McpSelector selector) {
+		if (selector.toolServer == null) {
+			selector.filteredTools = List.of();
+			return;
+		}
+		List<McpManager.ToolStatus> tools = mcpToolStatuses(selector.manager, selector.toolServer);
+		selector.filteredTools = fuzzyFilter(
+				tools,
+				selector.query.toString(),
+				tool -> tool.name + " " + tool.description + " " + (tool.enabled ? "enabled" : "disabled"));
+		if (selector.selectedIndex >= selector.filteredTools.size()) {
+			selector.selectedIndex = Math.max(0, selector.filteredTools.size() - 1);
+		}
+	}
 
 	// ------------------------------------------------------------ turn details
 
@@ -13350,173 +13350,173 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				() -> details.thinkingHidden);
 	}
 
-//	public static List<String> renderTurnDetails(
-//			TurnDetailsComponent details, int width, int height, Theme theme) {
-//		int safeWidth = Math.max(20, width);
-//		details.viewportHeight = Math.max(
-//				1, height - TurnDetailsComponent.HEADER_LINES - TurnDetailsComponent.FOOTER_LINES);
-//		List<TurnDetailsComponent.RenderedLine> content = renderTurnDetailsContent(details, safeWidth, theme);
-//		int selectedRow = turnDetailsHeadingRow(content, details.selectedIndex);
-//		if (details.keepSelectionVisible) {
-//			if (selectedRow < details.scrollTop) {
-//				details.scrollTop = selectedRow;
-//			} else if (selectedRow >= details.scrollTop + details.viewportHeight) {
-//				details.scrollTop = selectedRow - details.viewportHeight + 1;
-//			}
-//		}
-//		details.scrollTop = Math.max(
-//				0, Math.min(details.scrollTop, Math.max(0, content.size() - details.viewportHeight)));
-//
-//		List<String> lines = new ArrayList<>();
-//		lines.add(theme.heading + "Turn details" + theme.reset);
-//		lines.add("");
-//		details.visibleSectionsByRow.clear();
-//		int visibleEnd = Math.min(content.size(), details.scrollTop + details.viewportHeight);
-//		for (int index = details.scrollTop; index < visibleEnd; index++) {
-//			TurnDetailsComponent.RenderedLine line = content.get(index);
-//			if (line.heading) details.visibleSectionsByRow.put(lines.size(), line.sectionIndex);
-//			lines.add(line.text);
-//		}
-//		String hint = "Up/Down select  Enter expand/collapse  PgUp/PgDn scroll  Ctrl-T thinking  Ctrl-O tools  Esc close";
-//		lines.add(theme.muted + truncatePlain(hint, safeWidth) + theme.reset);
-//		return lines;
-//	}
-//
-//	public static void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
-//		switch (input) {
-//			case TuiInput.Key key -> handleTurnDetailsKey(details, key);
-//			case TuiInput.Mouse mouse -> handleTurnDetailsMouse(details, mouse);
-//			case TuiInput.Resize ignored -> {
-//				// Rendering uses the current dimensions directly.
-//			}
-//		}
-//	}
-//
-//	private static List<TurnDetailsComponent.RenderedLine> renderTurnDetailsContent(
-//			TurnDetailsComponent details, int width, Theme theme) {
-//		List<TurnDetailsComponent.RenderedLine> lines = new ArrayList<>();
-//		for (int index = 0; index < details.sections.size(); index++) {
-//			TurnDetailsComponent.Section section = details.sections.get(index);
-//			String marker = section.expanded ? "▼ " : "▶ ";
-//			String suffix = section.expanded || section.summary.isBlank() ? "" : " — " + section.summary;
-//			String heading = truncatePlain(marker + section.title + suffix, width);
-//			if (index == details.selectedIndex) heading = theme.heading + heading + theme.reset;
-//			else heading = theme.strong + heading + theme.reset;
-//			lines.add(new TurnDetailsComponent.RenderedLine(heading, index, true));
-//			if (section.expanded) {
-//				for (String bodyLine : wrapPlain(section.body, Math.max(1, width - 3))) {
-//					String rendered = "   " + bodyLine;
-//					if (section.kind == TurnDetailsComponent.Kind.THINKING) {
-//						rendered = theme.muted + rendered + theme.reset;
-//					}
-//					lines.add(new TurnDetailsComponent.RenderedLine(rendered, index, false));
-//				}
-//			}
-//			if (index + 1 < details.sections.size()) {
-//				lines.add(new TurnDetailsComponent.RenderedLine("", index, false));
-//			}
-//		}
-//		return lines;
-//	}
-//
-//	private static void handleTurnDetailsKey(TurnDetailsComponent details, TuiInput.Key key) {
-//		switch (key.type) {
-//			case UP -> moveTurnDetails(details, -1);
-//			case DOWN -> moveTurnDetails(details, 1);
-//			case PAGE_UP -> scrollTurnDetails(details, -Math.max(1, details.viewportHeight - 1));
-//			case PAGE_DOWN -> scrollTurnDetails(details, Math.max(1, details.viewportHeight - 1));
-//			case HOME -> {
-//				details.selectedIndex = 0;
-//				details.keepSelectionVisible = true;
-//			}
-//			case END -> {
-//				details.selectedIndex = details.sections.size() - 1;
-//				details.keepSelectionVisible = true;
-//			}
-//			case ENTER -> toggleSelectedTurnDetail(details);
-//			case TOGGLE_THINKING -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.THINKING);
-//			case EXPAND_TOOLS -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.TOOL);
-//			case ESCAPE, CANCEL, EXIT -> details.complete = true;
-//			case CHARACTER -> {
-//				if (key.text.equals(" ")) toggleSelectedTurnDetail(details);
-//				else if (key.text.equalsIgnoreCase("q")) details.complete = true;
-//			}
-//			default -> {
-//				// Other keys do not affect the inspector.
-//			}
-//		}
-//	}
-//
-//	private static void handleTurnDetailsMouse(TurnDetailsComponent details, TuiInput.Mouse mouse) {
-//		switch (mouse.action) {
-//			case SCROLL_UP -> scrollTurnDetails(details, -3);
-//			case SCROLL_DOWN -> scrollTurnDetails(details, 3);
-//			case PRESS -> {
-//				if (mouse.button != 0) return;
-//				Integer section = details.visibleSectionsByRow.get(mouse.y - 1);
-//				if (section != null) {
-//					details.selectedIndex = section;
-//					toggleSelectedTurnDetail(details);
-//				}
-//			}
-//			default -> {
-//				// Release and drag do not affect expansion.
-//			}
-//		}
-//	}
-//
-//	private static void moveTurnDetails(TurnDetailsComponent details, int delta) {
-//		details.selectedIndex = Math.floorMod(details.selectedIndex + delta, details.sections.size());
-//		details.keepSelectionVisible = true;
-//	}
-//
-//	private static void scrollTurnDetails(TurnDetailsComponent details, int delta) {
-//		details.scrollTop = Math.max(0, details.scrollTop + delta);
-//		details.keepSelectionVisible = false;
-//	}
-//
-//	private static void toggleSelectedTurnDetail(TurnDetailsComponent details) {
-//		TurnDetailsComponent.Section section = details.sections.get(details.selectedIndex);
-//		section.expanded = !section.expanded;
-//		details.keepSelectionVisible = true;
-//	}
-//
-//	private static void toggleTurnDetailsKind(
-//			TurnDetailsComponent details, TurnDetailsComponent.Kind kind) {
-//		if (details.sections.stream().noneMatch(section -> section.kind == kind)) return;
-//		boolean expand =
-//				details.sections.stream().anyMatch(section -> section.kind == kind && !section.expanded);
-//		for (TurnDetailsComponent.Section section : details.sections) {
-//			if (section.kind == kind) section.expanded = expand;
-//		}
-//		if (kind == TurnDetailsComponent.Kind.THINKING) details.thinkingHidden = !expand;
-//		details.keepSelectionVisible = true;
-//	}
-//
-//	private static int turnDetailsHeadingRow(
-//			List<TurnDetailsComponent.RenderedLine> lines, int sectionIndex) {
-//		for (int index = 0; index < lines.size(); index++) {
-//			TurnDetailsComponent.RenderedLine line = lines.get(index);
-//			if (line.heading && line.sectionIndex == sectionIndex) return index;
-//		}
-//		return 0;
-//	}
-//
-//	private static String turnDetailsResultSummary(String text) {
-//		if (text == null || text.isBlank()) return "done";
-//		long lines = text.lines().count();
-//		return lines == 1 ? "done" : lines + " lines";
-//	}
-//
-//	private static String turnDetailsFirstLine(String text) {
-//		if (text == null || text.isBlank()) return "";
-//		String line = text.lines().filter(value -> !value.isBlank()).findFirst().orElse("").strip();
-//		return line.length() <= 100 ? line : line.substring(0, 100) + "...";
-//	}
-//
-//	private static String turnDetailsSingleLine(String value) {
-//		return turnDetailsSafePlain(value).replaceAll("\\s+", " ").strip();
-//	}
+	public static List<String> renderTurnDetails(
+			TurnDetailsComponent details, int width, int height, Theme theme) {
+		int safeWidth = Math.max(20, width);
+		details.viewportHeight = Math.max(
+				1, height - TurnDetailsComponent.HEADER_LINES - TurnDetailsComponent.FOOTER_LINES);
+		List<TurnDetailsComponent.RenderedLine> content = renderTurnDetailsContent(details, safeWidth, theme);
+		int selectedRow = turnDetailsHeadingRow(content, details.selectedIndex);
+		if (details.keepSelectionVisible) {
+			if (selectedRow < details.scrollTop) {
+				details.scrollTop = selectedRow;
+			} else if (selectedRow >= details.scrollTop + details.viewportHeight) {
+				details.scrollTop = selectedRow - details.viewportHeight + 1;
+			}
+		}
+		details.scrollTop = Math.max(
+				0, Math.min(details.scrollTop, Math.max(0, content.size() - details.viewportHeight)));
+
+		List<String> lines = new ArrayList<>();
+		lines.add(theme.heading + "Turn details" + theme.reset);
+		lines.add("");
+		details.visibleSectionsByRow.clear();
+		int visibleEnd = Math.min(content.size(), details.scrollTop + details.viewportHeight);
+		for (int index = details.scrollTop; index < visibleEnd; index++) {
+			TurnDetailsComponent.RenderedLine line = content.get(index);
+			if (line.heading) details.visibleSectionsByRow.put(lines.size(), line.sectionIndex);
+			lines.add(line.text);
+		}
+		String hint = "Up/Down select  Enter expand/collapse  PgUp/PgDn scroll  Ctrl-T thinking  Ctrl-O tools  Esc close";
+		lines.add(theme.muted + truncatePlain(hint, safeWidth) + theme.reset);
+		return lines;
+	}
+
+	public static void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
+		switch (input) {
+			case TuiInput.Key key -> handleTurnDetailsKey(details, key);
+			case TuiInput.Mouse mouse -> handleTurnDetailsMouse(details, mouse);
+			case TuiInput.Resize ignored -> {
+				// Rendering uses the current dimensions directly.
+			}
+		}
+	}
+
+	private static List<TurnDetailsComponent.RenderedLine> renderTurnDetailsContent(
+			TurnDetailsComponent details, int width, Theme theme) {
+		List<TurnDetailsComponent.RenderedLine> lines = new ArrayList<>();
+		for (int index = 0; index < details.sections.size(); index++) {
+			TurnDetailsComponent.Section section = details.sections.get(index);
+			String marker = section.expanded ? "▼ " : "▶ ";
+			String suffix = section.expanded || section.summary.isBlank() ? "" : " — " + section.summary;
+			String heading = truncatePlain(marker + section.title + suffix, width);
+			if (index == details.selectedIndex) heading = theme.heading + heading + theme.reset;
+			else heading = theme.strong + heading + theme.reset;
+			lines.add(new TurnDetailsComponent.RenderedLine(heading, index, true));
+			if (section.expanded) {
+				for (String bodyLine : wrapPlain(section.body, Math.max(1, width - 3))) {
+					String rendered = "   " + bodyLine;
+					if (section.kind == TurnDetailsComponent.Kind.THINKING) {
+						rendered = theme.muted + rendered + theme.reset;
+					}
+					lines.add(new TurnDetailsComponent.RenderedLine(rendered, index, false));
+				}
+			}
+			if (index + 1 < details.sections.size()) {
+				lines.add(new TurnDetailsComponent.RenderedLine("", index, false));
+			}
+		}
+		return lines;
+	}
+
+	private static void handleTurnDetailsKey(TurnDetailsComponent details, TuiInput.Key key) {
+		switch (key.type) {
+			case UP -> moveTurnDetails(details, -1);
+			case DOWN -> moveTurnDetails(details, 1);
+			case PAGE_UP -> scrollTurnDetails(details, -Math.max(1, details.viewportHeight - 1));
+			case PAGE_DOWN -> scrollTurnDetails(details, Math.max(1, details.viewportHeight - 1));
+			case HOME -> {
+				details.selectedIndex = 0;
+				details.keepSelectionVisible = true;
+			}
+			case END -> {
+				details.selectedIndex = details.sections.size() - 1;
+				details.keepSelectionVisible = true;
+			}
+			case ENTER -> toggleSelectedTurnDetail(details);
+			case TOGGLE_THINKING -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.THINKING);
+			case EXPAND_TOOLS -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.TOOL);
+			case ESCAPE, CANCEL, EXIT -> details.complete = true;
+			case CHARACTER -> {
+				if (key.text.equals(" ")) toggleSelectedTurnDetail(details);
+				else if (key.text.equalsIgnoreCase("q")) details.complete = true;
+			}
+			default -> {
+				// Other keys do not affect the inspector.
+			}
+		}
+	}
+
+	private static void handleTurnDetailsMouse(TurnDetailsComponent details, TuiInput.Mouse mouse) {
+		switch (mouse.action) {
+			case SCROLL_UP -> scrollTurnDetails(details, -3);
+			case SCROLL_DOWN -> scrollTurnDetails(details, 3);
+			case PRESS -> {
+				if (mouse.button != 0) return;
+				Integer section = details.visibleSectionsByRow.get(mouse.y - 1);
+				if (section != null) {
+					details.selectedIndex = section;
+					toggleSelectedTurnDetail(details);
+				}
+			}
+			default -> {
+				// Release and drag do not affect expansion.
+			}
+		}
+	}
+
+	private static void moveTurnDetails(TurnDetailsComponent details, int delta) {
+		details.selectedIndex = Math.floorMod(details.selectedIndex + delta, details.sections.size());
+		details.keepSelectionVisible = true;
+	}
+
+	private static void scrollTurnDetails(TurnDetailsComponent details, int delta) {
+		details.scrollTop = Math.max(0, details.scrollTop + delta);
+		details.keepSelectionVisible = false;
+	}
+
+	private static void toggleSelectedTurnDetail(TurnDetailsComponent details) {
+		TurnDetailsComponent.Section section = details.sections.get(details.selectedIndex);
+		section.expanded = !section.expanded;
+		details.keepSelectionVisible = true;
+	}
+
+	private static void toggleTurnDetailsKind(
+			TurnDetailsComponent details, TurnDetailsComponent.Kind kind) {
+		if (details.sections.stream().noneMatch(section -> section.kind == kind)) return;
+		boolean expand =
+				details.sections.stream().anyMatch(section -> section.kind == kind && !section.expanded);
+		for (TurnDetailsComponent.Section section : details.sections) {
+			if (section.kind == kind) section.expanded = expand;
+		}
+		if (kind == TurnDetailsComponent.Kind.THINKING) details.thinkingHidden = !expand;
+		details.keepSelectionVisible = true;
+	}
+
+	private static int turnDetailsHeadingRow(
+			List<TurnDetailsComponent.RenderedLine> lines, int sectionIndex) {
+		for (int index = 0; index < lines.size(); index++) {
+			TurnDetailsComponent.RenderedLine line = lines.get(index);
+			if (line.heading && line.sectionIndex == sectionIndex) return index;
+		}
+		return 0;
+	}
+
+	private static String turnDetailsResultSummary(String text) {
+		if (text == null || text.isBlank()) return "done";
+		long lines = text.lines().count();
+		return lines == 1 ? "done" : lines + " lines";
+	}
+
+	private static String turnDetailsFirstLine(String text) {
+		if (text == null || text.isBlank()) return "";
+		String line = text.lines().filter(value -> !value.isBlank()).findFirst().orElse("").strip();
+		return line.length() <= 100 ? line : line.substring(0, 100) + "...";
+	}
+
+	private static String turnDetailsSingleLine(String value) {
+		return turnDetailsSafePlain(value).replaceAll("\\s+", " ").strip();
+	}
 
 	private static String turnDetailsSafePlain(String value) {
 		String stripped = stripAnsi(value == null ? "" : value);
@@ -13584,169 +13584,169 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return node;
 	}
 
-//	public static Message decodeSessionMessage(JsonNode node) throws IOException {
-//		if (node == null || !node.isObject() || !node.path("role").isTextual()) {
-//			throw new IOException("Message payload must be an object with a string role");
-//		}
-//		long timestamp = node.path("timestamp").isIntegralNumber()
-//				? node.path("timestamp").asLong()
-//				: System.currentTimeMillis();
-//		return switch (node.path("role").asText()) {
-//			case "user" -> userMessage(decodeSessionUserContent(node.get("content")), timestamp);
-//			case "assistant" -> decodeSessionAssistant(node, timestamp);
-//			case "toolResult" -> toolResultMessage(
-//					requiredSessionText(node, "toolCallId"),
-//					requiredSessionText(node, "toolName"),
-//					decodeSessionUserContent(node.get("content")),
-//					node.has("details") ? Json.MAPPER.treeToValue(node.get("details"), Object.class) : null,
-//					node.path("isError").asBoolean(false),
-//					timestamp);
-//			default -> throw new IOException("Unknown session message role: " + node.path("role").asText());
-//		};
-//	}
-//
-//	private static AssistantMessage decodeSessionAssistant(JsonNode node, long timestamp) throws IOException {
-//		AssistantMessage assistant = new AssistantMessage(
-//				optionalSessionText(node, "api"),
-//				optionalSessionText(node, "provider"),
-//				optionalSessionText(node, "model"));
-//		assistant.timestamp = timestamp;
-//		assistant.responseModel = optionalSessionText(node, "responseModel");
-//		assistant.responseId = optionalSessionText(node, "responseId");
-//		assistant.errorMessage = optionalSessionText(node, "error");
-//		assistant.rawStopReason = optionalSessionText(node, "rawStopReason");
-//		String stopReason = optionalSessionText(node, "stopReason");
-//		if (stopReason != null) {
-//			try {
-//				assistant.stopReason = stopReasonFromWire(stopReason);
-//			} catch (IllegalArgumentException error) {
-//				try {
-//					assistant.stopReason = StopReason.valueOf(stopReason.toUpperCase(Locale.ROOT));
-//				} catch (IllegalArgumentException ignored) {
-//					throw new IOException("Unknown assistant stop reason: " + stopReason, error);
-//				}
-//			}
-//		}
-//		decodeSessionUsage(node.get("usage"), assistant);
-//		JsonNode content = node.get("content");
-//		if (content != null && !content.isArray()) {
-//			throw new IOException("Assistant message content must be an array");
-//		}
-//		if (content != null) {
-//			for (JsonNode block : content) {
-//				String type = requiredSessionText(block, "type");
-//				switch (type) {
-//					case "text" -> assistant.content.add(textContent(
-//							requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-//					case "thinking" -> assistant.content.add(thinkingContent(
-//							requiredSessionText(block, "text"),
-//							optionalSessionText(block, "thinkingSignature"),
-//							block.path("redacted").asBoolean(false)));
-//					case "toolCall" -> {
-//						JsonNode arguments = block.get("arguments");
-//						if (!(arguments instanceof ObjectNode object)) {
-//							throw new IOException("Tool call arguments must be an object");
-//						}
-//						assistant.content.add(toolCall(
-//								requiredSessionText(block, "id"),
-//								requiredSessionText(block, "name"),
-//								object.deepCopy(),
-//								optionalSessionText(block, "thoughtSignature")));
-//					}
-//					default -> throw new IOException("Unknown assistant content type: " + type);
-//				}
-//			}
-//		}
-//		return assistant;
-//	}
-//
-//	private static void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
-//		for (UserContent block : source) {
-//			if (block instanceof TextContent text) {
-//				ObjectNode encoded = target.addObject().put("type", "text").put("text", text.text);
-//				putNullableSessionText(encoded, "textSignature", text.textSignature);
-//			} else if (block instanceof ImageContent image) {
-//				target.addObject().put("type", "image").put("data", image.data).put("mimeType", image.mimeType);
-//			}
-//		}
-//	}
-//
-//	private static List<UserContent> decodeSessionUserContent(JsonNode content) throws IOException {
-//		if (content == null || content.isNull()) {
-//			return List.of();
-//		}
-//		if (!content.isArray()) {
-//			throw new IOException("Message content must be an array");
-//		}
-//		List<UserContent> decoded = new ArrayList<>();
-//		for (JsonNode block : content) {
-//			String type = requiredSessionText(block, "type");
-//			switch (type) {
-//				case "text" -> decoded.add(textContent(
-//						requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-//				case "image" -> decoded.add(imageContent(
-//						requiredSessionText(block, "data"), requiredSessionText(block, "mimeType")));
-//				default -> throw new IOException("Unknown user content type: " + type);
-//			}
-//		}
-//		return List.copyOf(decoded);
-//	}
-//
-//	private static void encodeSessionUsage(ObjectNode node, AssistantMessage assistant) {
-//		node.put("input", assistant.usage.input);
-//		node.put("output", assistant.usage.output);
-//		node.put("cacheRead", assistant.usage.cacheRead);
-//		node.put("cacheWrite", assistant.usage.cacheWrite);
-//		if (assistant.usage.cacheWrite1h != null) node.put("cacheWrite1h", assistant.usage.cacheWrite1h);
-//		if (assistant.usage.reasoning != null) node.put("reasoning", assistant.usage.reasoning);
-//		node.put("totalTokens", assistant.usage.totalTokens);
-//		ObjectNode cost = node.putObject("cost");
-//		cost.put("input", assistant.usage.cost.input);
-//		cost.put("output", assistant.usage.cost.output);
-//		cost.put("cacheRead", assistant.usage.cost.cacheRead);
-//		cost.put("cacheWrite", assistant.usage.cost.cacheWrite);
-//		cost.put("total", assistant.usage.cost.total);
-//	}
-//
-//	private static void decodeSessionUsage(JsonNode node, AssistantMessage assistant) {
-//		if (node == null || !node.isObject()) return;
-//		assistant.usage.input = node.path("input").asLong();
-//		assistant.usage.output = node.path("output").asLong();
-//		assistant.usage.cacheRead = node.path("cacheRead").asLong();
-//		assistant.usage.cacheWrite = node.path("cacheWrite").asLong();
-//		if (node.path("cacheWrite1h").isIntegralNumber()) {
-//			assistant.usage.cacheWrite1h = node.path("cacheWrite1h").asLong();
-//		}
-//		if (node.path("reasoning").isIntegralNumber()) {
-//			assistant.usage.reasoning = node.path("reasoning").asLong();
-//		}
-//		assistant.usage.totalTokens = node.path("totalTokens").asLong();
-//		JsonNode cost = node.get("cost");
-//		if (cost != null && cost.isObject()) {
-//			assistant.usage.cost.input = cost.path("input").asDouble();
-//			assistant.usage.cost.output = cost.path("output").asDouble();
-//			assistant.usage.cost.cacheRead = cost.path("cacheRead").asDouble();
-//			assistant.usage.cost.cacheWrite = cost.path("cacheWrite").asDouble();
-//			assistant.usage.cost.total = cost.path("total").asDouble();
-//		}
-//	}
-//
-//	private static String requiredSessionText(JsonNode node, String field) throws IOException {
-//		JsonNode value = node == null ? null : node.get(field);
-//		if (value == null || !value.isTextual()) {
-//			throw new IOException(field + " must be a string");
-//		}
-//		return value.asText();
-//	}
-//
-//	private static String optionalSessionText(JsonNode node, String field) {
-//		JsonNode value = node == null ? null : node.get(field);
-//		return value != null && value.isTextual() ? value.asText() : null;
-//	}
-//
-//	private static void putNullableSessionText(ObjectNode node, String field, String value) {
-//		if (value != null) node.put(field, value);
-//	}
+	public static Message decodeSessionMessage(JsonNode node) throws IOException {
+		if (node == null || !node.isObject() || !node.path("role").isTextual()) {
+			throw new IOException("Message payload must be an object with a string role");
+		}
+		long timestamp = node.path("timestamp").isIntegralNumber()
+				? node.path("timestamp").asLong()
+				: System.currentTimeMillis();
+		return switch (node.path("role").asText()) {
+			case "user" -> userMessage(decodeSessionUserContent(node.get("content")), timestamp);
+			case "assistant" -> decodeSessionAssistant(node, timestamp);
+			case "toolResult" -> toolResultMessage(
+					requiredSessionText(node, "toolCallId"),
+					requiredSessionText(node, "toolName"),
+					decodeSessionUserContent(node.get("content")),
+					node.has("details") ? Json.MAPPER.treeToValue(node.get("details"), Object.class) : null,
+					node.path("isError").asBoolean(false),
+					timestamp);
+			default -> throw new IOException("Unknown session message role: " + node.path("role").asText());
+		};
+	}
+
+	private static AssistantMessage decodeSessionAssistant(JsonNode node, long timestamp) throws IOException {
+		AssistantMessage assistant = new AssistantMessage(
+				optionalSessionText(node, "api"),
+				optionalSessionText(node, "provider"),
+				optionalSessionText(node, "model"));
+		assistant.timestamp = timestamp;
+		assistant.responseModel = optionalSessionText(node, "responseModel");
+		assistant.responseId = optionalSessionText(node, "responseId");
+		assistant.errorMessage = optionalSessionText(node, "error");
+		assistant.rawStopReason = optionalSessionText(node, "rawStopReason");
+		String stopReason = optionalSessionText(node, "stopReason");
+		if (stopReason != null) {
+			try {
+				assistant.stopReason = stopReasonFromWire(stopReason);
+			} catch (IllegalArgumentException error) {
+				try {
+					assistant.stopReason = StopReason.valueOf(stopReason.toUpperCase(Locale.ROOT));
+				} catch (IllegalArgumentException ignored) {
+					throw new IOException("Unknown assistant stop reason: " + stopReason, error);
+				}
+			}
+		}
+		decodeSessionUsage(node.get("usage"), assistant);
+		JsonNode content = node.get("content");
+		if (content != null && !content.isArray()) {
+			throw new IOException("Assistant message content must be an array");
+		}
+		if (content != null) {
+			for (JsonNode block : content) {
+				String type = requiredSessionText(block, "type");
+				switch (type) {
+					case "text" -> assistant.content.add(textContent(
+							requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
+					case "thinking" -> assistant.content.add(thinkingContent(
+							requiredSessionText(block, "text"),
+							optionalSessionText(block, "thinkingSignature"),
+							block.path("redacted").asBoolean(false)));
+					case "toolCall" -> {
+						JsonNode arguments = block.get("arguments");
+						if (!(arguments instanceof ObjectNode object)) {
+							throw new IOException("Tool call arguments must be an object");
+						}
+						assistant.content.add(toolCall(
+								requiredSessionText(block, "id"),
+								requiredSessionText(block, "name"),
+								object.deepCopy(),
+								optionalSessionText(block, "thoughtSignature")));
+					}
+					default -> throw new IOException("Unknown assistant content type: " + type);
+				}
+			}
+		}
+		return assistant;
+	}
+
+	private static void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
+		for (UserContent block : source) {
+			if (block instanceof TextContent text) {
+				ObjectNode encoded = target.addObject().put("type", "text").put("text", text.text);
+				putNullableSessionText(encoded, "textSignature", text.textSignature);
+			} else if (block instanceof ImageContent image) {
+				target.addObject().put("type", "image").put("data", image.data).put("mimeType", image.mimeType);
+			}
+		}
+	}
+
+	private static List<UserContent> decodeSessionUserContent(JsonNode content) throws IOException {
+		if (content == null || content.isNull()) {
+			return List.of();
+		}
+		if (!content.isArray()) {
+			throw new IOException("Message content must be an array");
+		}
+		List<UserContent> decoded = new ArrayList<>();
+		for (JsonNode block : content) {
+			String type = requiredSessionText(block, "type");
+			switch (type) {
+				case "text" -> decoded.add(textContent(
+						requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
+				case "image" -> decoded.add(imageContent(
+						requiredSessionText(block, "data"), requiredSessionText(block, "mimeType")));
+				default -> throw new IOException("Unknown user content type: " + type);
+			}
+		}
+		return List.copyOf(decoded);
+	}
+
+	private static void encodeSessionUsage(ObjectNode node, AssistantMessage assistant) {
+		node.put("input", assistant.usage.input);
+		node.put("output", assistant.usage.output);
+		node.put("cacheRead", assistant.usage.cacheRead);
+		node.put("cacheWrite", assistant.usage.cacheWrite);
+		if (assistant.usage.cacheWrite1h != null) node.put("cacheWrite1h", assistant.usage.cacheWrite1h);
+		if (assistant.usage.reasoning != null) node.put("reasoning", assistant.usage.reasoning);
+		node.put("totalTokens", assistant.usage.totalTokens);
+		ObjectNode cost = node.putObject("cost");
+		cost.put("input", assistant.usage.cost.input);
+		cost.put("output", assistant.usage.cost.output);
+		cost.put("cacheRead", assistant.usage.cost.cacheRead);
+		cost.put("cacheWrite", assistant.usage.cost.cacheWrite);
+		cost.put("total", assistant.usage.cost.total);
+	}
+
+	private static void decodeSessionUsage(JsonNode node, AssistantMessage assistant) {
+		if (node == null || !node.isObject()) return;
+		assistant.usage.input = node.path("input").asLong();
+		assistant.usage.output = node.path("output").asLong();
+		assistant.usage.cacheRead = node.path("cacheRead").asLong();
+		assistant.usage.cacheWrite = node.path("cacheWrite").asLong();
+		if (node.path("cacheWrite1h").isIntegralNumber()) {
+			assistant.usage.cacheWrite1h = node.path("cacheWrite1h").asLong();
+		}
+		if (node.path("reasoning").isIntegralNumber()) {
+			assistant.usage.reasoning = node.path("reasoning").asLong();
+		}
+		assistant.usage.totalTokens = node.path("totalTokens").asLong();
+		JsonNode cost = node.get("cost");
+		if (cost != null && cost.isObject()) {
+			assistant.usage.cost.input = cost.path("input").asDouble();
+			assistant.usage.cost.output = cost.path("output").asDouble();
+			assistant.usage.cost.cacheRead = cost.path("cacheRead").asDouble();
+			assistant.usage.cost.cacheWrite = cost.path("cacheWrite").asDouble();
+			assistant.usage.cost.total = cost.path("total").asDouble();
+		}
+	}
+
+	private static String requiredSessionText(JsonNode node, String field) throws IOException {
+		JsonNode value = node == null ? null : node.get(field);
+		if (value == null || !value.isTextual()) {
+			throw new IOException(field + " must be a string");
+		}
+		return value.asText();
+	}
+
+	private static String optionalSessionText(JsonNode node, String field) {
+		JsonNode value = node == null ? null : node.get(field);
+		return value != null && value.isTextual() ? value.asText() : null;
+	}
+
+	private static void putNullableSessionText(ObjectNode node, String field, String value) {
+		if (value != null) node.put(field, value);
+	}
 
 	// --------------------------------------------------------- session recorder
 
@@ -13769,25 +13769,25 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new SessionRecorder(store, id);
 	}
 
-//	/** Creates a named child session containing a copy of the supplied conversation. */
-//	public static SessionRecorder forkSessionRecorder(
-//			SessionStore store,
-//			Path cwd,
-//			String provider,
-//			String model,
-//			String sessionName,
-//			List<Message> messages)
-//			throws IOException {
-//		SessionRecorder fork = createSessionRecorder(store, cwd, provider, model, sessionName);
-//		appendSessionMessages(fork, messages);
-//		return fork;
-//	}
-//
-//	/** Opens an existing session so future messages continue in the same JSONL file. */
-//	public static SessionRecorder resumeSessionRecorder(SessionStore store, String sessionId) throws IOException {
-//		sessionSnapshot(store, sessionId);
-//		return new SessionRecorder(store, sessionId);
-//	}
+	/** Creates a named child session containing a copy of the supplied conversation. */
+	public static SessionRecorder forkSessionRecorder(
+			SessionStore store,
+			Path cwd,
+			String provider,
+			String model,
+			String sessionName,
+			List<Message> messages)
+			throws IOException {
+		SessionRecorder fork = createSessionRecorder(store, cwd, provider, model, sessionName);
+		appendSessionMessages(fork, messages);
+		return fork;
+	}
+
+	/** Opens an existing session so future messages continue in the same JSONL file. */
+	public static SessionRecorder resumeSessionRecorder(SessionStore store, String sessionId) throws IOException {
+		sessionSnapshot(store, sessionId);
+		return new SessionRecorder(store, sessionId);
+	}
 
 	/** Appends finished agent messages in chronological order. */
 	public static void appendSessionMessages(SessionRecorder recorder, List<Message> messages) throws IOException {
@@ -13796,22 +13796,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/**
-//	 * Appends a compaction boundary without rewriting the prior transcript. On
-//	 * resume, the latest boundary rebuilds the active model context from that
-//	 * checkpoint and later messages only.
-//	 */
-//	public static void appendSessionCompaction(SessionRecorder recorder, CompactionResult result) throws IOException {
-//		Objects.requireNonNull(result, "result");
-//		if (result.summary == null || result.summary.isBlank()) {
-//			throw new IllegalArgumentException("Compaction summary must not be blank");
-//		}
-//		ObjectNode checkpoint = jsonObject();
-//		checkpoint.put("summary", result.summary);
-//		checkpoint.put("tokensBefore", result.tokensBefore);
-//		checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
-//		appendSessionEntry(recorder.store, recorder.sessionId, "compaction", checkpoint);
-//	}
+	/**
+	 * Appends a compaction boundary without rewriting the prior transcript. On
+	 * resume, the latest boundary rebuilds the active model context from that
+	 * checkpoint and later messages only.
+	 */
+	public static void appendSessionCompaction(SessionRecorder recorder, CompactionResult result) throws IOException {
+		Objects.requireNonNull(result, "result");
+		if (result.summary == null || result.summary.isBlank()) {
+			throw new IllegalArgumentException("Compaction summary must not be blank");
+		}
+		ObjectNode checkpoint = jsonObject();
+		checkpoint.put("summary", result.summary);
+		checkpoint.put("tokensBefore", result.tokensBefore);
+		checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
+		appendSessionEntry(recorder.store, recorder.sessionId, "compaction", checkpoint);
+	}
 
 	// ------------------------------------------------------------ session store
 
@@ -13841,16 +13841,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				List.of(home.resolve(".pi-java").resolve("sessions")));
 	}
 
-//	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
-//	public static String createSession(SessionStore store) throws IOException {
-//		Files.createDirectories(store.directory);
-//		setPosixPermissions(store.directory, SessionStore.DIRECTORY_PERMISSIONS);
-//		String id = uuidv7();
-//		Path file = store.directory.resolve(id + ".jsonl");
-//		Files.createFile(file);
-//		setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
-//		return id;
-//	}
+	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
+	public static String createSession(SessionStore store) throws IOException {
+		Files.createDirectories(store.directory);
+		setPosixPermissions(store.directory, SessionStore.DIRECTORY_PERMISSIONS);
+		String id = uuidv7();
+		Path file = store.directory.resolve(id + ".jsonl");
+		Files.createFile(file);
+		setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
+		return id;
+	}
 
 	/** Appends a typed payload to an existing session. */
 	public static void appendSessionEntry(SessionStore store, String sessionId, String type, JsonNode payload)
@@ -13877,41 +13877,41 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/** Reads and validates all complete entries in file order. */
-//	public static List<SessionStore.Entry> readSession(SessionStore store, String sessionId) throws IOException {
-//		validateSessionId(sessionId);
-//		Path file = existingSessionPath(store, sessionId);
-//		if (file == null) {
-//			throw new IOException("Unknown session: " + sessionId);
-//		}
-//		List<SessionStore.Entry> entries = new ArrayList<>();
-//		try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-//			int index = 0;
-//			String line;
-//			while ((line = reader.readLine()) != null) {
-//				index++;
-//				if (line.isBlank()) {
-//					continue;
-//				}
-//				JsonNode node;
-//				try {
-//					node = Json.MAPPER.readTree(line);
-//				} catch (IOException e) {
-//					throw new IOException("Invalid JSONL entry at " + file + ":" + index, e);
-//				}
-//				if (!node.isObject()
-//						|| !node.path("timestamp").isIntegralNumber()
-//						|| !node.path("type").isTextual()
-//						|| !node.has("payload")) {
-//					throw new IOException("Invalid JSONL entry at " + file + ":" + index);
-//				}
-//				entries.add(new SessionStore.Entry(
-//						node.path("timestamp").asLong(), node.path("type").asText(), node.path("payload")));
-//			}
-//		}
-//		return List.copyOf(entries);
-//	}
-//
+	/** Reads and validates all complete entries in file order. */
+	public static List<SessionStore.Entry> readSession(SessionStore store, String sessionId) throws IOException {
+		validateSessionId(sessionId);
+		Path file = existingSessionPath(store, sessionId);
+		if (file == null) {
+			throw new IOException("Unknown session: " + sessionId);
+		}
+		List<SessionStore.Entry> entries = new ArrayList<>();
+		try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+			int index = 0;
+			String line;
+			while ((line = reader.readLine()) != null) {
+				index++;
+				if (line.isBlank()) {
+					continue;
+				}
+				JsonNode node;
+				try {
+					node = Json.MAPPER.readTree(line);
+				} catch (IOException e) {
+					throw new IOException("Invalid JSONL entry at " + file + ":" + index, e);
+				}
+				if (!node.isObject()
+						|| !node.path("timestamp").isIntegralNumber()
+						|| !node.path("type").isTextual()
+						|| !node.has("payload")) {
+					throw new IOException("Invalid JSONL entry at " + file + ":" + index);
+				}
+				entries.add(new SessionStore.Entry(
+						node.path("timestamp").asLong(), node.path("type").asText(), node.path("payload")));
+			}
+		}
+		return List.copyOf(entries);
+	}
+
 //	/** Lists session ids newest first. */
 //	public static List<String> listSessions(SessionStore store) throws IOException {
 //		return sessionFiles(store).stream()
@@ -13938,110 +13938,110 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return List.copyOf(snapshots);
 	}
 
-//	/** Loads metadata, the complete transcript, and compaction-aware continuation context. */
-//	public static SessionSnapshot sessionSnapshot(SessionStore store, String sessionId) throws IOException {
-//		List<SessionStore.Entry> entries = readSession(store, sessionId);
-//		if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
-//			throw new IOException("Session has no session_start entry: " + sessionId);
-//		}
-//		SessionStore.Entry start = entries.getFirst();
-//		JsonNode payload = start.payload;
-//		String cwdText = requiredSessionPayloadText(payload, "cwd", sessionId);
-//		String provider = requiredSessionPayloadText(payload, "provider", sessionId);
-//		String model = requiredSessionPayloadText(payload, "model", sessionId);
-//		String name = optionalSessionText(payload, "name");
-//		List<Message> transcriptMessages = new ArrayList<>();
-//		List<Message> messages = new ArrayList<>();
-//		String firstMessage = "";
-//		StringBuilder allMessages = new StringBuilder();
-//		long modified = start.timestamp;
-//		for (SessionStore.Entry entry : entries) {
-//			modified = Math.max(modified, entry.timestamp);
-//			if (entry.type.equals("compaction")) {
-//				messages.clear();
-//				messages.add(sessionCompactionCheckpoint(entry.payload, entry.timestamp, sessionId));
-//				continue;
-//			}
-//			if (!entry.type.equals("message")) continue;
-//			Message message;
-//			try {
-//				message = decodeSessionMessage(entry.payload);
-//			} catch (IOException | RuntimeException error) {
-//				throw new IOException("Invalid message in session " + sessionId, error);
-//			}
-//			transcriptMessages.add(message);
-//			messages.add(message);
-//			String text = sessionMessageText(message);
-//			if (!text.isBlank()) {
-//				if (!allMessages.isEmpty()) allMessages.append(' ');
-//				allMessages.append(text);
-//				if (firstMessage.isEmpty() && message instanceof UserMessage) firstMessage = text;
-//			}
-//		}
-//		Path file = existingSessionPath(store, sessionId);
-//		if (file == null) throw new IOException("Unknown session: " + sessionId);
-//		Path sessionCwd;
-//		try {
-//			sessionCwd = Path.of(cwdText).toAbsolutePath().normalize();
-//		} catch (RuntimeException error) {
-//			throw new IOException("Session " + sessionId + " has an invalid cwd", error);
-//		}
-//		return newSessionSnapshot(
-//				sessionId,
-//				name,
-//				file,
-//				sessionCwd,
-//				provider,
-//				model,
-//				Instant.ofEpochMilli(start.timestamp),
-//				Instant.ofEpochMilli(modified),
-//				transcriptMessages.size(),
-//				firstMessage.isEmpty() ? "(no messages)" : firstMessage,
-//				allMessages.toString(),
-//				messages,
-//				transcriptMessages);
-//	}
-//
-//	/**
-//	 * Creates a session snapshot. Every field except the display name is
-//	 * required; a blank name normalizes to null and both message lists are
-//	 * copied.
-//	 */
-//	public static SessionSnapshot newSessionSnapshot(
-//			String id,
-//			String name,
-//			Path path,
-//			Path cwd,
-//			String provider,
-//			String model,
-//			Instant created,
-//			Instant modified,
-//			int messageCount,
-//			String firstMessage,
-//			String allMessagesText,
-//			List<Message> messages,
-//			List<Message> transcriptMessages) {
-//		return new SessionSnapshot(
-//				Objects.requireNonNull(id, "id"),
-//				normalizeSessionName(name),
-//				Objects.requireNonNull(path, "path"),
-//				Objects.requireNonNull(cwd, "cwd"),
-//				Objects.requireNonNull(provider, "provider"),
-//				Objects.requireNonNull(model, "model"),
-//				Objects.requireNonNull(created, "created"),
-//				Objects.requireNonNull(modified, "modified"),
-//				messageCount,
-//				Objects.requireNonNull(firstMessage, "firstMessage"),
-//				Objects.requireNonNull(allMessagesText, "allMessagesText"),
-//				List.copyOf(messages),
-//				List.copyOf(transcriptMessages));
-//	}
-//
-//	/** Strips a session display name, treating blank names as absent. */
-//	public static String normalizeSessionName(String name) {
-//		String normalized = name == null ? null : name.strip();
-//		return normalized == null || normalized.isEmpty() ? null : normalized;
-//	}
+	/** Loads metadata, the complete transcript, and compaction-aware continuation context. */
+	public static SessionSnapshot sessionSnapshot(SessionStore store, String sessionId) throws IOException {
+		List<SessionStore.Entry> entries = readSession(store, sessionId);
+		if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
+			throw new IOException("Session has no session_start entry: " + sessionId);
+		}
+		SessionStore.Entry start = entries.getFirst();
+		JsonNode payload = start.payload;
+		String cwdText = requiredSessionPayloadText(payload, "cwd", sessionId);
+		String provider = requiredSessionPayloadText(payload, "provider", sessionId);
+		String model = requiredSessionPayloadText(payload, "model", sessionId);
+		String name = optionalSessionText(payload, "name");
+		List<Message> transcriptMessages = new ArrayList<>();
+		List<Message> messages = new ArrayList<>();
+		String firstMessage = "";
+		StringBuilder allMessages = new StringBuilder();
+		long modified = start.timestamp;
+		for (SessionStore.Entry entry : entries) {
+			modified = Math.max(modified, entry.timestamp);
+			if (entry.type.equals("compaction")) {
+				messages.clear();
+				messages.add(sessionCompactionCheckpoint(entry.payload, entry.timestamp, sessionId));
+				continue;
+			}
+			if (!entry.type.equals("message")) continue;
+			Message message;
+			try {
+				message = decodeSessionMessage(entry.payload);
+			} catch (IOException | RuntimeException error) {
+				throw new IOException("Invalid message in session " + sessionId, error);
+			}
+			transcriptMessages.add(message);
+			messages.add(message);
+			String text = sessionMessageText(message);
+			if (!text.isBlank()) {
+				if (!allMessages.isEmpty()) allMessages.append(' ');
+				allMessages.append(text);
+				if (firstMessage.isEmpty() && message instanceof UserMessage) firstMessage = text;
+			}
+		}
+		Path file = existingSessionPath(store, sessionId);
+		if (file == null) throw new IOException("Unknown session: " + sessionId);
+		Path sessionCwd;
+		try {
+			sessionCwd = Path.of(cwdText).toAbsolutePath().normalize();
+		} catch (RuntimeException error) {
+			throw new IOException("Session " + sessionId + " has an invalid cwd", error);
+		}
+		return newSessionSnapshot(
+				sessionId,
+				name,
+				file,
+				sessionCwd,
+				provider,
+				model,
+				Instant.ofEpochMilli(start.timestamp),
+				Instant.ofEpochMilli(modified),
+				transcriptMessages.size(),
+				firstMessage.isEmpty() ? "(no messages)" : firstMessage,
+				allMessages.toString(),
+				messages,
+				transcriptMessages);
+	}
+
+	/**
+	 * Creates a session snapshot. Every field except the display name is
+	 * required; a blank name normalizes to null and both message lists are
+	 * copied.
+	 */
+	public static SessionSnapshot newSessionSnapshot(
+			String id,
+			String name,
+			Path path,
+			Path cwd,
+			String provider,
+			String model,
+			Instant created,
+			Instant modified,
+			int messageCount,
+			String firstMessage,
+			String allMessagesText,
+			List<Message> messages,
+			List<Message> transcriptMessages) {
+		return new SessionSnapshot(
+				Objects.requireNonNull(id, "id"),
+				normalizeSessionName(name),
+				Objects.requireNonNull(path, "path"),
+				Objects.requireNonNull(cwd, "cwd"),
+				Objects.requireNonNull(provider, "provider"),
+				Objects.requireNonNull(model, "model"),
+				Objects.requireNonNull(created, "created"),
+				Objects.requireNonNull(modified, "modified"),
+				messageCount,
+				Objects.requireNonNull(firstMessage, "firstMessage"),
+				Objects.requireNonNull(allMessagesText, "allMessagesText"),
+				List.copyOf(messages),
+				List.copyOf(transcriptMessages));
+	}
+
+	/** Strips a session display name, treating blank names as absent. */
+	public static String normalizeSessionName(String name) {
+		String normalized = name == null ? null : name.strip();
+		return normalized == null || normalized.isEmpty() ? null : normalized;
+	}
 
 	private static UserMessage sessionCompactionCheckpoint(JsonNode payload, long timestamp, String sessionId)
 			throws IOException {
@@ -14049,21 +14049,21 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return userMessage(List.of(textContent("[Conversation checkpoint]\n" + summary)), timestamp);
 	}
 
-//	private static List<Path> sessionFiles(SessionStore store) throws IOException {
-//		Map<String, Path> filesById = new LinkedHashMap<>();
-//		List<Path> directories = new ArrayList<>(store.legacyDirectories.size() + 1);
-//		directories.add(store.directory);
-//		directories.addAll(store.legacyDirectories);
-//		for (Path candidateDirectory : directories) {
-//			if (!Files.isDirectory(candidateDirectory)) continue;
-//			try (Stream<Path> files = Files.list(candidateDirectory)) {
-//				files.filter(Files::isRegularFile)
-//						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-//						.forEach(path -> filesById.putIfAbsent(sessionIdFor(path.getFileName()), path));
-//			}
-//		}
-//		return List.copyOf(filesById.values());
-//	}
+	private static List<Path> sessionFiles(SessionStore store) throws IOException {
+		Map<String, Path> filesById = new LinkedHashMap<>();
+		List<Path> directories = new ArrayList<>(store.legacyDirectories.size() + 1);
+		directories.add(store.directory);
+		directories.addAll(store.legacyDirectories);
+		for (Path candidateDirectory : directories) {
+			if (!Files.isDirectory(candidateDirectory)) continue;
+			try (Stream<Path> files = Files.list(candidateDirectory)) {
+				files.filter(Files::isRegularFile)
+						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
+						.forEach(path -> filesById.putIfAbsent(sessionIdFor(path.getFileName()), path));
+			}
+		}
+		return List.copyOf(filesById.values());
+	}
 
 	private static Path existingSessionPath(SessionStore store, String sessionId) {
 		Path current = store.directory.resolve(sessionId + ".jsonl");
@@ -14075,17 +14075,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return null;
 	}
 
-//	private static String sessionIdFor(Path fileName) {
-//		return fileName.toString().replaceFirst("\\.jsonl$", "");
-//	}
-//
-//	private static boolean sameSessionCwd(Path left, Path right) {
-//		try {
-//			return left.toRealPath().equals(right.toRealPath());
-//		} catch (IOException ignored) {
-//			return left.equals(right);
-//		}
-//	}
+	private static String sessionIdFor(Path fileName) {
+		return fileName.toString().replaceFirst("\\.jsonl$", "");
+	}
+
+	private static boolean sameSessionCwd(Path left, Path right) {
+		try {
+			return left.toRealPath().equals(right.toRealPath());
+		} catch (IOException ignored) {
+			return left.equals(right);
+		}
+	}
 
 	private static String requiredSessionPayloadText(JsonNode payload, String field, String sessionId)
 			throws IOException {
@@ -14096,13 +14096,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return value.asText();
 	}
 
-//	private static String sessionMessageText(Message message) {
-//		return switch (message) {
-//			case UserMessage user -> text(user);
-//			case AssistantMessage assistant -> text(assistant);
-//			case ToolResultMessage result -> text(result);
-//		};
-//	}
+	private static String sessionMessageText(Message message) {
+		return switch (message) {
+			case UserMessage user -> text(user);
+			case AssistantMessage assistant -> text(assistant);
+			case ToolResultMessage result -> text(result);
+		};
+	}
 
 	private static void validateSessionId(String sessionId) {
 		if (sessionId == null
@@ -14126,18 +14126,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 //	public static SettingsStore.Settings emptySettings() {
 //		return new SettingsStore.Settings(null, null, null, null, false);
 //	}
-//
-//	public static SettingsStore.Settings withSettingsDefaultModel(
-//			SettingsStore.Settings settings, String provider, String model) {
-//		return new SettingsStore.Settings(
-//				provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
-//	}
-//
-//	public static SettingsStore.Settings withSettingsDefaultThinkingLevel(
-//			SettingsStore.Settings settings, ThinkingLevel level) {
-//		return new SettingsStore.Settings(
-//				settings.defaultProvider, settings.defaultModel, level, settings.theme, settings.hideThinkingBlock);
-//	}
+
+	public static SettingsStore.Settings withSettingsDefaultModel(
+			SettingsStore.Settings settings, String provider, String model) {
+		return new SettingsStore.Settings(
+				provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
+	}
+
+	public static SettingsStore.Settings withSettingsDefaultThinkingLevel(
+			SettingsStore.Settings settings, ThinkingLevel level) {
+		return new SettingsStore.Settings(
+				settings.defaultProvider, settings.defaultModel, level, settings.theme, settings.hideThinkingBlock);
+	}
 
 	public static SettingsStore.Settings withSettingsTheme(SettingsStore.Settings settings, String value) {
 		return new SettingsStore.Settings(
@@ -14148,15 +14148,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				settings.hideThinkingBlock);
 	}
 
-//	public static SettingsStore.Settings withSettingsHideThinkingBlock(
-//			SettingsStore.Settings settings, boolean hide) {
-//		return new SettingsStore.Settings(
-//				settings.defaultProvider,
-//				settings.defaultModel,
-//				settings.defaultThinkingLevel,
-//				settings.theme,
-//				hide);
-//	}
+	public static SettingsStore.Settings withSettingsHideThinkingBlock(
+			SettingsStore.Settings settings, boolean hide) {
+		return new SettingsStore.Settings(
+				settings.defaultProvider,
+				settings.defaultModel,
+				settings.defaultThinkingLevel,
+				settings.theme,
+				hide);
+	}
 
 	/** Loads the current settings, or an empty settings object when no file exists. */
 	public static SettingsStore.Settings loadSettings(SettingsStore store) throws IOException {
@@ -14178,85 +14178,85 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				provider, model, thinkingLevel, theme, optionalSettingsBoolean(root, "hideThinkingBlock", false));
 	}
 
-//	public static void setSettingsDefaultModelAndProvider(SettingsStore store, String provider, String model)
-//			throws IOException {
-//		requireSettingsValue(provider, "provider");
-//		requireSettingsValue(model, "model");
-//		modifySettings(store, root -> {
-//			root.put("defaultProvider", provider);
-//			root.put("defaultModel", model);
-//		});
-//	}
-//
-//	public static void setSettingsDefaultThinkingLevel(SettingsStore store, ThinkingLevel level) throws IOException {
-//		if (level == null) throw new IllegalArgumentException("level must not be null");
-//		modifySettings(store, root -> root.put("defaultThinkingLevel", level.wire));
-//	}
+	public static void setSettingsDefaultModelAndProvider(SettingsStore store, String provider, String model)
+			throws IOException {
+		requireSettingsValue(provider, "provider");
+		requireSettingsValue(model, "model");
+		modifySettings(store, root -> {
+			root.put("defaultProvider", provider);
+			root.put("defaultModel", model);
+		});
+	}
+
+	public static void setSettingsDefaultThinkingLevel(SettingsStore store, ThinkingLevel level) throws IOException {
+		if (level == null) throw new IllegalArgumentException("level must not be null");
+		modifySettings(store, root -> root.put("defaultThinkingLevel", level.wire));
+	}
 
 	public static void setSettingsTheme(SettingsStore store, String theme) throws IOException {
 		requireSettingsValue(theme, "theme");
 		modifySettings(store, root -> root.put("theme", theme));
 	}
 
-//	public static void setSettingsHideThinkingBlock(SettingsStore store, boolean hide) throws IOException {
-//		modifySettings(store, root -> root.put("hideThinkingBlock", hide));
-//	}
-//
-//	/** Persists whether a configured MCP server should connect on future starts. */
-//	public static void setSettingsMcpServerEnabled(SettingsStore store, String serverName, boolean enabled)
-//			throws IOException {
-//		requireSettingsValue(serverName, "serverName");
-//		modifySettings(store, root -> settingsMcpServer(root, serverName).put("enabled", enabled));
-//	}
-//
-//	/**
-//	 * Persists a per-server tool override. Enabled tools are omitted from
-//	 * {@code disabledTools}, because enabled is the default.
-//	 */
-//	public static void setSettingsMcpToolEnabled(
-//			SettingsStore store, String serverName, String toolName, boolean enabled) throws IOException {
-//		requireSettingsValue(serverName, "serverName");
-//		requireSettingsValue(toolName, "toolName");
-//		modifySettings(store, root -> {
-//			ObjectNode server = settingsMcpServer(root, serverName);
-//			ArrayNode disabledTools = settingsDisabledTools(server, serverName);
-//			if (enabled) {
-//				if (disabledTools == null) return;
-//				ArrayNode retained = Json.MAPPER.createArrayNode();
-//				for (JsonNode tool : disabledTools) {
-//					String name = settingsDisabledToolName(serverName, tool);
-//					if (!name.equals(toolName)) retained.add(name);
-//				}
-//				if (retained.isEmpty()) server.remove("disabledTools");
-//				else server.set("disabledTools", retained);
-//				return;
-//			}
-//			if (disabledTools == null) disabledTools = server.putArray("disabledTools");
-//			for (JsonNode tool : disabledTools) {
-//				if (settingsDisabledToolName(serverName, tool).equals(toolName)) return;
-//			}
-//			disabledTools.add(toolName);
-//		});
-//	}
-//
-//	/**
-//	 * Serializes an update across processes, preserves unknown settings, and
-//	 * replaces the file atomically. The update reports invalid stored JSON with
-//	 * UncheckedIOException, which is unwrapped into the declared IOException.
-//	 */
-//	private static void modifySettings(SettingsStore store, Consumer<ObjectNode> operation) throws IOException {
-//		ensureSettingsParentDirectory(store);
-//		try (FileChannel channel =
-//						FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-//				FileLock ignored = channel.lock()) {
-//			setPosixPermissions(store.lockPath, SettingsStore.FILE_PERMISSIONS);
-//			ObjectNode root = readSettingsObject(store);
-//			operation.accept(root);
-//			writeSettingsObject(store, root);
-//		} catch (UncheckedIOException error) {
-//			throw error.getCause();
-//		}
-//	}
+	public static void setSettingsHideThinkingBlock(SettingsStore store, boolean hide) throws IOException {
+		modifySettings(store, root -> root.put("hideThinkingBlock", hide));
+	}
+
+	/** Persists whether a configured MCP server should connect on future starts. */
+	public static void setSettingsMcpServerEnabled(SettingsStore store, String serverName, boolean enabled)
+			throws IOException {
+		requireSettingsValue(serverName, "serverName");
+		modifySettings(store, root -> settingsMcpServer(root, serverName).put("enabled", enabled));
+	}
+
+	/**
+	 * Persists a per-server tool override. Enabled tools are omitted from
+	 * {@code disabledTools}, because enabled is the default.
+	 */
+	public static void setSettingsMcpToolEnabled(
+			SettingsStore store, String serverName, String toolName, boolean enabled) throws IOException {
+		requireSettingsValue(serverName, "serverName");
+		requireSettingsValue(toolName, "toolName");
+		modifySettings(store, root -> {
+			ObjectNode server = settingsMcpServer(root, serverName);
+			ArrayNode disabledTools = settingsDisabledTools(server, serverName);
+			if (enabled) {
+				if (disabledTools == null) return;
+				ArrayNode retained = Json.MAPPER.createArrayNode();
+				for (JsonNode tool : disabledTools) {
+					String name = settingsDisabledToolName(serverName, tool);
+					if (!name.equals(toolName)) retained.add(name);
+				}
+				if (retained.isEmpty()) server.remove("disabledTools");
+				else server.set("disabledTools", retained);
+				return;
+			}
+			if (disabledTools == null) disabledTools = server.putArray("disabledTools");
+			for (JsonNode tool : disabledTools) {
+				if (settingsDisabledToolName(serverName, tool).equals(toolName)) return;
+			}
+			disabledTools.add(toolName);
+		});
+	}
+
+	/**
+	 * Serializes an update across processes, preserves unknown settings, and
+	 * replaces the file atomically. The update reports invalid stored JSON with
+	 * UncheckedIOException, which is unwrapped into the declared IOException.
+	 */
+	private static void modifySettings(SettingsStore store, Consumer<ObjectNode> operation) throws IOException {
+		ensureSettingsParentDirectory(store);
+		try (FileChannel channel =
+						FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+				FileLock ignored = channel.lock()) {
+			setPosixPermissions(store.lockPath, SettingsStore.FILE_PERMISSIONS);
+			ObjectNode root = readSettingsObject(store);
+			operation.accept(root);
+			writeSettingsObject(store, root);
+		} catch (UncheckedIOException error) {
+			throw error.getCause();
+		}
+	}
 
 	private static ObjectNode readSettingsObject(SettingsStore store) throws IOException {
 		if (!Files.exists(store.settingsPath)) {
@@ -14275,70 +14275,70 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return object;
 	}
 
-//	private static void writeSettingsObject(SettingsStore store, ObjectNode root) throws IOException {
-//		Path temp = Files.createTempFile(store.settingsPath.getParent(), "settings-", ".json");
-//		try {
-//			Files.writeString(
-//					temp,
-//					Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
-//					StandardCharsets.UTF_8,
-//					StandardOpenOption.WRITE,
-//					StandardOpenOption.TRUNCATE_EXISTING);
-//			setPosixPermissions(temp, SettingsStore.FILE_PERMISSIONS);
-//			try {
-//				Files.move(temp, store.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-//			} catch (AtomicMoveNotSupportedException error) {
-//				Files.move(temp, store.settingsPath, StandardCopyOption.REPLACE_EXISTING);
-//			}
-//			setPosixPermissions(store.settingsPath, SettingsStore.FILE_PERMISSIONS);
-//		} finally {
-//			Files.deleteIfExists(temp);
-//		}
-//	}
-//
-//	private static void ensureSettingsParentDirectory(SettingsStore store) throws IOException {
-//		Path parent = store.settingsPath.getParent();
-//		if (parent == null) {
-//			throw new IOException("Settings path has no parent directory: " + store.settingsPath);
-//		}
-//		Files.createDirectories(parent);
-//		setPosixPermissions(parent, SettingsStore.DIRECTORY_PERMISSIONS);
-//	}
-//
-//	private static ObjectNode settingsMcpServer(ObjectNode root, String serverName) {
-//		JsonNode mcp = root.get("mcp");
-//		if (!(mcp instanceof ObjectNode servers)) {
-//			throw new UncheckedIOException(
-//					new IOException("Cannot update MCP server \"" + serverName + "\": mcp must be an object"));
-//		}
-//		JsonNode server = servers.get(serverName);
-//		if (!(server instanceof ObjectNode object)) {
-//			throw new UncheckedIOException(
-//					new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured"));
-//		}
-//		return object;
-//	}
-//
-//	private static ArrayNode settingsDisabledTools(ObjectNode server, String serverName) {
-//		JsonNode value = server.get("disabledTools");
-//		if (value == null || value.isNull()) return null;
-//		if (!(value instanceof ArrayNode tools)) {
-//			throw new UncheckedIOException(new IOException(
-//					"Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
-//		}
-//		for (JsonNode tool : tools) {
-//			settingsDisabledToolName(serverName, tool);
-//		}
-//		return tools;
-//	}
-//
-//	private static String settingsDisabledToolName(String serverName, JsonNode tool) {
-//		if (!tool.isTextual() || tool.asText().isBlank()) {
-//			throw new UncheckedIOException(new IOException(
-//					"Invalid MCP server \"" + serverName + "\": disabledTools must contain non-empty strings"));
-//		}
-//		return tool.asText();
-//	}
+	private static void writeSettingsObject(SettingsStore store, ObjectNode root) throws IOException {
+		Path temp = Files.createTempFile(store.settingsPath.getParent(), "settings-", ".json");
+		try {
+			Files.writeString(
+					temp,
+					Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
+					StandardCharsets.UTF_8,
+					StandardOpenOption.WRITE,
+					StandardOpenOption.TRUNCATE_EXISTING);
+			setPosixPermissions(temp, SettingsStore.FILE_PERMISSIONS);
+			try {
+				Files.move(temp, store.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			} catch (AtomicMoveNotSupportedException error) {
+				Files.move(temp, store.settingsPath, StandardCopyOption.REPLACE_EXISTING);
+			}
+			setPosixPermissions(store.settingsPath, SettingsStore.FILE_PERMISSIONS);
+		} finally {
+			Files.deleteIfExists(temp);
+		}
+	}
+
+	private static void ensureSettingsParentDirectory(SettingsStore store) throws IOException {
+		Path parent = store.settingsPath.getParent();
+		if (parent == null) {
+			throw new IOException("Settings path has no parent directory: " + store.settingsPath);
+		}
+		Files.createDirectories(parent);
+		setPosixPermissions(parent, SettingsStore.DIRECTORY_PERMISSIONS);
+	}
+
+	private static ObjectNode settingsMcpServer(ObjectNode root, String serverName) {
+		JsonNode mcp = root.get("mcp");
+		if (!(mcp instanceof ObjectNode servers)) {
+			throw new UncheckedIOException(
+					new IOException("Cannot update MCP server \"" + serverName + "\": mcp must be an object"));
+		}
+		JsonNode server = servers.get(serverName);
+		if (!(server instanceof ObjectNode object)) {
+			throw new UncheckedIOException(
+					new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured"));
+		}
+		return object;
+	}
+
+	private static ArrayNode settingsDisabledTools(ObjectNode server, String serverName) {
+		JsonNode value = server.get("disabledTools");
+		if (value == null || value.isNull()) return null;
+		if (!(value instanceof ArrayNode tools)) {
+			throw new UncheckedIOException(new IOException(
+					"Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
+		}
+		for (JsonNode tool : tools) {
+			settingsDisabledToolName(serverName, tool);
+		}
+		return tools;
+	}
+
+	private static String settingsDisabledToolName(String serverName, JsonNode tool) {
+		if (!tool.isTextual() || tool.asText().isBlank()) {
+			throw new UncheckedIOException(new IOException(
+					"Invalid MCP server \"" + serverName + "\": disabledTools must contain non-empty strings"));
+		}
+		return tool.asText();
+	}
 
 	private static String optionalSettingsText(ObjectNode root, String field) throws IOException {
 		JsonNode value = root.get(field);
@@ -14359,10 +14359,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return value.asBoolean();
 	}
 
-//	private static void requireSettingsValue(String value, String name) {
-//		if (value == null || value.isBlank()) {
-//			throw new IllegalArgumentException(name + " must not be blank");
-//		}
-//	}
+	private static void requireSettingsValue(String value, String name) {
+		if (value == null || value.isBlank()) {
+			throw new IllegalArgumentException(name + " must not be blank");
+		}
+	}
 
 }
