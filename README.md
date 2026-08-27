@@ -204,6 +204,9 @@ for a remote server.
 
 `--api-key` overrides environment-based credentials. Without `--no-session`,
 codingagent records an append-only transcript in `~/.codingagent/sessions`.
+Successful manual and automatic compactions are recorded as resume boundaries:
+the original transcript remains inspectable, while a resumed session sends only
+the saved checkpoint and messages added after that compaction.
 
 ## Repository instructions
 

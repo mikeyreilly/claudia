@@ -1,13 +1,16 @@
 package com.quaxt.codingagent.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import com.quaxt.codingagent.ai.Retry;
 import com.quaxt.codingagent.ai.json.Json;
@@ -158,5 +161,63 @@ class AgentTest {
 		UserMessage checkpoint = assertInstanceOf(UserMessage.class, agent.state().messages.getFirst());
 		assertTrue(checkpoint.text().startsWith("[Conversation checkpoint]\n## Goal"));
 		assertTrue(result.estimatedTokensAfter() < result.tokensBefore());
+	}
+
+	@Test
+	void rejectsPromptsTriggeredWhileCompactionIsInProgress() throws Exception {
+		FauxProvider provider = new FauxProvider();
+		provider.setResponses(List.of(
+				new FauxProvider.ResponseStep.Message(FauxProvider.text("Initial response.")),
+				new FauxProvider.ResponseStep.Message(FauxProvider.text("Checkpoint summary."))));
+		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
+		agent.prompt("initial prompt");
+		AtomicReference<IllegalStateException> rejection = new AtomicReference<>();
+		agent.subscribe(event -> {
+			if (event instanceof AgentEvent.CompactionStart) {
+				try {
+					agent.prompt("queued during compaction");
+				} catch (IllegalStateException error) {
+					rejection.set(error);
+				} catch (InterruptedException error) {
+					Thread.currentThread().interrupt();
+					throw new AssertionError(error);
+				}
+			}
+		});
+
+		agent.compact(null);
+
+		assertNotNull(rejection.get());
+		assertEquals(2, provider.state().callCount());
+	}
+
+	@Test
+	void sendsOnlyTheCheckpointAndNewPromptAfterManualCompaction() throws Exception {
+		FauxProvider provider = new FauxProvider();
+		AtomicReference<List<Message>> followUpRequest = new AtomicReference<>();
+		provider.setResponses(List.of(
+				new FauxProvider.ResponseStep.Message(FauxProvider.text("Initial response.")),
+				new FauxProvider.ResponseStep.Message(FauxProvider.text("Checkpoint summary.")),
+				new FauxProvider.ResponseStep.Factory(request -> {
+					followUpRequest.set(List.copyOf(request.context().messages));
+					return FauxProvider.text("Follow-up response.");
+				})));
+		Agent agent = new Agent("system", provider.models().getFirst(), provider::stream);
+
+		agent.prompt("PRE-COMPACTION-SENTINEL");
+		agent.compact(null);
+		agent.prompt("POST-COMPACTION-SENTINEL");
+
+		List<Message> messages = followUpRequest.get();
+		assertEquals(2, messages.size());
+		UserMessage checkpoint = assertInstanceOf(UserMessage.class, messages.getFirst());
+		assertEquals("[Conversation checkpoint]\nCheckpoint summary.", checkpoint.text());
+		UserMessage prompt = assertInstanceOf(UserMessage.class, messages.getLast());
+		assertEquals("POST-COMPACTION-SENTINEL", prompt.text());
+		assertFalse(messages.stream()
+				.filter(UserMessage.class::isInstance)
+				.map(UserMessage.class::cast)
+				.map(UserMessage::text)
+				.anyMatch(text -> text.contains("PRE-COMPACTION-SENTINEL")));
 	}
 }

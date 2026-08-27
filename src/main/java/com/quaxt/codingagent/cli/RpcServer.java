@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.List;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
+import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.ai.CoreProviders;
 import com.quaxt.codingagent.ai.Provider;
 import com.quaxt.codingagent.ai.json.Json;
@@ -209,6 +210,7 @@ final class RpcServer {
 				node.put("tokensBefore", start.tokensBefore());
 			}
 			case AgentEvent.CompactionEnd end -> {
+				persistCompaction(end.result());
 				node.put("type", "compaction_end");
 				node.put("tokensBefore", end.result().tokensBefore());
 				node.put("estimatedTokensAfter", end.result().estimatedTokensAfter());
@@ -263,6 +265,18 @@ final class RpcServer {
 			}
 		}
 		output(node);
+	}
+
+	/** Saves every successful manual or automatic compaction as a resume boundary. */
+	private void persistCompaction(CompactionResult result) {
+		if (recorder == null) return;
+		try {
+			recorder.appendCompaction(result);
+		} catch (IOException error) {
+			// Never contaminate the JSONL protocol on stdout. The live state remains
+			// valid even if its append-only resume marker could not be written.
+			System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
+		}
 	}
 
 	private void respond(String id, String command, boolean success, JsonNode data, String error) {
