@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.agent;
 
+import java.nio.file.Path;
 import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
 import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
@@ -9,6 +10,9 @@ public sealed interface AgentEvent {
 	record AgentStart() implements AgentEvent {}
 
 	record AgentEnd(java.util.List<Message> newMessages) implements AgentEvent {}
+
+	/** A repository instruction file was incorporated into the system prompt. */
+	record InstructionLoaded(Path path) implements AgentEvent {}
 
 	record CompactionStart(long tokensBefore) implements AgentEvent {}
 

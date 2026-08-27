@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.agent;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,6 +60,11 @@ public final class Agent {
 	public AutoCloseable subscribe(Consumer<AgentEvent> listener) {
 		listeners.add(listener);
 		return () -> listeners.remove(listener);
+	}
+
+	/** Reports that a repository instruction file will apply to later model requests. */
+	public void instructionLoaded(Path path) {
+		emit(new AgentEvent.InstructionLoaded(java.util.Objects.requireNonNull(path, "path")));
 	}
 
 	public void abort() {
