@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.ImageContent;
@@ -60,6 +61,52 @@ class SessionRecorderTest {
 		assertEquals(2, snapshot.messageCount());
 		assertEquals("first prompt", snapshot.firstMessage());
 		assertEquals(2, store.snapshot(source.sessionId()).messageCount());
+	}
+
+	@Test
+	void restoresCompactedSessionsUsingOnlyTheCheckpointAndLaterMessagesAsContext() throws Exception {
+		SessionStore store = new SessionStore(tempDir.resolve("sessions"));
+		SessionRecorder recorder = SessionRecorder.create(store, tempDir, "faux", "faux-1");
+		recorder.appendMessages(List.of(
+				UserMessage.of("PRE-COMPACTION-SENTINEL"),
+				UserMessage.of("another message to compact")));
+		recorder.appendCompaction(new CompactionResult("Saved checkpoint.", 123, 12));
+		recorder.appendMessages(List.of(UserMessage.of("POST-COMPACTION-SENTINEL")));
+
+		SessionSnapshot snapshot = store.snapshot(recorder.sessionId());
+
+		// The append-only transcript remains available to render or inspect.
+		assertEquals(3, snapshot.messageCount());
+		assertEquals(3, snapshot.transcriptMessages().size());
+		assertEquals("PRE-COMPACTION-SENTINEL", ((UserMessage) snapshot.transcriptMessages().getFirst()).text());
+		assertEquals("compaction", store.read(recorder.sessionId()).get(3).type());
+
+		// Resuming must use the compaction-aware projection, not the old transcript.
+		assertEquals(2, snapshot.messages().size());
+		UserMessage checkpoint = (UserMessage) snapshot.messages().getFirst();
+		assertEquals("[Conversation checkpoint]\nSaved checkpoint.", checkpoint.text());
+		UserMessage later = (UserMessage) snapshot.messages().getLast();
+		assertEquals("POST-COMPACTION-SENTINEL", later.text());
+		assertTrue(snapshot.messages().stream()
+				.noneMatch(message -> message instanceof UserMessage user
+						&& user.text().contains("PRE-COMPACTION-SENTINEL")));
+	}
+
+	@Test
+	void usesTheLatestCompactionBoundaryWhenASessionIsCompactedAgain() throws Exception {
+		SessionStore store = new SessionStore(tempDir.resolve("sessions"));
+		SessionRecorder recorder = SessionRecorder.create(store, tempDir, "faux", "faux-1");
+		recorder.appendMessages(List.of(UserMessage.of("first history")));
+		recorder.appendCompaction(new CompactionResult("first checkpoint", 100, 10));
+		recorder.appendMessages(List.of(UserMessage.of("between compactions")));
+		recorder.appendCompaction(new CompactionResult("second checkpoint", 100, 10));
+		recorder.appendMessages(List.of(UserMessage.of("after latest compaction")));
+
+		SessionSnapshot snapshot = store.snapshot(recorder.sessionId());
+
+		assertEquals(2, snapshot.messages().size());
+		assertEquals("[Conversation checkpoint]\nsecond checkpoint", ((UserMessage) snapshot.messages().getFirst()).text());
+		assertEquals("after latest compaction", ((UserMessage) snapshot.messages().getLast()).text());
 	}
 
 	@Test

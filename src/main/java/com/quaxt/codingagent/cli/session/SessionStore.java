@@ -20,6 +20,7 @@ import java.util.stream.Stream;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
+import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.Uuid;
@@ -153,7 +154,7 @@ public final class SessionStore {
 		return List.copyOf(snapshots);
 	}
 
-	/** Loads metadata and the complete message history needed to resume a session. */
+	/** Loads metadata, the complete transcript, and compaction-aware continuation context. */
 	public SessionSnapshot snapshot(String sessionId) throws IOException {
 		List<Entry> entries = read(sessionId);
 		if (entries.isEmpty() || !entries.getFirst().type().equals("session_start")) {
@@ -165,12 +166,18 @@ public final class SessionStore {
 		String provider = requiredText(payload, "provider", sessionId);
 		String model = requiredText(payload, "model", sessionId);
 		String name = optionalText(payload, "name");
+		List<Message> transcriptMessages = new ArrayList<>();
 		List<Message> messages = new ArrayList<>();
 		String firstMessage = "";
 		StringBuilder allMessages = new StringBuilder();
 		long modified = start.timestamp();
 		for (Entry entry : entries) {
 			modified = Math.max(modified, entry.timestamp());
+			if (entry.type().equals("compaction")) {
+				messages.clear();
+				messages.add(compactionCheckpoint(entry.payload(), entry.timestamp(), sessionId));
+				continue;
+			}
 			if (!entry.type().equals("message")) continue;
 			Message message;
 			try {
@@ -178,6 +185,7 @@ public final class SessionStore {
 			} catch (IOException | RuntimeException error) {
 				throw new IOException("Invalid message in session " + sessionId, error);
 			}
+			transcriptMessages.add(message);
 			messages.add(message);
 			String text = messageText(message);
 			if (!text.isBlank()) {
@@ -203,10 +211,16 @@ public final class SessionStore {
 				model,
 				Instant.ofEpochMilli(start.timestamp()),
 				Instant.ofEpochMilli(modified),
-				messages.size(),
+				transcriptMessages.size(),
 				firstMessage.isEmpty() ? "(no messages)" : firstMessage,
 				allMessages.toString(),
-				messages);
+				messages,
+				transcriptMessages);
+	}
+
+	private static UserMessage compactionCheckpoint(JsonNode payload, long timestamp, String sessionId) throws IOException {
+		String summary = requiredText(payload, "summary", sessionId);
+		return new UserMessage(List.of(new TextContent("[Conversation checkpoint]\n" + summary)), timestamp);
 	}
 
 	private List<Path> sessionFiles() throws IOException {

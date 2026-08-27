@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
+import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.CoreProviders;
 import com.quaxt.codingagent.ai.Models;
@@ -572,12 +573,14 @@ final class InteractiveShell implements AutoCloseable {
 			}
 		}
 		SessionRecorder resumedRecorder = SessionRecorder.resume(store, session.id());
+		// SessionSnapshot.messages() is compaction-aware, so resuming cannot
+		// resurrect summarized transcript entries into the next model request.
 		List<Message> restored = resumableMessages(session.messages());
 		configureAgent(model, session.cwd(), resumedRecorder, session.name());
 		settings = settings.withDefaultModel(model.provider, model.id);
 		agent.state().messages.addAll(restored);
 		refreshStatus();
-		terminal.replaceScreen(renderSessionScreen(model, session.messages(), hideThinkingBlock, terminal.theme()));
+		terminal.replaceScreen(renderSessionScreen(model, session.transcriptMessages(), hideThinkingBlock, terminal.theme()));
 		try {
 			settingsStore.setDefaultModelAndProvider(model.provider, model.id);
 		} catch (IOException error) {
@@ -1141,7 +1144,8 @@ final class InteractiveShell implements AutoCloseable {
 			}
 			case AgentEvent.CompactionStart ignored ->
 					setActivity(ActivityStatus.active(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
-			case AgentEvent.CompactionEnd ignored -> {
+			case AgentEvent.CompactionEnd end -> {
+				persistCompaction(end.result());
 				if (agent != null && agent.state().isStreaming) {
 					setActivity(ActivityStatus.active(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
 				} else {
@@ -1180,6 +1184,18 @@ final class InteractiveShell implements AutoCloseable {
 			default -> {
 				// Turn-end and low-level update events do not change the presentation phase.
 			}
+		}
+	}
+
+	/** Saves every successful manual or automatic compaction as a resume boundary. */
+	private void persistCompaction(CompactionResult result) {
+		if (recorder == null) return;
+		try {
+			recorder.appendCompaction(result);
+		} catch (IOException error) {
+			// The live agent state has already been compacted. Keep the turn usable,
+			// but make the loss of the resume boundary visible to the user.
+			terminal.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
 		}
 	}
 

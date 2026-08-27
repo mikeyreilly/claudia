@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import com.quaxt.codingagent.ai.types.Message;
 
-/** Metadata and restored conversation context for one persisted session. */
+/** Metadata, active conversation context, and complete transcript for one persisted session. */
 public record SessionSnapshot(
 		String id,
 		String name,
@@ -19,7 +19,10 @@ public record SessionSnapshot(
 		int messageCount,
 		String firstMessage,
 		String allMessagesText,
-		List<Message> messages) {
+		/** Compaction-aware message history to use when continuing the session. */
+		List<Message> messages,
+		/** Complete append-only transcript, retained for session display and search. */
+		List<Message> transcriptMessages) {
 	public SessionSnapshot {
 		id = Objects.requireNonNull(id, "id");
 		name = name == null ? null : name.strip();
@@ -33,5 +36,6 @@ public record SessionSnapshot(
 		firstMessage = Objects.requireNonNull(firstMessage, "firstMessage");
 		allMessagesText = Objects.requireNonNull(allMessagesText, "allMessagesText");
 		messages = List.copyOf(messages);
+		transcriptMessages = List.copyOf(transcriptMessages);
 	}
 }

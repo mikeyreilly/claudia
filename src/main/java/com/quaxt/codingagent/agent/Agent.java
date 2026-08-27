@@ -123,7 +123,7 @@ public final class Agent {
 
 	/** Runs one or more prompt messages to completion. */
 	public List<Message> prompt(Message... prompts) throws InterruptedException {
-		if (state.isStreaming) {
+		if (state.isStreaming || state.isCompacting) {
 			throw new IllegalStateException("Agent is already processing");
 		}
 		activeSignal = new AbortSignal();

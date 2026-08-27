@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
+import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.Message;
 
@@ -64,6 +66,23 @@ public final class SessionRecorder {
 		for (Message message : messages) {
 			store.append(sessionId, "message", SessionCodec.encode(message));
 		}
+	}
+
+	/**
+	 * Appends a compaction boundary without rewriting the prior transcript.
+	 * On resume, {@link SessionStore} uses the latest boundary to rebuild the
+	 * active model context from this checkpoint and later messages only.
+	 */
+	public void appendCompaction(CompactionResult result) throws IOException {
+		Objects.requireNonNull(result, "result");
+		if (result.summary() == null || result.summary().isBlank()) {
+			throw new IllegalArgumentException("Compaction summary must not be blank");
+		}
+		ObjectNode checkpoint = Json.object();
+		checkpoint.put("summary", result.summary());
+		checkpoint.put("tokensBefore", result.tokensBefore());
+		checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter());
+		store.append(sessionId, "compaction", checkpoint);
 	}
 
 	private static String normalizeName(String sessionName) {
