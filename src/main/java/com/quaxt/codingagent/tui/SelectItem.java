@@ -2,22 +2,37 @@ package com.quaxt.codingagent.tui;
 
 import java.util.Objects;
 
-/** Typed selector option with separate display and fuzzy-search text. */
-public record SelectItem<T>(T value, String label, String description, String searchText) {
-	public SelectItem {
-		Objects.requireNonNull(value, "value");
-		Objects.requireNonNull(label, "label");
-		description = description == null ? "" : description;
-		searchText = searchText == null || searchText.isBlank()
-				? label + (description.isBlank() ? "" : " " + description)
-				: searchText;
+/** Typed selector option carrier with separate display and fuzzy-search text. */
+public final class SelectItem<T> {
+	public T value;
+	public String label;
+	public String description;
+	public String searchText;
+
+	public SelectItem(T value, String label, String description, String searchText) {
+		this.value = value;
+		this.label = label;
+		this.description = description;
+		this.searchText = searchText;
 	}
 
-	public SelectItem(T value, String label, String description) {
-		this(value, label, description, null);
+	@Override
+	public boolean equals(Object other) {
+		return other instanceof SelectItem<?> that
+				&& Objects.equals(value, that.value)
+				&& Objects.equals(label, that.label)
+				&& Objects.equals(description, that.description)
+				&& Objects.equals(searchText, that.searchText);
 	}
 
-	public SelectItem(T value, String label) {
-		this(value, label, "", null);
+	@Override
+	public int hashCode() {
+		return Objects.hash(value, label, description, searchText);
+	}
+
+	@Override
+	public String toString() {
+		return "SelectItem[value=" + value + ", label=" + label + ", description=" + description
+				+ ", searchText=" + searchText + "]";
 	}
 }

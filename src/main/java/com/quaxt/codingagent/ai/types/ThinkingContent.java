@@ -1,25 +1,39 @@
 package com.quaxt.codingagent.ai.types;
 
+import java.util.Objects;
+
 /**
  * Thinking/reasoning content block. thinkingSignature is the provider's opaque
  * signature (or encrypted payload when redacted).
  */
-public record ThinkingContent(String thinking, String thinkingSignature, boolean redacted) implements AssistantContent {
-	public ThinkingContent {
-		if (thinking == null) {
-			throw new IllegalArgumentException("thinking must not be null");
-		}
+public final class ThinkingContent implements AssistantContent {
+	public String thinking;
+	public String thinkingSignature;
+	public boolean redacted;
+
+	public ThinkingContent(String thinking, String thinkingSignature, boolean redacted) {
+		this.thinking = thinking;
+		this.thinkingSignature = thinkingSignature;
+		this.redacted = redacted;
 	}
 
-	public ThinkingContent(String thinking) {
-		this(thinking, null, false);
+	@Override
+	public boolean equals(Object other) {
+		return other instanceof ThinkingContent that
+				&& Objects.equals(thinking, that.thinking)
+				&& Objects.equals(thinkingSignature, that.thinkingSignature)
+				&& redacted == that.redacted;
 	}
 
-	public ThinkingContent withThinking(String newThinking) {
-		return new ThinkingContent(newThinking, thinkingSignature, redacted);
+	@Override
+	public int hashCode() {
+		return Objects.hash(thinking, thinkingSignature, redacted);
 	}
 
-	public ThinkingContent withSignature(String signature) {
-		return new ThinkingContent(thinking, signature, redacted);
+	@Override
+	public String toString() {
+		return "ThinkingContent[thinking=" + thinking
+				+ ", thinkingSignature=" + thinkingSignature
+				+ ", redacted=" + redacted + "]";
 	}
 }

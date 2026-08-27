@@ -4,46 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Cooperative cancellation token, standing in for the DOM AbortSignal used by
- * the TS implementation. Thread-safe.
+ * Cooperative cancellation token state, standing in for the DOM AbortSignal
+ * used by the TS implementation. Pure data carrier: the abort/listen behavior
+ * lives in CodingAgentOperations, which uses the signal instance as its monitor.
  */
 public final class AbortSignal {
-	private final Object lock = new Object();
-	private boolean aborted;
-	private final List<Runnable> listeners = new ArrayList<>();
+	public boolean aborted;
+	public List<Runnable> listeners = new ArrayList<>();
 
-	public void abort() {
-		List<Runnable> toRun;
-		synchronized (lock) {
-			if (aborted) {
-				return;
-			}
-			aborted = true;
-			toRun = new ArrayList<>(listeners);
-			listeners.clear();
-		}
-		for (Runnable listener : toRun) {
-			listener.run();
-		}
-	}
-
-	public boolean isAborted() {
-		synchronized (lock) {
-			return aborted;
-		}
-	}
-
-	/** Registers a listener, invoking it immediately if already aborted. */
-	public void onAbort(Runnable listener) {
-		boolean runNow;
-		synchronized (lock) {
-			runNow = aborted;
-			if (!aborted) {
-				listeners.add(listener);
-			}
-		}
-		if (runNow) {
-			listener.run();
-		}
-	}
+	public AbortSignal() {}
 }

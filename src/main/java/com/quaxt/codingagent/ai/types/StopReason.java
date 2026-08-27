@@ -12,22 +12,9 @@ public enum StopReason {
 	ABORTED("aborted"),
 	DEFERRED("deferred");
 
-	private final String wire;
+	public String wire;
 
 	StopReason(String wire) {
 		this.wire = wire;
-	}
-
-	public String wire() {
-		return wire;
-	}
-
-	public static StopReason fromWire(String value) {
-		for (StopReason reason : values()) {
-			if (reason.wire.equals(value)) {
-				return reason;
-			}
-		}
-		throw new IllegalArgumentException("Unknown stop reason: " + value);
 	}
 }

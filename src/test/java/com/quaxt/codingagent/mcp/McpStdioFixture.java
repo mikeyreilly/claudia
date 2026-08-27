@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.json.Json;
 
 /** Tiny MCP server process used by the stdio integration test. */
@@ -18,7 +19,7 @@ public final class McpStdioFixture {
 			while ((line = input.readLine()) != null) {
 				JsonNode request = Json.MAPPER.readTree(line);
 				if (!request.path("method").isTextual() || !request.has("id")) continue;
-				ObjectNode response = Json.object().put("jsonrpc", "2.0");
+				ObjectNode response = CodingAgentOperations.jsonObject().put("jsonrpc", "2.0");
 				response.set("id", request.get("id"));
 				switch (request.path("method").asText()) {
 					case "initialize" -> {

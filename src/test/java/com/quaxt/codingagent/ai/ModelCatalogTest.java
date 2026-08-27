@@ -7,65 +7,67 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.Compat;
 import com.quaxt.codingagent.ai.types.Model;
 
 class ModelCatalogTest {
 	@Test
 	void loadsAllBundledCoreProviderCatalogs() {
-		ModelCatalog catalog = ModelCatalog.loadBundled();
+		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
 
-		assertTrue(catalog.forProvider("anthropic").size() > 0);
-		assertTrue(catalog.forProvider("openai").size() > 0);
-		assertTrue(catalog.forProvider("google").size() > 0);
-		assertTrue(catalog.forProvider("github-copilot").size() > 0);
+		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "anthropic").size() > 0);
+		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "openai").size() > 0);
+		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "google").size() > 0);
+		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "github-copilot").size() > 0);
 		assertEquals(
-				catalog.forProvider("anthropic").size()
-						+ catalog.forProvider("openai").size()
-						+ catalog.forProvider("google").size(),
-				catalog.all().size() - catalog.forProvider("github-copilot").size());
+				CodingAgentOperations.catalogModelsForProvider(catalog, "anthropic").size()
+						+ CodingAgentOperations.catalogModelsForProvider(catalog, "openai").size()
+						+ CodingAgentOperations.catalogModelsForProvider(catalog, "google").size(),
+				CodingAgentOperations.allCatalogModels(catalog).size() - CodingAgentOperations.catalogModelsForProvider(catalog, "github-copilot").size());
 	}
 
 	@Test
 	void loadsGitHubCopilotProtocolModels() {
-		ModelCatalog catalog = ModelCatalog.loadBundled();
+		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
 
-		assertTrue(catalog.forProvider("github-copilot").size() > 25);
-		assertEquals("openai-responses", catalog.require("github-copilot", "gpt-5.6-terra").api);
-		assertEquals("openai-completions", catalog.require("github-copilot", "gemini-3.6-flash").api);
-		assertEquals("anthropic-messages", catalog.require("github-copilot", "claude-opus-5").api);
+		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "github-copilot").size() > 25);
+		assertEquals("openai-responses", CodingAgentOperations.requireCatalogModel(catalog, "github-copilot", "gpt-5.6-terra").api);
+		assertEquals("openai-completions", CodingAgentOperations.requireCatalogModel(catalog, "github-copilot", "gemini-3.6-flash").api);
+		assertEquals("anthropic-messages", CodingAgentOperations.requireCatalogModel(catalog, "github-copilot", "claude-opus-5").api);
 	}
 
 	@Test
 	void preservesAdaptiveThinkingCompatibility() {
-		Model opus = ModelCatalog.loadBundled().require("github-copilot", "claude-opus-5");
+		Model opus = CodingAgentOperations.requireCatalogModel(
+				CodingAgentOperations.loadBundledModelCatalog(), "github-copilot", "claude-opus-5");
 
 		Compat.AnthropicMessages compat = assertInstanceOf(Compat.AnthropicMessages.class, opus.compat);
-		assertEquals(Boolean.TRUE, compat.forceAdaptiveThinking());
+		assertEquals(Boolean.TRUE, compat.forceAdaptiveThinking);
 	}
 
 	@Test
 	void preservesGeneratedCatalogProperties() {
-		ModelCatalog catalog = ModelCatalog.loadBundled();
+		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
 
-		Model model = catalog.require("anthropic", "claude-haiku-4-5");
+		Model model = CodingAgentOperations.requireCatalogModel(catalog, "anthropic", "claude-haiku-4-5");
 		assertEquals("anthropic-messages", model.api);
 		assertEquals("https://api.anthropic.com", model.baseUrl);
 		assertTrue(model.input.contains("image"));
 		assertTrue(model.reasoning);
 		assertTrue(model.contextWindow > 0);
 		assertTrue(model.maxTokens > 0);
-		assertTrue(model.cost.input() > 0);
+		assertTrue(model.cost.input > 0);
 		assertNotNull(model.cost);
 	}
 
 	@Test
 	void returnsNullOrClearErrorForUnknownModel() {
-		ModelCatalog catalog = ModelCatalog.loadBundled();
+		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
 
-		assertEquals(null, catalog.find("openai", "does-not-exist"));
+		assertEquals(null, CodingAgentOperations.findCatalogModel(catalog, "openai", "does-not-exist"));
 		IllegalArgumentException exception =
-				assertThrows(IllegalArgumentException.class, () -> catalog.require("openai", "does-not-exist"));
+				assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.requireCatalogModel(catalog, "openai", "does-not-exist"));
 		assertEquals("Unknown model: openai/does-not-exist", exception.getMessage());
 	}
 }

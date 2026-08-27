@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.mcp.McpConfiguration;
 import com.quaxt.codingagent.mcp.McpManager;
 import com.quaxt.codingagent.mcp.McpServerConfig;
@@ -24,58 +25,65 @@ class McpSelectorTest {
 	@Test
 	void drillsIntoAConnectedServerAndTogglesItsTools() throws Exception {
 		String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
-		McpServerConfig.Local server = new McpServerConfig.Local(
+		McpServerConfig.Local server = CodingAgentOperations.localMcpServerConfig(
 				List.of(java, "-cp", System.getProperty("java.class.path"), McpStdioFixture.class.getName()),
 				null,
 				Map.of(),
 				true,
-				5_000L);
+				5_000L,
+				List.of(),
+				List.of());
 		AtomicInteger changes = new AtomicInteger();
 		List<McpSelector.Change> persisted = new ArrayList<>();
-		try (McpManager manager = new McpManager(new McpConfiguration(Map.of("fixture", server), List.of()), tempDir)) {
-			manager.awaitReady();
-			McpSelector selector = new McpSelector(manager, change -> {
+		McpManager manager = CodingAgentOperations.mcpCreateManager(
+				CodingAgentOperations.mcpConfiguration(Map.of("fixture", server), List.of()), tempDir);
+		try {
+			CodingAgentOperations.mcpAwaitReady(manager);
+			McpSelector selector = CodingAgentOperations.newMcpSelector(manager, change -> {
 				changes.incrementAndGet();
 				persisted.add(change);
 			});
 
-			assertTrue(String.join("\n", selector.render(100, 30, Theme.PLAIN)).contains("MCP Servers"));
-			selector.handle(new TuiInput.Key(TuiInput.KeyType.TAB));
-			String tools = String.join("\n", selector.render(100, 30, Theme.PLAIN));
+			assertTrue(String.join("\n", CodingAgentOperations.renderMcpSelector(selector, 100, 30, Theme.PLAIN)).contains("MCP Servers"));
+			CodingAgentOperations.handleMcpSelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.TAB));
+			String tools = String.join("\n", CodingAgentOperations.renderMcpSelector(selector, 100, 30, Theme.PLAIN));
 			assertTrue(tools.contains("MCP Tools: fixture"));
 			assertTrue(tools.contains("echo  Enabled"));
 			assertTrue(tools.contains("reverse  Enabled"));
 
-			selector.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
+			CodingAgentOperations.handleMcpSelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
 
-			assertFalse(manager.toolStatuses("fixture").getFirst().enabled());
+			assertFalse(CodingAgentOperations.mcpToolStatuses(manager, "fixture").getFirst().enabled);
 			assertEquals(1, changes.get());
-			assertTrue(String.join("\n", selector.render(100, 30, Theme.PLAIN)).contains("echo  Disabled"));
+			assertTrue(String.join("\n", CodingAgentOperations.renderMcpSelector(selector, 100, 30, Theme.PLAIN)).contains("echo  Disabled"));
 
-			selector.handle(new TuiInput.Key(TuiInput.KeyType.ESCAPE));
-			String servers = String.join("\n", selector.render(100, 30, Theme.PLAIN));
+			CodingAgentOperations.handleMcpSelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ESCAPE));
+			String servers = String.join("\n", CodingAgentOperations.renderMcpSelector(selector, 100, 30, Theme.PLAIN));
 			assertTrue(servers.contains("MCP Servers"));
 			assertTrue(servers.contains("Enabled · 1/2 tool(s)"));
-			selector.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
-			assertEquals(McpManager.State.DISABLED, manager.status("fixture").state());
+			CodingAgentOperations.handleMcpSelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
+			assertEquals(McpManager.State.DISABLED, CodingAgentOperations.mcpStatus(manager, "fixture").state);
 			assertEquals(2, changes.get());
-			selector.handle(new TuiInput.Key(TuiInput.KeyType.ESCAPE));
-			assertTrue(selector.isComplete());
+			CodingAgentOperations.handleMcpSelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ESCAPE));
+			assertTrue(selector.complete);
 			assertEquals(
 					List.of(
 							new McpSelector.Change("fixture", "echo", false),
 							new McpSelector.Change("fixture", null, false)),
 					persisted);
 
-			assertEquals(McpManager.State.CONNECTED, manager.connect("fixture").state());
-			McpSelector unsaved = new McpSelector(manager, change -> {
-				throw new java.io.IOException("disk full");
+			assertEquals(
+					McpManager.State.CONNECTED, CodingAgentOperations.mcpConnectServer(manager, "fixture").state);
+			McpSelector unsaved = CodingAgentOperations.newMcpSelector(manager, change -> {
+				throw new java.io.UncheckedIOException(new java.io.IOException("disk full"));
 			});
-			unsaved.handle(new TuiInput.Key(TuiInput.KeyType.TAB));
-			unsaved.handle(new TuiInput.Key(TuiInput.KeyType.ENTER));
-			assertTrue(String.join("\n", unsaved.render(100, 30, Theme.PLAIN))
+			CodingAgentOperations.handleMcpSelectorInput(unsaved, CodingAgentOperations.key(TuiInput.KeyType.TAB));
+			CodingAgentOperations.handleMcpSelectorInput(unsaved, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
+			assertTrue(String.join("\n", CodingAgentOperations.renderMcpSelector(unsaved, 100, 30, Theme.PLAIN))
 					.contains("Change applied, but not saved: disk full"));
-			assertTrue(manager.toolStatuses("fixture").getFirst().enabled());
+			assertTrue(CodingAgentOperations.mcpToolStatuses(manager, "fixture").getFirst().enabled);
+		} finally {
+			CodingAgentOperations.mcpCloseManager(manager);
 		}
 	}
 }

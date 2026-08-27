@@ -6,13 +6,9 @@ public enum CacheRetention {
 	SHORT("short"),
 	LONG("long");
 
-	private final String wire;
+	public String wire;
 
 	CacheRetention(String wire) {
 		this.wire = wire;
-	}
-
-	public String wire() {
-		return wire;
 	}
 }

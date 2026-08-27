@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.TextContent;
@@ -50,13 +51,13 @@ class McpOAuthTest {
 		base.set(URI.create("http://127.0.0.1:" + server.getAddress().getPort()));
 		server.createContext("/mcp", exchange -> handleMcp(exchange, base.get(), acceptedToken.get()));
 		server.createContext("/.well-known/oauth-protected-resource", exchange -> {
-			ObjectNode metadata = Json.object().put("resource", base.get() + "/mcp");
+			ObjectNode metadata = CodingAgentOperations.jsonObject().put("resource", base.get() + "/mcp");
 			metadata.putArray("authorization_servers").add(base.get().toString());
 			metadata.putArray("scopes_supported").add("metadata-scope");
 			json(exchange, 200, metadata);
 		});
 		server.createContext("/.well-known/oauth-authorization-server", exchange -> {
-			ObjectNode metadata = Json.object()
+			ObjectNode metadata = CodingAgentOperations.jsonObject()
 					.put("issuer", base.get().toString())
 					.put("authorization_endpoint", base.get() + "/authorize")
 					.put("token_endpoint", base.get() + "/token")
@@ -72,7 +73,7 @@ class McpOAuthTest {
 			JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
 			assertEquals("challenge-scope", request.path("scope").asText());
 			assertEquals("none", request.path("token_endpoint_auth_method").asText());
-			json(exchange, 201, Json.object()
+			json(exchange, 201, CodingAgentOperations.jsonObject()
 					.put("client_id", "dynamic-client")
 					.put("token_endpoint_auth_method", "none"));
 		});
@@ -85,7 +86,7 @@ class McpOAuthTest {
 				assertEquals("refresh-one", form.get("refresh_token"));
 				String access = refresh == 1 ? "access-two" : "access-three";
 				acceptedToken.set(access);
-				json(exchange, 200, Json.object()
+				json(exchange, 200, CodingAgentOperations.jsonObject()
 						.put("access_token", access)
 						.put("token_type", "Bearer")
 						.put("expires_in", 3600));
@@ -94,7 +95,7 @@ class McpOAuthTest {
 			assertEquals("authorization_code", form.get("grant_type"));
 			assertEquals("test-code", form.get("code"));
 			assertNotNull(form.get("code_verifier"));
-			json(exchange, 200, Json.object()
+			json(exchange, 200, CodingAgentOperations.jsonObject()
 					.put("access_token", "access-one")
 					.put("refresh_token", "refresh-one")
 					.put("token_type", "Bearer")
@@ -104,9 +105,9 @@ class McpOAuthTest {
 		server.start();
 
 		try {
-			McpOAuthStore store = new McpOAuthStore(tempDir.resolve("mcp-auth.json"), List.of());
+			McpOAuthStore store = CodingAgentOperations.mcpOAuthStore(tempDir.resolve("mcp-auth.json"), List.of());
 			HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
-			McpOAuthClient oauth = new McpOAuthClient(store, http, authorizationUrl -> {
+			McpOAuthClient oauth = CodingAgentOperations.mcpOAuthClient(store, http, authorizationUrl -> {
 				browserOpens.incrementAndGet();
 				Map<String, String> query = form(authorizationUrl.getRawQuery());
 				assertEquals("dynamic-client", query.get("client_id"));
@@ -125,43 +126,70 @@ class McpOAuthTest {
 				return true;
 			}, Duration.ofSeconds(5));
 
-			ObjectNode oauthConfig = Json.object().put("callbackPort", callbackPort);
-			McpServerConfig.Remote remote = new McpServerConfig.Remote(
-					base.get().resolve("/mcp"), Map.of(), oauthConfig, true, 5_000L);
-			McpConfiguration configuration = new McpConfiguration(Map.of("protected", remote), List.of());
+			ObjectNode oauthConfig = CodingAgentOperations.jsonObject().put("callbackPort", callbackPort);
+			McpServerConfig.Remote remote = CodingAgentOperations.remoteMcpServerConfig(
+					base.get().resolve("/mcp"), Map.of(), oauthConfig, true, 5_000L, List.of(), List.of());
+			McpConfiguration configuration = CodingAgentOperations.mcpConfiguration(Map.of("protected", remote), List.of());
 
-			try (McpManager manager = new McpManager(configuration, tempDir, oauth)) {
-				manager.awaitReady();
-				assertEquals(McpManager.State.AUTH_REQUIRED, manager.status("protected").state());
-				assertEquals(McpManager.State.CONNECTED, manager.connect("protected").state());
-				assertEquals(1, manager.status("protected").toolCount());
+			McpManager manager = CodingAgentOperations.mcpCreateManager(configuration, tempDir, oauth);
+			try {
+				CodingAgentOperations.mcpAwaitReady(manager);
+				assertEquals(
+						McpManager.State.AUTH_REQUIRED,
+						CodingAgentOperations.mcpStatus(manager, "protected").state);
+				assertEquals(
+						McpManager.State.CONNECTED,
+						CodingAgentOperations.mcpConnectServer(manager, "protected").state);
+				assertEquals(1, CodingAgentOperations.mcpStatus(manager, "protected").toolCount);
+			} finally {
+				CodingAgentOperations.mcpCloseManager(manager);
 			}
 			assertEquals(1, browserOpens.get());
 			assertEquals(1, registrations.get());
 			assertTrue(Files.isRegularFile(tempDir.resolve("mcp-auth.json")));
-			McpOAuthStore.Entry saved = store.read("protected", base.get().resolve("/mcp").toString());
-			assertEquals("access-one", saved.tokens().accessToken());
-			assertEquals("dynamic-client", saved.clientInfo().clientId());
+			McpOAuthStore.Entry saved =
+					CodingAgentOperations.mcpOAuthRead(store, "protected", base.get().resolve("/mcp").toString());
+			assertEquals("access-one", saved.tokens.accessToken);
+			assertEquals("dynamic-client", saved.clientInfo.clientId);
 
 			// Force the access token to expire. Startup must use the refresh token without reopening a browser.
-			store.write(
+			CodingAgentOperations.mcpOAuthWrite(
+					store,
 					"protected",
 					base.get().resolve("/mcp").toString(),
-					saved.withTokens(new McpOAuthStore.Tokens(
-							"access-one", "refresh-one", Instant.now().getEpochSecond() - 1, "challenge-scope")));
-			try (McpManager manager = new McpManager(configuration, tempDir, oauth)) {
-				manager.awaitReady();
-				assertEquals(McpManager.State.CONNECTED, manager.status("protected").state());
+					new McpOAuthStore.Entry(
+							new McpOAuthStore.Tokens(
+								"access-one",
+								"refresh-one",
+								Instant.now().getEpochSecond() - 1,
+								"challenge-scope"),
+							saved.clientInfo));
+			McpManager refreshed = CodingAgentOperations.mcpCreateManager(configuration, tempDir, oauth);
+			try {
+				CodingAgentOperations.mcpAwaitReady(refreshed);
+				assertEquals(
+						McpManager.State.CONNECTED,
+						CodingAgentOperations.mcpStatus(refreshed, "protected").state);
 
 				// A token rejected before its recorded expiry is refreshed and the same tool request is retried once.
 				acceptedToken.set("access-three");
-				AgentTool.ToolResult result = manager.tools().getFirst().execute(
-						"call-1", Json.object().put("value", "renewed"), new AbortSignal(), ignored -> {});
-				assertEquals("renewed", ((TextContent) result.content().getFirst()).text());
+				AgentTool.ToolResult result = CodingAgentOperations.executeTool(
+						CodingAgentOperations.mcpTools(refreshed).getFirst(),
+						"call-1",
+						CodingAgentOperations.jsonObject().put("value", "renewed"),
+						new AbortSignal(),
+						ignored -> {});
+				assertEquals("renewed", ((TextContent) result.content.getFirst()).text);
+			} finally {
+				CodingAgentOperations.mcpCloseManager(refreshed);
 			}
 			assertEquals(1, browserOpens.get());
 			assertEquals(2, refreshes.get());
-			assertEquals("access-three", store.read("protected", base.get().resolve("/mcp").toString()).tokens().accessToken());
+			assertEquals(
+					"access-three",
+					CodingAgentOperations.mcpOAuthRead(store, "protected", base.get().resolve("/mcp").toString())
+						.tokens
+						.accessToken);
 		} finally {
 			server.stop(0);
 		}
@@ -188,7 +216,7 @@ class McpOAuthTest {
 				exchange.sendResponseHeaders(202, -1);
 				return;
 			}
-			ObjectNode response = Json.object().put("jsonrpc", "2.0");
+			ObjectNode response = CodingAgentOperations.jsonObject().put("jsonrpc", "2.0");
 			response.set("id", request.get("id"));
 			switch (request.path("method").asText()) {
 				case "initialize" -> response.putObject("result")

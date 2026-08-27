@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
 import com.quaxt.codingagent.ai.types.StopReason;
@@ -21,21 +22,21 @@ class EventStreamTest {
 		AssistantMessageEventStream stream = new AssistantMessageEventStream();
 		AssistantMessage partial = new AssistantMessage("test-api", "test-provider", "test-model");
 
-		stream.push(new AssistantMessageEvent.Start(partial));
-		partial.content.add(new TextContent("hello"));
-		stream.push(new AssistantMessageEvent.TextDelta(0, "hello", partial));
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.Start(partial));
+		partial.content.add(CodingAgentOperations.textContent("hello"));
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.TextDelta(0, "hello", partial));
 		partial.stopReason = StopReason.STOP;
-		stream.push(new AssistantMessageEvent.Done(StopReason.STOP, partial));
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.Done(StopReason.STOP, partial));
 
 		List<AssistantMessageEvent> events = new ArrayList<>();
-		for (AssistantMessageEvent event : stream) {
+		for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 			events.add(event);
 		}
 		assertEquals(3, events.size());
 		assertInstanceOf(AssistantMessageEvent.Start.class, events.get(0));
 		assertInstanceOf(AssistantMessageEvent.TextDelta.class, events.get(1));
 		assertInstanceOf(AssistantMessageEvent.Done.class, events.get(2));
-		assertSame(partial, stream.result());
+		assertSame(partial, CodingAgentOperations.result(stream));
 	}
 
 	@Test
@@ -47,12 +48,12 @@ class EventStreamTest {
 				Thread.sleep(50);
 			} catch (InterruptedException ignored) {
 			}
-			stream.push(new AssistantMessageEvent.Start(message));
-			stream.push(new AssistantMessageEvent.Done(StopReason.STOP, message));
+			CodingAgentOperations.push(stream, new AssistantMessageEvent.Start(message));
+			CodingAgentOperations.push(stream, new AssistantMessageEvent.Done(StopReason.STOP, message));
 		});
 
 		int count = 0;
-		for (AssistantMessageEvent ignored : stream) {
+		for (AssistantMessageEvent ignored : CodingAgentOperations.events(stream)) {
 			count++;
 		}
 		producer.join();
@@ -63,10 +64,10 @@ class EventStreamTest {
 	void ignoresPushAfterTerminal() {
 		AssistantMessageEventStream stream = new AssistantMessageEventStream();
 		AssistantMessage message = new AssistantMessage("a", "p", "m");
-		stream.push(new AssistantMessageEvent.Done(StopReason.STOP, message));
-		stream.push(new AssistantMessageEvent.Start(message));
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.Done(StopReason.STOP, message));
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.Start(message));
 
-		Iterator<AssistantMessageEvent> it = stream.iterator();
+		Iterator<AssistantMessageEvent> it = CodingAgentOperations.iterator(stream);
 		assertTrue(it.hasNext());
 		it.next();
 		assertFalse(it.hasNext());
@@ -78,8 +79,8 @@ class EventStreamTest {
 		AssistantMessage error = new AssistantMessage("a", "p", "m");
 		error.stopReason = StopReason.ERROR;
 		error.errorMessage = "boom";
-		stream.push(new AssistantMessageEvent.Error(StopReason.ERROR, error));
-		assertSame(error, stream.result());
-		assertEquals("boom", stream.result().errorMessage);
+		CodingAgentOperations.push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, error));
+		assertSame(error, CodingAgentOperations.result(stream));
+		assertEquals("boom", CodingAgentOperations.result(stream).errorMessage);
 	}
 }

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.StreamOptions;
 import com.quaxt.codingagent.ai.auth.Credential;
 import com.quaxt.codingagent.ai.auth.FileCredentialStore;
@@ -26,10 +27,28 @@ import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
-import com.quaxt.codingagent.ai.types.ToolResultMessage;
-import com.quaxt.codingagent.ai.types.UserMessage;
 
 class OpenAiResponsesProviderTest {
+	private static StreamOptions options(String apiKey) {
+		StreamOptions options = new StreamOptions();
+		options.apiKey = apiKey;
+		return options;
+	}
+
+	private static StreamOptions sessionOptions(
+			String apiKey, ThinkingLevel reasoning, String sessionId, int maxTokens) {
+		StreamOptions options = options(apiKey, reasoning);
+		options.sessionId = sessionId;
+		options.maxTokens = maxTokens;
+		return options;
+	}
+
+	private static StreamOptions options(String apiKey, ThinkingLevel reasoning) {
+		StreamOptions options = options(apiKey);
+		options.reasoning = reasoning;
+		return options;
+	}
+
 	@TempDir Path tempDir;
 
 	@Test
@@ -44,14 +63,14 @@ class OpenAiResponsesProviderTest {
 					""");
 		});
 		try {
-			FileCredentialStore credentials = new FileCredentialStore(tempDir.resolve("auth.json"));
-			credentials.modify("openai", ignored -> new Credential.ApiKeyCredential("saved-key"));
+			FileCredentialStore credentials = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"));
+			CodingAgentOperations.modifyCredential(credentials, "openai", ignored -> CodingAgentOperations.apiKeyCredential("saved-key"));
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(List.of(model), credentials);
+			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model), credentials);
 			Context context = new Context();
-			context.messages.add(UserMessage.of("hi"));
+			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
-			AssistantMessage result = provider.stream(model, context, new StreamOptions()).result();
+			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, new StreamOptions()));
 
 			assertEquals(StopReason.STOP, result.stopReason);
 		} finally {
@@ -84,14 +103,14 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
 			Context context = new Context("system");
-			context.messages.add(UserMessage.of("hi"));
+			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					provider.stream(model, context, new StreamOptions().apiKey("test-key")).result();
+					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
 
-			assertEquals("hello world", result.text());
+			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);
 			assertEquals(StopReason.STOP, result.stopReason);
 			assertEquals(4, result.usage.input);
@@ -128,20 +147,20 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = reasoningModel(url(server));
-			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
 			Context context = new Context();
-			context.messages.add(UserMessage.of("inspect"));
+			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			AssistantMessage result = provider.stream(
-					model, context, new StreamOptions().apiKey("test-key").reasoning(ThinkingLevel.MEDIUM)).result();
+			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.stream(provider,
+					model, context, options("test-key", ThinkingLevel.MEDIUM)));
 
 			JsonNode body = Json.MAPPER.readTree(request.get());
 			assertEquals("medium", body.path("reasoning").path("effort").asText());
 			assertEquals("auto", body.path("reasoning").path("summary").asText());
 			assertEquals("reasoning.encrypted_content", body.path("include").get(0).asText());
 			assertFalse(body.path("store").asBoolean(true));
-			assertEquals("Inspecting files\n\nChecking tests", result.thinking());
-			assertTrue(((ThinkingContent) result.content.getFirst()).thinkingSignature().contains("opaque"));
+			assertEquals("Inspecting files\n\nChecking tests", CodingAgentOperations.thinking(result));
+			assertTrue(((ThinkingContent) result.content.getFirst()).thinkingSignature.contains("opaque"));
 			assertEquals(6, result.usage.reasoning);
 		} finally {
 			server.stop(0);
@@ -162,19 +181,14 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = reasoningModel(url(server));
-			OpenAiResponsesProvider provider = OpenAiResponsesProvider.codex("chatgpt", "ChatGPT", List.of(model));
+			OpenAiResponsesProvider provider = CodingAgentOperations.codexResponsesProvider("chatgpt", "ChatGPT", List.of(model));
 			Context context = new Context();
-			context.messages.add(UserMessage.of("inspect"));
+			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			provider.stream(
+			CodingAgentOperations.result(CodingAgentOperations.stream(provider,
 					model,
 					context,
-					new StreamOptions()
-							.apiKey("test-key")
-							.reasoning(ThinkingLevel.MEDIUM)
-							.sessionId("session-1")
-							.maxTokens(4_096))
-					.result();
+					sessionOptions("test-key", ThinkingLevel.MEDIUM, "session-1", 4_096)));
 
 			JsonNode body = Json.MAPPER.readTree(request.get());
 			assertEquals("You are a helpful assistant.", body.path("instructions").asText());
@@ -203,18 +217,18 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
 			Context context = new Context();
 			AssistantMessage assistant = new AssistantMessage(model.api, model.provider, model.id);
-			assistant.content.add(new ThinkingContent(
+			assistant.content.add(CodingAgentOperations.thinkingContent(
 					"inspected files",
 					"{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"opaque\"}",
 					false));
-			assistant.content.add(new ToolCall("call_1", "list_files", Json.object().put("path", ".")));
+			assistant.content.add(CodingAgentOperations.toolCall("call_1", "list_files", CodingAgentOperations.jsonObject().put("path", ".")));
 			context.messages.add(assistant);
-			context.messages.add(ToolResultMessage.text("call_1", "list_files", "file.txt", false));
+			context.messages.add(CodingAgentOperations.toolResultMessage("call_1", "list_files", "file.txt", false));
 
-			provider.stream(model, context, new StreamOptions().apiKey("test-key")).result();
+			CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
 
 			JsonNode input = Json.MAPPER.readTree(request.get()).path("input");
 			assertEquals("reasoning", input.get(0).path("type").asText());
@@ -230,22 +244,22 @@ class OpenAiResponsesProviderTest {
 	}
 
 	private static Model model(String baseUrl) {
-		return modelBuilder(baseUrl).build();
+		Model model = new Model();
+		model.id = "gpt-test";
+		model.name = "gpt-test";
+		model.api = "openai-responses";
+		model.provider = "openai";
+		model.baseUrl = baseUrl;
+		model.cost = ModelCost.FREE;
+		model.contextWindow = 1000;
+		model.maxTokens = 100;
+		return model;
 	}
 
 	private static Model reasoningModel(String baseUrl) {
-		return modelBuilder(baseUrl).reasoning(true).build();
-	}
-
-	private static Model.Builder modelBuilder(String baseUrl) {
-		return Model.builder()
-				.id("gpt-test")
-				.api("openai-responses")
-				.provider("openai")
-				.baseUrl(baseUrl)
-				.cost(ModelCost.FREE)
-				.contextWindow(1000)
-				.maxTokens(100);
+		Model model = model(baseUrl);
+		model.reasoning = true;
+		return model;
 	}
 
 	private static HttpServer server(ExchangeHandler handler) throws Exception {

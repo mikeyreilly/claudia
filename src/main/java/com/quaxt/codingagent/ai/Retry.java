@@ -1,188 +1,158 @@
 package com.quaxt.codingagent.ai;
 
+import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
-import com.quaxt.codingagent.ai.types.AssistantMessage;
-import com.quaxt.codingagent.ai.types.StopReason;
-import com.quaxt.codingagent.ai.util.AbortSignal;
 
 /**
- * Transient-error classification and bounded retry with exponential backoff.
- * Port of packages/ai/src/utils/retry.ts.
+ * Transient-error classification data and retry policy/callback carriers.
+ * Port of packages/ai/src/utils/retry.ts; the classification and bounded
+ * exponential-backoff behavior lives in CodingAgentOperations.
  */
 public final class Retry {
-	private static final Pattern NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildPattern(new String[] {
-		"GoUsageLimitError",
-		"FreeUsageLimitError",
-		"Monthly usage limit reached",
-		"available balance",
-		"insufficient_quota",
-		"out of budget",
-		"quota exceeded",
-		"billing",
-	});
+	public static final Pattern NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = Pattern.compile(
+			String.join(
+					"|",
+					"GoUsageLimitError",
+					"FreeUsageLimitError",
+					"Monthly usage limit reached",
+					"available balance",
+					"insufficient_quota",
+					"out of budget",
+					"quota exceeded",
+					"billing"),
+			Pattern.CASE_INSENSITIVE);
 
-	private static final Pattern RETRYABLE_PROVIDER_ERROR_PATTERN = buildPattern(new String[] {
-		"overloaded",
-		"rate.?limit",
-		"too many requests",
-		"429",
-		"500",
-		"502",
-		"503",
-		"504",
-		"524",
-		"service.?unavailable",
-		"server.?error",
-		"internal.?error",
-		"provider.?returned.?error",
-		"network.?error",
-		"connection.?error",
-		"connect.?exception",
-		"connection.?refused",
-		"connection.?lost",
-		"connection.?reset",
-		"connection.?termination",
-		"disconnect",
-		"other side closed",
-		"fetch failed",
-		"getaddrinfo",
-		"ENOTFOUND",
-		"EAI_AGAIN",
-		"upstream.?connect",
-		"reset before headers",
-		"socket hang up",
-		"socket connection was closed",
-		"timed? out",
-		"timeout",
-		"terminated",
-		"websocket.?closed",
-		"websocket.?error",
-		"ended without",
-		"stream ended before message_stop",
-		"stream ended before a terminal response event",
-		"http2 request did not get a response",
-		"retry delay",
-		"you can retry your request",
-		"try your request again",
-		"please retry your request",
-		"ResourceExhausted",
-	});
+	public static final Pattern RETRYABLE_PROVIDER_ERROR_PATTERN = Pattern.compile(
+			String.join(
+					"|",
+					"overloaded",
+					"rate.?limit",
+					"too many requests",
+					"429",
+					"500",
+					"502",
+					"503",
+					"504",
+					"524",
+					"service.?unavailable",
+					"server.?error",
+					"internal.?error",
+					"provider.?returned.?error",
+					"network.?error",
+					"connection.?error",
+					"connect.?exception",
+					"connection.?refused",
+					"connection.?lost",
+					"connection.?reset",
+					"connection.?termination",
+					"disconnect",
+					"other side closed",
+					"fetch failed",
+					"getaddrinfo",
+					"ENOTFOUND",
+					"EAI_AGAIN",
+					"upstream.?connect",
+					"reset before headers",
+					"socket hang up",
+					"socket connection was closed",
+					"timed? out",
+					"timeout",
+					"terminated",
+					"websocket.?closed",
+					"websocket.?error",
+					"ended without",
+					"stream ended before message_stop",
+					"stream ended before a terminal response event",
+					"http2 request did not get a response",
+					"retry delay",
+					"you can retry your request",
+					"try your request again",
+					"please retry your request",
+					"ResourceExhausted"),
+			Pattern.CASE_INSENSITIVE);
 
-	private Retry() {}
-
-	private static Pattern buildPattern(String[] patterns) {
-		return Pattern.compile(String.join("|", patterns), Pattern.CASE_INSENSITIVE);
-	}
+	public Retry() {}
 
 	/** Retry policy: bounded attempts with exponential backoff (baseDelayMs * 2^(attempt-1)). */
-	public record Policy(boolean enabled, int maxRetries, long baseDelayMs) {
+	public static final class Policy {
 		public static final Policy DISABLED = new Policy(false, 0, 0);
 		public static final Policy DEFAULT = new Policy(true, 3, 2000);
+
+		public boolean enabled;
+		public int maxRetries;
+		public long baseDelayMs;
+
+		public Policy(boolean enabled, int maxRetries, long baseDelayMs) {
+			this.enabled = enabled;
+			this.maxRetries = maxRetries;
+			this.baseDelayMs = baseDelayMs;
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			return other instanceof Policy that
+					&& enabled == that.enabled
+					&& maxRetries == that.maxRetries
+					&& baseDelayMs == that.baseDelayMs;
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash(enabled, maxRetries, baseDelayMs);
+		}
+
+		@Override
+		public String toString() {
+			return "Policy[enabled=" + enabled + ", maxRetries=" + maxRetries
+					+ ", baseDelayMs=" + baseDelayMs + "]";
+		}
 	}
 
-	/** Callbacks around retry attempts. */
-	public interface Callbacks {
-		default void onRetryScheduled(int attempt, int maxAttempts, long delayMs, String errorMessage) {}
+	/** Details of a scheduled backoff before the next attempt. */
+	public static final class Scheduled {
+		public int attempt;
+		public int maxAttempts;
+		public long delayMs;
+		public String errorMessage;
 
-		default void onRetryAttemptStart() {}
-
-		default void onRetryFinished(boolean success, int attempt, String finalError) {}
+		public Scheduled(int attempt, int maxAttempts, long delayMs, String errorMessage) {
+			this.attempt = attempt;
+			this.maxAttempts = maxAttempts;
+			this.delayMs = delayMs;
+			this.errorMessage = errorMessage;
+		}
 	}
 
-	@FunctionalInterface
-	public interface Producer {
-		AssistantMessage produce() throws InterruptedException;
+	/** Outcome of a retry sequence that made at least one extra attempt. */
+	public static final class Finished {
+		public boolean success;
+		public int attempt;
+		public String finalError;
+
+		public Finished(boolean success, int attempt, String finalError) {
+			this.success = success;
+			this.attempt = attempt;
+			this.finalError = finalError;
+		}
 	}
 
 	/**
-	 * Classifies whether a failed assistant message looks like a transient
-	 * provider/transport error.
+	 * Retry observers. Each field holds a JDK functional value; a null field is
+	 * simply not invoked.
 	 */
-	public static boolean isRetryableAssistantError(AssistantMessage message) {
-		if (message.stopReason != StopReason.ERROR || message.errorMessage == null) {
-			return false;
-		}
-		if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.matcher(message.errorMessage).find()) {
-			return false;
-		}
-		return RETRYABLE_PROVIDER_ERROR_PATTERN.matcher(message.errorMessage).find();
-	}
+	public static final class Callbacks {
+		public Consumer<Scheduled> onRetryScheduled;
+		public Runnable onRetryAttemptStart;
+		public Consumer<Finished> onRetryFinished;
 
-	/**
-	 * Run a single assistant-producing call with bounded retry on transient
-	 * errors. Aborts are terminal and never retried; aborts during backoff are
-	 * normalized to an aborted AssistantMessage.
-	 */
-	public static AssistantMessage retryAssistantCall(
-			Producer produce, Policy policy, AbortSignal signal, Callbacks callbacks) throws InterruptedException {
-		int maxAttempts = policy != null && policy.enabled() ? policy.maxRetries() : 0;
-		Callbacks cb = callbacks != null ? callbacks : new Callbacks() {};
+		public Callbacks() {}
 
-		int attempt = 0;
-		Integer lastRetryAttempt = null;
-		while (true) {
-			AssistantMessage response = produce.produce();
-
-			if (response.stopReason == StopReason.ABORTED) {
-				if (lastRetryAttempt != null) {
-					cb.onRetryFinished(false, lastRetryAttempt, null);
-				}
-				return response;
-			}
-			if (response.stopReason != StopReason.ERROR) {
-				if (lastRetryAttempt != null) {
-					cb.onRetryFinished(true, lastRetryAttempt, null);
-				}
-				return response;
-			}
-			if (attempt >= maxAttempts || !isRetryableAssistantError(response)) {
-				if (lastRetryAttempt != null) {
-					cb.onRetryFinished(false, lastRetryAttempt, response.errorMessage);
-				}
-				return response;
-			}
-
-			attempt++;
-			lastRetryAttempt = attempt;
-			String errorMessage = response.errorMessage != null ? response.errorMessage : "Unknown error";
-			long delayMs = policy.baseDelayMs() * (1L << (attempt - 1));
-			cb.onRetryScheduled(attempt, maxAttempts, delayMs, errorMessage);
-
-			if (!sleepAbortable(delayMs, signal)) {
-				cb.onRetryFinished(false, attempt, errorMessage);
-				response.stopReason = StopReason.ABORTED;
-				response.errorMessage = null;
-				return response;
-			}
-			cb.onRetryAttemptStart();
+		public Callbacks(
+				Consumer<Scheduled> onRetryScheduled, Runnable onRetryAttemptStart, Consumer<Finished> onRetryFinished) {
+			this.onRetryScheduled = onRetryScheduled;
+			this.onRetryAttemptStart = onRetryAttemptStart;
+			this.onRetryFinished = onRetryFinished;
 		}
-	}
-
-	/** Returns false if aborted during sleep. */
-	private static boolean sleepAbortable(long ms, AbortSignal signal) throws InterruptedException {
-		if (signal == null) {
-			Thread.sleep(ms);
-			return true;
-		}
-		if (signal.isAborted()) {
-			return false;
-		}
-		Object monitor = new Object();
-		signal.onAbort(() -> {
-			synchronized (monitor) {
-				monitor.notifyAll();
-			}
-		});
-		long deadline = System.currentTimeMillis() + ms;
-		synchronized (monitor) {
-			while (!signal.isAborted()) {
-				long remaining = deadline - System.currentTimeMillis();
-				if (remaining <= 0) {
-					return true;
-				}
-				monitor.wait(remaining);
-			}
-		}
-		return false;
 	}
 }

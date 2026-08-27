@@ -10,15 +10,28 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.StreamOptions;
+import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
 import com.quaxt.codingagent.ai.types.StopReason;
-import com.quaxt.codingagent.ai.types.UserMessage;
 
 class GoogleProviderTest {
+	private static StreamOptions options(String apiKey) {
+		StreamOptions options = new StreamOptions();
+		options.apiKey = apiKey;
+		return options;
+	}
+
+	private static StreamOptions options(String apiKey, ThinkingLevel reasoning) {
+		StreamOptions options = options(apiKey);
+		options.reasoning = reasoning;
+		return options;
+	}
+
 	@Test
 	void sendsGeminiRequestAndStreamsTextAndUsage() throws Exception {
 		AtomicReference<String> request = new AtomicReference<>();
@@ -36,14 +49,14 @@ class GoogleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			GoogleProvider provider = new GoogleProvider(List.of(model));
+			GoogleProvider provider = CodingAgentOperations.googleProvider(List.of(model));
 			Context context = new Context("system");
-			context.messages.add(UserMessage.of("hi"));
+			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					provider.stream(model, context, new StreamOptions().apiKey("test-key")).result();
+					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
 
-			assertEquals("hello world", result.text());
+			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);
 			assertEquals(StopReason.STOP, result.stopReason);
 			assertEquals(4, result.usage.input);
@@ -57,15 +70,16 @@ class GoogleProviderTest {
 	}
 
 	private static Model model(String baseUrl) {
-		return Model.builder()
-				.id("gemini-test")
-				.api("google-generative-ai")
-				.provider("google")
-				.baseUrl(baseUrl)
-				.cost(ModelCost.FREE)
-				.contextWindow(1000)
-				.maxTokens(100)
-				.build();
+		Model model = new Model();
+		model.id = "gemini-test";
+		model.name = "gemini-test";
+		model.api = "google-generative-ai";
+		model.provider = "google";
+		model.baseUrl = baseUrl;
+		model.cost = ModelCost.FREE;
+		model.contextWindow = 1000;
+		model.maxTokens = 100;
+		return model;
 	}
 
 	private static HttpServer server(ExchangeHandler handler) throws Exception {

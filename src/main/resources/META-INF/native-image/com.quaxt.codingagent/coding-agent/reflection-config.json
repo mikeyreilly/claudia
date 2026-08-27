@@ -1,6 +1,6 @@
 [
   {
-    "name": "com.quaxt.codingagent.tui.ShiftAwareJniTerminalProvider",
+    "name": "com.quaxt.codingagent.CodingAgentOperations",
     "allDeclaredConstructors": true,
     "allPublicConstructors": true
   }

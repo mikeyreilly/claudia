@@ -1,55 +1,87 @@
 package com.quaxt.codingagent.ai.auth;
 
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
-/** One persisted credential for a provider, stored in {@code ~/.codingagent/auth.json}. */
+/**
+ * One persisted credential for a provider, stored in
+ * {@code ~/.codingagent/auth.json}.
+ *
+ * <p>Marker interface; the sealed hierarchy is retained so operations can
+ * pattern match on the credential flavour. All behavior lives in
+ * CodingAgentOperations.
+ */
 public sealed interface Credential permits Credential.ApiKeyCredential, Credential.OAuthCredential {
-	String type();
 
 	/** API key credential with optional provider-scoped configuration values. */
-	record ApiKeyCredential(String key, Map<String, String> env) implements Credential {
-		public ApiKeyCredential {
-			env = env == null ? Map.of() : Map.copyOf(env);
-		}
+	final class ApiKeyCredential implements Credential {
+		public String key;
+		public Map<String, String> env;
 
-		public ApiKeyCredential(String key) {
-			this(key, Map.of());
+		public ApiKeyCredential(String key, Map<String, String> env) {
+			this.key = key;
+			this.env = env;
 		}
 
 		@Override
-		public String type() {
-			return "api_key";
+		public boolean equals(Object other) {
+			return other instanceof ApiKeyCredential that
+					&& Objects.equals(key, that.key)
+					&& Objects.equals(env, that.env);
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash(key, env);
+		}
+
+		@Override
+		public String toString() {
+			return "ApiKeyCredential[key=" + key + ", env=" + env + "]";
 		}
 	}
 
 	/** OAuth refresh/access tokens, expiry in Unix milliseconds, and optional enabled model ids. */
-	record OAuthCredential(
-			String access,
-			String refresh,
-			long expires,
-			List<String> availableModelIds,
-			Map<String, String> metadata) implements Credential {
-		public OAuthCredential {
-			availableModelIds = availableModelIds == null ? null : List.copyOf(availableModelIds);
-			metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-		}
+	final class OAuthCredential implements Credential {
+		public String access;
+		public String refresh;
+		public long expires;
+		public List<String> availableModelIds;
+		public Map<String, String> metadata;
 
-		public OAuthCredential(String access, String refresh, long expires) {
-			this(access, refresh, expires, null, Map.of());
-		}
-
-		public OAuthCredential(String access, String refresh, long expires, List<String> availableModelIds) {
-			this(access, refresh, expires, availableModelIds, Map.of());
+		public OAuthCredential(
+				String access,
+				String refresh,
+				long expires,
+				List<String> availableModelIds,
+				Map<String, String> metadata) {
+			this.access = access;
+			this.refresh = refresh;
+			this.expires = expires;
+			this.availableModelIds = availableModelIds;
+			this.metadata = metadata;
 		}
 
 		@Override
-		public String type() {
-			return "oauth";
+		public boolean equals(Object other) {
+			return other instanceof OAuthCredential that
+					&& Objects.equals(access, that.access)
+					&& Objects.equals(refresh, that.refresh)
+					&& expires == that.expires
+					&& Objects.equals(availableModelIds, that.availableModelIds)
+					&& Objects.equals(metadata, that.metadata);
 		}
 
-		public boolean isExpired(long nowMs) {
-			return expires <= nowMs;
+		@Override
+		public int hashCode() {
+			return Objects.hash(access, refresh, expires, availableModelIds, metadata);
+		}
+
+		@Override
+		public String toString() {
+			return "OAuthCredential[access=" + access + ", refresh=" + refresh + ", expires=" + expires
+					+ ", availableModelIds=" + availableModelIds + ", metadata=" + metadata + "]";
 		}
 	}
 }

@@ -12,7 +12,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.StreamOptions;
+import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
@@ -20,9 +22,20 @@ import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
 import com.quaxt.codingagent.ai.types.StopReason;
-import com.quaxt.codingagent.ai.types.UserMessage;
 
 class OpenAiCompatibleProviderTest {
+	private static StreamOptions options(String apiKey) {
+		StreamOptions options = new StreamOptions();
+		options.apiKey = apiKey;
+		return options;
+	}
+
+	private static StreamOptions options(String apiKey, ThinkingLevel reasoning) {
+		StreamOptions options = options(apiKey);
+		options.reasoning = reasoning;
+		return options;
+	}
+
 	@Test
 	void sendsChatCompletionRequestAndStreamsText() throws Exception {
 		AtomicReference<String> requestBody = new AtomicReference<>();
@@ -43,19 +56,19 @@ class OpenAiCompatibleProviderTest {
 		try {
 			Model model = model(url(server));
 			OpenAiCompatibleProvider provider =
-					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 			Context context = new Context("system instructions");
-			context.messages.add(UserMessage.of("hello"));
+			context.messages.add(CodingAgentOperations.userMessage("hello"));
 
 			AssistantMessageEventStream stream =
-					provider.stream(model, context, new StreamOptions().apiKey("test-key"));
+					CodingAgentOperations.stream(provider, model, context, options("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
-			for (AssistantMessageEvent event : stream) {
+			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
 			}
 
-			AssistantMessage response = stream.result();
-			assertEquals("hello world", response.text());
+			AssistantMessage response = CodingAgentOperations.result(stream);
+			assertEquals("hello world", CodingAgentOperations.text(response));
 			assertEquals(StopReason.STOP, response.stopReason);
 			assertEquals(4, response.usage.input);
 			assertEquals(2, response.usage.output);
@@ -86,14 +99,14 @@ class OpenAiCompatibleProviderTest {
 		try {
 			Model model = model(url(server));
 			OpenAiCompatibleProvider provider =
-					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key")).result();
+					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
-			assertEquals("read", result.toolCalls().getFirst().name());
-			assertEquals("README.md", result.toolCalls().getFirst().arguments().path("path").asText());
+			assertEquals("read", CodingAgentOperations.toolCalls(result).getFirst().name);
+			assertEquals("README.md", CodingAgentOperations.toolCalls(result).getFirst().arguments.path("path").asText());
 		} finally {
 			server.stop(0);
 		}
@@ -112,16 +125,16 @@ class OpenAiCompatibleProviderTest {
 		try {
 			Model model = model(url(server));
 			OpenAiCompatibleProvider provider =
-					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key")).result();
+					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
-			assertEquals(1, result.toolCalls().size());
-			assertEquals("toolu_1", result.toolCalls().getFirst().id());
-			assertEquals("parameterless_tool", result.toolCalls().getFirst().name());
-			assertTrue(result.toolCalls().getFirst().arguments().isEmpty());
+			assertEquals(1, CodingAgentOperations.toolCalls(result).size());
+			assertEquals("toolu_1", CodingAgentOperations.toolCalls(result).getFirst().id);
+			assertEquals("parameterless_tool", CodingAgentOperations.toolCalls(result).getFirst().name);
+			assertTrue(CodingAgentOperations.toolCalls(result).getFirst().arguments.isEmpty());
 		} finally {
 			server.stop(0);
 		}
@@ -140,19 +153,19 @@ class OpenAiCompatibleProviderTest {
 		try {
 			Model model = model(url(server));
 			OpenAiCompatibleProvider provider =
-					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessageEventStream stream =
-					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key"));
+					CodingAgentOperations.stream(provider, model, new Context(), options("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
-			for (AssistantMessageEvent event : stream) {
+			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
 			}
-			AssistantMessage result = stream.result();
+			AssistantMessage result = CodingAgentOperations.result(stream);
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
-			assertEquals(1, result.toolCalls().size());
-			assertEquals("read", result.toolCalls().getFirst().name());
+			assertEquals(1, CodingAgentOperations.toolCalls(result).size());
+			assertEquals("read", CodingAgentOperations.toolCalls(result).getFirst().name);
 			assertEquals(
 					1L,
 					events.stream().filter(AssistantMessageEvent.ToolCallStart.class::isInstance).count());
@@ -176,10 +189,10 @@ class OpenAiCompatibleProviderTest {
 		try {
 			Model model = model(url(server));
 			OpenAiCompatibleProvider provider =
-					new OpenAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					provider.stream(model, new Context(), new StreamOptions().apiKey("test-key")).result();
+					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.ERROR, result.stopReason);
 			assertTrue(result.errorMessage.startsWith("OpenAI tool call arguments must be a JSON object"));
@@ -191,22 +204,23 @@ class OpenAiCompatibleProviderTest {
 			assertTrue(result.errorMessage.contains("\"arguments\":\"[\""));
 			assertTrue(result.errorMessage.contains("\"name\":\"tool\""));
 			assertTrue(result.errorMessage.contains("\"arguments\":\"]\""));
-			assertEquals("read", result.toolCalls().getFirst().name());
+			assertEquals("read", CodingAgentOperations.toolCalls(result).getFirst().name);
 		} finally {
 			server.stop(0);
 		}
 	}
 
 	private static Model model(String baseUrl) {
-		return Model.builder()
-				.id("test-model")
-				.api("openai-completions")
-				.provider("custom")
-				.baseUrl(baseUrl)
-				.cost(ModelCost.FREE)
-				.contextWindow(1000)
-				.maxTokens(100)
-				.build();
+		Model model = new Model();
+		model.id = "test-model";
+		model.name = "test-model";
+		model.api = "openai-completions";
+		model.provider = "custom";
+		model.baseUrl = baseUrl;
+		model.cost = ModelCost.FREE;
+		model.contextWindow = 1000;
+		model.maxTokens = 100;
+		return model;
 	}
 
 	private static HttpServer server(ExchangeHandler handler) throws Exception {

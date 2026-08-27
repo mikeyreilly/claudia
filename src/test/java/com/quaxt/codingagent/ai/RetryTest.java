@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.util.AbortSignal;
@@ -21,28 +22,28 @@ class RetryTest {
 
 	@Test
 	void classifiesRetryableErrors() {
-		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "429 Too Many Requests")));
-		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "socket hang up")));
-		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "java.net.ConnectException")));
-		assertTrue(Retry.isRetryableAssistantError(message(StopReason.ERROR, "Overloaded")));
-		assertTrue(Retry.isRetryableAssistantError(message(
+		assertTrue(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "429 Too Many Requests")));
+		assertTrue(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "socket hang up")));
+		assertTrue(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "java.net.ConnectException")));
+		assertTrue(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "Overloaded")));
+		assertTrue(CodingAgentOperations.isRetryableAssistantError(message(
 				StopReason.ERROR,
 				"503: upstream connect error or disconnect/reset before headers. reset reason: connection termination")));
 	}
 
 	@Test
 	void classifiesNonRetryableErrors() {
-		assertFalse(Retry.isRetryableAssistantError(message(StopReason.ERROR, "insufficient_quota: add credits")));
-		assertFalse(Retry.isRetryableAssistantError(message(StopReason.ERROR, "invalid_request_error")));
-		assertFalse(Retry.isRetryableAssistantError(message(StopReason.STOP, null)));
+		assertFalse(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "insufficient_quota: add credits")));
+		assertFalse(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "invalid_request_error")));
+		assertFalse(CodingAgentOperations.isRetryableAssistantError(message(StopReason.STOP, null)));
 		// quota patterns take precedence even when a retryable token (429) is present
-		assertFalse(Retry.isRetryableAssistantError(message(StopReason.ERROR, "429 quota exceeded")));
+		assertFalse(CodingAgentOperations.isRetryableAssistantError(message(StopReason.ERROR, "429 quota exceeded")));
 	}
 
 	@Test
 	void retriesUntilSuccess() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = Retry.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
 				() -> calls.incrementAndGet() < 3
 						? message(StopReason.ERROR, "503 service unavailable")
 						: message(StopReason.STOP, null),
@@ -56,7 +57,7 @@ class RetryTest {
 	@Test
 	void returnsErrorAfterExhaustingRetries() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = Retry.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "500 internal error");
@@ -71,7 +72,7 @@ class RetryTest {
 	@Test
 	void doesNotRetryNonRetryable() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = Retry.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "billing problem");
@@ -91,9 +92,9 @@ class RetryTest {
 				Thread.sleep(30);
 			} catch (InterruptedException ignored) {
 			}
-			signal.abort();
+			CodingAgentOperations.abort(signal);
 		});
-		AssistantMessage result = Retry.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
 				() -> message(StopReason.ERROR, "503 service unavailable"),
 				new Retry.Policy(true, 3, 10_000),
 				signal,
@@ -106,7 +107,7 @@ class RetryTest {
 	@Test
 	void neverRetriesAbortedResponses() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = Retry.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ABORTED, null);

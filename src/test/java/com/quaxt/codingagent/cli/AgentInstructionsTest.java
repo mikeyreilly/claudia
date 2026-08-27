@@ -10,9 +10,9 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
-import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
 
 class AgentInstructionsTest {
@@ -25,10 +25,10 @@ class AgentInstructionsTest {
 		Path rootInstructions = repository.resolve("AGENTS.md");
 		Files.writeString(rootInstructions, "Use the repository build.");
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(workingDirectory, "Base agent prompt.");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(workingDirectory, "Base agent prompt.");
 
-		assertEquals("Base agent prompt.\n\nUse the repository build.", instructions.systemPrompt());
-		assertEquals(List.of(rootInstructions), instructions.sources());
+		assertEquals("Base agent prompt.\n\nUse the repository build.", instructions.systemPrompt);
+		assertEquals(List.of(rootInstructions), instructions.sources);
 	}
 
 	@Test
@@ -36,10 +36,10 @@ class AgentInstructionsTest {
 		Path repository = repository();
 		Path workingDirectory = Files.createDirectories(repository.resolve("src"));
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(workingDirectory, "Base agent prompt.");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(workingDirectory, "Base agent prompt.");
 
-		assertEquals("Base agent prompt.", instructions.systemPrompt());
-		assertTrue(instructions.sources().isEmpty());
+		assertEquals("Base agent prompt.", instructions.systemPrompt);
+		assertTrue(instructions.sources.isEmpty());
 	}
 
 	@Test
@@ -52,10 +52,10 @@ class AgentInstructionsTest {
 		Files.writeString(rootInstructions, "Repository instructions.");
 		Files.writeString(backendInstructions, "Backend instructions.");
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(workingDirectory, "");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(workingDirectory, "");
 
-		assertEquals("Repository instructions.\n\nBackend instructions.", instructions.systemPrompt());
-		assertEquals(List.of(rootInstructions, backendInstructions), instructions.sources());
+		assertEquals("Repository instructions.\n\nBackend instructions.", instructions.systemPrompt);
+		assertEquals(List.of(rootInstructions, backendInstructions), instructions.sources);
 	}
 
 	@Test
@@ -68,9 +68,9 @@ class AgentInstructionsTest {
 		Files.writeString(services.resolve("AGENTS.md"), "Services.");
 		Files.writeString(payments.resolve("AGENTS.md"), "Payments.");
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(workingDirectory, "Base.");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(workingDirectory, "Base.");
 
-		assertEquals("Base.\n\nRoot.\n\nServices.\n\nPayments.", instructions.systemPrompt());
+		assertEquals("Base.\n\nRoot.\n\nServices.\n\nPayments.", instructions.systemPrompt);
 	}
 
 	@Test
@@ -80,10 +80,10 @@ class AgentInstructionsTest {
 		Path override = repository.resolve("AGENTS.override.md");
 		Files.writeString(override, "Override instructions.");
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(repository, "");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(repository, "");
 
-		assertEquals("Override instructions.", instructions.systemPrompt());
-		assertEquals(List.of(override), instructions.sources());
+		assertEquals("Override instructions.", instructions.systemPrompt);
+		assertEquals(List.of(override), instructions.sources);
 	}
 
 	@Test
@@ -96,12 +96,12 @@ class AgentInstructionsTest {
 		Files.writeString(database.resolve("AGENTS.md"), "Database.");
 		Path databaseFile = Files.writeString(database.resolve("schema.sql"), "select 1;");
 
-		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(backend, "Base.");
+		AgentInstructions instructions = CodingAgentOperations.agentInstructionsForWorkingDirectory(backend, "Base.");
 
-		assertEquals("Base.\n\nRoot.\n\nBackend.", instructions.systemPrompt());
-		assertTrue(instructions.observe(databaseFile));
-		assertEquals("Base.\n\nRoot.\n\nBackend.\n\nDatabase.", instructions.systemPrompt());
-		assertFalse(instructions.observe(repository.resolve("frontend/app.js")));
+		assertEquals("Base.\n\nRoot.\n\nBackend.", instructions.systemPrompt);
+		assertTrue(CodingAgentOperations.observeAgentInstructions(instructions, databaseFile));
+		assertEquals("Base.\n\nRoot.\n\nBackend.\n\nDatabase.", instructions.systemPrompt);
+		assertFalse(CodingAgentOperations.observeAgentInstructions(instructions, repository.resolve("frontend/app.js")));
 	}
 
 	@Test
@@ -112,27 +112,27 @@ class AgentInstructionsTest {
 		Files.writeString(nested.resolve("AGENTS.md"), "Database rule.");
 		Files.writeString(nested.resolve("schema.sql"), "select 1;");
 
-		FauxProvider provider = new FauxProvider();
+		FauxProvider provider = CodingAgentOperations.newFauxProvider();
 		List<String> prompts = new CopyOnWriteArrayList<>();
-		provider.setResponses(List.of(
+		CodingAgentOperations.setFauxResponses(provider, List.of(
 				new FauxProvider.ResponseStep.Factory(request -> {
-					prompts.add(request.context().systemPrompt);
-					return FauxProvider.toolCall("read", Json.object().put("path", "backend/database/schema.sql"));
+					prompts.add(request.context.systemPrompt);
+					return CodingAgentOperations.fauxToolCall("read", CodingAgentOperations.jsonObject().put("path", "backend/database/schema.sql"));
 				}),
 				new FauxProvider.ResponseStep.Factory(request -> {
-					prompts.add(request.context().systemPrompt);
-					return FauxProvider.text("Done.");
+					prompts.add(request.context.systemPrompt);
+					return CodingAgentOperations.fauxText("Done.");
 				})));
-		Agent agent = new Agent("Base prompt.", provider.models().getFirst(), provider::stream);
-		Cli.configureBuiltInTools(agent, repository, "Base prompt.");
+		Agent agent = CodingAgentOperations.newAgent("Base prompt.", provider.models.getFirst(), provider);
+		CodingAgentOperations.configureBuiltInTools(agent, repository, "Base prompt.");
 		List<Path> loadedSources = new CopyOnWriteArrayList<>();
-		agent.subscribe(event -> {
+		CodingAgentOperations.subscribe(agent, event -> {
 			if (event instanceof AgentEvent.InstructionLoaded loaded) {
-				loadedSources.add(loaded.path());
+				loadedSources.add(loaded.path);
 			}
 		});
 
-		agent.prompt("Inspect the schema.");
+		CodingAgentOperations.prompt(agent, "Inspect the schema.");
 
 		assertEquals(
 				List.of(
@@ -146,7 +146,7 @@ class AgentInstructionsTest {
 	void formatsLoadedInstructionFilesForTheUser() {
 		Path source = Path.of("/Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md");
 
-		assertEquals("Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md", Cli.instructionLoadedMessage(source));
+		assertEquals("Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md", CodingAgentOperations.instructionLoadedMessage(source));
 	}
 
 	private Path repository() throws Exception {

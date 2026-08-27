@@ -6,58 +6,81 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import com.quaxt.codingagent.CodingAgentOperations;
 
 class SseReaderTest {
 	private static SseReader reader(String input) {
-		return new SseReader(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)));
+		return CodingAgentOperations.sseReader(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)));
+	}
+
+	private static SseReader.SseEvent next(SseReader reader) throws Exception {
+		return CodingAgentOperations.nextSseEvent(reader);
 	}
 
 	@Test
 	void parsesEventAndData() throws Exception {
-		try (SseReader r = reader("event: message_start\ndata: {\"a\":1}\n\n")) {
-			SseReader.SseEvent event = r.next();
-			assertEquals("message_start", event.event());
-			assertEquals("{\"a\":1}", event.data());
-			assertNull(r.next());
+		SseReader r = reader("event: message_start\ndata: {\"a\":1}\n\n");
+		try {
+			SseReader.SseEvent event = next(r);
+			assertEquals("message_start", event.event);
+			assertEquals("{\"a\":1}", event.data);
+			assertNull(next(r));
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 
 	@Test
 	void joinsMultipleDataLines() throws Exception {
-		try (SseReader r = reader("data: line1\ndata: line2\n\n")) {
-			assertEquals("line1\nline2", r.next().data());
+		SseReader r = reader("data: line1\ndata: line2\n\n");
+		try {
+			assertEquals("line1\nline2", next(r).data);
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 
 	@Test
 	void ignoresCommentsAndRetry() throws Exception {
-		try (SseReader r = reader(": keepalive\nretry: 3000\ndata: x\n\n")) {
-			assertEquals("x", r.next().data());
+		SseReader r = reader(": keepalive\nretry: 3000\ndata: x\n\n");
+		try {
+			assertEquals("x", next(r).data);
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 
 	@Test
 	void handlesMultipleEvents() throws Exception {
-		try (SseReader r = reader("data: one\n\ndata: two\n\ndata: [DONE]\n\n")) {
-			assertEquals("one", r.next().data());
-			assertEquals("two", r.next().data());
-			assertEquals("[DONE]", r.next().data());
-			assertNull(r.next());
+		SseReader r = reader("data: one\n\ndata: two\n\ndata: [DONE]\n\n");
+		try {
+			assertEquals("one", next(r).data);
+			assertEquals("two", next(r).data);
+			assertEquals("[DONE]", next(r).data);
+			assertNull(next(r));
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 
 	@Test
 	void flushesTrailingEventWithoutBlankLine() throws Exception {
-		try (SseReader r = reader("data: tail")) {
-			assertEquals("tail", r.next().data());
-			assertNull(r.next());
+		SseReader r = reader("data: tail");
+		try {
+			assertEquals("tail", next(r).data);
+			assertNull(next(r));
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 
 	@Test
 	void stripsSingleLeadingSpaceOnly() throws Exception {
-		try (SseReader r = reader("data:  two spaces\n\n")) {
-			assertEquals(" two spaces", r.next().data());
+		SseReader r = reader("data:  two spaces\n\n");
+		try {
+			assertEquals(" two spaces", next(r).data);
+		} finally {
+			CodingAgentOperations.closeSseReader(r);
 		}
 	}
 }

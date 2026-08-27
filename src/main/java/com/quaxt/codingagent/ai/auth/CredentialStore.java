@@ -1,25 +1,39 @@
 package com.quaxt.codingagent.ai.auth;
 
-import java.io.IOException;
-import java.util.List;
-import java.util.Optional;
-import java.util.function.UnaryOperator;
+import java.util.Objects;
 
-/** Persistent credential store. Mutations are serialized and atomically written. */
-public interface CredentialStore {
-	Optional<Credential> read(String providerId) throws IOException;
+/**
+ * Persistent credential store marker. Mutations are serialized and atomically
+ * written by the operations in CodingAgentOperations, which dispatch over the
+ * concrete store carriers permitted here.
+ */
+public sealed interface CredentialStore permits FileCredentialStore {
 
-	List<CredentialInfo> list() throws IOException;
+	/** Provider id and credential type pair, without the secret material. */
+	final class CredentialInfo {
+		public String providerId;
+		public String type;
 
-	/**
-	 * Atomically applies a mutation to a provider credential. Returning null
-	 * removes the credential.
-	 */
-	Optional<Credential> modify(String providerId, UnaryOperator<Credential> operation) throws IOException;
+		public CredentialInfo(String providerId, String type) {
+			this.providerId = providerId;
+			this.type = type;
+		}
 
-	default void delete(String providerId) throws IOException {
-		modify(providerId, ignored -> null);
+		@Override
+		public boolean equals(Object other) {
+			return other instanceof CredentialInfo that
+					&& Objects.equals(providerId, that.providerId)
+					&& Objects.equals(type, that.type);
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash(providerId, type);
+		}
+
+		@Override
+		public String toString() {
+			return "CredentialInfo[providerId=" + providerId + ", type=" + type + "]";
+		}
 	}
-
-	record CredentialInfo(String providerId, String type) {}
 }

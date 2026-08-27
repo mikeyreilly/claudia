@@ -15,8 +15,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.AgentTool;
-import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 
@@ -25,15 +25,15 @@ class BuiltInToolsTest {
 
 	@Test
 	void readsWritesAndEditsFiles() throws Exception {
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
-		ObjectNode write = Json.object().put("path", "nested/example.txt").put("content", "before\nsecond\n");
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
+		ObjectNode write = CodingAgentOperations.jsonObject().put("path", "nested/example.txt").put("content", "before\nsecond\n");
 		assertTrue(run(tools, "write", write).contains("Successfully wrote"));
 
-		ObjectNode edit = Json.object().put("path", "nested/example.txt");
+		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", "nested/example.txt");
 		edit.putArray("edits").addObject().put("oldText", "before").put("newText", "after");
 		assertTrue(run(tools, "edit", edit).contains("Successfully replaced"));
 
-		ObjectNode read = Json.object().put("path", "nested/example.txt").put("offset", 1).put("limit", 1);
+		ObjectNode read = CodingAgentOperations.jsonObject().put("path", "nested/example.txt").put("offset", 1).put("limit", 1);
 		assertEquals("after\n\n[1 more lines. Use offset=2 to continue.]", run(tools, "read", read));
 		assertEquals("after\nsecond\n", Files.readString(tempDir.resolve("nested/example.txt")));
 	}
@@ -41,9 +41,10 @@ class BuiltInToolsTest {
 	@Test
 	void rejectsAmbiguousEdits() throws Exception {
 		Files.writeString(tempDir.resolve("example.txt"), "duplicate duplicate");
-		ObjectNode edit = Json.object().put("path", "example.txt");
+		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", "example.txt");
 		edit.putArray("edits").addObject().put("oldText", "duplicate").put("newText", "changed");
-		assertThrows(IllegalArgumentException.class, () -> tool(BuiltInTools.create(tempDir), "edit").execute("id", edit, new AbortSignal(), ignored -> {}));
+		assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.executeTool(
+				tool(CodingAgentOperations.builtInTools(tempDir), "edit"), "id", edit, new AbortSignal(), ignored -> {}));
 	}
 
 	@Test
@@ -52,13 +53,13 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve("src/example.java"), "class Example {\n  String value = \"needle\";\n}\n");
 		Files.writeString(tempDir.resolve("README.md"), "documentation");
 
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
-		assertEquals("src/example.java", run(tools, "find", Json.object().put("pattern", "**/*.java")));
-		assertTrue(run(tools, "grep", Json.object().put("pattern", "needle")).contains("src/example.java:2:"));
-		String listing = run(tools, "ls", Json.object());
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
+		assertEquals("src/example.java", run(tools, "find", CodingAgentOperations.jsonObject().put("pattern", "**/*.java")));
+		assertTrue(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("src/example.java:2:"));
+		String listing = run(tools, "ls", CodingAgentOperations.jsonObject());
 		assertTrue(listing.contains("README.md"));
 		assertTrue(listing.contains("src/"));
-		assertEquals("ok", run(tools, "shell", Json.object().put("command", shellCommandThatPrintsOk())));
+		assertEquals("ok", run(tools, "shell", CodingAgentOperations.jsonObject().put("command", shellCommandThatPrintsOk())));
 	}
 
 	@Test
@@ -68,11 +69,11 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve("src/nested/Nested.java"), "needle");
 		Files.writeString(tempDir.resolve("src/nested/notes.txt"), "needle");
 
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
 		String byFileName = run(
 				tools,
 				"grep",
-				Json.object().put("pattern", "needle").put("path", "src").put("glob", "*.java"));
+				CodingAgentOperations.jsonObject().put("pattern", "needle").put("path", "src").put("glob", "*.java"));
 		assertTrue(byFileName.contains("Root.java:1:"));
 		assertTrue(byFileName.contains("nested/Nested.java:1:"));
 		assertFalse(byFileName.contains("notes.txt"));
@@ -80,19 +81,23 @@ class BuiltInToolsTest {
 		String recursive = run(
 				tools,
 				"grep",
-				Json.object().put("pattern", "needle").put("path", "src").put("glob", "**/*.java"));
+				CodingAgentOperations.jsonObject().put("pattern", "needle").put("path", "src").put("glob", "**/*.java"));
 		assertTrue(recursive.contains("Root.java:1:"));
 		assertTrue(recursive.contains("nested/Nested.java:1:"));
 	}
 
 	@Test
 	void grepRejectsWildcardsInLiteralPathWithActionableError() {
-		ObjectNode arguments = Json.object().put("pattern", "needle").put("path", "src/**/*.java");
+		ObjectNode arguments = CodingAgentOperations.jsonObject().put("pattern", "needle").put("path", "src/**/*.java");
 
 		IllegalArgumentException error = assertThrows(
 				IllegalArgumentException.class,
-				() -> tool(BuiltInTools.create(tempDir), "grep")
-						.execute("id", arguments, new AbortSignal(), ignored -> {}));
+				() -> CodingAgentOperations.executeTool(
+						tool(CodingAgentOperations.builtInTools(tempDir), "grep"),
+						"id",
+						arguments,
+						new AbortSignal(),
+						ignored -> {}));
 
 		assertTrue(error.getMessage().contains("path is literal"));
 		assertTrue(error.getMessage().contains("glob"));
@@ -109,14 +114,14 @@ class BuiltInToolsTest {
 		String originalHome = System.getProperty("user.home");
 		try {
 			System.setProperty("user.home", home.toString());
-			List<AgentTool> tools = BuiltInTools.create(cwd);
-			assertEquals("home content", run(tools, "read", Json.object().put("path", "~/from-home.txt")));
-			assertTrue(run(tools, "ls", Json.object().put("path", "~")).contains("from-home.txt"));
-			assertEquals("literal tilde", run(tools, "read", Json.object().put("path", "./~")));
+			List<AgentTool> tools = CodingAgentOperations.builtInTools(cwd);
+			assertEquals("home content", run(tools, "read", CodingAgentOperations.jsonObject().put("path", "~/from-home.txt")));
+			assertTrue(run(tools, "ls", CodingAgentOperations.jsonObject().put("path", "~")).contains("from-home.txt"));
+			assertEquals("literal tilde", run(tools, "read", CodingAgentOperations.jsonObject().put("path", "./~")));
 
 			IllegalArgumentException error = assertThrows(
 					IllegalArgumentException.class,
-					() -> run(tools, "read", Json.object().put("path", "~someuser/file.txt")));
+					() -> run(tools, "read", CodingAgentOperations.jsonObject().put("path", "~someuser/file.txt")));
 			assertEquals("~user paths are not supported; use an absolute path", error.getMessage());
 		} finally {
 			if (originalHome == null) System.clearProperty("user.home");
@@ -129,12 +134,12 @@ class BuiltInToolsTest {
 		Files.createDirectories(tempDir.resolve("bases/example/src"));
 		Files.writeString(tempDir.resolve("bases/example/src/core.clj"), "(ns example.core)");
 		Files.writeString(tempDir.resolve("README.md"), "documentation");
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
 
 		String wrongPrefix = run(
 				tools,
 				"grep",
-				Json.object().put("pattern", "missing").put("glob", "src/**/*.clj"));
+				CodingAgentOperations.jsonObject().put("pattern", "missing").put("glob", "src/**/*.clj"));
 		assertTrue(wrongPrefix.contains("No files matched glob 'src/**/*.clj'"));
 		assertTrue(wrongPrefix.contains("2 files under"));
 		assertTrue(wrongPrefix.contains("relative to path"));
@@ -142,11 +147,11 @@ class BuiltInToolsTest {
 		String noContentMatch = run(
 				tools,
 				"grep",
-				Json.object().put("pattern", "missing").put("path", "bases").put("glob", "**/*.clj"));
+				CodingAgentOperations.jsonObject().put("pattern", "missing").put("path", "bases").put("glob", "**/*.clj"));
 		assertEquals("No matches found in 1 files matching glob '**/*.clj'", noContentMatch);
 		assertEquals(
 				"No matches found in 2 files",
-				run(tools, "grep", Json.object().put("pattern", "missing")));
+				run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "missing")));
 	}
 
 	@Test
@@ -156,45 +161,45 @@ class BuiltInToolsTest {
 			addZipEntry(zip, "pkg/a.clj", "first\nsecond\nthird");
 			addZipEntry(zip, "pkg/b.txt", "other");
 		}
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
 		String archivePath = archive + "!";
 
 		assertEquals("first\nsecond\nthird", run(
-				tools, "read", Json.object().put("path", archivePath + "pkg/a.clj")));
+				tools, "read", CodingAgentOperations.jsonObject().put("path", archivePath + "pkg/a.clj")));
 		assertEquals(
 				"second\n\n[1 more lines. Use offset=3 to continue.]",
-				run(tools, "read", Json.object().put("path", archivePath + "pkg/a.clj").put("offset", 2).put("limit", 1)));
-		assertTrue(run(tools, "read", Json.object().put("path", archivePath)).contains("pkg/"));
-		String packageListing = run(tools, "read", Json.object().put("path", archivePath + "pkg/"));
+				run(tools, "read", CodingAgentOperations.jsonObject().put("path", archivePath + "pkg/a.clj").put("offset", 2).put("limit", 1)));
+		assertTrue(run(tools, "read", CodingAgentOperations.jsonObject().put("path", archivePath)).contains("pkg/"));
+		String packageListing = run(tools, "read", CodingAgentOperations.jsonObject().put("path", archivePath + "pkg/"));
 		assertTrue(packageListing.contains("a.clj (18 bytes)"));
 		assertTrue(packageListing.contains("b.txt (5 bytes)"));
 
 		IOException missing = assertThrows(
 				IOException.class,
-				() -> run(tools, "read", Json.object().put("path", archivePath + "pkg/missing.clj")));
+				() -> run(tools, "read", CodingAgentOperations.jsonObject().put("path", archivePath + "pkg/missing.clj")));
 		assertTrue(missing.getMessage().contains("pkg/a.clj"));
 		assertTrue(missing.getMessage().contains("pkg/b.txt"));
 
-		ObjectNode edit = Json.object().put("path", archivePath + "pkg/a.clj");
+		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", archivePath + "pkg/a.clj");
 		edit.putArray("edits").addObject().put("oldText", "first").put("newText", "changed");
 		IllegalArgumentException readOnly = assertThrows(
 				IllegalArgumentException.class, () -> run(tools, "edit", edit));
 		assertEquals("archives are read-only through this tool", readOnly.getMessage());
 		IllegalArgumentException writeReadOnly = assertThrows(
 				IllegalArgumentException.class,
-				() -> run(tools, "write", Json.object().put("path", archivePath + "new.txt").put("content", "new")));
+				() -> run(tools, "write", CodingAgentOperations.jsonObject().put("path", archivePath + "new.txt").put("content", "new")));
 		assertEquals("archives are read-only through this tool", writeReadOnly.getMessage());
 
 		Path notZip = tempDir.resolve("not-zip.bin");
 		Files.writeString(notZip, "not an archive");
 		IOException badArchive = assertThrows(
 				IOException.class,
-				() -> run(tools, "read", Json.object().put("path", notZip + "!entry.txt")));
+				() -> run(tools, "read", CodingAgentOperations.jsonObject().put("path", notZip + "!entry.txt")));
 		assertTrue(badArchive.getMessage().contains(notZip.toString()));
 
 		Path bangFile = tempDir.resolve("plain!name.txt");
 		Files.writeString(bangFile, "plain bang file");
-		assertEquals("plain bang file", run(tools, "read", Json.object().put("path", bangFile.toString())));
+		assertEquals("plain bang file", run(tools, "read", CodingAgentOperations.jsonObject().put("path", bangFile.toString())));
 	}
 
 	@Test
@@ -203,19 +208,19 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve(".gitignore"), "logs/\n");
 		Files.createDirectories(tempDir.resolve("logs"));
 		Files.writeString(tempDir.resolve("logs/ignored.log"), "secret needle");
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
 
-		assertFalse(run(tools, "grep", Json.object().put("pattern", "needle")).contains("ignored.log"));
+		assertFalse(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("ignored.log"));
 		assertTrue(run(
 				tools,
 				"grep",
-				Json.object().put("pattern", "needle").put("includeIgnored", true)).contains("logs/ignored.log"));
+				CodingAgentOperations.jsonObject().put("pattern", "needle").put("includeIgnored", true)).contains("logs/ignored.log"));
 		assertEquals("No files found matching pattern", run(
-				tools, "find", Json.object().put("pattern", "**/*.log")));
+				tools, "find", CodingAgentOperations.jsonObject().put("pattern", "**/*.log")));
 		assertEquals("logs/ignored.log", run(
 				tools,
 				"find",
-				Json.object().put("pattern", "**/*.log").put("includeIgnored", true)));
+				CodingAgentOperations.jsonObject().put("pattern", "**/*.log").put("includeIgnored", true)));
 	}
 
 	@Test
@@ -223,31 +228,32 @@ class BuiltInToolsTest {
 		initializeGitRepository(tempDir);
 		Files.writeString(tempDir.resolve(".gitignore"), "ignored.txt\n");
 		Files.writeString(tempDir.resolve("ignored.txt"), "fallback needle");
-		List<AgentTool> tools = BuiltInTools.create(
-				tempDir, new GitIgnore(tempDir.resolve("missing-git-executable").toString()));
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(
+				tempDir, new GitIgnore(tempDir.resolve("missing-git-executable").toString()), ignored -> {});
 
-		assertTrue(run(tools, "grep", Json.object().put("pattern", "needle")).contains("ignored.txt"));
+		assertTrue(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("ignored.txt"));
 	}
 
 	@Test
 	void schemasDescribeRequiredInputs() {
-		List<AgentTool> tools = BuiltInTools.create(tempDir);
-		AgentTool write = tool(tools, "write");
-		assertTrue(write.parameters().path("required").toString().contains("\"path\""));
-		assertTrue(write.parameters().path("required").toString().contains("\"content\""));
-		assertFalse(tool(tools, "ls").parameters().path("required").toString().contains("\"path\""));
+		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir);
+		ObjectNode write = CodingAgentOperations.toolParameters(tool(tools, "write"));
+		assertTrue(write.path("required").toString().contains("\"path\""));
+		assertTrue(write.path("required").toString().contains("\"content\""));
+		assertFalse(CodingAgentOperations.toolParameters(tool(tools, "ls"))
+				.path("required").toString().contains("\"path\""));
 
-		AgentTool grep = tool(tools, "grep");
-		assertTrue(grep.parameters().path("properties").has("path"));
-		assertTrue(grep.parameters().path("properties").has("glob"));
-		assertTrue(grep.parameters().path("properties").has("includeIgnored"));
-		assertTrue(grep.parameters().path("properties").path("path").path("description").asText().contains("Literal"));
+		ObjectNode grep = CodingAgentOperations.toolParameters(tool(tools, "grep"));
+		assertTrue(grep.path("properties").has("path"));
+		assertTrue(grep.path("properties").has("glob"));
+		assertTrue(grep.path("properties").has("includeIgnored"));
+		assertTrue(grep.path("properties").path("path").path("description").asText().contains("Literal"));
 		for (String name : List.of("read", "write", "edit", "grep", "find", "ls")) {
-			assertTrue(tool(tools, name).parameters().path("properties").path("path")
+			assertTrue(CodingAgentOperations.toolParameters(tool(tools, name)).path("properties").path("path")
 					.path("description").asText().contains("leading ~/"));
 		}
-		assertTrue(tool(tools, "read").description().contains("archive.jar!"));
-		assertTrue(tool(tools, "grep").description().contains("code-lens"));
+		assertTrue(CodingAgentOperations.toolDescription(tool(tools, "read")).contains("archive.jar!"));
+		assertTrue(CodingAgentOperations.toolDescription(tool(tools, "grep")).contains("code-lens"));
 	}
 
 	private static void addZipEntry(ZipOutputStream zip, String name, String content) throws IOException {
@@ -266,12 +272,16 @@ class BuiltInToolsTest {
 	}
 
 	private static AgentTool tool(List<AgentTool> tools, String name) {
-		return tools.stream().filter(tool -> tool.name().equals(name)).findFirst().orElseThrow();
+		return tools.stream()
+				.filter(tool -> CodingAgentOperations.toolName(tool).equals(name))
+				.findFirst()
+				.orElseThrow();
 	}
 
 	private static String run(List<AgentTool> tools, String name, ObjectNode arguments) throws Exception {
-		AgentTool.ToolResult result = tool(tools, name).execute("id", arguments, new AbortSignal(), ignored -> {});
-		return ((TextContent) result.content().getFirst()).text();
+		AgentTool.ToolResult result = CodingAgentOperations.executeTool(
+				tool(tools, name), "id", arguments, new AbortSignal(), ignored -> {});
+		return ((TextContent) result.content.getFirst()).text;
 	}
 
 	private static String shellCommandThatPrintsOk() {
