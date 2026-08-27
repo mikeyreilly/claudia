@@ -4198,29 +4198,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return text == null || text.isEmpty() ? 0 : (text.length() + 3L) / 4L;
 	}
 
-//	public static AssistantMessage fauxText(String content) {
-//		AssistantMessage response = new AssistantMessage(
-//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-//		response.content.add(textContent(content));
-//		response.stopReason = StopReason.STOP;
-//		return response;
-//	}
-//
-//	public static AssistantMessage fauxThinking(String content) {
-//		AssistantMessage response = new AssistantMessage(
-//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-//		response.content.add(thinkingContent(content));
-//		response.stopReason = StopReason.STOP;
-//		return response;
-//	}
-//
-//	public static AssistantMessage fauxToolCall(String name, ObjectNode arguments) {
-//		AssistantMessage response = new AssistantMessage(
-//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-//		response.content.add(toolCall("tool-call-1", name, arguments));
-//		response.stopReason = StopReason.TOOL_USE;
-//		return response;
-//	}
 
 	/** Shallow copy of an assistant message sharing its content blocks and usage. */
 	public static AssistantMessage copyAssistantMessage(AssistantMessage source) {
@@ -4236,46 +4213,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return copy;
 	}
 
-//	// ------------------------------------------------------ provider dispatch
-//
-//	public static String providerId(Provider provider) {
-//		return switch (provider) {
-//			case AnthropicProvider anthropic -> anthropic.id;
-//			case ChatGptProvider ignored -> ChatGptAuth.PROVIDER_ID;
-//			case FauxProvider faux -> faux.id;
-//			case GitHubCopilotProvider ignored -> GitHubCopilotAuth.PROVIDER_ID;
-//			case GoogleProvider ignored -> "google";
-//			case OpenAiCompatibleProvider compatible -> compatible.id;
-//			case OpenAiResponsesProvider responses -> responses.id;
-//			default -> throw unknownProvider(provider);
-//		};
-//	}
-//
-//	public static String providerName(Provider provider) {
-//		return switch (provider) {
-//			case AnthropicProvider anthropic -> anthropic.name;
-//			case ChatGptProvider ignored -> ChatGptProvider.NAME;
-//			case FauxProvider ignored -> FauxProvider.NAME;
-//			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.NAME;
-//			case GoogleProvider ignored -> "Google";
-//			case OpenAiCompatibleProvider compatible -> compatible.name;
-//			case OpenAiResponsesProvider responses -> responses.name;
-//			default -> throw unknownProvider(provider);
-//		};
-//	}
-//
-//	public static String providerApi(Provider provider) {
-//		return switch (provider) {
-//			case AnthropicProvider ignored -> AnthropicProvider.API;
-//			case ChatGptProvider ignored -> ChatGptProvider.API;
-//			case FauxProvider faux -> faux.api;
-//			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.API;
-//			case GoogleProvider ignored -> GoogleProvider.API;
-//			case OpenAiCompatibleProvider ignored -> OpenAiCompatibleProvider.API;
-//			case OpenAiResponsesProvider ignored -> OpenAiResponsesProvider.API;
-//			default -> throw unknownProvider(provider);
-//		};
-//	}
 
 	public static List<Model> providerModels(Provider provider) {
 		return switch (provider) {
@@ -4290,28 +4227,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-//	public static List<String> providerApiKeyEnvVars(Provider provider) {
-//		return switch (provider) {
-//			case AnthropicProvider anthropic -> anthropic.apiKeyEnvVars;
-//			case GoogleProvider ignored -> List.of("GEMINI_API_KEY", "GOOGLE_API_KEY");
-//			case OpenAiCompatibleProvider compatible ->
-//				compatible.id.equals("openai") ? List.of("OPENAI_API_KEY") : List.of();
-//			case OpenAiResponsesProvider responses -> responses.apiKeyEnvVars;
-//			case ChatGptProvider ignored -> List.of();
-//			case FauxProvider ignored -> List.of();
-//			case GitHubCopilotProvider ignored -> List.of();
-//			default -> throw unknownProvider(provider);
-//		};
-//	}
-//
-//	/** Reports whether a credential-routed provider has a saved login. */
-//	public static boolean providerHasCredential(Provider provider) throws IOException {
-//		return switch (provider) {
-//			case ChatGptProvider chatGpt -> chatGptHasCredential(chatGpt.auth);
-//			case GitHubCopilotProvider copilot -> gitHubCopilotHasCredential(copilot.auth);
-//			default -> false;
-//		};
-//	}
 
 	/** Removes a credential-routed provider's saved login. */
 	public static void providerLogout(Provider provider) throws IOException {
@@ -7393,14 +7308,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/** Connects or retries a configured server and waits for that attempt. */
-//	public static McpManager.ServerStatus mcpConnectServer(McpManager manager, String name)
-//			throws InterruptedException {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		Thread thread = mcpStartConnect(manager, runtime, true);
-//		if (thread != null) thread.join();
-//		return mcpSnapshot(runtime);
-//	}
 
 	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
 	public static McpManager.ServerStatus mcpConnectServerAsync(McpManager manager, String name) {
@@ -7431,20 +7338,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return mcpSnapshot(runtime);
 	}
 
-//	/** Connected/connecting means toggle off; disabled/failed means connect or retry. */
-//	public static McpManager.ServerStatus mcpToggleServer(McpManager manager, String name)
-//			throws InterruptedException {
-//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-//		McpManager.State state;
-//		synchronized (runtime.lock) {
-//			state = runtime.state;
-//		}
-//		return state == McpManager.State.CONNECTED
-//						|| state == McpManager.State.CONNECTING
-//						|| state == McpManager.State.AUTHENTICATING
-//				? mcpDisconnectServer(manager, name)
-//				: mcpConnectServer(manager, name);
-//	}
 
 	/** Asynchronous variant used by the full-screen selector. */
 	public static McpManager.ServerStatus mcpToggleServerAsync(McpManager manager, String name) {
@@ -8897,46 +8790,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return TERMINAL_ANSI.matcher(value).replaceAll("");
 	}
 
-//	// -------------------------------------------------------------- markdown
-//
-//	private static final Pattern MARKDOWN_BOLD = Pattern.compile("\\*\\*(.+?)\\*\\*");
-//	private static final Pattern MARKDOWN_CODE = Pattern.compile("`([^`]+)`");
-//
-//	public static String renderMarkdown(String markdown) {
-//		return renderMarkdown(markdown, Theme.DARK);
-//	}
-//
-//	/** Compact ANSI formatting for the Markdown constructs used in agent replies. */
-//	public static String renderMarkdown(String markdown, Theme theme) {
-//		StringBuilder output = new StringBuilder();
-//		for (String line : markdown.split("\\R", -1)) {
-//			if (line.startsWith("### ")) output.append(theme.strong).append(line.substring(4)).append(theme.reset);
-//			else if (line.startsWith("## ")) output.append(theme.heading).append(line.substring(3)).append(theme.reset);
-//			else if (line.startsWith("# ")) output.append(theme.heading).append(line.substring(2)).append(theme.reset);
-//			else if (line.startsWith("> ")) output.append(theme.muted).append(line.substring(2)).append(theme.reset);
-//			else output.append(markdownInline(line, theme));
-//			output.append('\n');
-//		}
-//		return output.isEmpty() ? "" : output.substring(0, output.length() - 1);
-//	}
-//
-//	private static String markdownInline(String text, Theme theme) {
-//		return markdownReplace(
-//				MARKDOWN_CODE,
-//				markdownReplace(MARKDOWN_BOLD, text, theme.strong, theme.reset),
-//				theme.code,
-//				theme.reset);
-//	}
-//
-//	private static String markdownReplace(Pattern pattern, String input, String style, String reset) {
-//		Matcher matcher = pattern.matcher(input);
-//		StringBuilder output = new StringBuilder();
-//		while (matcher.find()) {
-//			matcher.appendReplacement(output, Matcher.quoteReplacement(style + matcher.group(1) + reset));
-//		}
-//		matcher.appendTail(output);
-//		return output.toString();
-//	}
 
 	// ----------------------------------------------------------------- theme
 
@@ -9138,9 +8991,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		renderer.previousLines = List.of();
 	}
 
-//	public static List<String> ansiPreviousLines(AnsiRenderer renderer) {
-//		return new ArrayList<>(renderer.previousLines);
-//	}
 
 	private static void ansiMoveTo(StringBuilder output, int zeroBasedLine) {
 		output.append("\u001b[").append(zeroBasedLine + 1).append(";1H");
@@ -9416,22 +9266,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return lines;
 	}
 
-//	public static List<String> visibleCommands(CommandSuggestions suggestions, String buffer) {
-//		synchronizeCommandSuggestions(suggestions, buffer);
-//		if (suggestions.matches.isEmpty()) return List.of();
-//		return List.copyOf(suggestions.matches.subList(
-//				suggestions.visibleStart,
-//				Math.min(
-//						suggestions.matches.size(),
-//						suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS)));
-//	}
-//
-//	public static String selectedCommand(CommandSuggestions suggestions, String buffer) {
-//		synchronizeCommandSuggestions(suggestions, buffer);
-//		return suggestions.matches.isEmpty()
-//				? null
-//				: suggestions.matches.get(suggestions.selectedIndex);
-//	}
 
 	private static void synchronizeCommandSuggestions(CommandSuggestions suggestions, String buffer) {
 		String value = buffer == null ? "" : buffer;
@@ -11155,18 +10989,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return instructions;
 	}
 
-//	/** Creates an instruction set for an explicit repository root. */
-//	public static AgentInstructions agentInstructionsForRepository(
-//			Path repositoryRoot, Path workingDirectory, String baseSystemPrompt) {
-//		Path root = Objects.requireNonNull(repositoryRoot, "repositoryRoot").toAbsolutePath().normalize();
-//		Path directory = instructionDirectory(workingDirectory);
-//		if (directory == null || !directory.startsWith(root)) {
-//			throw new IllegalArgumentException("workingDirectory must be inside repositoryRoot");
-//		}
-//		AgentInstructions instructions = agentInstructions(root, directory, baseSystemPrompt);
-//		refreshAgentInstructionsIn(instructions, directory);
-//		return instructions;
-//	}
 
 	/** Reloads the instruction files applicable to the current scope. */
 	public static boolean refreshAgentInstructions(AgentInstructions instructions) {
@@ -13811,13 +13633,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return List.copyOf(entries);
 	}
 
-//	/** Lists session ids newest first. */
-//	public static List<String> listSessions(SessionStore store) throws IOException {
-//		return sessionFiles(store).stream()
-//				.map(path -> sessionIdFor(path.getFileName()))
-//				.sorted(Comparator.reverseOrder())
-//				.toList();
-//	}
 
 	/** Lists resumable sessions newest first, optionally limited to one working directory. */
 	public static List<SessionSnapshot> listSessionSnapshots(SessionStore store, Path cwd) throws IOException {
@@ -14021,10 +13836,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	public static SettingsStore defaultSettingsStore() {
 		return settingsStore(Path.of(System.getProperty("user.home"), ".codingagent", "settings.json"));
 	}
-
-//	public static SettingsStore.Settings emptySettings() {
-//		return new SettingsStore.Settings(null, null, null, null, false);
-//	}
 
 	public static SettingsStore.Settings withSettingsDefaultModel(
 			SettingsStore.Settings settings, String provider, String model) {
