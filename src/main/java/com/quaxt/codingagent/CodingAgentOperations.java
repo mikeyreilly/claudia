@@ -253,75 +253,75 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	// ---------------------------------------------------------------- uuid
 
 	/** Generates a time-ordered UUIDv7 string. */
-	public static String uuidv7() {
-		byte[] random = new byte[16];
-		Uuid.RANDOM.nextBytes(random);
-		long timestampMs;
-		long seq;
-		synchronized (Uuid.class) {
-			long now = System.currentTimeMillis();
-			if (now > Uuid.lastTimestamp) {
-				Uuid.sequence = ((random[6] & 0xFFL) << 24)
-						| ((random[7] & 0xFFL) << 16)
-						| ((random[8] & 0xFFL) << 8)
-						| (random[9] & 0xFFL);
-				Uuid.lastTimestamp = now;
-			} else {
-				Uuid.sequence = (Uuid.sequence + 1) & 0xFFFFFFFFL;
-				if (Uuid.sequence == 0) {
-					Uuid.lastTimestamp++;
-				}
-			}
-			timestampMs = Uuid.lastTimestamp;
-			seq = Uuid.sequence;
-		}
-
-		byte[] bytes = new byte[16];
-		bytes[0] = (byte) (timestampMs >>> 40);
-		bytes[1] = (byte) (timestampMs >>> 32);
-		bytes[2] = (byte) (timestampMs >>> 24);
-		bytes[3] = (byte) (timestampMs >>> 16);
-		bytes[4] = (byte) (timestampMs >>> 8);
-		bytes[5] = (byte) timestampMs;
-		bytes[6] = (byte) (0x70 | ((seq >>> 28) & 0x0F));
-		bytes[7] = (byte) ((seq >>> 20) & 0xFF);
-		bytes[8] = (byte) (0x80 | ((seq >>> 14) & 0x3F));
-		bytes[9] = (byte) ((seq >>> 6) & 0xFF);
-		bytes[10] = (byte) (((seq & 0x3F) << 2) | (random[10] & 0x03));
-		bytes[11] = random[11];
-		bytes[12] = random[12];
-		bytes[13] = random[13];
-		bytes[14] = random[14];
-		bytes[15] = random[15];
-
-		StringBuilder sb = new StringBuilder(36);
-		for (int i = 0; i < 16; i++) {
-			if (i == 4 || i == 6 || i == 8 || i == 10) {
-				sb.append('-');
-			}
-			sb.append(Character.forDigit((bytes[i] >> 4) & 0xF, 16));
-			sb.append(Character.forDigit(bytes[i] & 0xF, 16));
-		}
-		return sb.toString();
-	}
-
-	// --------------------------------------------------------- abort signal
-
-	/** Marks the signal aborted and runs (once) every registered listener. */
-	public static void abort(AbortSignal signal) {
-		List<Runnable> toRun;
-		synchronized (signal) {
-			if (signal.aborted) {
-				return;
-			}
-			signal.aborted = true;
-			toRun = new ArrayList<>(signal.listeners);
-			signal.listeners.clear();
-		}
-		for (Runnable listener : toRun) {
-			listener.run();
-		}
-	}
+//	public static String uuidv7() {
+//		byte[] random = new byte[16];
+//		Uuid.RANDOM.nextBytes(random);
+//		long timestampMs;
+//		long seq;
+//		synchronized (Uuid.class) {
+//			long now = System.currentTimeMillis();
+//			if (now > Uuid.lastTimestamp) {
+//				Uuid.sequence = ((random[6] & 0xFFL) << 24)
+//						| ((random[7] & 0xFFL) << 16)
+//						| ((random[8] & 0xFFL) << 8)
+//						| (random[9] & 0xFFL);
+//				Uuid.lastTimestamp = now;
+//			} else {
+//				Uuid.sequence = (Uuid.sequence + 1) & 0xFFFFFFFFL;
+//				if (Uuid.sequence == 0) {
+//					Uuid.lastTimestamp++;
+//				}
+//			}
+//			timestampMs = Uuid.lastTimestamp;
+//			seq = Uuid.sequence;
+//		}
+//
+//		byte[] bytes = new byte[16];
+//		bytes[0] = (byte) (timestampMs >>> 40);
+//		bytes[1] = (byte) (timestampMs >>> 32);
+//		bytes[2] = (byte) (timestampMs >>> 24);
+//		bytes[3] = (byte) (timestampMs >>> 16);
+//		bytes[4] = (byte) (timestampMs >>> 8);
+//		bytes[5] = (byte) timestampMs;
+//		bytes[6] = (byte) (0x70 | ((seq >>> 28) & 0x0F));
+//		bytes[7] = (byte) ((seq >>> 20) & 0xFF);
+//		bytes[8] = (byte) (0x80 | ((seq >>> 14) & 0x3F));
+//		bytes[9] = (byte) ((seq >>> 6) & 0xFF);
+//		bytes[10] = (byte) (((seq & 0x3F) << 2) | (random[10] & 0x03));
+//		bytes[11] = random[11];
+//		bytes[12] = random[12];
+//		bytes[13] = random[13];
+//		bytes[14] = random[14];
+//		bytes[15] = random[15];
+//
+//		StringBuilder sb = new StringBuilder(36);
+//		for (int i = 0; i < 16; i++) {
+//			if (i == 4 || i == 6 || i == 8 || i == 10) {
+//				sb.append('-');
+//			}
+//			sb.append(Character.forDigit((bytes[i] >> 4) & 0xF, 16));
+//			sb.append(Character.forDigit(bytes[i] & 0xF, 16));
+//		}
+//		return sb.toString();
+//	}
+//
+//	// --------------------------------------------------------- abort signal
+//
+//	/** Marks the signal aborted and runs (once) every registered listener. */
+//	public static void abort(AbortSignal signal) {
+//		List<Runnable> toRun;
+//		synchronized (signal) {
+//			if (signal.aborted) {
+//				return;
+//			}
+//			signal.aborted = true;
+//			toRun = new ArrayList<>(signal.listeners);
+//			signal.listeners.clear();
+//		}
+//		for (Runnable listener : toRun) {
+//			listener.run();
+//		}
+//	}
 
 	public static boolean isAborted(AbortSignal signal) {
 		synchronized (signal) {
@@ -360,20 +360,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	/** Terminates the stream without a terminal event, optionally supplying the result. */
-	public static <T, R> void end(EventStream<T, R> stream, R result) {
-		synchronized (stream) {
-			stream.done = true;
-			if (result != null) {
-				stream.finalResult.complete(result);
-			}
-			stream.notifyAll();
-		}
-	}
-
-	public static <T, R> void end(EventStream<T, R> stream) {
-		end(stream, null);
-	}
+//	/** Terminates the stream without a terminal event, optionally supplying the result. */
+//	public static <T, R> void end(EventStream<T, R> stream, R result) {
+//		synchronized (stream) {
+//			stream.done = true;
+//			if (result != null) {
+//				stream.finalResult.complete(result);
+//			}
+//			stream.notifyAll();
+//		}
+//	}
+//
+//	public static <T, R> void end(EventStream<T, R> stream) {
+//		end(stream, null);
+//	}
 
 	/** Blocks until the terminal event arrives and returns the extracted result. */
 	public static <T, R> R result(EventStream<T, R> stream) throws InterruptedException {
@@ -445,14 +445,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	/** Unix timestamp in milliseconds. */
-	public static long timestamp(Message message) {
-		return switch (message) {
-			case UserMessage user -> user.timestamp;
-			case AssistantMessage assistant -> assistant.timestamp;
-			case ToolResultMessage result -> result.timestamp;
-		};
-	}
+//	/** Unix timestamp in milliseconds. */
+//	public static long timestamp(Message message) {
+//		return switch (message) {
+//			case UserMessage user -> user.timestamp;
+//			case AssistantMessage assistant -> assistant.timestamp;
+//			case ToolResultMessage result -> result.timestamp;
+//		};
+//	}
 
 	/** Concatenated text of all text blocks. */
 	public static String text(AssistantMessage message) {
@@ -602,15 +602,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return thinkingContent(block.thinking, signature, block.redacted);
 	}
 
-	// --------------------------------------------------------------- context
-
-	/** Shallow copy: message and tool lists are duplicated, elements shared. */
-	public static Context copy(Context context) {
-		Context copy = new Context(context.systemPrompt);
-		copy.messages.addAll(context.messages);
-		copy.tools.addAll(context.tools);
-		return copy;
-	}
+//	// --------------------------------------------------------------- context
+//
+//	/** Shallow copy: message and tool lists are duplicated, elements shared. */
+//	public static Context copy(Context context) {
+//		Context copy = new Context(context.systemPrompt);
+//		copy.messages.addAll(context.messages);
+//		copy.tools.addAll(context.tools);
+//		return copy;
+//	}
 
 	// --------------------------------------------------------------- model
 
@@ -654,14 +654,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
 	// ------------------------------------------------------------ wire enums
 
-	public static StopReason stopReasonFromWire(String value) {
-		for (StopReason reason : StopReason.values()) {
-			if (reason.wire.equals(value)) {
-				return reason;
-			}
-		}
-		throw new IllegalArgumentException("Unknown stop reason: " + value);
-	}
+//	public static StopReason stopReasonFromWire(String value) {
+//		for (StopReason reason : StopReason.values()) {
+//			if (reason.wire.equals(value)) {
+//				return reason;
+//			}
+//		}
+//		throw new IllegalArgumentException("Unknown stop reason: " + value);
+//	}
 
 	public static ThinkingLevel thinkingLevelFromWire(String value) {
 		for (ThinkingLevel level : ThinkingLevel.values()) {
@@ -674,30 +674,30 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
 	// ------------------------------------------------------------------ http
 
-	public static ProxySelector proxySelectorFromEnv() {
-		String httpsProxy = envAnyCase("https_proxy");
-		String httpProxy = envAnyCase("http_proxy");
-		if (httpsProxy.isEmpty() && httpProxy.isEmpty()) {
-			return ProxySelector.getDefault();
-		}
-		String chosen = !httpsProxy.isEmpty() ? httpsProxy : httpProxy;
-		try {
-			URI proxyUri = URI.create(chosen);
-			int port = proxyUri.getPort() != -1 ? proxyUri.getPort() : 80;
-			return ProxySelector.of(new InetSocketAddress(proxyUri.getHost(), port));
-		} catch (IllegalArgumentException e) {
-			return ProxySelector.getDefault();
-		}
-	}
-
-	public static String envAnyCase(String key) {
-		String lower = System.getenv(key.toLowerCase(Locale.ROOT));
-		if (lower != null && !lower.isEmpty()) {
-			return lower;
-		}
-		String upper = System.getenv(key.toUpperCase(Locale.ROOT));
-		return upper != null ? upper : "";
-	}
+//	public static ProxySelector proxySelectorFromEnv() {
+//		String httpsProxy = envAnyCase("https_proxy");
+//		String httpProxy = envAnyCase("http_proxy");
+//		if (httpsProxy.isEmpty() && httpProxy.isEmpty()) {
+//			return ProxySelector.getDefault();
+//		}
+//		String chosen = !httpsProxy.isEmpty() ? httpsProxy : httpProxy;
+//		try {
+//			URI proxyUri = URI.create(chosen);
+//			int port = proxyUri.getPort() != -1 ? proxyUri.getPort() : 80;
+//			return ProxySelector.of(new InetSocketAddress(proxyUri.getHost(), port));
+//		} catch (IllegalArgumentException e) {
+//			return ProxySelector.getDefault();
+//		}
+//	}
+//
+//	public static String envAnyCase(String key) {
+//		String lower = System.getenv(key.toLowerCase(Locale.ROOT));
+//		if (lower != null && !lower.isEmpty()) {
+//			return lower;
+//		}
+//		String upper = System.getenv(key.toUpperCase(Locale.ROOT));
+//		return upper != null ? upper : "";
+//	}
 
 	public static String httpErrorMessage(int status, String body) {
 		String trimmed = body == null ? "" : body.trim();
@@ -1016,17 +1016,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	public static List<CredentialStore.CredentialInfo> listCredentials(CredentialStore store) throws IOException {
-		return switch (store) {
-			case FileCredentialStore file -> {
-				List<CredentialStore.CredentialInfo> result = new ArrayList<>();
-				for (Map.Entry<String, Credential> entry : readAllCredentials(file).entrySet()) {
-					result.add(new CredentialStore.CredentialInfo(entry.getKey(), credentialType(entry.getValue())));
-				}
-				yield List.copyOf(result);
-			}
-		};
-	}
+//	public static List<CredentialStore.CredentialInfo> listCredentials(CredentialStore store) throws IOException {
+//		return switch (store) {
+//			case FileCredentialStore file -> {
+//				List<CredentialStore.CredentialInfo> result = new ArrayList<>();
+//				for (Map.Entry<String, Credential> entry : readAllCredentials(file).entrySet()) {
+//					result.add(new CredentialStore.CredentialInfo(entry.getKey(), credentialType(entry.getValue())));
+//				}
+//				yield List.copyOf(result);
+//			}
+//		};
+//	}
 
 	/**
 	 * Atomically applies a mutation to a provider credential. Returning null
@@ -1058,9 +1058,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	public static void deleteCredential(CredentialStore store, String providerId) throws IOException {
-		modifyCredential(store, providerId, ignored -> null);
-	}
+//	public static void deleteCredential(CredentialStore store, String providerId) throws IOException {
+//		modifyCredential(store, providerId, ignored -> null);
+//	}
 
 	private static Map<String, Credential> readAllCredentials(FileCredentialStore store) throws IOException {
 		Path source = Files.exists(store.authPath) ? store.authPath : store.fallbackAuthPath;
@@ -1241,36 +1241,36 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new ChatGptAuth(credentials, validatedBaseUrl, clientId);
 	}
 
-	/** Starts the Codex device flow. Display the URI and code before completing it. */
-	public static ChatGptAuth.DeviceCode chatGptBeginLogin(ChatGptAuth auth) throws IOException {
-		ObjectNode request = jsonObject().put("client_id", auth.clientId);
-		JsonNode response = authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"), request);
-		String deviceAuthId = requiredOpenAiText(response, "device_auth_id");
-		String userCode = requiredOpenAiText(response, "user_code");
-		int interval = parseDeviceInterval(response.path("interval"));
-		return new ChatGptAuth.DeviceCode(
-				deviceAuthId,
-				userCode,
-				auth.authBaseUrl.resolve("/codex/device"),
-				interval,
-				System.currentTimeMillis() + ChatGptAuth.DEVICE_CODE_LIFETIME_MS);
-	}
-
-	/** Waits for browser authorization, exchanges the code, and saves refreshable tokens. */
-	public static Credential.OAuthCredential chatGptCompleteLogin(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
-			throws IOException, InterruptedException {
-		JsonNode authorization = pollForChatGptAuthorization(auth, device);
-		Map<String, String> form = new LinkedHashMap<>();
-		form.put("grant_type", "authorization_code");
-		form.put("code", requiredOpenAiText(authorization, "authorization_code"));
-		form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
-		form.put("client_id", auth.clientId);
-		form.put("code_verifier", requiredOpenAiText(authorization, "code_verifier"));
-		Credential.OAuthCredential credential =
-				chatGptCredentialFromTokenResponse(authPostForm(auth.authBaseUrl.resolve("/oauth/token"), form), null);
-		modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> credential);
-		return credential;
-	}
+//	/** Starts the Codex device flow. Display the URI and code before completing it. */
+//	public static ChatGptAuth.DeviceCode chatGptBeginLogin(ChatGptAuth auth) throws IOException {
+//		ObjectNode request = jsonObject().put("client_id", auth.clientId);
+//		JsonNode response = authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"), request);
+//		String deviceAuthId = requiredOpenAiText(response, "device_auth_id");
+//		String userCode = requiredOpenAiText(response, "user_code");
+//		int interval = parseDeviceInterval(response.path("interval"));
+//		return new ChatGptAuth.DeviceCode(
+//				deviceAuthId,
+//				userCode,
+//				auth.authBaseUrl.resolve("/codex/device"),
+//				interval,
+//				System.currentTimeMillis() + ChatGptAuth.DEVICE_CODE_LIFETIME_MS);
+//	}
+//
+//	/** Waits for browser authorization, exchanges the code, and saves refreshable tokens. */
+//	public static Credential.OAuthCredential chatGptCompleteLogin(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
+//			throws IOException, InterruptedException {
+//		JsonNode authorization = pollForChatGptAuthorization(auth, device);
+//		Map<String, String> form = new LinkedHashMap<>();
+//		form.put("grant_type", "authorization_code");
+//		form.put("code", requiredOpenAiText(authorization, "authorization_code"));
+//		form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
+//		form.put("client_id", auth.clientId);
+//		form.put("code_verifier", requiredOpenAiText(authorization, "code_verifier"));
+//		Credential.OAuthCredential credential =
+//				chatGptCredentialFromTokenResponse(authPostForm(auth.authBaseUrl.resolve("/oauth/token"), form), null);
+//		modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> credential);
+//		return credential;
+//	}
 
 	/** Returns a usable ChatGPT bearer token, refreshing it when close to expiry. */
 	public static ChatGptAuth.ChatGptToken chatGptResolveToken(ChatGptAuth auth) throws IOException {
@@ -1288,35 +1288,35 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return chatGptToken(refreshed);
 	}
 
-	public static boolean chatGptHasCredential(ChatGptAuth auth) throws IOException {
-		Optional<Credential> credential = readCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
-		return credential.filter(Credential.OAuthCredential.class::isInstance)
-				.map(Credential.OAuthCredential.class::cast)
-				.map(value -> !value.refresh.isBlank())
-				.orElse(false);
-	}
-
-	public static void chatGptLogout(ChatGptAuth auth) throws IOException {
-		deleteCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
-	}
-
-	private static JsonNode pollForChatGptAuthorization(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
-			throws IOException, InterruptedException {
-		ObjectNode request = jsonObject()
-				.put("device_auth_id", device.deviceAuthId)
-				.put("user_code", device.userCode);
-		while (System.currentTimeMillis() < device.expiresAtMs) {
-			try {
-				return authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/token"), request);
-			} catch (HttpException error) {
-				if (error.status != 403 && error.status != 404) {
-					throw error;
-				}
-				sleepSeconds(device.intervalSeconds);
-			}
-		}
-		throw new IOException("ChatGPT device authorization expired before completion");
-	}
+//	public static boolean chatGptHasCredential(ChatGptAuth auth) throws IOException {
+//		Optional<Credential> credential = readCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
+//		return credential.filter(Credential.OAuthCredential.class::isInstance)
+//				.map(Credential.OAuthCredential.class::cast)
+//				.map(value -> !value.refresh.isBlank())
+//				.orElse(false);
+//	}
+//
+//	public static void chatGptLogout(ChatGptAuth auth) throws IOException {
+//		deleteCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
+//	}
+//
+//	private static JsonNode pollForChatGptAuthorization(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
+//			throws IOException, InterruptedException {
+//		ObjectNode request = jsonObject()
+//				.put("device_auth_id", device.deviceAuthId)
+//				.put("user_code", device.userCode);
+//		while (System.currentTimeMillis() < device.expiresAtMs) {
+//			try {
+//				return authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/token"), request);
+//			} catch (HttpException error) {
+//				if (error.status != 403 && error.status != 404) {
+//					throw error;
+//				}
+//				sleepSeconds(device.intervalSeconds);
+//			}
+//		}
+//		throw new IOException("ChatGPT device authorization expired before completion");
+//	}
 
 	private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
 			JsonNode response, Credential.OAuthCredential previous) throws IOException {
@@ -1375,28 +1375,28 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static int parseDeviceInterval(JsonNode node) throws IOException {
-		int interval;
-		try {
-			interval = node.isIntegralNumber() ? node.asInt() : Integer.parseInt(node.asText("5"));
-		} catch (NumberFormatException error) {
-			throw new IOException("Invalid OpenAI device response: invalid interval", error);
-		}
-		if (interval < 0) {
-			throw new IOException("Invalid OpenAI device response: interval must not be negative");
-		}
-		return interval;
-	}
-
-	private static JsonNode authPostJson(URI url, JsonNode body) throws IOException {
-		HttpTransport.Response response = httpPostJson(
-				url.toString(), Map.of("Accept", "application/json"), Json.MAPPER.writeValueAsBytes(body), null, null);
-		try {
-			return Json.MAPPER.readTree(response.body);
-		} finally {
-			closeHttpResponse(response);
-		}
-	}
+//	private static int parseDeviceInterval(JsonNode node) throws IOException {
+//		int interval;
+//		try {
+//			interval = node.isIntegralNumber() ? node.asInt() : Integer.parseInt(node.asText("5"));
+//		} catch (NumberFormatException error) {
+//			throw new IOException("Invalid OpenAI device response: invalid interval", error);
+//		}
+//		if (interval < 0) {
+//			throw new IOException("Invalid OpenAI device response: interval must not be negative");
+//		}
+//		return interval;
+//	}
+//
+//	private static JsonNode authPostJson(URI url, JsonNode body) throws IOException {
+//		HttpTransport.Response response = httpPostJson(
+//				url.toString(), Map.of("Accept", "application/json"), Json.MAPPER.writeValueAsBytes(body), null, null);
+//		try {
+//			return Json.MAPPER.readTree(response.body);
+//		} finally {
+//			closeHttpResponse(response);
+//		}
+//	}
 
 	private static JsonNode authPostForm(URI url, Map<String, String> parameters) throws IOException {
 		String body = parameters.entrySet().stream()
@@ -1431,11 +1431,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return uri;
 	}
 
-	private static void sleepSeconds(int seconds) throws InterruptedException {
-		if (seconds > 0) {
-			Thread.sleep(seconds * 1000L);
-		}
-	}
+//	private static void sleepSeconds(int seconds) throws InterruptedException {
+//		if (seconds > 0) {
+//			Thread.sleep(seconds * 1000L);
+//		}
+//	}
 
 	// -------------------------------------------------- github copilot auth
 
@@ -1457,38 +1457,38 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl"));
 	}
 
-	/** Starts the device flow. Display the resulting URI and code before completing the login. */
-	public static GitHubCopilotAuth.DeviceCode gitHubCopilotBeginLogin(GitHubCopilotAuth auth) throws IOException {
-		JsonNode response = gitHubPostForm(
-				auth.githubBaseUrl.resolve("/login/device/code"),
-				Map.of("client_id", GitHubCopilotAuth.CLIENT_ID, "scope", "read:user"));
-		String deviceCode = requiredGitHubText(response, "device_code");
-		String userCode = requiredGitHubText(response, "user_code");
-		URI verificationUri = requireAbsoluteHttpUri(
-				URI.create(requiredGitHubText(response, "verification_uri")), "verification_uri");
-		long expiresIn = requiredPositiveLong(response, "expires_in");
-		int interval = response.path("interval").isIntegralNumber() ? response.path("interval").asInt() : 5;
-		if (interval < 0) {
-			throw new IOException("Invalid device code response: interval must not be negative");
-		}
-		return new GitHubCopilotAuth.DeviceCode(
-				deviceCode, userCode, verificationUri, interval, System.currentTimeMillis() + expiresIn * 1000);
-	}
-
-	/** Polls GitHub, exchanges the durable GitHub token for a Copilot token, and saves the credential. */
-	public static Credential.OAuthCredential gitHubCopilotCompleteLogin(
-			GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device) throws IOException, InterruptedException {
-		String githubAccessToken = pollForGitHubAccessToken(auth, device);
-		Credential.OAuthCredential credential = createCopilotCredential(auth, githubAccessToken, null);
-		try {
-			credential = withCopilotAvailableModels(auth, credential);
-		} catch (IOException ignored) {
-			// The Copilot token is valid even if its optional model catalog is transiently unavailable.
-		}
-		Credential.OAuthCredential saved = credential;
-		modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> saved);
-		return credential;
-	}
+//	/** Starts the device flow. Display the resulting URI and code before completing the login. */
+//	public static GitHubCopilotAuth.DeviceCode gitHubCopilotBeginLogin(GitHubCopilotAuth auth) throws IOException {
+//		JsonNode response = gitHubPostForm(
+//				auth.githubBaseUrl.resolve("/login/device/code"),
+//				Map.of("client_id", GitHubCopilotAuth.CLIENT_ID, "scope", "read:user"));
+//		String deviceCode = requiredGitHubText(response, "device_code");
+//		String userCode = requiredGitHubText(response, "user_code");
+//		URI verificationUri = requireAbsoluteHttpUri(
+//				URI.create(requiredGitHubText(response, "verification_uri")), "verification_uri");
+//		long expiresIn = requiredPositiveLong(response, "expires_in");
+//		int interval = response.path("interval").isIntegralNumber() ? response.path("interval").asInt() : 5;
+//		if (interval < 0) {
+//			throw new IOException("Invalid device code response: interval must not be negative");
+//		}
+//		return new GitHubCopilotAuth.DeviceCode(
+//				deviceCode, userCode, verificationUri, interval, System.currentTimeMillis() + expiresIn * 1000);
+//	}
+//
+//	/** Polls GitHub, exchanges the durable GitHub token for a Copilot token, and saves the credential. */
+//	public static Credential.OAuthCredential gitHubCopilotCompleteLogin(
+//			GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device) throws IOException, InterruptedException {
+//		String githubAccessToken = pollForGitHubAccessToken(auth, device);
+//		Credential.OAuthCredential credential = createCopilotCredential(auth, githubAccessToken, null);
+//		try {
+//			credential = withCopilotAvailableModels(auth, credential);
+//		} catch (IOException ignored) {
+//			// The Copilot token is valid even if its optional model catalog is transiently unavailable.
+//		}
+//		Credential.OAuthCredential saved = credential;
+//		modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> saved);
+//		return credential;
+//	}
 
 	/** Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary. */
 	public static GitHubCopilotAuth.CopilotToken gitHubCopilotResolveToken(GitHubCopilotAuth auth) throws IOException {
@@ -1511,18 +1511,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return copilotToken(auth, refreshed);
 	}
 
-	/** Reports whether a saved GitHub OAuth credential can be refreshed. */
-	public static boolean gitHubCopilotHasCredential(GitHubCopilotAuth auth) throws IOException {
-		Optional<Credential> credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
-		return credential.filter(Credential.OAuthCredential.class::isInstance)
-				.map(Credential.OAuthCredential.class::cast)
-				.map(value -> !value.refresh.isBlank())
-				.orElse(false);
-	}
-
-	public static void gitHubCopilotLogout(GitHubCopilotAuth auth) throws IOException {
-		deleteCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
-	}
+//	/** Reports whether a saved GitHub OAuth credential can be refreshed. */
+//	public static boolean gitHubCopilotHasCredential(GitHubCopilotAuth auth) throws IOException {
+//		Optional<Credential> credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
+//		return credential.filter(Credential.OAuthCredential.class::isInstance)
+//				.map(Credential.OAuthCredential.class::cast)
+//				.map(value -> !value.refresh.isBlank())
+//				.orElse(false);
+//	}
+//
+//	public static void gitHubCopilotLogout(GitHubCopilotAuth auth) throws IOException {
+//		deleteCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
+//	}
 
 	/** Enables the listed Copilot model policies and reports how many policy requests GitHub accepted. */
 	public static int gitHubCopilotEnableModels(GitHubCopilotAuth auth, List<String> modelIds) throws IOException {
@@ -1549,16 +1549,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return enabled;
 	}
 
-	/** Re-fetches and persists the enabled-model list without minting a new Copilot API token. */
-	public static GitHubCopilotAuth.CopilotToken gitHubCopilotRefreshAvailableModels(GitHubCopilotAuth auth)
-			throws IOException {
-		GitHubCopilotAuth.CopilotToken current = gitHubCopilotResolveToken(auth);
-		Credential.OAuthCredential oauth = copilotOauthCredential(auth);
-		Credential.OAuthCredential refreshed = oauthCredential(
-				oauth.access, oauth.refresh, oauth.expires, fetchCopilotAvailableModelIds(auth, current.accessToken));
-		modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> refreshed);
-		return copilotToken(auth, refreshed);
-	}
+//	/** Re-fetches and persists the enabled-model list without minting a new Copilot API token. */
+//	public static GitHubCopilotAuth.CopilotToken gitHubCopilotRefreshAvailableModels(GitHubCopilotAuth auth)
+//			throws IOException {
+//		GitHubCopilotAuth.CopilotToken current = gitHubCopilotResolveToken(auth);
+//		Credential.OAuthCredential oauth = copilotOauthCredential(auth);
+//		Credential.OAuthCredential refreshed = oauthCredential(
+//				oauth.access, oauth.refresh, oauth.expires, fetchCopilotAvailableModelIds(auth, current.accessToken));
+//		modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> refreshed);
+//		return copilotToken(auth, refreshed);
+//	}
 
 	private static Credential.OAuthCredential createCopilotCredential(
 			GitHubCopilotAuth auth, String githubAccessToken, List<String> availableModelIds) throws IOException {
@@ -1625,35 +1625,35 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				: List.copyOf(pickerEnabled);
 	}
 
-	private static String pollForGitHubAccessToken(GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device)
-			throws IOException, InterruptedException {
-		int intervalSeconds = device.intervalSeconds;
-		while (System.currentTimeMillis() < device.expiresAtMs) {
-			JsonNode response = gitHubPostForm(
-					auth.githubBaseUrl.resolve("/login/oauth/access_token"),
-					Map.of(
-							"client_id", GitHubCopilotAuth.CLIENT_ID,
-							"device_code", device.deviceCode,
-							"grant_type", "urn:ietf:params:oauth:grant-type:device_code"));
-			if (response.path("access_token").isTextual()) {
-				return response.path("access_token").asText();
-			}
-			String error = response.path("error").asText();
-			if (error.equals("authorization_pending")) {
-				sleepSeconds(intervalSeconds);
-				continue;
-			}
-			if (error.equals("slow_down")) {
-				intervalSeconds = Math.max(intervalSeconds + 5, response.path("interval").asInt(0));
-				sleepSeconds(intervalSeconds);
-				continue;
-			}
-			String description = response.path("error_description").asText();
-			throw new IOException(
-					"GitHub device authorization failed: " + error + (description.isBlank() ? "" : ": " + description));
-		}
-		throw new IOException("GitHub device authorization expired before completion");
-	}
+//	private static String pollForGitHubAccessToken(GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device)
+//			throws IOException, InterruptedException {
+//		int intervalSeconds = device.intervalSeconds;
+//		while (System.currentTimeMillis() < device.expiresAtMs) {
+//			JsonNode response = gitHubPostForm(
+//					auth.githubBaseUrl.resolve("/login/oauth/access_token"),
+//					Map.of(
+//							"client_id", GitHubCopilotAuth.CLIENT_ID,
+//							"device_code", device.deviceCode,
+//							"grant_type", "urn:ietf:params:oauth:grant-type:device_code"));
+//			if (response.path("access_token").isTextual()) {
+//				return response.path("access_token").asText();
+//			}
+//			String error = response.path("error").asText();
+//			if (error.equals("authorization_pending")) {
+//				sleepSeconds(intervalSeconds);
+//				continue;
+//			}
+//			if (error.equals("slow_down")) {
+//				intervalSeconds = Math.max(intervalSeconds + 5, response.path("interval").asInt(0));
+//				sleepSeconds(intervalSeconds);
+//				continue;
+//			}
+//			String description = response.path("error_description").asText();
+//			throw new IOException(
+//					"GitHub device authorization failed: " + error + (description.isBlank() ? "" : ": " + description));
+//		}
+//		throw new IOException("GitHub device authorization expired before completion");
+//	}
 
 	private static GitHubCopilotAuth.CopilotToken copilotToken(
 			GitHubCopilotAuth auth, Credential.OAuthCredential credential) {
@@ -1664,14 +1664,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				availableModelIds == null ? null : List.copyOf(availableModelIds));
 	}
 
-	private static Credential.OAuthCredential copilotOauthCredential(GitHubCopilotAuth auth) throws IOException {
-		Credential credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID)
-				.orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
-		if (credential instanceof Credential.OAuthCredential oauth) {
-			return oauth;
-		}
-		throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
-	}
+//	private static Credential.OAuthCredential copilotOauthCredential(GitHubCopilotAuth auth) throws IOException {
+//		Credential credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID)
+//				.orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
+//		if (credential instanceof Credential.OAuthCredential oauth) {
+//			return oauth;
+//		}
+//		throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
+//	}
 
 	private static URI copilotBaseUrlFromToken(GitHubCopilotAuth auth, String token) {
 		Matcher match = GitHubCopilotAuth.PROXY_ENDPOINT.matcher(token);
@@ -1706,25 +1706,25 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
 	}
 
-	private static JsonNode gitHubPostForm(URI url, Map<String, String> parameters) throws IOException {
-		String body = parameters.entrySet().stream()
-				.map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)
-						+ "="
-						+ URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
-				.reduce((left, right) -> left + "&" + right)
-				.orElse("");
-		HttpTransport.Response response = httpPostForm(
-				url.toString(),
-				Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
-				body.getBytes(StandardCharsets.UTF_8),
-				null,
-				null);
-		try {
-			return Json.MAPPER.readTree(response.body);
-		} finally {
-			closeHttpResponse(response);
-		}
-	}
+//	private static JsonNode gitHubPostForm(URI url, Map<String, String> parameters) throws IOException {
+//		String body = parameters.entrySet().stream()
+//				.map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)
+//						+ "="
+//						+ URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
+//				.reduce((left, right) -> left + "&" + right)
+//				.orElse("");
+//		HttpTransport.Response response = httpPostForm(
+//				url.toString(),
+//				Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
+//				body.getBytes(StandardCharsets.UTF_8),
+//				null,
+//				null);
+//		try {
+//			return Json.MAPPER.readTree(response.body);
+//		} finally {
+//			closeHttpResponse(response);
+//		}
+//	}
 
 	private static String requiredGitHubText(JsonNode node, String field) throws IOException {
 		if (!node.path(field).isTextual() || node.path(field).asText().isBlank()) {
@@ -1829,12 +1829,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return clamped.wire;
 	}
 
-	public static boolean modelsAreEqual(Model a, Model b) {
-		if (a == null || b == null) {
-			return false;
-		}
-		return a.id.equals(b.id) && a.provider.equals(b.provider);
-	}
+//	public static boolean modelsAreEqual(Model a, Model b) {
+//		if (a == null || b == null) {
+//			return false;
+//		}
+//		return a.id.equals(b.id) && a.provider.equals(b.provider);
+//	}
 
 	// -------------------------------------------------------- model catalog
 
@@ -1852,32 +1852,32 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new ModelCatalog(Map.copyOf(models), Map.copyOf(immutableByProvider));
 	}
 
-	/**
-	 * Finds a model by its provider and id, returning null if it is absent. Use
-	 * {@link #requireCatalogModel} when absence is a user-facing error.
-	 */
-	public static Model findCatalogModel(ModelCatalog catalog, String provider, String id) {
-		return catalog.byProviderAndId.get(modelCatalogKey(provider, id));
-	}
-
-	/** Finds a model or throws a clear error that includes the provider/id pair. */
-	public static Model requireCatalogModel(ModelCatalog catalog, String provider, String id) {
-		Model model = findCatalogModel(catalog, provider, id);
-		if (model == null) {
-			throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
-		}
-		return model;
-	}
+//	/**
+//	 * Finds a model by its provider and id, returning null if it is absent. Use
+//	 * {@link #requireCatalogModel} when absence is a user-facing error.
+//	 */
+//	public static Model findCatalogModel(ModelCatalog catalog, String provider, String id) {
+//		return catalog.byProviderAndId.get(modelCatalogKey(provider, id));
+//	}
+//
+//	/** Finds a model or throws a clear error that includes the provider/id pair. */
+//	public static Model requireCatalogModel(ModelCatalog catalog, String provider, String id) {
+//		Model model = findCatalogModel(catalog, provider, id);
+//		if (model == null) {
+//			throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
+//		}
+//		return model;
+//	}
 
 	/** Returns every bundled model from a provider, preserving source-file order. */
 	public static List<Model> catalogModelsForProvider(ModelCatalog catalog, String provider) {
 		return catalog.byProvider.getOrDefault(provider, List.of());
 	}
 
-	/** Returns every bundled model, preserving resource and source-file order. */
-	public static List<Model> allCatalogModels(ModelCatalog catalog) {
-		return List.copyOf(catalog.byProviderAndId.values());
-	}
+//	/** Returns every bundled model, preserving resource and source-file order. */
+//	public static List<Model> allCatalogModels(ModelCatalog catalog) {
+//		return List.copyOf(catalog.byProviderAndId.values());
+//	}
 
 	private static void loadModelCatalogResource(
 			String resourceName, Map<String, Model> models, Map<String, List<Model>> providers) {
@@ -3968,12 +3968,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return stream;
 	}
 
-	// ----------------------------------------------- github copilot provider
-
-	/** Creates the enabled-model result with an unmodifiable model list. */
-	public static GitHubCopilotProvider.ModelAccess modelAccess(int policiesEnabled, List<Model> models) {
-		return new GitHubCopilotProvider.ModelAccess(policiesEnabled, List.copyOf(models));
-	}
+//	// ----------------------------------------------- github copilot provider
+//
+//	/** Creates the enabled-model result with an unmodifiable model list. */
+//	public static GitHubCopilotProvider.ModelAccess modelAccess(int policiesEnabled, List<Model> models) {
+//		return new GitHubCopilotProvider.ModelAccess(policiesEnabled, List.copyOf(models));
+//	}
 
 	/** Builds the GitHub Copilot router provider over its catalog slice. */
 	public static GitHubCopilotProvider newGitHubCopilotProvider(List<Model> models, GitHubCopilotAuth auth) {
@@ -4003,28 +4003,28 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return models.stream().filter(model -> model.api.equals(api)).toList();
 	}
 
-	/** Filters the catalog to models GitHub reports as enabled for the signed-in account. */
-	public static List<Model> gitHubCopilotAvailableModels(GitHubCopilotProvider provider) throws IOException {
-		List<String> enabled = gitHubCopilotResolveToken(provider.auth).availableModelIds;
-		return filterEnabledCopilotModels(provider, enabled);
-	}
-
-	/** Enables catalog model policies, then refreshes the account's enabled-model list. */
-	public static GitHubCopilotProvider.ModelAccess gitHubCopilotEnableAndRefreshModels(
-			GitHubCopilotProvider provider) throws IOException {
-		int policiesEnabled =
-				gitHubCopilotEnableModels(provider.auth, provider.models.stream().map(model -> model.id).toList());
-		List<Model> available = filterEnabledCopilotModels(
-				provider, gitHubCopilotRefreshAvailableModels(provider.auth).availableModelIds);
-		return modelAccess(policiesEnabled, available);
-	}
-
-	private static List<Model> filterEnabledCopilotModels(GitHubCopilotProvider provider, List<String> enabled) {
-		if (enabled == null) {
-			return provider.models;
-		}
-		return provider.models.stream().filter(model -> enabled.contains(model.id)).toList();
-	}
+//	/** Filters the catalog to models GitHub reports as enabled for the signed-in account. */
+//	public static List<Model> gitHubCopilotAvailableModels(GitHubCopilotProvider provider) throws IOException {
+//		List<String> enabled = gitHubCopilotResolveToken(provider.auth).availableModelIds;
+//		return filterEnabledCopilotModels(provider, enabled);
+//	}
+//
+//	/** Enables catalog model policies, then refreshes the account's enabled-model list. */
+//	public static GitHubCopilotProvider.ModelAccess gitHubCopilotEnableAndRefreshModels(
+//			GitHubCopilotProvider provider) throws IOException {
+//		int policiesEnabled =
+//				gitHubCopilotEnableModels(provider.auth, provider.models.stream().map(model -> model.id).toList());
+//		List<Model> available = filterEnabledCopilotModels(
+//				provider, gitHubCopilotRefreshAvailableModels(provider.auth).availableModelIds);
+//		return modelAccess(policiesEnabled, available);
+//	}
+//
+//	private static List<Model> filterEnabledCopilotModels(GitHubCopilotProvider provider, List<String> enabled) {
+//		if (enabled == null) {
+//			return provider.models;
+//		}
+//		return provider.models.stream().filter(model -> enabled.contains(model.id)).toList();
+//	}
 
 	public static AssistantMessageEventStream gitHubCopilotStream(
 			GitHubCopilotProvider provider, Model model, Context context, StreamOptions options) {
@@ -4049,62 +4049,62 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	// --------------------------------------------------------- faux provider
-
-	/** Creates a deterministic test provider; at least one model is required. */
-	public static FauxProvider fauxProvider(String api, String id, List<Model> models) {
-		Objects.requireNonNull(api);
-		Objects.requireNonNull(id);
-		List<Model> catalog = List.copyOf(models);
-		if (catalog.isEmpty()) {
-			throw new IllegalArgumentException("Faux provider needs at least one model");
-		}
-		return new FauxProvider(api, id, catalog);
-	}
-
-	public static FauxProvider newFauxProvider() {
-		return fauxProvider(FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, List.of(fauxDefaultModel()));
-	}
-
-	public static Model fauxDefaultModel() {
-		Model model = new Model();
-		model.id = FauxProvider.DEFAULT_MODEL_ID;
-		model.name = "Faux Model";
-		model.api = FauxProvider.DEFAULT_API;
-		model.provider = FauxProvider.DEFAULT_PROVIDER;
-		model.baseUrl = "http://localhost:0";
-		model.input = new ArrayList<>(List.of("text", "image"));
-		model.cost = ModelCost.FREE;
-		model.contextWindow = 128_000;
-		model.maxTokens = 16_384;
-		return model;
-	}
-
-	/** Replaces the provider's FIFO script of literal or context-dependent responses. */
-	public static void setFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
-		synchronized (provider) {
-			provider.pendingResponses.clear();
-			provider.pendingResponses.addAll(responses);
-		}
-	}
-
-	public static void appendFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
-		synchronized (provider) {
-			provider.pendingResponses.addAll(responses);
-		}
-	}
-
-	public static int fauxPendingResponseCount(FauxProvider provider) {
-		synchronized (provider) {
-			return provider.pendingResponses.size();
-		}
-	}
-
-	public static int fauxCallCount(FauxProvider provider) {
-		synchronized (provider.state) {
-			return provider.state.callCount;
-		}
-	}
+//	// --------------------------------------------------------- faux provider
+//
+//	/** Creates a deterministic test provider; at least one model is required. */
+//	public static FauxProvider fauxProvider(String api, String id, List<Model> models) {
+//		Objects.requireNonNull(api);
+//		Objects.requireNonNull(id);
+//		List<Model> catalog = List.copyOf(models);
+//		if (catalog.isEmpty()) {
+//			throw new IllegalArgumentException("Faux provider needs at least one model");
+//		}
+//		return new FauxProvider(api, id, catalog);
+//	}
+//
+//	public static FauxProvider newFauxProvider() {
+//		return fauxProvider(FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, List.of(fauxDefaultModel()));
+//	}
+//
+//	public static Model fauxDefaultModel() {
+//		Model model = new Model();
+//		model.id = FauxProvider.DEFAULT_MODEL_ID;
+//		model.name = "Faux Model";
+//		model.api = FauxProvider.DEFAULT_API;
+//		model.provider = FauxProvider.DEFAULT_PROVIDER;
+//		model.baseUrl = "http://localhost:0";
+//		model.input = new ArrayList<>(List.of("text", "image"));
+//		model.cost = ModelCost.FREE;
+//		model.contextWindow = 128_000;
+//		model.maxTokens = 16_384;
+//		return model;
+//	}
+//
+//	/** Replaces the provider's FIFO script of literal or context-dependent responses. */
+//	public static void setFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
+//		synchronized (provider) {
+//			provider.pendingResponses.clear();
+//			provider.pendingResponses.addAll(responses);
+//		}
+//	}
+//
+//	public static void appendFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
+//		synchronized (provider) {
+//			provider.pendingResponses.addAll(responses);
+//		}
+//	}
+//
+//	public static int fauxPendingResponseCount(FauxProvider provider) {
+//		synchronized (provider) {
+//			return provider.pendingResponses.size();
+//		}
+//	}
+//
+//	public static int fauxCallCount(FauxProvider provider) {
+//		synchronized (provider.state) {
+//			return provider.state.callCount;
+//		}
+//	}
 
 	public static AssistantMessageEventStream fauxStream(
 			FauxProvider provider, Model model, Context context, StreamOptions options) {
@@ -4299,29 +4299,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return text == null || text.isEmpty() ? 0 : (text.length() + 3L) / 4L;
 	}
 
-	public static AssistantMessage fauxText(String content) {
-		AssistantMessage response = new AssistantMessage(
-				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-		response.content.add(textContent(content));
-		response.stopReason = StopReason.STOP;
-		return response;
-	}
-
-	public static AssistantMessage fauxThinking(String content) {
-		AssistantMessage response = new AssistantMessage(
-				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-		response.content.add(thinkingContent(content));
-		response.stopReason = StopReason.STOP;
-		return response;
-	}
-
-	public static AssistantMessage fauxToolCall(String name, ObjectNode arguments) {
-		AssistantMessage response = new AssistantMessage(
-				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
-		response.content.add(toolCall("tool-call-1", name, arguments));
-		response.stopReason = StopReason.TOOL_USE;
-		return response;
-	}
+//	public static AssistantMessage fauxText(String content) {
+//		AssistantMessage response = new AssistantMessage(
+//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
+//		response.content.add(textContent(content));
+//		response.stopReason = StopReason.STOP;
+//		return response;
+//	}
+//
+//	public static AssistantMessage fauxThinking(String content) {
+//		AssistantMessage response = new AssistantMessage(
+//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
+//		response.content.add(thinkingContent(content));
+//		response.stopReason = StopReason.STOP;
+//		return response;
+//	}
+//
+//	public static AssistantMessage fauxToolCall(String name, ObjectNode arguments) {
+//		AssistantMessage response = new AssistantMessage(
+//				FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, FauxProvider.DEFAULT_MODEL_ID);
+//		response.content.add(toolCall("tool-call-1", name, arguments));
+//		response.stopReason = StopReason.TOOL_USE;
+//		return response;
+//	}
 
 	/** Shallow copy of an assistant message sharing its content blocks and usage. */
 	public static AssistantMessage copyAssistantMessage(AssistantMessage source) {
@@ -4337,46 +4337,46 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return copy;
 	}
 
-	// ------------------------------------------------------ provider dispatch
-
-	public static String providerId(Provider provider) {
-		return switch (provider) {
-			case AnthropicProvider anthropic -> anthropic.id;
-			case ChatGptProvider ignored -> ChatGptAuth.PROVIDER_ID;
-			case FauxProvider faux -> faux.id;
-			case GitHubCopilotProvider ignored -> GitHubCopilotAuth.PROVIDER_ID;
-			case GoogleProvider ignored -> "google";
-			case OpenAiCompatibleProvider compatible -> compatible.id;
-			case OpenAiResponsesProvider responses -> responses.id;
-			default -> throw unknownProvider(provider);
-		};
-	}
-
-	public static String providerName(Provider provider) {
-		return switch (provider) {
-			case AnthropicProvider anthropic -> anthropic.name;
-			case ChatGptProvider ignored -> ChatGptProvider.NAME;
-			case FauxProvider ignored -> FauxProvider.NAME;
-			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.NAME;
-			case GoogleProvider ignored -> "Google";
-			case OpenAiCompatibleProvider compatible -> compatible.name;
-			case OpenAiResponsesProvider responses -> responses.name;
-			default -> throw unknownProvider(provider);
-		};
-	}
-
-	public static String providerApi(Provider provider) {
-		return switch (provider) {
-			case AnthropicProvider ignored -> AnthropicProvider.API;
-			case ChatGptProvider ignored -> ChatGptProvider.API;
-			case FauxProvider faux -> faux.api;
-			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.API;
-			case GoogleProvider ignored -> GoogleProvider.API;
-			case OpenAiCompatibleProvider ignored -> OpenAiCompatibleProvider.API;
-			case OpenAiResponsesProvider ignored -> OpenAiResponsesProvider.API;
-			default -> throw unknownProvider(provider);
-		};
-	}
+//	// ------------------------------------------------------ provider dispatch
+//
+//	public static String providerId(Provider provider) {
+//		return switch (provider) {
+//			case AnthropicProvider anthropic -> anthropic.id;
+//			case ChatGptProvider ignored -> ChatGptAuth.PROVIDER_ID;
+//			case FauxProvider faux -> faux.id;
+//			case GitHubCopilotProvider ignored -> GitHubCopilotAuth.PROVIDER_ID;
+//			case GoogleProvider ignored -> "google";
+//			case OpenAiCompatibleProvider compatible -> compatible.id;
+//			case OpenAiResponsesProvider responses -> responses.id;
+//			default -> throw unknownProvider(provider);
+//		};
+//	}
+//
+//	public static String providerName(Provider provider) {
+//		return switch (provider) {
+//			case AnthropicProvider anthropic -> anthropic.name;
+//			case ChatGptProvider ignored -> ChatGptProvider.NAME;
+//			case FauxProvider ignored -> FauxProvider.NAME;
+//			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.NAME;
+//			case GoogleProvider ignored -> "Google";
+//			case OpenAiCompatibleProvider compatible -> compatible.name;
+//			case OpenAiResponsesProvider responses -> responses.name;
+//			default -> throw unknownProvider(provider);
+//		};
+//	}
+//
+//	public static String providerApi(Provider provider) {
+//		return switch (provider) {
+//			case AnthropicProvider ignored -> AnthropicProvider.API;
+//			case ChatGptProvider ignored -> ChatGptProvider.API;
+//			case FauxProvider faux -> faux.api;
+//			case GitHubCopilotProvider ignored -> GitHubCopilotProvider.API;
+//			case GoogleProvider ignored -> GoogleProvider.API;
+//			case OpenAiCompatibleProvider ignored -> OpenAiCompatibleProvider.API;
+//			case OpenAiResponsesProvider ignored -> OpenAiResponsesProvider.API;
+//			default -> throw unknownProvider(provider);
+//		};
+//	}
 
 	public static List<Model> providerModels(Provider provider) {
 		return switch (provider) {
@@ -4391,37 +4391,37 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	public static List<String> providerApiKeyEnvVars(Provider provider) {
-		return switch (provider) {
-			case AnthropicProvider anthropic -> anthropic.apiKeyEnvVars;
-			case GoogleProvider ignored -> List.of("GEMINI_API_KEY", "GOOGLE_API_KEY");
-			case OpenAiCompatibleProvider compatible ->
-				compatible.id.equals("openai") ? List.of("OPENAI_API_KEY") : List.of();
-			case OpenAiResponsesProvider responses -> responses.apiKeyEnvVars;
-			case ChatGptProvider ignored -> List.of();
-			case FauxProvider ignored -> List.of();
-			case GitHubCopilotProvider ignored -> List.of();
-			default -> throw unknownProvider(provider);
-		};
-	}
-
-	/** Reports whether a credential-routed provider has a saved login. */
-	public static boolean providerHasCredential(Provider provider) throws IOException {
-		return switch (provider) {
-			case ChatGptProvider chatGpt -> chatGptHasCredential(chatGpt.auth);
-			case GitHubCopilotProvider copilot -> gitHubCopilotHasCredential(copilot.auth);
-			default -> false;
-		};
-	}
-
-	/** Removes a credential-routed provider's saved login. */
-	public static void providerLogout(Provider provider) throws IOException {
-		switch (provider) {
-			case ChatGptProvider chatGpt -> chatGptLogout(chatGpt.auth);
-			case GitHubCopilotProvider copilot -> gitHubCopilotLogout(copilot.auth);
-			default -> throw unknownProvider(provider);
-		}
-	}
+//	public static List<String> providerApiKeyEnvVars(Provider provider) {
+//		return switch (provider) {
+//			case AnthropicProvider anthropic -> anthropic.apiKeyEnvVars;
+//			case GoogleProvider ignored -> List.of("GEMINI_API_KEY", "GOOGLE_API_KEY");
+//			case OpenAiCompatibleProvider compatible ->
+//				compatible.id.equals("openai") ? List.of("OPENAI_API_KEY") : List.of();
+//			case OpenAiResponsesProvider responses -> responses.apiKeyEnvVars;
+//			case ChatGptProvider ignored -> List.of();
+//			case FauxProvider ignored -> List.of();
+//			case GitHubCopilotProvider ignored -> List.of();
+//			default -> throw unknownProvider(provider);
+//		};
+//	}
+//
+//	/** Reports whether a credential-routed provider has a saved login. */
+//	public static boolean providerHasCredential(Provider provider) throws IOException {
+//		return switch (provider) {
+//			case ChatGptProvider chatGpt -> chatGptHasCredential(chatGpt.auth);
+//			case GitHubCopilotProvider copilot -> gitHubCopilotHasCredential(copilot.auth);
+//			default -> false;
+//		};
+//	}
+//
+//	/** Removes a credential-routed provider's saved login. */
+//	public static void providerLogout(Provider provider) throws IOException {
+//		switch (provider) {
+//			case ChatGptProvider chatGpt -> chatGptLogout(chatGpt.auth);
+//			case GitHubCopilotProvider copilot -> gitHubCopilotLogout(copilot.auth);
+//			default -> throw unknownProvider(provider);
+//		}
+//	}
 
 	/**
 	 * Starts a streaming request. Once invoked, failures are encoded in the
@@ -4479,57 +4479,57 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		emit(agent, new AgentEvent.InstructionLoaded(Objects.requireNonNull(path, "path")));
 	}
 
-	/** Cancels the turn in flight, if any. */
-	public static void abort(Agent agent) {
-		AbortSignal signal = agent.activeSignal;
-		if (signal != null) {
-			abort(signal);
-		}
-	}
-
-	/**
-	 * Summarizes all active messages in a separate model call, then replaces
-	 * them with a single checkpoint message. The caller remains responsible for
-	 * persisting the original transcript if it needs complete history.
-	 */
-	public static CompactionResult compact(Agent agent, String customInstructions) throws InterruptedException {
-		AgentState state = agent.state;
-		if (state.isStreaming || state.isCompacting) {
-			throw new IllegalStateException("Agent is already processing");
-		}
-		if (state.messages.isEmpty()) {
-			throw new IllegalStateException("Cannot compact an empty conversation");
-		}
-		state.isCompacting = true;
-		AbortSignal signal = new AbortSignal();
-		try {
-			long tokensBefore = estimateMessageTokens(state.messages);
-			emit(agent, new AgentEvent.CompactionStart(tokensBefore));
-			Context context = new Context(COMPACTION_SYSTEM_PROMPT);
-			String prompt = "<conversation>\n" + serializeMessages(state.messages) + "\n</conversation>\n\n"
-					+ (customInstructions == null || customInstructions.isBlank()
-							? "Summarize this conversation for a future coding-agent turn."
-							: "Summarize this conversation with this focus: " + customInstructions);
-			context.messages.add(userMessage(prompt));
-			AssistantMessage response = agentComplete(agent, context, signal);
-			if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
-				throw new IllegalStateException("Compaction failed: " + response.errorMessage);
-			}
-			String summary = text(response);
-			if (summary.isBlank()) {
-				throw new IllegalStateException("Compaction failed: provider returned an empty summary");
-			}
-			state.messages.clear();
-			state.compactionSummary = summary;
-			state.messages.add(userMessage("[Conversation checkpoint]\n" + summary));
-			CompactionResult result =
-					new CompactionResult(summary, tokensBefore, estimateMessageTokens(state.messages));
-			emit(agent, new AgentEvent.CompactionEnd(result));
-			return result;
-		} finally {
-			state.isCompacting = false;
-		}
-	}
+//	/** Cancels the turn in flight, if any. */
+//	public static void abort(Agent agent) {
+//		AbortSignal signal = agent.activeSignal;
+//		if (signal != null) {
+//			abort(signal);
+//		}
+//	}
+//
+//	/**
+//	 * Summarizes all active messages in a separate model call, then replaces
+//	 * them with a single checkpoint message. The caller remains responsible for
+//	 * persisting the original transcript if it needs complete history.
+//	 */
+//	public static CompactionResult compact(Agent agent, String customInstructions) throws InterruptedException {
+//		AgentState state = agent.state;
+//		if (state.isStreaming || state.isCompacting) {
+//			throw new IllegalStateException("Agent is already processing");
+//		}
+//		if (state.messages.isEmpty()) {
+//			throw new IllegalStateException("Cannot compact an empty conversation");
+//		}
+//		state.isCompacting = true;
+//		AbortSignal signal = new AbortSignal();
+//		try {
+//			long tokensBefore = estimateMessageTokens(state.messages);
+//			emit(agent, new AgentEvent.CompactionStart(tokensBefore));
+//			Context context = new Context(COMPACTION_SYSTEM_PROMPT);
+//			String prompt = "<conversation>\n" + serializeMessages(state.messages) + "\n</conversation>\n\n"
+//					+ (customInstructions == null || customInstructions.isBlank()
+//							? "Summarize this conversation for a future coding-agent turn."
+//							: "Summarize this conversation with this focus: " + customInstructions);
+//			context.messages.add(userMessage(prompt));
+//			AssistantMessage response = agentComplete(agent, context, signal);
+//			if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
+//				throw new IllegalStateException("Compaction failed: " + response.errorMessage);
+//			}
+//			String summary = text(response);
+//			if (summary.isBlank()) {
+//				throw new IllegalStateException("Compaction failed: provider returned an empty summary");
+//			}
+//			state.messages.clear();
+//			state.compactionSummary = summary;
+//			state.messages.add(userMessage("[Conversation checkpoint]\n" + summary));
+//			CompactionResult result =
+//					new CompactionResult(summary, tokensBefore, estimateMessageTokens(state.messages));
+//			emit(agent, new AgentEvent.CompactionEnd(result));
+//			return result;
+//		} finally {
+//			state.isCompacting = false;
+//		}
+//	}
 
 	/** Runs a prompt to completion, returning only messages created during this invocation. */
 	public static List<Message> prompt(Agent agent, String text) throws InterruptedException {
@@ -5949,13 +5949,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	/** Human-readable command line or URL this server connects to. */
-	public static String mcpConfigTarget(McpServerConfig config) {
-		return switch (config) {
-			case McpServerConfig.Local local -> String.join(" ", local.command);
-			case McpServerConfig.Remote remote -> remote.url.toString();
-		};
-	}
+//	/** Human-readable command line or URL this server connects to. */
+//	public static String mcpConfigTarget(McpServerConfig config) {
+//		return switch (config) {
+//			case McpServerConfig.Local local -> String.join(" ", local.command);
+//			case McpServerConfig.Remote remote -> remote.url.toString();
+//		};
+//	}
 
 	/** Whether a result filter's glob pattern selects this raw MCP tool name. */
 	public static boolean mcpFilterMatches(McpResultFilter filter, String toolName) {
@@ -7412,73 +7412,73 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return manager;
 	}
 
-	/** Whether the manager has no configured servers at all. */
-	public static boolean mcpIsEmpty(McpManager manager) {
-		return manager.servers.isEmpty();
-	}
-
-	/** Snapshots every configured server, ordered by name. */
-	public static List<McpManager.ServerStatus> mcpStatuses(McpManager manager) {
-		return manager.servers.values().stream()
-				.sorted(Comparator.comparing(runtime -> runtime.name))
-				.map(CodingAgentOperations::mcpSnapshot)
-				.toList();
-	}
-
-	/** Snapshots one configured server. */
-	public static McpManager.ServerStatus mcpStatus(McpManager manager, String name) {
-		return mcpSnapshot(mcpRequireRuntime(manager, name));
-	}
-
-	/** Whether this server is enabled for the current and future manager connections. */
-	public static boolean mcpIsEnabled(McpManager manager, String name) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		synchronized (runtime.lock) {
-			return runtime.enabled;
-		}
-	}
-
-	/**
-	 * Returns the current tool catalog for a connected server, including tools
-	 * disabled for this process. A disconnected server has no current catalog.
-	 */
-	public static List<McpManager.ToolStatus> mcpToolStatuses(McpManager manager, String serverName) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
-		synchronized (runtime.lock) {
-			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) return List.of();
-			return runtime.tools.stream()
-					.map(tool -> new McpManager.ToolStatus(
-							runtime.name, tool.name, tool.description, !runtime.disabledTools.contains(tool.name)))
-					.toList();
-		}
-	}
-
-	/**
-	 * Enables a currently disabled tool or disables an enabled one without
-	 * disconnecting its server. The runtime choice survives a later reconnect
-	 * of that server.
-	 */
-	public static McpManager.ToolStatus mcpToggleTool(McpManager manager, String serverName, String toolName) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
-		synchronized (runtime.lock) {
-			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
-				throw new IllegalStateException("MCP server is not connected: " + serverName);
-			}
-			McpClient.ToolDefinition definition = runtime.tools.stream()
-					.filter(tool -> tool.name.equals(toolName))
-					.findFirst()
-					.orElseThrow(() -> new IllegalArgumentException(
-							"MCP tool is not available from " + serverName + ": " + toolName));
-			boolean enabled;
-			if (runtime.disabledTools.remove(toolName)) {
-				enabled = true;
-			} else {
-				runtime.disabledTools.add(toolName);
-				enabled = false;
-			}
-			return new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
-		}
-	}
+//	/** Whether the manager has no configured servers at all. */
+//	public static boolean mcpIsEmpty(McpManager manager) {
+//		return manager.servers.isEmpty();
+//	}
+//
+//	/** Snapshots every configured server, ordered by name. */
+//	public static List<McpManager.ServerStatus> mcpStatuses(McpManager manager) {
+//		return manager.servers.values().stream()
+//				.sorted(Comparator.comparing(runtime -> runtime.name))
+//				.map(CodingAgentOperations::mcpSnapshot)
+//				.toList();
+//	}
+//
+//	/** Snapshots one configured server. */
+//	public static McpManager.ServerStatus mcpStatus(McpManager manager, String name) {
+//		return mcpSnapshot(mcpRequireRuntime(manager, name));
+//	}
+//
+//	/** Whether this server is enabled for the current and future manager connections. */
+//	public static boolean mcpIsEnabled(McpManager manager, String name) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		synchronized (runtime.lock) {
+//			return runtime.enabled;
+//		}
+//	}
+//
+//	/**
+//	 * Returns the current tool catalog for a connected server, including tools
+//	 * disabled for this process. A disconnected server has no current catalog.
+//	 */
+//	public static List<McpManager.ToolStatus> mcpToolStatuses(McpManager manager, String serverName) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
+//		synchronized (runtime.lock) {
+//			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) return List.of();
+//			return runtime.tools.stream()
+//					.map(tool -> new McpManager.ToolStatus(
+//							runtime.name, tool.name, tool.description, !runtime.disabledTools.contains(tool.name)))
+//					.toList();
+//		}
+//	}
+//
+//	/**
+//	 * Enables a currently disabled tool or disables an enabled one without
+//	 * disconnecting its server. The runtime choice survives a later reconnect
+//	 * of that server.
+//	 */
+//	public static McpManager.ToolStatus mcpToggleTool(McpManager manager, String serverName, String toolName) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, serverName);
+//		synchronized (runtime.lock) {
+//			if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
+//				throw new IllegalStateException("MCP server is not connected: " + serverName);
+//			}
+//			McpClient.ToolDefinition definition = runtime.tools.stream()
+//					.filter(tool -> tool.name.equals(toolName))
+//					.findFirst()
+//					.orElseThrow(() -> new IllegalArgumentException(
+//							"MCP tool is not available from " + serverName + ": " + toolName));
+//			boolean enabled;
+//			if (runtime.disabledTools.remove(toolName)) {
+//				enabled = true;
+//			} else {
+//				runtime.disabledTools.add(toolName);
+//				enabled = false;
+//			}
+//			return new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
+//		}
+//	}
 
 	/** Waits for all currently-starting configured servers. */
 	public static void mcpAwaitReady(McpManager manager) throws InterruptedException {
@@ -7494,72 +7494,72 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	/** Connects or retries a configured server and waits for that attempt. */
-	public static McpManager.ServerStatus mcpConnectServer(McpManager manager, String name)
-			throws InterruptedException {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		Thread thread = mcpStartConnect(manager, runtime, true);
-		if (thread != null) thread.join();
-		return mcpSnapshot(runtime);
-	}
-
-	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
-	public static McpManager.ServerStatus mcpConnectServerAsync(McpManager manager, String name) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		mcpStartConnect(manager, runtime, true);
-		return mcpSnapshot(runtime);
-	}
-
-	/** Disconnects a server and marks it disabled; callers may persist that choice. */
-	public static McpManager.ServerStatus mcpDisconnectServer(McpManager manager, String name) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		McpClient client;
-		Thread connector;
-		synchronized (runtime.lock) {
-			runtime.generation++;
-			connector = runtime.connector;
-			runtime.connector = null;
-			client = runtime.client;
-			runtime.client = null;
-			runtime.tools = List.of();
-			runtime.enabled = false;
-			runtime.state = McpManager.State.DISABLED;
-			runtime.message = null;
-			runtime.authorizationUrl = null;
-		}
-		if (connector != null) connector.interrupt();
-		if (client != null) mcpCloseClient(client);
-		return mcpSnapshot(runtime);
-	}
-
-	/** Connected/connecting means toggle off; disabled/failed means connect or retry. */
-	public static McpManager.ServerStatus mcpToggleServer(McpManager manager, String name)
-			throws InterruptedException {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		McpManager.State state;
-		synchronized (runtime.lock) {
-			state = runtime.state;
-		}
-		return state == McpManager.State.CONNECTED
-						|| state == McpManager.State.CONNECTING
-						|| state == McpManager.State.AUTHENTICATING
-				? mcpDisconnectServer(manager, name)
-				: mcpConnectServer(manager, name);
-	}
-
-	/** Asynchronous variant used by the full-screen selector. */
-	public static McpManager.ServerStatus mcpToggleServerAsync(McpManager manager, String name) {
-		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
-		McpManager.State state;
-		synchronized (runtime.lock) {
-			state = runtime.state;
-		}
-		return state == McpManager.State.CONNECTED
-						|| state == McpManager.State.CONNECTING
-						|| state == McpManager.State.AUTHENTICATING
-				? mcpDisconnectServer(manager, name)
-				: mcpConnectServerAsync(manager, name);
-	}
+//	/** Connects or retries a configured server and waits for that attempt. */
+//	public static McpManager.ServerStatus mcpConnectServer(McpManager manager, String name)
+//			throws InterruptedException {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		Thread thread = mcpStartConnect(manager, runtime, true);
+//		if (thread != null) thread.join();
+//		return mcpSnapshot(runtime);
+//	}
+//
+//	/** Starts the same connect/authenticate action without blocking a TUI event loop. */
+//	public static McpManager.ServerStatus mcpConnectServerAsync(McpManager manager, String name) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		mcpStartConnect(manager, runtime, true);
+//		return mcpSnapshot(runtime);
+//	}
+//
+//	/** Disconnects a server and marks it disabled; callers may persist that choice. */
+//	public static McpManager.ServerStatus mcpDisconnectServer(McpManager manager, String name) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		McpClient client;
+//		Thread connector;
+//		synchronized (runtime.lock) {
+//			runtime.generation++;
+//			connector = runtime.connector;
+//			runtime.connector = null;
+//			client = runtime.client;
+//			runtime.client = null;
+//			runtime.tools = List.of();
+//			runtime.enabled = false;
+//			runtime.state = McpManager.State.DISABLED;
+//			runtime.message = null;
+//			runtime.authorizationUrl = null;
+//		}
+//		if (connector != null) connector.interrupt();
+//		if (client != null) mcpCloseClient(client);
+//		return mcpSnapshot(runtime);
+//	}
+//
+//	/** Connected/connecting means toggle off; disabled/failed means connect or retry. */
+//	public static McpManager.ServerStatus mcpToggleServer(McpManager manager, String name)
+//			throws InterruptedException {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		McpManager.State state;
+//		synchronized (runtime.lock) {
+//			state = runtime.state;
+//		}
+//		return state == McpManager.State.CONNECTED
+//						|| state == McpManager.State.CONNECTING
+//						|| state == McpManager.State.AUTHENTICATING
+//				? mcpDisconnectServer(manager, name)
+//				: mcpConnectServer(manager, name);
+//	}
+//
+//	/** Asynchronous variant used by the full-screen selector. */
+//	public static McpManager.ServerStatus mcpToggleServerAsync(McpManager manager, String name) {
+//		McpManager.Runtime runtime = mcpRequireRuntime(manager, name);
+//		McpManager.State state;
+//		synchronized (runtime.lock) {
+//			state = runtime.state;
+//		}
+//		return state == McpManager.State.CONNECTED
+//						|| state == McpManager.State.CONNECTING
+//						|| state == McpManager.State.AUTHENTICATING
+//				? mcpDisconnectServer(manager, name)
+//				: mcpConnectServerAsync(manager, name);
+//	}
 
 	/** Returns the current model-visible tool adapters, with OpenCode-compatible names. */
 	public static List<AgentTool> mcpTools(McpManager manager) {
@@ -7721,26 +7721,26 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		});
 	}
 
-	private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
-		synchronized (runtime.lock) {
-			int enabledToolCount =
-					(int) runtime.tools.stream().filter(tool -> !runtime.disabledTools.contains(tool.name)).count();
-			return new McpManager.ServerStatus(
-					runtime.name,
-					runtime.state,
-					runtime.message,
-					runtime.tools.size(),
-					enabledToolCount,
-					mcpConfigTarget(runtime.config),
-					runtime.authorizationUrl);
-		}
-	}
-
-	private static McpManager.Runtime mcpRequireRuntime(McpManager manager, String name) {
-		McpManager.Runtime runtime = manager.servers.get(name);
-		if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
-		return runtime;
-	}
+//	private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
+//		synchronized (runtime.lock) {
+//			int enabledToolCount =
+//					(int) runtime.tools.stream().filter(tool -> !runtime.disabledTools.contains(tool.name)).count();
+//			return new McpManager.ServerStatus(
+//					runtime.name,
+//					runtime.state,
+//					runtime.message,
+//					runtime.tools.size(),
+//					enabledToolCount,
+//					mcpConfigTarget(runtime.config),
+//					runtime.authorizationUrl);
+//		}
+//	}
+//
+//	private static McpManager.Runtime mcpRequireRuntime(McpManager manager, String name) {
+//		McpManager.Runtime runtime = manager.servers.get(name);
+//		if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
+//		return runtime;
+//	}
 
 	private static String mcpErrorMessage(Exception error) {
 		String value = error.getMessage();
@@ -8913,339 +8913,339 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	}
 
 
-	// ------------------------------------------------------------ tui text
-
-	private static final Pattern TERMINAL_ANSI = Pattern.compile(
-			"\u001b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\u0007\u001b]*(?:\u0007|\u001b\\\\))");
-
-	/** Terminal cell width of a string, ignoring ANSI escapes. */
-	public static int visibleWidth(String value) {
-		String plain = stripAnsi(value);
-		int width = 0;
-		for (int index = 0; index < plain.length(); ) {
-			int codePoint = plain.codePointAt(index);
-			width += Math.max(0, WCWidth.wcwidth(codePoint));
-			index += Character.charCount(codePoint);
-		}
-		return width;
-	}
-
-	/** Truncates plain text to a cell width, adding an ellipsis when there is room. */
-	public static String truncatePlain(String value, int maximumWidth) {
-		if (maximumWidth <= 0) {
-			return "";
-		}
-		if (visibleWidth(value) <= maximumWidth) {
-			return value;
-		}
-		String ellipsis = maximumWidth > 3 ? "..." : "";
-		int targetWidth = maximumWidth - ellipsis.length();
-		StringBuilder output = new StringBuilder();
-		int width = 0;
-		for (int index = 0; index < value.length(); ) {
-			int codePoint = value.codePointAt(index);
-			int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
-			if (width + codePointWidth > targetWidth) {
-				break;
-			}
-			output.appendCodePoint(codePoint);
-			width += codePointWidth;
-			index += Character.charCount(codePoint);
-		}
-		return output + ellipsis;
-	}
-
-	/** Hard-wraps plain text to terminal cell width while preserving explicit blank lines. */
-	public static List<String> wrapPlain(String value, int maximumWidth) {
-		if (maximumWidth <= 0) {
-			return List.of("");
-		}
-		String normalized = value.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
-		List<String> lines = new ArrayList<>();
-		for (String sourceLine : normalized.split("\n", -1)) {
-			if (sourceLine.isEmpty()) {
-				lines.add("");
-				continue;
-			}
-			StringBuilder line = new StringBuilder();
-			int width = 0;
-			for (int index = 0; index < sourceLine.length(); ) {
-				int codePoint = sourceLine.codePointAt(index);
-				int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
-				if (!line.isEmpty() && width + codePointWidth > maximumWidth) {
-					lines.add(line.toString());
-					line.setLength(0);
-					width = 0;
-				}
-				line.appendCodePoint(codePoint);
-				width += codePointWidth;
-				index += Character.charCount(codePoint);
-			}
-			if (!line.isEmpty()) {
-				lines.add(line.toString());
-			}
-		}
-		return List.copyOf(lines);
-	}
-
-	/** Wraps text in an OSC 8 hyperlink. */
-	public static String hyperlink(String text, String url) {
-		String safeUrl = url.replace("\u001b", "").replace("\u0007", "");
-		return "\u001b]8;;" + safeUrl + "\u001b\\" + text + "\u001b]8;;\u001b\\";
-	}
-
-	public static String stripAnsi(String value) {
-		return TERMINAL_ANSI.matcher(value).replaceAll("");
-	}
-
-	// -------------------------------------------------------------- markdown
-
-	private static final Pattern MARKDOWN_BOLD = Pattern.compile("\\*\\*(.+?)\\*\\*");
-	private static final Pattern MARKDOWN_CODE = Pattern.compile("`([^`]+)`");
-
-	public static String renderMarkdown(String markdown) {
-		return renderMarkdown(markdown, Theme.DARK);
-	}
-
-	/** Compact ANSI formatting for the Markdown constructs used in agent replies. */
-	public static String renderMarkdown(String markdown, Theme theme) {
-		StringBuilder output = new StringBuilder();
-		for (String line : markdown.split("\\R", -1)) {
-			if (line.startsWith("### ")) output.append(theme.strong).append(line.substring(4)).append(theme.reset);
-			else if (line.startsWith("## ")) output.append(theme.heading).append(line.substring(3)).append(theme.reset);
-			else if (line.startsWith("# ")) output.append(theme.heading).append(line.substring(2)).append(theme.reset);
-			else if (line.startsWith("> ")) output.append(theme.muted).append(line.substring(2)).append(theme.reset);
-			else output.append(markdownInline(line, theme));
-			output.append('\n');
-		}
-		return output.isEmpty() ? "" : output.substring(0, output.length() - 1);
-	}
-
-	private static String markdownInline(String text, Theme theme) {
-		return markdownReplace(
-				MARKDOWN_CODE,
-				markdownReplace(MARKDOWN_BOLD, text, theme.strong, theme.reset),
-				theme.code,
-				theme.reset);
-	}
-
-	private static String markdownReplace(Pattern pattern, String input, String style, String reset) {
-		Matcher matcher = pattern.matcher(input);
-		StringBuilder output = new StringBuilder();
-		while (matcher.find()) {
-			matcher.appendReplacement(output, Matcher.quoteReplacement(style + matcher.group(1) + reset));
-		}
-		matcher.appendTail(output);
-		return output.toString();
-	}
-
-	// ----------------------------------------------------------------- theme
-
-	public static Theme namedTheme(String name) {
-		return switch (name.toLowerCase(Locale.ROOT)) {
-			case "dark" -> Theme.DARK;
-			case "light" -> Theme.LIGHT;
-			case "plain" -> Theme.PLAIN;
-			default -> throw new IllegalArgumentException(
-					"Unknown theme: " + name + " (expected dark, light, or plain)");
-		};
-	}
-
-	/** Bold green is reserved for the Ready activity so idle is recognizable at a glance. */
-	public static String readyStatus(Theme theme) {
-		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;92m";
-	}
-
-	/** Active model and shell work; deliberately never green. */
-	public static String activeStatus(Theme theme) {
-		return switch (theme.name.toLowerCase(Locale.ROOT)) {
-			case "dark" -> "\u001b[1;96m";
-			case "light" -> "\u001b[1;34m";
-			default -> "";
-		};
-	}
-
-	/** Tool execution; deliberately never green. */
-	public static String toolStatus(Theme theme) {
-		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
-	}
-
-	/** Retry, cancellation, and configuration attention; deliberately never green. */
-	public static String warningStatus(Theme theme) {
-		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;93m";
-	}
-
-	/** Background used to visually separate the editable prompt from chat output. */
-	public static String promptBackground(Theme theme) {
-		return switch (theme.name.toLowerCase(Locale.ROOT)) {
-			case "dark" -> Theme.DARK_PROMPT_BACKGROUND;
-			case "light" -> Theme.LIGHT_PROMPT_BACKGROUND;
-			default -> "";
-		};
-	}
-
-	/** Styles every line as a full-width prompt area. */
-	public static String promptArea(Theme theme, String value) {
-		String background = promptBackground(theme);
-		if (background.isEmpty()) return value;
-		StringBuilder styled = new StringBuilder(value.length() + 32);
-		styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
-		for (int index = 0; index < value.length(); index++) {
-			char character = value.charAt(index);
-			if (character == '\n') {
-				styled.append(theme.reset).append(character);
-				if (index + 1 < value.length()) {
-					styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
-				}
-			} else {
-				styled.append(character);
-			}
-		}
-		if (value.isEmpty() || value.charAt(value.length() - 1) != '\n') styled.append(theme.reset);
-		return styled.toString();
-	}
-
-	// -------------------------------------------------------- fuzzy matching
-
-	/** Ordered-character match with a digit/letter swap fallback; lower scores rank first. */
-	public static FuzzyMatcher.Match fuzzyMatch(String query, String text) {
-		String normalizedQuery = query.toLowerCase(Locale.ROOT);
-		String normalizedText = text.toLowerCase(Locale.ROOT);
-		FuzzyMatcher.Match primary = fuzzyMatchNormalized(normalizedQuery, normalizedText);
-		if (primary.matches) {
-			return primary;
-		}
-
-		Matcher alphaNumeric = FuzzyMatcher.ALPHA_NUMERIC.matcher(normalizedQuery);
-		Matcher numericAlpha = FuzzyMatcher.NUMERIC_ALPHA.matcher(normalizedQuery);
-		String swapped = alphaNumeric.matches()
-				? alphaNumeric.group(2) + alphaNumeric.group(1)
-				: numericAlpha.matches() ? numericAlpha.group(2) + numericAlpha.group(1) : "";
-		if (swapped.isEmpty()) {
-			return primary;
-		}
-		FuzzyMatcher.Match swappedMatch = fuzzyMatchNormalized(swapped, normalizedText);
-		return swappedMatch.matches ? new FuzzyMatcher.Match(true, swappedMatch.score + 5) : primary;
-	}
-
-	/** Keeps items matching every whitespace/slash-separated token, best score first. */
-	public static <T> List<T> fuzzyFilter(List<T> items, String query, Function<T, String> text) {
-		String trimmed = query.trim();
-		if (trimmed.isEmpty()) {
-			return List.copyOf(items);
-		}
-		String[] tokens = trimmed.split("[\\s/]+");
-		List<FuzzyMatcher.Scored<T>> scored = new ArrayList<>();
-		for (int index = 0; index < items.size(); index++) {
-			T item = items.get(index);
-			double total = 0;
-			boolean matches = true;
-			for (String token : tokens) {
-				FuzzyMatcher.Match match = fuzzyMatch(token, text.apply(item));
-				if (!match.matches) {
-					matches = false;
-					break;
-				}
-				total += match.score;
-			}
-			if (matches) {
-				scored.add(new FuzzyMatcher.Scored<>(item, total, index));
-			}
-		}
-		scored.sort((left, right) -> {
-			int byScore = Double.compare(left.score, right.score);
-			return byScore != 0 ? byScore : Integer.compare(left.index, right.index);
-		});
-		return scored.stream().map(entry -> entry.item).toList();
-	}
-
-	private static FuzzyMatcher.Match fuzzyMatchNormalized(String query, String text) {
-		if (query.isEmpty()) {
-			return new FuzzyMatcher.Match(true, 0);
-		}
-		if (query.length() > text.length()) {
-			return new FuzzyMatcher.Match(false, 0);
-		}
-		int queryIndex = 0;
-		int lastMatchIndex = -1;
-		int consecutiveMatches = 0;
-		double score = 0;
-		for (int index = 0; index < text.length() && queryIndex < query.length(); index++) {
-			if (text.charAt(index) != query.charAt(queryIndex)) {
-				continue;
-			}
-			boolean wordBoundary = index == 0 || isFuzzyBoundary(text.charAt(index - 1));
-			if (lastMatchIndex == index - 1) {
-				consecutiveMatches++;
-				score -= consecutiveMatches * 5;
-			} else {
-				consecutiveMatches = 0;
-				if (lastMatchIndex >= 0) {
-					score += (index - lastMatchIndex - 1) * 2;
-				}
-			}
-			if (wordBoundary) {
-				score -= 10;
-			}
-			score += index * 0.1;
-			lastMatchIndex = index;
-			queryIndex++;
-		}
-		if (queryIndex < query.length()) {
-			return new FuzzyMatcher.Match(false, 0);
-		}
-		if (query.equals(text)) {
-			score -= 100;
-		}
-		return new FuzzyMatcher.Match(true, score);
-	}
-
-	private static boolean isFuzzyBoundary(char value) {
-		return Character.isWhitespace(value)
-				|| value == '-'
-				|| value == '_'
-				|| value == '.'
-				|| value == '/'
-				|| value == ':';
-	}
-
-	// -------------------------------------------------------- ansi rendering
-
-	/** Returns the minimal line updates needed to replace the renderer's prior frame. */
-	public static String renderAnsiFrame(AnsiRenderer renderer, List<String> lines) {
-		List<String> next = List.copyOf(lines);
-		StringBuilder output = new StringBuilder();
-		int common = Math.min(renderer.previousLines.size(), next.size());
-		for (int index = 0; index < common; index++) {
-			if (!renderer.previousLines.get(index).equals(next.get(index))) {
-				ansiMoveTo(output, index);
-				output.append("\u001b[2K").append(next.get(index));
-			}
-		}
-		for (int index = common; index < next.size(); index++) {
-			ansiMoveTo(output, index);
-			output.append("\u001b[2K").append(next.get(index));
-		}
-		for (int index = next.size(); index < renderer.previousLines.size(); index++) {
-			ansiMoveTo(output, index);
-			output.append("\u001b[2K");
-		}
-		renderer.previousLines = next;
-		return output.toString();
-	}
-
-	/** Resets the baseline, for example after the terminal scrolls externally. */
-	public static void resetAnsiRenderer(AnsiRenderer renderer) {
-		renderer.previousLines = List.of();
-	}
-
-	public static List<String> ansiPreviousLines(AnsiRenderer renderer) {
-		return new ArrayList<>(renderer.previousLines);
-	}
-
-	private static void ansiMoveTo(StringBuilder output, int zeroBasedLine) {
-		output.append("\u001b[").append(zeroBasedLine + 1).append(";1H");
-	}
+//	// ------------------------------------------------------------ tui text
+//
+//	private static final Pattern TERMINAL_ANSI = Pattern.compile(
+//			"\u001b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\u0007\u001b]*(?:\u0007|\u001b\\\\))");
+//
+//	/** Terminal cell width of a string, ignoring ANSI escapes. */
+//	public static int visibleWidth(String value) {
+//		String plain = stripAnsi(value);
+//		int width = 0;
+//		for (int index = 0; index < plain.length(); ) {
+//			int codePoint = plain.codePointAt(index);
+//			width += Math.max(0, WCWidth.wcwidth(codePoint));
+//			index += Character.charCount(codePoint);
+//		}
+//		return width;
+//	}
+//
+//	/** Truncates plain text to a cell width, adding an ellipsis when there is room. */
+//	public static String truncatePlain(String value, int maximumWidth) {
+//		if (maximumWidth <= 0) {
+//			return "";
+//		}
+//		if (visibleWidth(value) <= maximumWidth) {
+//			return value;
+//		}
+//		String ellipsis = maximumWidth > 3 ? "..." : "";
+//		int targetWidth = maximumWidth - ellipsis.length();
+//		StringBuilder output = new StringBuilder();
+//		int width = 0;
+//		for (int index = 0; index < value.length(); ) {
+//			int codePoint = value.codePointAt(index);
+//			int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+//			if (width + codePointWidth > targetWidth) {
+//				break;
+//			}
+//			output.appendCodePoint(codePoint);
+//			width += codePointWidth;
+//			index += Character.charCount(codePoint);
+//		}
+//		return output + ellipsis;
+//	}
+//
+//	/** Hard-wraps plain text to terminal cell width while preserving explicit blank lines. */
+//	public static List<String> wrapPlain(String value, int maximumWidth) {
+//		if (maximumWidth <= 0) {
+//			return List.of("");
+//		}
+//		String normalized = value.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
+//		List<String> lines = new ArrayList<>();
+//		for (String sourceLine : normalized.split("\n", -1)) {
+//			if (sourceLine.isEmpty()) {
+//				lines.add("");
+//				continue;
+//			}
+//			StringBuilder line = new StringBuilder();
+//			int width = 0;
+//			for (int index = 0; index < sourceLine.length(); ) {
+//				int codePoint = sourceLine.codePointAt(index);
+//				int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+//				if (!line.isEmpty() && width + codePointWidth > maximumWidth) {
+//					lines.add(line.toString());
+//					line.setLength(0);
+//					width = 0;
+//				}
+//				line.appendCodePoint(codePoint);
+//				width += codePointWidth;
+//				index += Character.charCount(codePoint);
+//			}
+//			if (!line.isEmpty()) {
+//				lines.add(line.toString());
+//			}
+//		}
+//		return List.copyOf(lines);
+//	}
+//
+//	/** Wraps text in an OSC 8 hyperlink. */
+//	public static String hyperlink(String text, String url) {
+//		String safeUrl = url.replace("\u001b", "").replace("\u0007", "");
+//		return "\u001b]8;;" + safeUrl + "\u001b\\" + text + "\u001b]8;;\u001b\\";
+//	}
+//
+//	public static String stripAnsi(String value) {
+//		return TERMINAL_ANSI.matcher(value).replaceAll("");
+//	}
+//
+//	// -------------------------------------------------------------- markdown
+//
+//	private static final Pattern MARKDOWN_BOLD = Pattern.compile("\\*\\*(.+?)\\*\\*");
+//	private static final Pattern MARKDOWN_CODE = Pattern.compile("`([^`]+)`");
+//
+//	public static String renderMarkdown(String markdown) {
+//		return renderMarkdown(markdown, Theme.DARK);
+//	}
+//
+//	/** Compact ANSI formatting for the Markdown constructs used in agent replies. */
+//	public static String renderMarkdown(String markdown, Theme theme) {
+//		StringBuilder output = new StringBuilder();
+//		for (String line : markdown.split("\\R", -1)) {
+//			if (line.startsWith("### ")) output.append(theme.strong).append(line.substring(4)).append(theme.reset);
+//			else if (line.startsWith("## ")) output.append(theme.heading).append(line.substring(3)).append(theme.reset);
+//			else if (line.startsWith("# ")) output.append(theme.heading).append(line.substring(2)).append(theme.reset);
+//			else if (line.startsWith("> ")) output.append(theme.muted).append(line.substring(2)).append(theme.reset);
+//			else output.append(markdownInline(line, theme));
+//			output.append('\n');
+//		}
+//		return output.isEmpty() ? "" : output.substring(0, output.length() - 1);
+//	}
+//
+//	private static String markdownInline(String text, Theme theme) {
+//		return markdownReplace(
+//				MARKDOWN_CODE,
+//				markdownReplace(MARKDOWN_BOLD, text, theme.strong, theme.reset),
+//				theme.code,
+//				theme.reset);
+//	}
+//
+//	private static String markdownReplace(Pattern pattern, String input, String style, String reset) {
+//		Matcher matcher = pattern.matcher(input);
+//		StringBuilder output = new StringBuilder();
+//		while (matcher.find()) {
+//			matcher.appendReplacement(output, Matcher.quoteReplacement(style + matcher.group(1) + reset));
+//		}
+//		matcher.appendTail(output);
+//		return output.toString();
+//	}
+//
+//	// ----------------------------------------------------------------- theme
+//
+//	public static Theme namedTheme(String name) {
+//		return switch (name.toLowerCase(Locale.ROOT)) {
+//			case "dark" -> Theme.DARK;
+//			case "light" -> Theme.LIGHT;
+//			case "plain" -> Theme.PLAIN;
+//			default -> throw new IllegalArgumentException(
+//					"Unknown theme: " + name + " (expected dark, light, or plain)");
+//		};
+//	}
+//
+//	/** Bold green is reserved for the Ready activity so idle is recognizable at a glance. */
+//	public static String readyStatus(Theme theme) {
+//		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;92m";
+//	}
+//
+//	/** Active model and shell work; deliberately never green. */
+//	public static String activeStatus(Theme theme) {
+//		return switch (theme.name.toLowerCase(Locale.ROOT)) {
+//			case "dark" -> "\u001b[1;96m";
+//			case "light" -> "\u001b[1;34m";
+//			default -> "";
+//		};
+//	}
+//
+//	/** Tool execution; deliberately never green. */
+//	public static String toolStatus(Theme theme) {
+//		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
+//	}
+//
+//	/** Retry, cancellation, and configuration attention; deliberately never green. */
+//	public static String warningStatus(Theme theme) {
+//		return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;93m";
+//	}
+//
+//	/** Background used to visually separate the editable prompt from chat output. */
+//	public static String promptBackground(Theme theme) {
+//		return switch (theme.name.toLowerCase(Locale.ROOT)) {
+//			case "dark" -> Theme.DARK_PROMPT_BACKGROUND;
+//			case "light" -> Theme.LIGHT_PROMPT_BACKGROUND;
+//			default -> "";
+//		};
+//	}
+//
+//	/** Styles every line as a full-width prompt area. */
+//	public static String promptArea(Theme theme, String value) {
+//		String background = promptBackground(theme);
+//		if (background.isEmpty()) return value;
+//		StringBuilder styled = new StringBuilder(value.length() + 32);
+//		styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
+//		for (int index = 0; index < value.length(); index++) {
+//			char character = value.charAt(index);
+//			if (character == '\n') {
+//				styled.append(theme.reset).append(character);
+//				if (index + 1 < value.length()) {
+//					styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
+//				}
+//			} else {
+//				styled.append(character);
+//			}
+//		}
+//		if (value.isEmpty() || value.charAt(value.length() - 1) != '\n') styled.append(theme.reset);
+//		return styled.toString();
+//	}
+//
+//	// -------------------------------------------------------- fuzzy matching
+//
+//	/** Ordered-character match with a digit/letter swap fallback; lower scores rank first. */
+//	public static FuzzyMatcher.Match fuzzyMatch(String query, String text) {
+//		String normalizedQuery = query.toLowerCase(Locale.ROOT);
+//		String normalizedText = text.toLowerCase(Locale.ROOT);
+//		FuzzyMatcher.Match primary = fuzzyMatchNormalized(normalizedQuery, normalizedText);
+//		if (primary.matches) {
+//			return primary;
+//		}
+//
+//		Matcher alphaNumeric = FuzzyMatcher.ALPHA_NUMERIC.matcher(normalizedQuery);
+//		Matcher numericAlpha = FuzzyMatcher.NUMERIC_ALPHA.matcher(normalizedQuery);
+//		String swapped = alphaNumeric.matches()
+//				? alphaNumeric.group(2) + alphaNumeric.group(1)
+//				: numericAlpha.matches() ? numericAlpha.group(2) + numericAlpha.group(1) : "";
+//		if (swapped.isEmpty()) {
+//			return primary;
+//		}
+//		FuzzyMatcher.Match swappedMatch = fuzzyMatchNormalized(swapped, normalizedText);
+//		return swappedMatch.matches ? new FuzzyMatcher.Match(true, swappedMatch.score + 5) : primary;
+//	}
+//
+//	/** Keeps items matching every whitespace/slash-separated token, best score first. */
+//	public static <T> List<T> fuzzyFilter(List<T> items, String query, Function<T, String> text) {
+//		String trimmed = query.trim();
+//		if (trimmed.isEmpty()) {
+//			return List.copyOf(items);
+//		}
+//		String[] tokens = trimmed.split("[\\s/]+");
+//		List<FuzzyMatcher.Scored<T>> scored = new ArrayList<>();
+//		for (int index = 0; index < items.size(); index++) {
+//			T item = items.get(index);
+//			double total = 0;
+//			boolean matches = true;
+//			for (String token : tokens) {
+//				FuzzyMatcher.Match match = fuzzyMatch(token, text.apply(item));
+//				if (!match.matches) {
+//					matches = false;
+//					break;
+//				}
+//				total += match.score;
+//			}
+//			if (matches) {
+//				scored.add(new FuzzyMatcher.Scored<>(item, total, index));
+//			}
+//		}
+//		scored.sort((left, right) -> {
+//			int byScore = Double.compare(left.score, right.score);
+//			return byScore != 0 ? byScore : Integer.compare(left.index, right.index);
+//		});
+//		return scored.stream().map(entry -> entry.item).toList();
+//	}
+//
+//	private static FuzzyMatcher.Match fuzzyMatchNormalized(String query, String text) {
+//		if (query.isEmpty()) {
+//			return new FuzzyMatcher.Match(true, 0);
+//		}
+//		if (query.length() > text.length()) {
+//			return new FuzzyMatcher.Match(false, 0);
+//		}
+//		int queryIndex = 0;
+//		int lastMatchIndex = -1;
+//		int consecutiveMatches = 0;
+//		double score = 0;
+//		for (int index = 0; index < text.length() && queryIndex < query.length(); index++) {
+//			if (text.charAt(index) != query.charAt(queryIndex)) {
+//				continue;
+//			}
+//			boolean wordBoundary = index == 0 || isFuzzyBoundary(text.charAt(index - 1));
+//			if (lastMatchIndex == index - 1) {
+//				consecutiveMatches++;
+//				score -= consecutiveMatches * 5;
+//			} else {
+//				consecutiveMatches = 0;
+//				if (lastMatchIndex >= 0) {
+//					score += (index - lastMatchIndex - 1) * 2;
+//				}
+//			}
+//			if (wordBoundary) {
+//				score -= 10;
+//			}
+//			score += index * 0.1;
+//			lastMatchIndex = index;
+//			queryIndex++;
+//		}
+//		if (queryIndex < query.length()) {
+//			return new FuzzyMatcher.Match(false, 0);
+//		}
+//		if (query.equals(text)) {
+//			score -= 100;
+//		}
+//		return new FuzzyMatcher.Match(true, score);
+//	}
+//
+//	private static boolean isFuzzyBoundary(char value) {
+//		return Character.isWhitespace(value)
+//				|| value == '-'
+//				|| value == '_'
+//				|| value == '.'
+//				|| value == '/'
+//				|| value == ':';
+//	}
+//
+//	// -------------------------------------------------------- ansi rendering
+//
+//	/** Returns the minimal line updates needed to replace the renderer's prior frame. */
+//	public static String renderAnsiFrame(AnsiRenderer renderer, List<String> lines) {
+//		List<String> next = List.copyOf(lines);
+//		StringBuilder output = new StringBuilder();
+//		int common = Math.min(renderer.previousLines.size(), next.size());
+//		for (int index = 0; index < common; index++) {
+//			if (!renderer.previousLines.get(index).equals(next.get(index))) {
+//				ansiMoveTo(output, index);
+//				output.append("\u001b[2K").append(next.get(index));
+//			}
+//		}
+//		for (int index = common; index < next.size(); index++) {
+//			ansiMoveTo(output, index);
+//			output.append("\u001b[2K").append(next.get(index));
+//		}
+//		for (int index = next.size(); index < renderer.previousLines.size(); index++) {
+//			ansiMoveTo(output, index);
+//			output.append("\u001b[2K");
+//		}
+//		renderer.previousLines = next;
+//		return output.toString();
+//	}
+//
+//	/** Resets the baseline, for example after the terminal scrolls externally. */
+//	public static void resetAnsiRenderer(AnsiRenderer renderer) {
+//		renderer.previousLines = List.of();
+//	}
+//
+//	public static List<String> ansiPreviousLines(AnsiRenderer renderer) {
+//		return new ArrayList<>(renderer.previousLines);
+//	}
+//
+//	private static void ansiMoveTo(StringBuilder output, int zeroBasedLine) {
+//		output.append("\u001b[").append(zeroBasedLine + 1).append(";1H");
+//	}
 
 	// ----------------------------------------------------------- keybindings
 
@@ -9269,709 +9269,709 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		throw new IllegalArgumentException("Unsupported editor keybinding: " + action + "=" + binding);
 	}
 
-	public static String appKeySequence(String action) {
-		String binding = Keybindings.DEFAULT_APP_KEYBINDINGS.get(action);
-		if (binding != null && binding.startsWith("ctrl-") && binding.length() == 6) {
-			return KeyMap.ctrl(binding.charAt(5));
-		}
-		if (binding != null && binding.equals("escape")) {
-			return "\u001b";
-		}
-		throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
-	}
-
-	public static TuiInput.KeyType appKeyType(int value) {
-		if (appKeyMatches(value, "exit")) return TuiInput.KeyType.EXIT;
-		if (appKeyMatches(value, "interrupt")) return TuiInput.KeyType.CANCEL;
-		if (appKeyMatches(value, "suspend")) return TuiInput.KeyType.SUSPEND;
-		if (appKeyMatches(value, "expandTools")) return TuiInput.KeyType.EXPAND_TOOLS;
-		if (appKeyMatches(value, "toggleThinking")) return TuiInput.KeyType.TOGGLE_THINKING;
-		return null;
-	}
-
-	private static boolean appKeyMatches(int value, String action) {
-		String sequence = appKeySequence(action);
-		return sequence.length() == 1 && sequence.charAt(0) == value;
-	}
-
-	// ----------------------------------------------------------- input parsing
-
-	private static final long ESCAPE_TIMEOUT_MS = 25;
-	private static final Pattern SGR_MOUSE = Pattern.compile("<(\\d+);(\\d+);(\\d+)([Mm])");
-	private static final String TUI_PASTE_END = "\u001b[201~";
-
-	/** Creates a key event without associated text. */
-	public static TuiInput.Key key(TuiInput.KeyType type) {
-		return new TuiInput.Key(type, "");
-	}
-
-	/** Reads one normalized input event, or null when the read timed out. */
-	public static TuiInput readTuiInput(NonBlockingReader reader, long timeoutMs) throws IOException {
-		int value = reader.read(timeoutMs);
-		if (value == NonBlockingReader.READ_EXPIRED) {
-			return null;
-		}
-		if (value == NonBlockingReader.EOF) {
-			return key(TuiInput.KeyType.CANCEL);
-		}
-		return value == 0x1b ? readEscapeSequence(reader) : keyInput(value);
-	}
-
-	/** Normalizes an already-buffered terminal sequence. */
-	public static TuiInput parseInputSequence(String sequence) {
-		if (sequence == null || sequence.isEmpty()) {
-			return key(TuiInput.KeyType.UNKNOWN);
-		}
-		if (sequence.length() == 1 && sequence.charAt(0) != 0x1b) {
-			return keyInput(sequence.charAt(0));
-		}
-		if (sequence.equals("\u001b")) {
-			return key(TuiInput.KeyType.ESCAPE);
-		}
-		if (sequence.startsWith("\u001b[")) {
-			return csiInput(sequence.substring(2));
-		}
-		if (sequence.startsWith("\u001bO") && sequence.length() == 3) {
-			return switch (sequence.charAt(2)) {
-				case 'A' -> key(TuiInput.KeyType.UP);
-				case 'B' -> key(TuiInput.KeyType.DOWN);
-				case 'C' -> key(TuiInput.KeyType.RIGHT);
-				case 'D' -> key(TuiInput.KeyType.LEFT);
-				default -> key(TuiInput.KeyType.UNKNOWN);
-			};
-		}
-		return key(TuiInput.KeyType.UNKNOWN);
-	}
-
-	private static TuiInput readEscapeSequence(NonBlockingReader reader) throws IOException {
-		int next = reader.read(ESCAPE_TIMEOUT_MS);
-		if (next == NonBlockingReader.READ_EXPIRED || next == NonBlockingReader.EOF) {
-			return key(TuiInput.KeyType.ESCAPE);
-		}
-		if (next == '[') {
-			StringBuilder sequence = new StringBuilder();
-			while (sequence.length() < 64) {
-				int value = reader.read(ESCAPE_TIMEOUT_MS);
-				if (value == NonBlockingReader.READ_EXPIRED || value == NonBlockingReader.EOF) {
-					break;
-				}
-				sequence.append((char) value);
-				if (value >= 0x40 && value <= 0x7e) {
-					break;
-				}
-			}
-			if (sequence.toString().equals("200~")) {
-				return new TuiInput.Key(TuiInput.KeyType.PASTE, readBracketedPaste(reader));
-			}
-			return csiInput(sequence.toString());
-		}
-		if (next == 'O') {
-			int value = reader.read(ESCAPE_TIMEOUT_MS);
-			return value < 0
-					? key(TuiInput.KeyType.ESCAPE)
-					: parseInputSequence("\u001bO" + (char) value);
-		}
-		return keyInput(next);
-	}
-
-	private static String readBracketedPaste(NonBlockingReader reader) throws IOException {
-		StringBuilder content = new StringBuilder();
-		StringBuilder suffix = new StringBuilder();
-		while (true) {
-			int value = reader.read();
-			if (value == NonBlockingReader.EOF) {
-				content.append(suffix);
-				return content.toString();
-			}
-			suffix.append((char) value);
-			while (!TUI_PASTE_END.startsWith(suffix.toString())) {
-				content.append(suffix.charAt(0));
-				suffix.deleteCharAt(0);
-			}
-			if (suffix.toString().equals(TUI_PASTE_END)) {
-				return content.toString();
-			}
-		}
-	}
-
-	private static TuiInput csiInput(String sequence) {
-		return switch (sequence) {
-			case "A" -> key(TuiInput.KeyType.UP);
-			case "B" -> key(TuiInput.KeyType.DOWN);
-			case "C" -> key(TuiInput.KeyType.RIGHT);
-			case "D" -> key(TuiInput.KeyType.LEFT);
-			case "H", "1~", "7~" -> key(TuiInput.KeyType.HOME);
-			case "F", "4~", "8~" -> key(TuiInput.KeyType.END);
-			case "3~" -> key(TuiInput.KeyType.DELETE);
-			case "5~" -> key(TuiInput.KeyType.PAGE_UP);
-			case "6~" -> key(TuiInput.KeyType.PAGE_DOWN);
-			default -> mouseInput(sequence);
-		};
-	}
-
-	private static TuiInput mouseInput(String sequence) {
-		Matcher matcher = SGR_MOUSE.matcher(sequence);
-		if (!matcher.matches()) {
-			return key(TuiInput.KeyType.UNKNOWN);
-		}
-		int code = Integer.parseInt(matcher.group(1));
-		int x = Integer.parseInt(matcher.group(2));
-		int y = Integer.parseInt(matcher.group(3));
-		if ((code & 64) != 0) {
-			return new TuiInput.Mouse(
-					(code & 1) == 0 ? TuiInput.MouseAction.SCROLL_UP : TuiInput.MouseAction.SCROLL_DOWN,
-					code & 3,
-					x,
-					y);
-		}
-		TuiInput.MouseAction action;
-		if (matcher.group(4).equals("m") || (code & 3) == 3) {
-			action = TuiInput.MouseAction.RELEASE;
-		} else if ((code & 32) != 0) {
-			action = TuiInput.MouseAction.DRAG;
-		} else {
-			action = TuiInput.MouseAction.PRESS;
-		}
-		return new TuiInput.Mouse(action, code & 3, x, y);
-	}
-
-	private static TuiInput keyInput(int value) {
-		TuiInput.KeyType applicationType = appKeyType(value);
-		if (applicationType != null) {
-			return key(applicationType);
-		}
-		return switch (value) {
-			case 3 -> key(TuiInput.KeyType.CANCEL);
-			case 8, 127 -> key(TuiInput.KeyType.BACKSPACE);
-			case 9 -> key(TuiInput.KeyType.TAB);
-			case 10, 13 -> key(TuiInput.KeyType.ENTER);
-			case 14 -> key(TuiInput.KeyType.DOWN);
-			case 16 -> key(TuiInput.KeyType.UP);
-			case 21 -> key(TuiInput.KeyType.CLEAR);
-			default -> value >= 32
-					? new TuiInput.Key(TuiInput.KeyType.CHARACTER, Character.toString(value))
-					: key(TuiInput.KeyType.UNKNOWN);
-		};
-	}
-
-	// ------------------------------------------------------ command suggestions
-
-	/** Builds the panel state from an alphabetized, de-duplicated command list. */
-	public static CommandSuggestions newCommandSuggestions(List<String> commands) {
-		Objects.requireNonNull(commands, "commands");
-		return new CommandSuggestions(commands.stream()
-				.filter(Objects::nonNull)
-				.map(String::trim)
-				.filter(command -> command.startsWith("/") && command.length() > 1)
-				.distinct()
-				.sorted(Comparator.naturalOrder())
-				.toList());
-	}
-
-	/** Moves the selection when a panel is open; returns false to let JLine handle the key. */
-	public static boolean moveCommandSuggestion(CommandSuggestions suggestions, String buffer, int delta) {
-		synchronizeCommandSuggestions(suggestions, buffer);
-		if (suggestions.matches.isEmpty()) return false;
-		suggestions.selectedIndex =
-				Math.floorMod(suggestions.selectedIndex + delta, suggestions.matches.size());
-		adjustCommandViewport(suggestions);
-		return true;
-	}
-
-	/** Returns the selected command and dismisses the panel until the buffer is edited. */
-	public static String acceptCommandSuggestion(CommandSuggestions suggestions, String buffer) {
-		synchronizeCommandSuggestions(suggestions, buffer);
-		if (suggestions.matches.isEmpty()) return null;
-		String selected = suggestions.matches.get(suggestions.selectedIndex);
-		suggestions.dismissedBuffer = selected;
-		return selected;
-	}
-
-	public static List<String> renderCommandSuggestions(
-			CommandSuggestions suggestions, String buffer, int width, Theme theme) {
-		synchronizeCommandSuggestions(suggestions, buffer);
-		if (suggestions.matches.isEmpty()) return List.of();
-
-		int visibleEnd = Math.min(
-				suggestions.matches.size(), suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS);
-		List<String> visible = suggestions.matches.subList(suggestions.visibleStart, visibleEnd);
-		int longestCommand = visible.stream()
-				.mapToInt(CodingAgentOperations::visibleWidth)
-				.max()
-				.orElse(1);
-		int innerWidth = Math.max(1, Math.min(longestCommand + 2, Math.max(1, width - 2)));
-		String border = "─".repeat(innerWidth);
-		List<String> lines = new ArrayList<>(visible.size() + 2);
-		lines.add(styleMuted("╭" + border + "╮", theme));
-		for (int index = suggestions.visibleStart; index < visibleEnd; index++) {
-			boolean selected = index == suggestions.selectedIndex;
-			String content = (selected ? "› " : "  ") + suggestions.matches.get(index);
-			content = truncatePlain(content, innerWidth);
-			content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
-			String styledContent = selected && !theme.heading.isEmpty()
-					? theme.heading + content + theme.reset
-					: content;
-			lines.add(styleMuted("│", theme) + styledContent + styleMuted("│", theme));
-		}
-		lines.add(styleMuted("╰" + border + "╯", theme));
-		return lines;
-	}
-
-	public static List<String> visibleCommands(CommandSuggestions suggestions, String buffer) {
-		synchronizeCommandSuggestions(suggestions, buffer);
-		if (suggestions.matches.isEmpty()) return List.of();
-		return List.copyOf(suggestions.matches.subList(
-				suggestions.visibleStart,
-				Math.min(
-						suggestions.matches.size(),
-						suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS)));
-	}
-
-	public static String selectedCommand(CommandSuggestions suggestions, String buffer) {
-		synchronizeCommandSuggestions(suggestions, buffer);
-		return suggestions.matches.isEmpty()
-				? null
-				: suggestions.matches.get(suggestions.selectedIndex);
-	}
-
-	private static void synchronizeCommandSuggestions(CommandSuggestions suggestions, String buffer) {
-		String value = buffer == null ? "" : buffer;
-		if (suggestions.dismissedBuffer != null) {
-			if (suggestions.dismissedBuffer.equals(value)) {
-				suggestions.matches = List.of();
-				suggestions.query = value;
-				suggestions.selectedIndex = 0;
-				suggestions.visibleStart = 0;
-				return;
-			}
-			suggestions.dismissedBuffer = null;
-		}
-		if (value.equals(suggestions.query)) return;
-		suggestions.query = value;
-		suggestions.selectedIndex = 0;
-		suggestions.visibleStart = 0;
-		if (!isCommandPrefix(value)) {
-			suggestions.matches = List.of();
-			return;
-		}
-		suggestions.matches =
-				suggestions.commands.stream().filter(command -> command.startsWith(value)).toList();
-	}
-
-	private static boolean isCommandPrefix(String value) {
-		if (value.isEmpty() || value.charAt(0) != '/') return false;
-		for (int index = 1; index < value.length(); index++) {
-			if (Character.isWhitespace(value.charAt(index))) return false;
-		}
-		return true;
-	}
-
-	private static void adjustCommandViewport(CommandSuggestions suggestions) {
-		if (suggestions.selectedIndex < suggestions.visibleStart) {
-			suggestions.visibleStart = suggestions.selectedIndex;
-		} else if (suggestions.selectedIndex
-				>= suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS) {
-			suggestions.visibleStart =
-					suggestions.selectedIndex - CommandSuggestions.VISIBLE_COMMANDS + 1;
-		}
-		suggestions.visibleStart = Math.min(
-				suggestions.visibleStart,
-				Math.max(0, suggestions.matches.size() - CommandSuggestions.VISIBLE_COMMANDS));
-	}
-
-	private static String styleMuted(String value, Theme theme) {
-		return theme.muted.isEmpty() ? value : theme.muted + value + theme.reset;
-	}
-
-	// --------------------------------------------------------- tui components
-
-	/** Renders a component frame at the given size and palette. */
-	public static List<String> renderComponent(
-			TuiComponent<?> component, int width, int height, Theme theme) {
-		return component.render.apply(new TuiFrame(width, height, theme));
-	}
-
-	/** Applies one normalized input event to a component. */
-	public static void handleComponentInput(TuiComponent<?> component, TuiInput input) {
-		component.handle.accept(input);
-	}
-
-	public static boolean isComponentComplete(TuiComponent<?> component) {
-		return component.complete.getAsBoolean();
-	}
-
-	public static <T> T componentResult(TuiComponent<T> component) {
-		return component.result.get();
-	}
-
-	// ---------------------------------------------------------- fuzzy selector
-
-	public static <T> SelectItem<T> selectItem(T value, String label) {
-		return selectItem(value, label, "", null);
-	}
-
-	public static <T> SelectItem<T> selectItem(T value, String label, String description) {
-		return selectItem(value, label, description, null);
-	}
-
-	/**
-	 * Creates a selector option. Value and label are required; a missing
-	 * description becomes empty and blank search text falls back to the label
-	 * plus description.
-	 */
-	public static <T> SelectItem<T> selectItem(T value, String label, String description, String searchText) {
-		Objects.requireNonNull(value, "value");
-		Objects.requireNonNull(label, "label");
-		String resolvedDescription = description == null ? "" : description;
-		return new SelectItem<>(
-				value,
-				label,
-				resolvedDescription,
-				searchText == null || searchText.isBlank()
-						? label + (resolvedDescription.isBlank() ? "" : " " + resolvedDescription)
-						: searchText);
-	}
-
-	/** Creates selector state over at least one option, clamping the initial selection. */
-	public static <T> FuzzySelector<T> fuzzySelector(
-			String title, List<SelectItem<T>> items, int initialIndex, boolean searchable) {
-		if (items.isEmpty()) {
-			throw new IllegalArgumentException("items must not be empty");
-		}
-		List<SelectItem<T>> options = List.copyOf(items);
-		int selectedIndex = initialIndex < 0 ? 0 : Math.min(initialIndex, options.size() - 1);
-		return new FuzzySelector<>(
-				title,
-				options,
-				options,
-				initialIndex < 0 ? null : options.get(selectedIndex),
-				selectedIndex,
-				searchable);
-	}
-
-	/** Binds a selector carrier to the full-screen host. */
-	public static <T> TuiComponent<T> fuzzySelectorComponent(FuzzySelector<T> selector) {
-		return new TuiComponent<>(
-				frame -> renderFuzzySelector(selector, frame.width, frame.height, frame.theme),
-				input -> handleFuzzySelectorInput(selector, input),
-				() -> selector.complete,
-				() -> selector.result);
-	}
-
-	public static <T> List<String> renderFuzzySelector(
-			FuzzySelector<T> selector, int width, int height, Theme theme) {
-		List<String> lines = new ArrayList<>();
-		lines.add(theme.heading + truncatePlain(selector.title, width) + theme.reset);
-		lines.add("");
-		if (selector.searchable) {
-			String beforeCursor = selector.query.substring(0, selector.queryCursor);
-			String afterCursor = selector.query.substring(selector.queryCursor);
-			String search = "Search: " + beforeCursor + "|" + afterCursor;
-			lines.add(truncatePlain(search, width));
-			lines.add("");
-		}
-
-		selector.optionStartRow = lines.size();
-		int reservedLines = lines.size() + 3;
-		selector.visibleCount = Math.max(1, Math.min(10, height - reservedLines));
-		selector.visibleStart = Math.max(
-				0,
-				Math.min(
-						selector.selectedIndex - (selector.visibleCount / 2),
-						Math.max(0, selector.filteredItems.size() - selector.visibleCount)));
-		int visibleEnd =
-				Math.min(selector.filteredItems.size(), selector.visibleStart + selector.visibleCount);
-
-		if (selector.filteredItems.isEmpty()) {
-			lines.add(theme.muted + "  No matching options" + theme.reset);
-		} else {
-			for (int index = selector.visibleStart; index < visibleEnd; index++) {
-				SelectItem<T> item = selector.filteredItems.get(index);
-				boolean selected = index == selector.selectedIndex;
-				boolean current = item == selector.currentItem;
-				String suffix = current ? " *" : "";
-				String description = item.description.isBlank() ? "" : "  " + item.description;
-				String row = (selected ? "> " : "  ") + item.label + suffix + description;
-				row = truncatePlain(row, width);
-				lines.add(selected ? theme.heading + row + theme.reset : row);
-			}
-			if (selector.visibleStart > 0 || visibleEnd < selector.filteredItems.size()) {
-				lines.add(theme.muted
-						+ "  "
-						+ (selector.selectedIndex + 1)
-						+ "/"
-						+ selector.filteredItems.size()
-						+ theme.reset);
-			}
-		}
-		lines.add("");
-		String currentHint = selector.currentItem == null ? "" : "  * current";
-		String hint = (selector.searchable
-						? "Type to filter  Up/Down move  Enter select  Esc cancel"
-						: "Up/Down move  Enter select  Esc cancel")
-				+ currentHint;
-		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
-		return lines;
-	}
-
-	public static <T> void handleFuzzySelectorInput(FuzzySelector<T> selector, TuiInput input) {
-		switch (input) {
-			case TuiInput.Key key -> handleFuzzySelectorKey(selector, key);
-			case TuiInput.Mouse mouse -> handleFuzzySelectorMouse(selector, mouse);
-			case TuiInput.Resize ignored -> {
-				// Rendering derives its viewport directly from the latest dimensions.
-			}
-		}
-	}
-
-	private static <T> void handleFuzzySelectorKey(FuzzySelector<T> selector, TuiInput.Key key) {
-		switch (key.type) {
-			case UP -> moveFuzzySelection(selector, -1);
-			case DOWN -> moveFuzzySelection(selector, 1);
-			case PAGE_UP -> moveFuzzySelection(selector, -Math.max(1, selector.visibleCount));
-			case PAGE_DOWN -> moveFuzzySelection(selector, Math.max(1, selector.visibleCount));
-			case ENTER -> selectFuzzyItem(selector);
-			case ESCAPE, CANCEL -> selector.complete = true;
-			case CHARACTER, PASTE -> insertFuzzyQuery(selector, key.text);
-			case BACKSPACE -> backspaceFuzzyQuery(selector);
-			case DELETE -> deleteFuzzyQuery(selector);
-			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
-			case RIGHT -> selector.queryCursor =
-					Math.min(selector.query.length(), selector.queryCursor + 1);
-			case HOME -> {
-				if (selector.searchable) {
-					selector.queryCursor = 0;
-				} else if (!selector.filteredItems.isEmpty()) {
-					selector.selectedIndex = 0;
-				}
-			}
-			case END -> {
-				if (selector.searchable) {
-					selector.queryCursor = selector.query.length();
-				} else if (!selector.filteredItems.isEmpty()) {
-					selector.selectedIndex = selector.filteredItems.size() - 1;
-				}
-			}
-			case CLEAR -> {
-				selector.query.setLength(0);
-				selector.queryCursor = 0;
-				filterFuzzyItems(selector);
-			}
-			default -> {
-				// Other normalized keys do not affect selector state.
-			}
-		}
-	}
-
-	private static <T> void handleFuzzySelectorMouse(FuzzySelector<T> selector, TuiInput.Mouse mouse) {
-		switch (mouse.action) {
-			case SCROLL_UP -> moveFuzzySelection(selector, -1);
-			case SCROLL_DOWN -> moveFuzzySelection(selector, 1);
-			case PRESS -> {
-				int row = mouse.y - 1;
-				int itemOffset = row - selector.optionStartRow;
-				if (mouse.button == 0 && itemOffset >= 0 && itemOffset < selector.visibleCount) {
-					int index = selector.visibleStart + itemOffset;
-					if (index < selector.filteredItems.size()) {
-						selector.selectedIndex = index;
-					}
-				}
-			}
-			default -> {
-				// Release and drag events are currently informational.
-			}
-		}
-	}
-
-	private static <T> void moveFuzzySelection(FuzzySelector<T> selector, int delta) {
-		if (selector.filteredItems.isEmpty()) {
-			return;
-		}
-		selector.selectedIndex =
-				Math.floorMod(selector.selectedIndex + delta, selector.filteredItems.size());
-	}
-
-	private static <T> void selectFuzzyItem(FuzzySelector<T> selector) {
-		if (selector.filteredItems.isEmpty()) {
-			return;
-		}
-		selector.result = selector.filteredItems.get(selector.selectedIndex).value;
-		selector.complete = true;
-	}
-
-	private static <T> void insertFuzzyQuery(FuzzySelector<T> selector, String text) {
-		if (!selector.searchable || text == null || text.isEmpty()) {
-			return;
-		}
-		String normalized = text.replace("\r", " ").replace("\n", " ");
-		selector.query.insert(selector.queryCursor, normalized);
-		selector.queryCursor += normalized.length();
-		filterFuzzyItems(selector);
-	}
-
-	private static <T> void backspaceFuzzyQuery(FuzzySelector<T> selector) {
-		if (!selector.searchable || selector.queryCursor == 0) {
-			return;
-		}
-		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
-		selector.query.delete(start, selector.queryCursor);
-		selector.queryCursor = start;
-		filterFuzzyItems(selector);
-	}
-
-	private static <T> void deleteFuzzyQuery(FuzzySelector<T> selector) {
-		if (!selector.searchable || selector.queryCursor >= selector.query.length()) {
-			return;
-		}
-		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
-		selector.query.delete(selector.queryCursor, end);
-		filterFuzzyItems(selector);
-	}
-
-	private static <T> void filterFuzzyItems(FuzzySelector<T> selector) {
-		selector.filteredItems =
-				fuzzyFilter(selector.items, selector.query.toString(), item -> item.searchText);
-		if (selector.query.isEmpty()) {
-			int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
-			selector.selectedIndex = currentIndex < 0 ? 0 : currentIndex;
-		} else {
-			selector.selectedIndex = 0;
-		}
-	}
-
-	/** Runs a searchable selector on the terminal and returns the chosen value. */
-	public static <T> T select(
-			InteractiveTerminal terminal,
-			String title,
-			List<SelectItem<T>> options,
-			int initialIndex,
-			boolean searchable)
-			throws IOException {
-		if (options.isEmpty()) {
-			throw new IllegalArgumentException("options must not be empty");
-		}
-		return runComponent(
-				terminal, fuzzySelectorComponent(fuzzySelector(title, options, initialIndex, searchable)));
-	}
-
-	public static String select(InteractiveTerminal terminal, String title, List<String> options)
-			throws IOException {
-		List<SelectItem<String>> items =
-				options.stream().map(option -> selectItem(option, option)).toList();
-		return select(terminal, title, items, -1, options.size() > 10);
-	}
-
-	// ------------------------------------------------------------ tui runtime
-
-	/** Hosts a component on the alternate screen until it completes. */
-	public static <T> T runTuiComponent(TuiRuntime runtime, TuiComponent<T> component)
-			throws IOException {
-		int width = tuiWidth(runtime);
-		int height = tuiHeight(runtime);
-		try {
-			startTuiRuntime(runtime);
-			handleComponentInput(component, new TuiInput.Resize(width, height));
-			renderTuiFrame(runtime, component, width, height);
-			while (!isComponentComplete(component)) {
-				TuiInput input = readTuiInput(runtime.terminal.reader(), 100);
-				int nextWidth = tuiWidth(runtime);
-				int nextHeight = tuiHeight(runtime);
-				if (nextWidth != width || nextHeight != height) {
-					width = nextWidth;
-					height = nextHeight;
-					handleComponentInput(component, new TuiInput.Resize(width, height));
-					resetAnsiRenderer(runtime.renderer);
-					clearTuiScreen(runtime);
-					renderTuiFrame(runtime, component, width, height);
-				}
-				if (input == null) {
-					// Components such as the MCP selector can change from background connection threads.
-					renderTuiFrame(runtime, component, width, height);
-					continue;
-				}
-				if (runtime.suspendAction != null
-						&& input instanceof TuiInput.Key key
-						&& key.type == TuiInput.KeyType.SUSPEND) {
-					stopTuiRuntime(runtime);
-					callSuspendAction(runtime.suspendAction);
-					runtime.resumeMainScreen.run();
-					startTuiRuntime(runtime);
-					width = tuiWidth(runtime);
-					height = tuiHeight(runtime);
-					handleComponentInput(component, new TuiInput.Resize(width, height));
-					resetAnsiRenderer(runtime.renderer);
-					renderTuiFrame(runtime, component, width, height);
-					continue;
-				}
-				handleComponentInput(component, input);
-				renderTuiFrame(runtime, component, width, height);
-			}
-			return componentResult(component);
-		} finally {
-			stopTuiRuntime(runtime);
-		}
-	}
-
-	private static int tuiWidth(TuiRuntime runtime) {
-		int columns = runtime.terminal.getColumns();
-		return columns > 0 ? columns : TuiRuntime.DEFAULT_COLUMNS;
-	}
-
-	private static int tuiHeight(TuiRuntime runtime) {
-		int rows = runtime.terminal.getRows();
-		return rows > 0 ? rows : TuiRuntime.DEFAULT_ROWS;
-	}
-
-	private static void startTuiRuntime(TuiRuntime runtime) {
-		runtime.originalAttributes = runtime.terminal.enterRawMode();
-		if (!runtime.terminal.puts(Capability.enter_ca_mode)) {
-			runtime.terminal.writer().write("\u001b[?1049h");
-		}
-		runtime.terminal.puts(Capability.keypad_xmit);
-		runtime.terminal.trackMouse(Terminal.MouseTracking.Button);
-		if (!runtime.terminal.puts(Capability.cursor_invisible)) {
-			runtime.terminal.writer().write("\u001b[?25l");
-		}
-		runtime.active = true;
-		resetAnsiRenderer(runtime.renderer);
-		clearTuiScreen(runtime);
-		runtime.terminal.flush();
-	}
-
-	private static void stopTuiRuntime(TuiRuntime runtime) {
-		if (!runtime.active) {
-			return;
-		}
-		runtime.terminal.trackMouse(Terminal.MouseTracking.Off);
-		if (!runtime.terminal.puts(Capability.cursor_normal)) {
-			runtime.terminal.writer().write("\u001b[?25h");
-		}
-		runtime.terminal.puts(Capability.keypad_local);
-		if (!runtime.terminal.puts(Capability.exit_ca_mode)) {
-			runtime.terminal.writer().write("\u001b[?1049l");
-		}
-		runtime.terminal.flush();
-		if (runtime.originalAttributes != null) {
-			runtime.terminal.setAttributes(runtime.originalAttributes);
-		}
-		runtime.active = false;
-	}
-
-	private static void renderTuiFrame(
-			TuiRuntime runtime, TuiComponent<?> component, int width, int height) {
-		int safeWidth = Math.max(20, width);
-		int safeHeight = Math.max(5, height);
-		List<String> lines = renderComponent(component, safeWidth, safeHeight, runtime.theme);
-		if (lines.size() > safeHeight) {
-			lines = lines.subList(0, safeHeight);
-		}
-		runtime.terminal.writer().write(renderAnsiFrame(runtime.renderer, lines));
-		runtime.terminal.flush();
-	}
-
-	private static void clearTuiScreen(TuiRuntime runtime) {
-		runtime.terminal.writer().write("\u001b[2J\u001b[H");
-	}
+//	public static String appKeySequence(String action) {
+//		String binding = Keybindings.DEFAULT_APP_KEYBINDINGS.get(action);
+//		if (binding != null && binding.startsWith("ctrl-") && binding.length() == 6) {
+//			return KeyMap.ctrl(binding.charAt(5));
+//		}
+//		if (binding != null && binding.equals("escape")) {
+//			return "\u001b";
+//		}
+//		throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
+//	}
+//
+//	public static TuiInput.KeyType appKeyType(int value) {
+//		if (appKeyMatches(value, "exit")) return TuiInput.KeyType.EXIT;
+//		if (appKeyMatches(value, "interrupt")) return TuiInput.KeyType.CANCEL;
+//		if (appKeyMatches(value, "suspend")) return TuiInput.KeyType.SUSPEND;
+//		if (appKeyMatches(value, "expandTools")) return TuiInput.KeyType.EXPAND_TOOLS;
+//		if (appKeyMatches(value, "toggleThinking")) return TuiInput.KeyType.TOGGLE_THINKING;
+//		return null;
+//	}
+//
+//	private static boolean appKeyMatches(int value, String action) {
+//		String sequence = appKeySequence(action);
+//		return sequence.length() == 1 && sequence.charAt(0) == value;
+//	}
+//
+//	// ----------------------------------------------------------- input parsing
+//
+//	private static final long ESCAPE_TIMEOUT_MS = 25;
+//	private static final Pattern SGR_MOUSE = Pattern.compile("<(\\d+);(\\d+);(\\d+)([Mm])");
+//	private static final String TUI_PASTE_END = "\u001b[201~";
+//
+//	/** Creates a key event without associated text. */
+//	public static TuiInput.Key key(TuiInput.KeyType type) {
+//		return new TuiInput.Key(type, "");
+//	}
+//
+//	/** Reads one normalized input event, or null when the read timed out. */
+//	public static TuiInput readTuiInput(NonBlockingReader reader, long timeoutMs) throws IOException {
+//		int value = reader.read(timeoutMs);
+//		if (value == NonBlockingReader.READ_EXPIRED) {
+//			return null;
+//		}
+//		if (value == NonBlockingReader.EOF) {
+//			return key(TuiInput.KeyType.CANCEL);
+//		}
+//		return value == 0x1b ? readEscapeSequence(reader) : keyInput(value);
+//	}
+//
+//	/** Normalizes an already-buffered terminal sequence. */
+//	public static TuiInput parseInputSequence(String sequence) {
+//		if (sequence == null || sequence.isEmpty()) {
+//			return key(TuiInput.KeyType.UNKNOWN);
+//		}
+//		if (sequence.length() == 1 && sequence.charAt(0) != 0x1b) {
+//			return keyInput(sequence.charAt(0));
+//		}
+//		if (sequence.equals("\u001b")) {
+//			return key(TuiInput.KeyType.ESCAPE);
+//		}
+//		if (sequence.startsWith("\u001b[")) {
+//			return csiInput(sequence.substring(2));
+//		}
+//		if (sequence.startsWith("\u001bO") && sequence.length() == 3) {
+//			return switch (sequence.charAt(2)) {
+//				case 'A' -> key(TuiInput.KeyType.UP);
+//				case 'B' -> key(TuiInput.KeyType.DOWN);
+//				case 'C' -> key(TuiInput.KeyType.RIGHT);
+//				case 'D' -> key(TuiInput.KeyType.LEFT);
+//				default -> key(TuiInput.KeyType.UNKNOWN);
+//			};
+//		}
+//		return key(TuiInput.KeyType.UNKNOWN);
+//	}
+//
+//	private static TuiInput readEscapeSequence(NonBlockingReader reader) throws IOException {
+//		int next = reader.read(ESCAPE_TIMEOUT_MS);
+//		if (next == NonBlockingReader.READ_EXPIRED || next == NonBlockingReader.EOF) {
+//			return key(TuiInput.KeyType.ESCAPE);
+//		}
+//		if (next == '[') {
+//			StringBuilder sequence = new StringBuilder();
+//			while (sequence.length() < 64) {
+//				int value = reader.read(ESCAPE_TIMEOUT_MS);
+//				if (value == NonBlockingReader.READ_EXPIRED || value == NonBlockingReader.EOF) {
+//					break;
+//				}
+//				sequence.append((char) value);
+//				if (value >= 0x40 && value <= 0x7e) {
+//					break;
+//				}
+//			}
+//			if (sequence.toString().equals("200~")) {
+//				return new TuiInput.Key(TuiInput.KeyType.PASTE, readBracketedPaste(reader));
+//			}
+//			return csiInput(sequence.toString());
+//		}
+//		if (next == 'O') {
+//			int value = reader.read(ESCAPE_TIMEOUT_MS);
+//			return value < 0
+//					? key(TuiInput.KeyType.ESCAPE)
+//					: parseInputSequence("\u001bO" + (char) value);
+//		}
+//		return keyInput(next);
+//	}
+//
+//	private static String readBracketedPaste(NonBlockingReader reader) throws IOException {
+//		StringBuilder content = new StringBuilder();
+//		StringBuilder suffix = new StringBuilder();
+//		while (true) {
+//			int value = reader.read();
+//			if (value == NonBlockingReader.EOF) {
+//				content.append(suffix);
+//				return content.toString();
+//			}
+//			suffix.append((char) value);
+//			while (!TUI_PASTE_END.startsWith(suffix.toString())) {
+//				content.append(suffix.charAt(0));
+//				suffix.deleteCharAt(0);
+//			}
+//			if (suffix.toString().equals(TUI_PASTE_END)) {
+//				return content.toString();
+//			}
+//		}
+//	}
+//
+//	private static TuiInput csiInput(String sequence) {
+//		return switch (sequence) {
+//			case "A" -> key(TuiInput.KeyType.UP);
+//			case "B" -> key(TuiInput.KeyType.DOWN);
+//			case "C" -> key(TuiInput.KeyType.RIGHT);
+//			case "D" -> key(TuiInput.KeyType.LEFT);
+//			case "H", "1~", "7~" -> key(TuiInput.KeyType.HOME);
+//			case "F", "4~", "8~" -> key(TuiInput.KeyType.END);
+//			case "3~" -> key(TuiInput.KeyType.DELETE);
+//			case "5~" -> key(TuiInput.KeyType.PAGE_UP);
+//			case "6~" -> key(TuiInput.KeyType.PAGE_DOWN);
+//			default -> mouseInput(sequence);
+//		};
+//	}
+//
+//	private static TuiInput mouseInput(String sequence) {
+//		Matcher matcher = SGR_MOUSE.matcher(sequence);
+//		if (!matcher.matches()) {
+//			return key(TuiInput.KeyType.UNKNOWN);
+//		}
+//		int code = Integer.parseInt(matcher.group(1));
+//		int x = Integer.parseInt(matcher.group(2));
+//		int y = Integer.parseInt(matcher.group(3));
+//		if ((code & 64) != 0) {
+//			return new TuiInput.Mouse(
+//					(code & 1) == 0 ? TuiInput.MouseAction.SCROLL_UP : TuiInput.MouseAction.SCROLL_DOWN,
+//					code & 3,
+//					x,
+//					y);
+//		}
+//		TuiInput.MouseAction action;
+//		if (matcher.group(4).equals("m") || (code & 3) == 3) {
+//			action = TuiInput.MouseAction.RELEASE;
+//		} else if ((code & 32) != 0) {
+//			action = TuiInput.MouseAction.DRAG;
+//		} else {
+//			action = TuiInput.MouseAction.PRESS;
+//		}
+//		return new TuiInput.Mouse(action, code & 3, x, y);
+//	}
+//
+//	private static TuiInput keyInput(int value) {
+//		TuiInput.KeyType applicationType = appKeyType(value);
+//		if (applicationType != null) {
+//			return key(applicationType);
+//		}
+//		return switch (value) {
+//			case 3 -> key(TuiInput.KeyType.CANCEL);
+//			case 8, 127 -> key(TuiInput.KeyType.BACKSPACE);
+//			case 9 -> key(TuiInput.KeyType.TAB);
+//			case 10, 13 -> key(TuiInput.KeyType.ENTER);
+//			case 14 -> key(TuiInput.KeyType.DOWN);
+//			case 16 -> key(TuiInput.KeyType.UP);
+//			case 21 -> key(TuiInput.KeyType.CLEAR);
+//			default -> value >= 32
+//					? new TuiInput.Key(TuiInput.KeyType.CHARACTER, Character.toString(value))
+//					: key(TuiInput.KeyType.UNKNOWN);
+//		};
+//	}
+//
+//	// ------------------------------------------------------ command suggestions
+//
+//	/** Builds the panel state from an alphabetized, de-duplicated command list. */
+//	public static CommandSuggestions newCommandSuggestions(List<String> commands) {
+//		Objects.requireNonNull(commands, "commands");
+//		return new CommandSuggestions(commands.stream()
+//				.filter(Objects::nonNull)
+//				.map(String::trim)
+//				.filter(command -> command.startsWith("/") && command.length() > 1)
+//				.distinct()
+//				.sorted(Comparator.naturalOrder())
+//				.toList());
+//	}
+//
+//	/** Moves the selection when a panel is open; returns false to let JLine handle the key. */
+//	public static boolean moveCommandSuggestion(CommandSuggestions suggestions, String buffer, int delta) {
+//		synchronizeCommandSuggestions(suggestions, buffer);
+//		if (suggestions.matches.isEmpty()) return false;
+//		suggestions.selectedIndex =
+//				Math.floorMod(suggestions.selectedIndex + delta, suggestions.matches.size());
+//		adjustCommandViewport(suggestions);
+//		return true;
+//	}
+//
+//	/** Returns the selected command and dismisses the panel until the buffer is edited. */
+//	public static String acceptCommandSuggestion(CommandSuggestions suggestions, String buffer) {
+//		synchronizeCommandSuggestions(suggestions, buffer);
+//		if (suggestions.matches.isEmpty()) return null;
+//		String selected = suggestions.matches.get(suggestions.selectedIndex);
+//		suggestions.dismissedBuffer = selected;
+//		return selected;
+//	}
+//
+//	public static List<String> renderCommandSuggestions(
+//			CommandSuggestions suggestions, String buffer, int width, Theme theme) {
+//		synchronizeCommandSuggestions(suggestions, buffer);
+//		if (suggestions.matches.isEmpty()) return List.of();
+//
+//		int visibleEnd = Math.min(
+//				suggestions.matches.size(), suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS);
+//		List<String> visible = suggestions.matches.subList(suggestions.visibleStart, visibleEnd);
+//		int longestCommand = visible.stream()
+//				.mapToInt(CodingAgentOperations::visibleWidth)
+//				.max()
+//				.orElse(1);
+//		int innerWidth = Math.max(1, Math.min(longestCommand + 2, Math.max(1, width - 2)));
+//		String border = "─".repeat(innerWidth);
+//		List<String> lines = new ArrayList<>(visible.size() + 2);
+//		lines.add(styleMuted("╭" + border + "╮", theme));
+//		for (int index = suggestions.visibleStart; index < visibleEnd; index++) {
+//			boolean selected = index == suggestions.selectedIndex;
+//			String content = (selected ? "› " : "  ") + suggestions.matches.get(index);
+//			content = truncatePlain(content, innerWidth);
+//			content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
+//			String styledContent = selected && !theme.heading.isEmpty()
+//					? theme.heading + content + theme.reset
+//					: content;
+//			lines.add(styleMuted("│", theme) + styledContent + styleMuted("│", theme));
+//		}
+//		lines.add(styleMuted("╰" + border + "╯", theme));
+//		return lines;
+//	}
+//
+//	public static List<String> visibleCommands(CommandSuggestions suggestions, String buffer) {
+//		synchronizeCommandSuggestions(suggestions, buffer);
+//		if (suggestions.matches.isEmpty()) return List.of();
+//		return List.copyOf(suggestions.matches.subList(
+//				suggestions.visibleStart,
+//				Math.min(
+//						suggestions.matches.size(),
+//						suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS)));
+//	}
+//
+//	public static String selectedCommand(CommandSuggestions suggestions, String buffer) {
+//		synchronizeCommandSuggestions(suggestions, buffer);
+//		return suggestions.matches.isEmpty()
+//				? null
+//				: suggestions.matches.get(suggestions.selectedIndex);
+//	}
+//
+//	private static void synchronizeCommandSuggestions(CommandSuggestions suggestions, String buffer) {
+//		String value = buffer == null ? "" : buffer;
+//		if (suggestions.dismissedBuffer != null) {
+//			if (suggestions.dismissedBuffer.equals(value)) {
+//				suggestions.matches = List.of();
+//				suggestions.query = value;
+//				suggestions.selectedIndex = 0;
+//				suggestions.visibleStart = 0;
+//				return;
+//			}
+//			suggestions.dismissedBuffer = null;
+//		}
+//		if (value.equals(suggestions.query)) return;
+//		suggestions.query = value;
+//		suggestions.selectedIndex = 0;
+//		suggestions.visibleStart = 0;
+//		if (!isCommandPrefix(value)) {
+//			suggestions.matches = List.of();
+//			return;
+//		}
+//		suggestions.matches =
+//				suggestions.commands.stream().filter(command -> command.startsWith(value)).toList();
+//	}
+//
+//	private static boolean isCommandPrefix(String value) {
+//		if (value.isEmpty() || value.charAt(0) != '/') return false;
+//		for (int index = 1; index < value.length(); index++) {
+//			if (Character.isWhitespace(value.charAt(index))) return false;
+//		}
+//		return true;
+//	}
+//
+//	private static void adjustCommandViewport(CommandSuggestions suggestions) {
+//		if (suggestions.selectedIndex < suggestions.visibleStart) {
+//			suggestions.visibleStart = suggestions.selectedIndex;
+//		} else if (suggestions.selectedIndex
+//				>= suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS) {
+//			suggestions.visibleStart =
+//					suggestions.selectedIndex - CommandSuggestions.VISIBLE_COMMANDS + 1;
+//		}
+//		suggestions.visibleStart = Math.min(
+//				suggestions.visibleStart,
+//				Math.max(0, suggestions.matches.size() - CommandSuggestions.VISIBLE_COMMANDS));
+//	}
+//
+//	private static String styleMuted(String value, Theme theme) {
+//		return theme.muted.isEmpty() ? value : theme.muted + value + theme.reset;
+//	}
+//
+//	// --------------------------------------------------------- tui components
+//
+//	/** Renders a component frame at the given size and palette. */
+//	public static List<String> renderComponent(
+//			TuiComponent<?> component, int width, int height, Theme theme) {
+//		return component.render.apply(new TuiFrame(width, height, theme));
+//	}
+//
+//	/** Applies one normalized input event to a component. */
+//	public static void handleComponentInput(TuiComponent<?> component, TuiInput input) {
+//		component.handle.accept(input);
+//	}
+//
+//	public static boolean isComponentComplete(TuiComponent<?> component) {
+//		return component.complete.getAsBoolean();
+//	}
+//
+//	public static <T> T componentResult(TuiComponent<T> component) {
+//		return component.result.get();
+//	}
+//
+//	// ---------------------------------------------------------- fuzzy selector
+//
+//	public static <T> SelectItem<T> selectItem(T value, String label) {
+//		return selectItem(value, label, "", null);
+//	}
+//
+//	public static <T> SelectItem<T> selectItem(T value, String label, String description) {
+//		return selectItem(value, label, description, null);
+//	}
+//
+//	/**
+//	 * Creates a selector option. Value and label are required; a missing
+//	 * description becomes empty and blank search text falls back to the label
+//	 * plus description.
+//	 */
+//	public static <T> SelectItem<T> selectItem(T value, String label, String description, String searchText) {
+//		Objects.requireNonNull(value, "value");
+//		Objects.requireNonNull(label, "label");
+//		String resolvedDescription = description == null ? "" : description;
+//		return new SelectItem<>(
+//				value,
+//				label,
+//				resolvedDescription,
+//				searchText == null || searchText.isBlank()
+//						? label + (resolvedDescription.isBlank() ? "" : " " + resolvedDescription)
+//						: searchText);
+//	}
+//
+//	/** Creates selector state over at least one option, clamping the initial selection. */
+//	public static <T> FuzzySelector<T> fuzzySelector(
+//			String title, List<SelectItem<T>> items, int initialIndex, boolean searchable) {
+//		if (items.isEmpty()) {
+//			throw new IllegalArgumentException("items must not be empty");
+//		}
+//		List<SelectItem<T>> options = List.copyOf(items);
+//		int selectedIndex = initialIndex < 0 ? 0 : Math.min(initialIndex, options.size() - 1);
+//		return new FuzzySelector<>(
+//				title,
+//				options,
+//				options,
+//				initialIndex < 0 ? null : options.get(selectedIndex),
+//				selectedIndex,
+//				searchable);
+//	}
+//
+//	/** Binds a selector carrier to the full-screen host. */
+//	public static <T> TuiComponent<T> fuzzySelectorComponent(FuzzySelector<T> selector) {
+//		return new TuiComponent<>(
+//				frame -> renderFuzzySelector(selector, frame.width, frame.height, frame.theme),
+//				input -> handleFuzzySelectorInput(selector, input),
+//				() -> selector.complete,
+//				() -> selector.result);
+//	}
+//
+//	public static <T> List<String> renderFuzzySelector(
+//			FuzzySelector<T> selector, int width, int height, Theme theme) {
+//		List<String> lines = new ArrayList<>();
+//		lines.add(theme.heading + truncatePlain(selector.title, width) + theme.reset);
+//		lines.add("");
+//		if (selector.searchable) {
+//			String beforeCursor = selector.query.substring(0, selector.queryCursor);
+//			String afterCursor = selector.query.substring(selector.queryCursor);
+//			String search = "Search: " + beforeCursor + "|" + afterCursor;
+//			lines.add(truncatePlain(search, width));
+//			lines.add("");
+//		}
+//
+//		selector.optionStartRow = lines.size();
+//		int reservedLines = lines.size() + 3;
+//		selector.visibleCount = Math.max(1, Math.min(10, height - reservedLines));
+//		selector.visibleStart = Math.max(
+//				0,
+//				Math.min(
+//						selector.selectedIndex - (selector.visibleCount / 2),
+//						Math.max(0, selector.filteredItems.size() - selector.visibleCount)));
+//		int visibleEnd =
+//				Math.min(selector.filteredItems.size(), selector.visibleStart + selector.visibleCount);
+//
+//		if (selector.filteredItems.isEmpty()) {
+//			lines.add(theme.muted + "  No matching options" + theme.reset);
+//		} else {
+//			for (int index = selector.visibleStart; index < visibleEnd; index++) {
+//				SelectItem<T> item = selector.filteredItems.get(index);
+//				boolean selected = index == selector.selectedIndex;
+//				boolean current = item == selector.currentItem;
+//				String suffix = current ? " *" : "";
+//				String description = item.description.isBlank() ? "" : "  " + item.description;
+//				String row = (selected ? "> " : "  ") + item.label + suffix + description;
+//				row = truncatePlain(row, width);
+//				lines.add(selected ? theme.heading + row + theme.reset : row);
+//			}
+//			if (selector.visibleStart > 0 || visibleEnd < selector.filteredItems.size()) {
+//				lines.add(theme.muted
+//						+ "  "
+//						+ (selector.selectedIndex + 1)
+//						+ "/"
+//						+ selector.filteredItems.size()
+//						+ theme.reset);
+//			}
+//		}
+//		lines.add("");
+//		String currentHint = selector.currentItem == null ? "" : "  * current";
+//		String hint = (selector.searchable
+//						? "Type to filter  Up/Down move  Enter select  Esc cancel"
+//						: "Up/Down move  Enter select  Esc cancel")
+//				+ currentHint;
+//		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
+//		return lines;
+//	}
+//
+//	public static <T> void handleFuzzySelectorInput(FuzzySelector<T> selector, TuiInput input) {
+//		switch (input) {
+//			case TuiInput.Key key -> handleFuzzySelectorKey(selector, key);
+//			case TuiInput.Mouse mouse -> handleFuzzySelectorMouse(selector, mouse);
+//			case TuiInput.Resize ignored -> {
+//				// Rendering derives its viewport directly from the latest dimensions.
+//			}
+//		}
+//	}
+//
+//	private static <T> void handleFuzzySelectorKey(FuzzySelector<T> selector, TuiInput.Key key) {
+//		switch (key.type) {
+//			case UP -> moveFuzzySelection(selector, -1);
+//			case DOWN -> moveFuzzySelection(selector, 1);
+//			case PAGE_UP -> moveFuzzySelection(selector, -Math.max(1, selector.visibleCount));
+//			case PAGE_DOWN -> moveFuzzySelection(selector, Math.max(1, selector.visibleCount));
+//			case ENTER -> selectFuzzyItem(selector);
+//			case ESCAPE, CANCEL -> selector.complete = true;
+//			case CHARACTER, PASTE -> insertFuzzyQuery(selector, key.text);
+//			case BACKSPACE -> backspaceFuzzyQuery(selector);
+//			case DELETE -> deleteFuzzyQuery(selector);
+//			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
+//			case RIGHT -> selector.queryCursor =
+//					Math.min(selector.query.length(), selector.queryCursor + 1);
+//			case HOME -> {
+//				if (selector.searchable) {
+//					selector.queryCursor = 0;
+//				} else if (!selector.filteredItems.isEmpty()) {
+//					selector.selectedIndex = 0;
+//				}
+//			}
+//			case END -> {
+//				if (selector.searchable) {
+//					selector.queryCursor = selector.query.length();
+//				} else if (!selector.filteredItems.isEmpty()) {
+//					selector.selectedIndex = selector.filteredItems.size() - 1;
+//				}
+//			}
+//			case CLEAR -> {
+//				selector.query.setLength(0);
+//				selector.queryCursor = 0;
+//				filterFuzzyItems(selector);
+//			}
+//			default -> {
+//				// Other normalized keys do not affect selector state.
+//			}
+//		}
+//	}
+//
+//	private static <T> void handleFuzzySelectorMouse(FuzzySelector<T> selector, TuiInput.Mouse mouse) {
+//		switch (mouse.action) {
+//			case SCROLL_UP -> moveFuzzySelection(selector, -1);
+//			case SCROLL_DOWN -> moveFuzzySelection(selector, 1);
+//			case PRESS -> {
+//				int row = mouse.y - 1;
+//				int itemOffset = row - selector.optionStartRow;
+//				if (mouse.button == 0 && itemOffset >= 0 && itemOffset < selector.visibleCount) {
+//					int index = selector.visibleStart + itemOffset;
+//					if (index < selector.filteredItems.size()) {
+//						selector.selectedIndex = index;
+//					}
+//				}
+//			}
+//			default -> {
+//				// Release and drag events are currently informational.
+//			}
+//		}
+//	}
+//
+//	private static <T> void moveFuzzySelection(FuzzySelector<T> selector, int delta) {
+//		if (selector.filteredItems.isEmpty()) {
+//			return;
+//		}
+//		selector.selectedIndex =
+//				Math.floorMod(selector.selectedIndex + delta, selector.filteredItems.size());
+//	}
+//
+//	private static <T> void selectFuzzyItem(FuzzySelector<T> selector) {
+//		if (selector.filteredItems.isEmpty()) {
+//			return;
+//		}
+//		selector.result = selector.filteredItems.get(selector.selectedIndex).value;
+//		selector.complete = true;
+//	}
+//
+//	private static <T> void insertFuzzyQuery(FuzzySelector<T> selector, String text) {
+//		if (!selector.searchable || text == null || text.isEmpty()) {
+//			return;
+//		}
+//		String normalized = text.replace("\r", " ").replace("\n", " ");
+//		selector.query.insert(selector.queryCursor, normalized);
+//		selector.queryCursor += normalized.length();
+//		filterFuzzyItems(selector);
+//	}
+//
+//	private static <T> void backspaceFuzzyQuery(FuzzySelector<T> selector) {
+//		if (!selector.searchable || selector.queryCursor == 0) {
+//			return;
+//		}
+//		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
+//		selector.query.delete(start, selector.queryCursor);
+//		selector.queryCursor = start;
+//		filterFuzzyItems(selector);
+//	}
+//
+//	private static <T> void deleteFuzzyQuery(FuzzySelector<T> selector) {
+//		if (!selector.searchable || selector.queryCursor >= selector.query.length()) {
+//			return;
+//		}
+//		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
+//		selector.query.delete(selector.queryCursor, end);
+//		filterFuzzyItems(selector);
+//	}
+//
+//	private static <T> void filterFuzzyItems(FuzzySelector<T> selector) {
+//		selector.filteredItems =
+//				fuzzyFilter(selector.items, selector.query.toString(), item -> item.searchText);
+//		if (selector.query.isEmpty()) {
+//			int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
+//			selector.selectedIndex = currentIndex < 0 ? 0 : currentIndex;
+//		} else {
+//			selector.selectedIndex = 0;
+//		}
+//	}
+//
+//	/** Runs a searchable selector on the terminal and returns the chosen value. */
+//	public static <T> T select(
+//			InteractiveTerminal terminal,
+//			String title,
+//			List<SelectItem<T>> options,
+//			int initialIndex,
+//			boolean searchable)
+//			throws IOException {
+//		if (options.isEmpty()) {
+//			throw new IllegalArgumentException("options must not be empty");
+//		}
+//		return runComponent(
+//				terminal, fuzzySelectorComponent(fuzzySelector(title, options, initialIndex, searchable)));
+//	}
+//
+//	public static String select(InteractiveTerminal terminal, String title, List<String> options)
+//			throws IOException {
+//		List<SelectItem<String>> items =
+//				options.stream().map(option -> selectItem(option, option)).toList();
+//		return select(terminal, title, items, -1, options.size() > 10);
+//	}
+//
+//	// ------------------------------------------------------------ tui runtime
+//
+//	/** Hosts a component on the alternate screen until it completes. */
+//	public static <T> T runTuiComponent(TuiRuntime runtime, TuiComponent<T> component)
+//			throws IOException {
+//		int width = tuiWidth(runtime);
+//		int height = tuiHeight(runtime);
+//		try {
+//			startTuiRuntime(runtime);
+//			handleComponentInput(component, new TuiInput.Resize(width, height));
+//			renderTuiFrame(runtime, component, width, height);
+//			while (!isComponentComplete(component)) {
+//				TuiInput input = readTuiInput(runtime.terminal.reader(), 100);
+//				int nextWidth = tuiWidth(runtime);
+//				int nextHeight = tuiHeight(runtime);
+//				if (nextWidth != width || nextHeight != height) {
+//					width = nextWidth;
+//					height = nextHeight;
+//					handleComponentInput(component, new TuiInput.Resize(width, height));
+//					resetAnsiRenderer(runtime.renderer);
+//					clearTuiScreen(runtime);
+//					renderTuiFrame(runtime, component, width, height);
+//				}
+//				if (input == null) {
+//					// Components such as the MCP selector can change from background connection threads.
+//					renderTuiFrame(runtime, component, width, height);
+//					continue;
+//				}
+//				if (runtime.suspendAction != null
+//						&& input instanceof TuiInput.Key key
+//						&& key.type == TuiInput.KeyType.SUSPEND) {
+//					stopTuiRuntime(runtime);
+//					callSuspendAction(runtime.suspendAction);
+//					runtime.resumeMainScreen.run();
+//					startTuiRuntime(runtime);
+//					width = tuiWidth(runtime);
+//					height = tuiHeight(runtime);
+//					handleComponentInput(component, new TuiInput.Resize(width, height));
+//					resetAnsiRenderer(runtime.renderer);
+//					renderTuiFrame(runtime, component, width, height);
+//					continue;
+//				}
+//				handleComponentInput(component, input);
+//				renderTuiFrame(runtime, component, width, height);
+//			}
+//			return componentResult(component);
+//		} finally {
+//			stopTuiRuntime(runtime);
+//		}
+//	}
+//
+//	private static int tuiWidth(TuiRuntime runtime) {
+//		int columns = runtime.terminal.getColumns();
+//		return columns > 0 ? columns : TuiRuntime.DEFAULT_COLUMNS;
+//	}
+//
+//	private static int tuiHeight(TuiRuntime runtime) {
+//		int rows = runtime.terminal.getRows();
+//		return rows > 0 ? rows : TuiRuntime.DEFAULT_ROWS;
+//	}
+//
+//	private static void startTuiRuntime(TuiRuntime runtime) {
+//		runtime.originalAttributes = runtime.terminal.enterRawMode();
+//		if (!runtime.terminal.puts(Capability.enter_ca_mode)) {
+//			runtime.terminal.writer().write("\u001b[?1049h");
+//		}
+//		runtime.terminal.puts(Capability.keypad_xmit);
+//		runtime.terminal.trackMouse(Terminal.MouseTracking.Button);
+//		if (!runtime.terminal.puts(Capability.cursor_invisible)) {
+//			runtime.terminal.writer().write("\u001b[?25l");
+//		}
+//		runtime.active = true;
+//		resetAnsiRenderer(runtime.renderer);
+//		clearTuiScreen(runtime);
+//		runtime.terminal.flush();
+//	}
+//
+//	private static void stopTuiRuntime(TuiRuntime runtime) {
+//		if (!runtime.active) {
+//			return;
+//		}
+//		runtime.terminal.trackMouse(Terminal.MouseTracking.Off);
+//		if (!runtime.terminal.puts(Capability.cursor_normal)) {
+//			runtime.terminal.writer().write("\u001b[?25h");
+//		}
+//		runtime.terminal.puts(Capability.keypad_local);
+//		if (!runtime.terminal.puts(Capability.exit_ca_mode)) {
+//			runtime.terminal.writer().write("\u001b[?1049l");
+//		}
+//		runtime.terminal.flush();
+//		if (runtime.originalAttributes != null) {
+//			runtime.terminal.setAttributes(runtime.originalAttributes);
+//		}
+//		runtime.active = false;
+//	}
+//
+//	private static void renderTuiFrame(
+//			TuiRuntime runtime, TuiComponent<?> component, int width, int height) {
+//		int safeWidth = Math.max(20, width);
+//		int safeHeight = Math.max(5, height);
+//		List<String> lines = renderComponent(component, safeWidth, safeHeight, runtime.theme);
+//		if (lines.size() > safeHeight) {
+//			lines = lines.subList(0, safeHeight);
+//		}
+//		runtime.terminal.writer().write(renderAnsiFrame(runtime.renderer, lines));
+//		runtime.terminal.flush();
+//	}
+//
+//	private static void clearTuiScreen(TuiRuntime runtime) {
+//		runtime.terminal.writer().write("\u001b[2J\u001b[H");
+//	}
 
 	// --------------------------------------------------------------- suspend
 
@@ -9992,18 +9992,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	/** Invokes a suspend hook, preserving its IOException contract. */
-	private static void callSuspendAction(Callable<Void> action) throws IOException {
-		try {
-			action.call();
-		} catch (IOException error) {
-			throw error;
-		} catch (RuntimeException error) {
-			throw error;
-		} catch (Exception error) {
-			throw new IOException(error);
-		}
-	}
+//	/** Invokes a suspend hook, preserving its IOException contract. */
+//	private static void callSuspendAction(Callable<Void> action) throws IOException {
+//		try {
+//			action.call();
+//		} catch (IOException error) {
+//			throw error;
+//		} catch (RuntimeException error) {
+//			throw error;
+//		} catch (Exception error) {
+//			throw new IOException(error);
+//		}
+//	}
 
 	// --------------------------------------------------- interactive terminal
 
@@ -10153,52 +10153,52 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		keyMap.bind(widget, fallbackSequences);
 	}
 
-	private static boolean moveSuggestionOrFallback(
-			InteractiveTerminal interactive, int delta, String fallbackWidget) {
-		if (interactive.activeCommandSuggestions != null
-				&& moveCommandSuggestion(
-						interactive.activeCommandSuggestions,
-						interactive.reader.getBuffer().toString(),
-						delta)) {
-			return true;
-		}
-		interactive.reader.callWidget(fallbackWidget);
-		return true;
-	}
-
-	/**
-	 * Some consoles send pasted text without bracketed-paste markers. A pasted
-	 * line ending is followed immediately by more input, unlike a submit key.
-	 */
-	private static boolean submitOrInsertPastedNewline(InteractiveTerminal interactive) {
-		LineReaderImpl reader = interactive.reader;
-		int next = reader.peekCharacter(InteractiveTerminal.PASTE_LOOKAHEAD_MILLIS);
-		// Preserve multiline paste detection even when the pasted first line
-		// happens to look like a slash command. A queued CR is instead treated
-		// as the user's second Enter after choosing a command.
-		if (next >= 0 && next != '\r') {
-			if (next == '\n') reader.readCharacter();
-			reader.getBuffer().write('\n');
-			return true;
-		}
-		if (acceptActiveCommandSuggestion(interactive)) return true;
-		if (next >= 0) {
-			reader.getBuffer().write('\n');
-			return true;
-		}
-		reader.callWidget(LineReader.ACCEPT_LINE);
-		return true;
-	}
-
-	private static boolean acceptActiveCommandSuggestion(InteractiveTerminal interactive) {
-		if (interactive.activeCommandSuggestions == null) return false;
-		String command = acceptCommandSuggestion(
-				interactive.activeCommandSuggestions, interactive.reader.getBuffer().toString());
-		if (command == null) return false;
-		interactive.reader.getBuffer().clear();
-		interactive.reader.getBuffer().write(command);
-		return true;
-	}
+//	private static boolean moveSuggestionOrFallback(
+//			InteractiveTerminal interactive, int delta, String fallbackWidget) {
+//		if (interactive.activeCommandSuggestions != null
+//				&& moveCommandSuggestion(
+//						interactive.activeCommandSuggestions,
+//						interactive.reader.getBuffer().toString(),
+//						delta)) {
+//			return true;
+//		}
+//		interactive.reader.callWidget(fallbackWidget);
+//		return true;
+//	}
+//
+//	/**
+//	 * Some consoles send pasted text without bracketed-paste markers. A pasted
+//	 * line ending is followed immediately by more input, unlike a submit key.
+//	 */
+//	private static boolean submitOrInsertPastedNewline(InteractiveTerminal interactive) {
+//		LineReaderImpl reader = interactive.reader;
+//		int next = reader.peekCharacter(InteractiveTerminal.PASTE_LOOKAHEAD_MILLIS);
+//		// Preserve multiline paste detection even when the pasted first line
+//		// happens to look like a slash command. A queued CR is instead treated
+//		// as the user's second Enter after choosing a command.
+//		if (next >= 0 && next != '\r') {
+//			if (next == '\n') reader.readCharacter();
+//			reader.getBuffer().write('\n');
+//			return true;
+//		}
+//		if (acceptActiveCommandSuggestion(interactive)) return true;
+//		if (next >= 0) {
+//			reader.getBuffer().write('\n');
+//			return true;
+//		}
+//		reader.callWidget(LineReader.ACCEPT_LINE);
+//		return true;
+//	}
+//
+//	private static boolean acceptActiveCommandSuggestion(InteractiveTerminal interactive) {
+//		if (interactive.activeCommandSuggestions == null) return false;
+//		String command = acceptCommandSuggestion(
+//				interactive.activeCommandSuggestions, interactive.reader.getBuffer().toString());
+//		if (command == null) return false;
+//		interactive.reader.getBuffer().clear();
+//		interactive.reader.getBuffer().write(command);
+//		return true;
+//	}
 
 	/** JLine maps every CR in a bracketed paste to LF, doubling CRLF input. */
 	private static boolean insertBracketedPaste(InteractiveTerminal interactive) {
@@ -10216,433 +10216,433 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return true;
 	}
 
-	private static boolean builderEndsWith(StringBuilder value, String suffix) {
-		if (value.length() < suffix.length()) return false;
-		int offset = value.length() - suffix.length();
-		for (int index = 0; index < suffix.length(); index++) {
-			if (value.charAt(offset + index) != suffix.charAt(index)) return false;
-		}
-		return true;
-	}
-
-	private static String normalizePastedLineEndings(String value) {
-		return value.replace("\r\n", "\n").replace('\r', '\n');
-	}
-
-	/** Returns null on EOF and an empty string after Ctrl-C. */
-	public static String readLine(InteractiveTerminal interactive, String prompt) {
-		return readLineInternal(interactive, prompt, null, null, null);
-	}
-
-	/** Reads a line with an alphabetized slash-command panel below the prompt. */
-	public static String readLine(
-			InteractiveTerminal interactive, String prompt, List<String> slashCommands) {
-		CommandSuggestions suggestions = slashCommands == null || slashCommands.isEmpty()
-				? null
-				: newCommandSuggestions(slashCommands);
-		return readLineInternal(interactive, prompt, null, null, suggestions);
-	}
-
-	/** Reads a line whose editable buffer starts with {@code initialValue}. */
-	public static String readLine(InteractiveTerminal interactive, String prompt, String initialValue) {
-		return readLineInternal(interactive, prompt, initialValue, null, null);
-	}
-
-	/** Returns null on EOF and an empty string after Ctrl-C without echoing the entered value. */
-	public static String readPassword(InteractiveTerminal interactive, String prompt) {
-		return readLineInternal(interactive, prompt, null, '*', null);
-	}
-
-	private static String readLineInternal(
-			InteractiveTerminal interactive,
-			String prompt,
-			String initialBuffer,
-			Character mask,
-			CommandSuggestions suggestions) {
-		while (true) {
-			Theme promptTheme = interactive.theme;
-			try {
-				String line =
-						readEditorLine(interactive, prompt, mask, initialBuffer, promptTheme, suggestions);
-				rememberCompletedLine(interactive, prompt, line, mask, promptTheme);
-				return line;
-			} catch (CancellationException signal) {
-				if (signal != SUSPEND_REQUESTED) {
-					throw signal;
-				}
-				initialBuffer = interactive.suspendedBuffer;
-				interactive.restoreCursor = interactive.suspendedCursor;
-				interactive.managedSuspend = true;
-				try {
-					callSuspendAction(interactive.suspendAction);
-				} catch (IOException error) {
-					println(interactive, "Could not suspend process: " + error.getMessage());
-				} finally {
-					repaintScreen(interactive);
-					interactive.managedSuspend = false;
-				}
-			} catch (UserInterruptException ignored) {
-				rememberCompletedLine(interactive, prompt, "", mask, promptTheme);
-				return "";
-			} catch (EndOfFileException ignored) {
-				rememberPrompt(interactive, prompt, promptTheme);
-				return null;
-			}
-		}
-	}
-
-	/** Keeps the background active so JLine's erase/edit operations preserve the full-width prompt bar. */
-	private static String readEditorLine(
-			InteractiveTerminal interactive,
-			String prompt,
-			Character mask,
-			String initialBuffer,
-			Theme promptTheme,
-			CommandSuggestions suggestions) {
-		String background = promptBackground(promptTheme);
-		interactive.reader.setVariable(
-				LineReader.SECONDARY_PROMPT_PATTERN,
-				background.isEmpty()
-						? InteractiveTerminal.SECONDARY_PROMPT
-						: hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
-								+ InteractiveTerminal.SECONDARY_PROMPT);
-		String editorPrompt =
-				background.isEmpty() ? prompt : styleActivePromptLine(prompt, background);
-		interactive.activeCommandSuggestions = suggestions;
-		interactive.dynamicPost =
-				suggestions == null ? null : () -> renderCommandPanel(interactive, suggestions, promptTheme);
-		try {
-			return interactive.reader.readLine(editorPrompt, null, mask, initialBuffer);
-		} finally {
-			interactive.dynamicPost = null;
-			interactive.activeCommandSuggestions = null;
-			resetPromptBackground(interactive, promptTheme);
-		}
-	}
-
-	private static AttributedString renderCommandPanel(
-			InteractiveTerminal interactive, CommandSuggestions suggestions, Theme promptTheme) {
-		int columns = interactive.terminal.getColumns() > 0
-				? interactive.terminal.getColumns()
-				: InteractiveTerminal.DEFAULT_COLUMNS;
-		List<String> lines = renderCommandSuggestions(
-				suggestions, interactive.reader.getBuffer().toString(), columns, promptTheme);
-		return lines.isEmpty()
-				? new AttributedString("")
-				: AttributedString.fromAnsi(String.join("\n", lines));
-	}
-
-	private static String styleActivePromptLine(String prompt, String background) {
-		int activeLineOffset = activePromptLineOffset(prompt);
-		return prompt.substring(0, activeLineOffset)
-				+ hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
-				+ prompt.substring(activeLineOffset);
-	}
-
-	private static String hiddenForJLine(String value) {
-		return "%{" + value + "%}";
-	}
-
-	private static int activePromptLineOffset(String prompt) {
-		return Math.max(prompt.lastIndexOf('\n'), prompt.lastIndexOf('\r')) + 1;
-	}
-
-	/** Hosts a component on the alternate screen, restoring the line editor afterwards. */
-	public static <T> T runComponent(InteractiveTerminal interactive, TuiComponent<T> component)
-			throws IOException {
-		if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
-		suspendStatusBar(interactive);
-		try {
-			TuiRuntime runtime = new TuiRuntime(
-					interactive.terminal,
-					interactive.theme,
-					interactive.supportsSuspend
-							? () -> {
-								suspendFullScreen(interactive);
-								return null;
-							}
-							: null,
-					() -> resumeMainScreen(interactive));
-			return runTuiComponent(runtime, component);
-		} finally {
-			restoreStatusBar(interactive);
-			if (interactive.reader.isReading()) interactive.reader.callWidget(LineReader.REDRAW_LINE);
-		}
-	}
-
-	/**
-	 * Runs an operation while listening for an interrupt key. The operation uses
-	 * a virtual thread so Escape can be read even while it is blocked on a model
-	 * response or tool. Ctrl-C remains an interrupt alias outside the line editor.
-	 */
-	public static <T> T runInterruptibly(
-			InteractiveTerminal interactive, Callable<T> operation, Runnable interruptHandler)
-			throws IOException, InterruptedException {
-		Objects.requireNonNull(operation, "operation");
-		Objects.requireNonNull(interruptHandler, "interruptHandler");
-		Attributes originalAttributes = interactive.terminal.enterRawMode();
-		FutureTask<T> task = new FutureTask<>(operation);
-		Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
-		boolean interruptRequested = false;
-		try {
-			while (!task.isDone()) {
-				TuiInput input = readTuiInput(interactive.terminal.reader(), 50);
-				if (input instanceof TuiInput.Key key
-						&& (key.type == TuiInput.KeyType.ESCAPE || key.type == TuiInput.KeyType.CANCEL)
-						&& !interruptRequested
-						&& !task.isDone()) {
-					interruptRequested = true;
-					interruptHandler.run();
-				} else if (input instanceof TuiInput.Key key
-						&& key.type == TuiInput.KeyType.SUSPEND
-						&& interactive.supportsSuspend) {
-					interactive.terminal.setAttributes(originalAttributes);
-					interactive.managedSuspend = true;
-					try {
-						callSuspendAction(interactive.suspendAction);
-					} catch (IOException error) {
-						println(interactive, "Could not suspend process: " + error.getMessage());
-					} finally {
-						repaintScreen(interactive);
-						interactive.managedSuspend = false;
-						interactive.terminal.enterRawMode();
-					}
-				}
-			}
-			return awaitCompletedTask(task);
-		} catch (IOException | RuntimeException | Error error) {
-			if (!task.isDone()) {
-				interruptHandler.run();
-				worker.interrupt();
-			}
-			throw error;
-		} finally {
-			interactive.terminal.setAttributes(originalAttributes);
-		}
-	}
-
-	private static <T> T awaitCompletedTask(FutureTask<T> task)
-			throws IOException, InterruptedException {
-		try {
-			return task.get();
-		} catch (ExecutionException error) {
-			Throwable cause = error.getCause();
-			if (cause instanceof InterruptedException interrupted) throw interrupted;
-			if (cause instanceof IOException io) throw io;
-			if (cause instanceof RuntimeException runtime) throw runtime;
-			if (cause instanceof Error fatal) throw fatal;
-			throw new IllegalStateException(cause);
-		}
-	}
-
-	/** Binds a configured application action while the line editor is active. */
-	public static void bindAppAction(InteractiveTerminal interactive, String action, Runnable handler) {
-		Objects.requireNonNull(handler, "handler");
-		String widgetName = "codingagent-" + action;
-		interactive.reader.getWidgets().put(widgetName, () -> {
-			resetPromptBackground(interactive, interactive.theme);
-			try {
-				handler.run();
-			} finally {
-				interactive.reader.callWidget(LineReader.REDRAW_LINE);
-			}
-			return true;
-		});
-		Reference reference = new Reference(widgetName);
-		for (var keyMap : interactive.reader.getKeyMaps().values()) {
-			keyMap.bind(reference, appKeySequence(action));
-		}
-	}
-
-	/** Prints a status line without losing the active line-editor buffer. */
-	public static void printAbove(InteractiveTerminal interactive, String text) {
-		synchronized (interactive) {
-			if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
-			interactive.reader.printAbove(text);
-			remember(interactive, text + System.lineSeparator());
-		}
-	}
-
-	public static void print(InteractiveTerminal interactive, String text) {
-		synchronized (interactive) {
-			String value = String.valueOf(text);
-			interactive.terminal.writer().print(value);
-			interactive.terminal.writer().flush();
-			remember(interactive, value);
-		}
-	}
-
-	public static void println(InteractiveTerminal interactive, String text) {
-		synchronized (interactive) {
-			String value = String.valueOf(text);
-			interactive.terminal.writer().println(value);
-			interactive.terminal.writer().flush();
-			remember(interactive, value + System.lineSeparator());
-		}
-	}
-
-	/** Replaces the main-screen document and redraws it from the top. */
-	public static void replaceScreen(InteractiveTerminal interactive, String document) {
-		synchronized (interactive) {
-			interactive.screenDocument.setLength(0);
-			interactive.screenDocument.append(document == null ? "" : document);
-			repaintScreen(interactive);
-		}
-	}
-
-	public static Theme terminalTheme(InteractiveTerminal interactive) {
-		return interactive.theme;
-	}
-
-	public static void setTheme(InteractiveTerminal interactive, Theme theme) {
-		interactive.theme = theme;
-	}
-
-	/** Shows or updates the status bar pinned to the bottom terminal row. */
-	public static void setStatus(InteractiveTerminal interactive, String left, String right) {
-		setStatus(interactive, "", InteractiveTerminal.StatusAccent.NONE, left, right);
-	}
-
-	/** Shows activity first so it remains visible when workspace/model details need truncation. */
-	public static void setStatus(
-			InteractiveTerminal interactive,
-			String activity,
-			InteractiveTerminal.StatusAccent accent,
-			String left,
-			String right) {
-		synchronized (interactive) {
-			interactive.statusActivity = activity == null ? "" : activity;
-			interactive.statusAccent =
-					accent == null ? InteractiveTerminal.StatusAccent.NONE : accent;
-			interactive.statusLeft = left == null ? "" : left;
-			interactive.statusRight = right == null ? "" : right;
-			renderStatusBar(interactive);
-		}
-	}
-
-	private static void handleTerminalResize(InteractiveTerminal interactive, Terminal.Signal signal) {
-		if (interactive.previousResizeHandler != null
-				&& interactive.previousResizeHandler != Terminal.SignalHandler.SIG_DFL
-				&& interactive.previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
-			interactive.previousResizeHandler.handle(signal);
-		}
-		synchronized (interactive) {
-			if (interactive.statusBar != null) {
-				interactive.statusBar.resize();
-				renderStatusBar(interactive);
-			}
-		}
-	}
-
-	private static void renderStatusBar(InteractiveTerminal interactive) {
-		if (interactive.statusLeft == null && interactive.statusRight == null) return;
-		if (interactive.statusBar == null) {
-			interactive.statusBar = Status.getStatus(interactive.terminal);
-		}
-		if (interactive.statusBar == null) return;
-		int columns = interactive.terminal.getColumns();
-		int width = columns > 0 ? columns : InteractiveTerminal.DEFAULT_COLUMNS;
-		interactive.statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
-				interactive.statusActivity,
-				interactive.statusAccent,
-				interactive.statusLeft,
-				interactive.statusRight,
-				width,
-				interactive.theme))));
-	}
-
-	/** Left- and right-aligns status content on one full-width row. */
-	public static String statusBarLine(String left, String right, int width, Theme theme) {
-		return statusBarLine("", InteractiveTerminal.StatusAccent.NONE, left, right, width, theme);
-	}
-
-	/**
-	 * Keeps activity ahead of workspace/model metadata. When the terminal is
-	 * narrow, metadata is discarded before the activity text is truncated.
-	 */
-	public static String statusBarLine(
-			String activity,
-			InteractiveTerminal.StatusAccent accent,
-			String left,
-			String right,
-			int width,
-			Theme theme) {
-		int safeWidth = Math.max(0, width);
-		String activityText = truncatePlain(activity == null ? "" : activity, safeWidth);
-		int activityWidth = visibleWidth(activityText);
-		String separatorAndDetails = "";
-		int remaining = safeWidth - activityWidth;
-		if (remaining >= 4
-				&& (!(left == null || left.isEmpty()) || !(right == null || right.isEmpty()))) {
-			String details = alignedStatusDetails(left, right, remaining - 3);
-			if (!details.isEmpty()) separatorAndDetails = " │ " + details;
-		}
-
-		if (activityText.isEmpty()) {
-			String details = alignedStatusDetails(left, right, safeWidth);
-			return mutedStatus(details, theme);
-		}
-		String activityStyle = statusAccentStyle(theme, accent);
-		String styledActivity =
-				activityStyle.isEmpty() ? activityText : activityStyle + activityText + theme.reset;
-		return styledActivity + mutedStatus(separatorAndDetails, theme);
-	}
-
-	private static String alignedStatusDetails(String left, String right, int width) {
-		if (width <= 0) return "";
-		String rightText = truncatePlain(right == null ? "" : right, width);
-		int rightWidth = visibleWidth(rightText);
-		int leftLimit = rightWidth == 0 ? width : width - rightWidth - 1;
-		String leftText = truncatePlain(left == null ? "" : left, Math.max(0, leftLimit));
-		int leftWidth = visibleWidth(leftText);
-		int padding = Math.max(leftText.isEmpty() ? 0 : 1, width - leftWidth - rightWidth);
-		return rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
-	}
-
-	private static String mutedStatus(String text, Theme theme) {
-		return theme.muted.isEmpty() || text.isEmpty() ? text : theme.muted + text + theme.reset;
-	}
-
-	private static String statusAccentStyle(Theme theme, InteractiveTerminal.StatusAccent accent) {
-		return switch (accent == null ? InteractiveTerminal.StatusAccent.NONE : accent) {
-			case NONE -> theme.muted;
-			case READY -> readyStatus(theme);
-			case ACTIVE -> activeStatus(theme);
-			case TOOL -> toolStatus(theme);
-			case WARNING -> warningStatus(theme);
-		};
-	}
-
-	private static void suspendStatusBar(InteractiveTerminal interactive) {
-		synchronized (interactive) {
-			if (interactive.statusBar != null) interactive.statusBar.suspend();
-		}
-	}
-
-	private static void restoreStatusBar(InteractiveTerminal interactive) {
-		synchronized (interactive) {
-			if (interactive.statusBar == null) return;
-			interactive.statusBar.restore();
-			if (interactive.statusBar.size() > 0) {
-				// Alternate-screen switches can drop the scroll region on some terminals.
-				int rows = interactive.terminal.getRows() > 0
-						? interactive.terminal.getRows()
-						: InteractiveTerminal.DEFAULT_ROWS;
-				interactive.terminal.puts(Capability.save_cursor);
-				interactive.terminal.puts(
-						Capability.change_scroll_region, 0, rows - 1 - interactive.statusBar.size());
-				interactive.terminal.puts(Capability.restore_cursor);
-				renderStatusBar(interactive);
-				interactive.terminal.flush();
-			}
-		}
-	}
-
-	private static boolean requestSuspend(InteractiveTerminal interactive) {
-		interactive.suspendedBuffer = interactive.reader.getBuffer().toString();
-		interactive.suspendedCursor = interactive.reader.getBuffer().cursor();
-		throw SUSPEND_REQUESTED;
-	}
+//	private static boolean builderEndsWith(StringBuilder value, String suffix) {
+//		if (value.length() < suffix.length()) return false;
+//		int offset = value.length() - suffix.length();
+//		for (int index = 0; index < suffix.length(); index++) {
+//			if (value.charAt(offset + index) != suffix.charAt(index)) return false;
+//		}
+//		return true;
+//	}
+//
+//	private static String normalizePastedLineEndings(String value) {
+//		return value.replace("\r\n", "\n").replace('\r', '\n');
+//	}
+//
+//	/** Returns null on EOF and an empty string after Ctrl-C. */
+//	public static String readLine(InteractiveTerminal interactive, String prompt) {
+//		return readLineInternal(interactive, prompt, null, null, null);
+//	}
+//
+//	/** Reads a line with an alphabetized slash-command panel below the prompt. */
+//	public static String readLine(
+//			InteractiveTerminal interactive, String prompt, List<String> slashCommands) {
+//		CommandSuggestions suggestions = slashCommands == null || slashCommands.isEmpty()
+//				? null
+//				: newCommandSuggestions(slashCommands);
+//		return readLineInternal(interactive, prompt, null, null, suggestions);
+//	}
+//
+//	/** Reads a line whose editable buffer starts with {@code initialValue}. */
+//	public static String readLine(InteractiveTerminal interactive, String prompt, String initialValue) {
+//		return readLineInternal(interactive, prompt, initialValue, null, null);
+//	}
+//
+//	/** Returns null on EOF and an empty string after Ctrl-C without echoing the entered value. */
+//	public static String readPassword(InteractiveTerminal interactive, String prompt) {
+//		return readLineInternal(interactive, prompt, null, '*', null);
+//	}
+//
+//	private static String readLineInternal(
+//			InteractiveTerminal interactive,
+//			String prompt,
+//			String initialBuffer,
+//			Character mask,
+//			CommandSuggestions suggestions) {
+//		while (true) {
+//			Theme promptTheme = interactive.theme;
+//			try {
+//				String line =
+//						readEditorLine(interactive, prompt, mask, initialBuffer, promptTheme, suggestions);
+//				rememberCompletedLine(interactive, prompt, line, mask, promptTheme);
+//				return line;
+//			} catch (CancellationException signal) {
+//				if (signal != SUSPEND_REQUESTED) {
+//					throw signal;
+//				}
+//				initialBuffer = interactive.suspendedBuffer;
+//				interactive.restoreCursor = interactive.suspendedCursor;
+//				interactive.managedSuspend = true;
+//				try {
+//					callSuspendAction(interactive.suspendAction);
+//				} catch (IOException error) {
+//					println(interactive, "Could not suspend process: " + error.getMessage());
+//				} finally {
+//					repaintScreen(interactive);
+//					interactive.managedSuspend = false;
+//				}
+//			} catch (UserInterruptException ignored) {
+//				rememberCompletedLine(interactive, prompt, "", mask, promptTheme);
+//				return "";
+//			} catch (EndOfFileException ignored) {
+//				rememberPrompt(interactive, prompt, promptTheme);
+//				return null;
+//			}
+//		}
+//	}
+//
+//	/** Keeps the background active so JLine's erase/edit operations preserve the full-width prompt bar. */
+//	private static String readEditorLine(
+//			InteractiveTerminal interactive,
+//			String prompt,
+//			Character mask,
+//			String initialBuffer,
+//			Theme promptTheme,
+//			CommandSuggestions suggestions) {
+//		String background = promptBackground(promptTheme);
+//		interactive.reader.setVariable(
+//				LineReader.SECONDARY_PROMPT_PATTERN,
+//				background.isEmpty()
+//						? InteractiveTerminal.SECONDARY_PROMPT
+//						: hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
+//								+ InteractiveTerminal.SECONDARY_PROMPT);
+//		String editorPrompt =
+//				background.isEmpty() ? prompt : styleActivePromptLine(prompt, background);
+//		interactive.activeCommandSuggestions = suggestions;
+//		interactive.dynamicPost =
+//				suggestions == null ? null : () -> renderCommandPanel(interactive, suggestions, promptTheme);
+//		try {
+//			return interactive.reader.readLine(editorPrompt, null, mask, initialBuffer);
+//		} finally {
+//			interactive.dynamicPost = null;
+//			interactive.activeCommandSuggestions = null;
+//			resetPromptBackground(interactive, promptTheme);
+//		}
+//	}
+//
+//	private static AttributedString renderCommandPanel(
+//			InteractiveTerminal interactive, CommandSuggestions suggestions, Theme promptTheme) {
+//		int columns = interactive.terminal.getColumns() > 0
+//				? interactive.terminal.getColumns()
+//				: InteractiveTerminal.DEFAULT_COLUMNS;
+//		List<String> lines = renderCommandSuggestions(
+//				suggestions, interactive.reader.getBuffer().toString(), columns, promptTheme);
+//		return lines.isEmpty()
+//				? new AttributedString("")
+//				: AttributedString.fromAnsi(String.join("\n", lines));
+//	}
+//
+//	private static String styleActivePromptLine(String prompt, String background) {
+//		int activeLineOffset = activePromptLineOffset(prompt);
+//		return prompt.substring(0, activeLineOffset)
+//				+ hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
+//				+ prompt.substring(activeLineOffset);
+//	}
+//
+//	private static String hiddenForJLine(String value) {
+//		return "%{" + value + "%}";
+//	}
+//
+//	private static int activePromptLineOffset(String prompt) {
+//		return Math.max(prompt.lastIndexOf('\n'), prompt.lastIndexOf('\r')) + 1;
+//	}
+//
+//	/** Hosts a component on the alternate screen, restoring the line editor afterwards. */
+//	public static <T> T runComponent(InteractiveTerminal interactive, TuiComponent<T> component)
+//			throws IOException {
+//		if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
+//		suspendStatusBar(interactive);
+//		try {
+//			TuiRuntime runtime = new TuiRuntime(
+//					interactive.terminal,
+//					interactive.theme,
+//					interactive.supportsSuspend
+//							? () -> {
+//								suspendFullScreen(interactive);
+//								return null;
+//							}
+//							: null,
+//					() -> resumeMainScreen(interactive));
+//			return runTuiComponent(runtime, component);
+//		} finally {
+//			restoreStatusBar(interactive);
+//			if (interactive.reader.isReading()) interactive.reader.callWidget(LineReader.REDRAW_LINE);
+//		}
+//	}
+//
+//	/**
+//	 * Runs an operation while listening for an interrupt key. The operation uses
+//	 * a virtual thread so Escape can be read even while it is blocked on a model
+//	 * response or tool. Ctrl-C remains an interrupt alias outside the line editor.
+//	 */
+//	public static <T> T runInterruptibly(
+//			InteractiveTerminal interactive, Callable<T> operation, Runnable interruptHandler)
+//			throws IOException, InterruptedException {
+//		Objects.requireNonNull(operation, "operation");
+//		Objects.requireNonNull(interruptHandler, "interruptHandler");
+//		Attributes originalAttributes = interactive.terminal.enterRawMode();
+//		FutureTask<T> task = new FutureTask<>(operation);
+//		Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
+//		boolean interruptRequested = false;
+//		try {
+//			while (!task.isDone()) {
+//				TuiInput input = readTuiInput(interactive.terminal.reader(), 50);
+//				if (input instanceof TuiInput.Key key
+//						&& (key.type == TuiInput.KeyType.ESCAPE || key.type == TuiInput.KeyType.CANCEL)
+//						&& !interruptRequested
+//						&& !task.isDone()) {
+//					interruptRequested = true;
+//					interruptHandler.run();
+//				} else if (input instanceof TuiInput.Key key
+//						&& key.type == TuiInput.KeyType.SUSPEND
+//						&& interactive.supportsSuspend) {
+//					interactive.terminal.setAttributes(originalAttributes);
+//					interactive.managedSuspend = true;
+//					try {
+//						callSuspendAction(interactive.suspendAction);
+//					} catch (IOException error) {
+//						println(interactive, "Could not suspend process: " + error.getMessage());
+//					} finally {
+//						repaintScreen(interactive);
+//						interactive.managedSuspend = false;
+//						interactive.terminal.enterRawMode();
+//					}
+//				}
+//			}
+//			return awaitCompletedTask(task);
+//		} catch (IOException | RuntimeException | Error error) {
+//			if (!task.isDone()) {
+//				interruptHandler.run();
+//				worker.interrupt();
+//			}
+//			throw error;
+//		} finally {
+//			interactive.terminal.setAttributes(originalAttributes);
+//		}
+//	}
+//
+//	private static <T> T awaitCompletedTask(FutureTask<T> task)
+//			throws IOException, InterruptedException {
+//		try {
+//			return task.get();
+//		} catch (ExecutionException error) {
+//			Throwable cause = error.getCause();
+//			if (cause instanceof InterruptedException interrupted) throw interrupted;
+//			if (cause instanceof IOException io) throw io;
+//			if (cause instanceof RuntimeException runtime) throw runtime;
+//			if (cause instanceof Error fatal) throw fatal;
+//			throw new IllegalStateException(cause);
+//		}
+//	}
+//
+//	/** Binds a configured application action while the line editor is active. */
+//	public static void bindAppAction(InteractiveTerminal interactive, String action, Runnable handler) {
+//		Objects.requireNonNull(handler, "handler");
+//		String widgetName = "codingagent-" + action;
+//		interactive.reader.getWidgets().put(widgetName, () -> {
+//			resetPromptBackground(interactive, interactive.theme);
+//			try {
+//				handler.run();
+//			} finally {
+//				interactive.reader.callWidget(LineReader.REDRAW_LINE);
+//			}
+//			return true;
+//		});
+//		Reference reference = new Reference(widgetName);
+//		for (var keyMap : interactive.reader.getKeyMaps().values()) {
+//			keyMap.bind(reference, appKeySequence(action));
+//		}
+//	}
+//
+//	/** Prints a status line without losing the active line-editor buffer. */
+//	public static void printAbove(InteractiveTerminal interactive, String text) {
+//		synchronized (interactive) {
+//			if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
+//			interactive.reader.printAbove(text);
+//			remember(interactive, text + System.lineSeparator());
+//		}
+//	}
+//
+//	public static void print(InteractiveTerminal interactive, String text) {
+//		synchronized (interactive) {
+//			String value = String.valueOf(text);
+//			interactive.terminal.writer().print(value);
+//			interactive.terminal.writer().flush();
+//			remember(interactive, value);
+//		}
+//	}
+//
+//	public static void println(InteractiveTerminal interactive, String text) {
+//		synchronized (interactive) {
+//			String value = String.valueOf(text);
+//			interactive.terminal.writer().println(value);
+//			interactive.terminal.writer().flush();
+//			remember(interactive, value + System.lineSeparator());
+//		}
+//	}
+//
+//	/** Replaces the main-screen document and redraws it from the top. */
+//	public static void replaceScreen(InteractiveTerminal interactive, String document) {
+//		synchronized (interactive) {
+//			interactive.screenDocument.setLength(0);
+//			interactive.screenDocument.append(document == null ? "" : document);
+//			repaintScreen(interactive);
+//		}
+//	}
+//
+//	public static Theme terminalTheme(InteractiveTerminal interactive) {
+//		return interactive.theme;
+//	}
+//
+//	public static void setTheme(InteractiveTerminal interactive, Theme theme) {
+//		interactive.theme = theme;
+//	}
+//
+//	/** Shows or updates the status bar pinned to the bottom terminal row. */
+//	public static void setStatus(InteractiveTerminal interactive, String left, String right) {
+//		setStatus(interactive, "", InteractiveTerminal.StatusAccent.NONE, left, right);
+//	}
+//
+//	/** Shows activity first so it remains visible when workspace/model details need truncation. */
+//	public static void setStatus(
+//			InteractiveTerminal interactive,
+//			String activity,
+//			InteractiveTerminal.StatusAccent accent,
+//			String left,
+//			String right) {
+//		synchronized (interactive) {
+//			interactive.statusActivity = activity == null ? "" : activity;
+//			interactive.statusAccent =
+//					accent == null ? InteractiveTerminal.StatusAccent.NONE : accent;
+//			interactive.statusLeft = left == null ? "" : left;
+//			interactive.statusRight = right == null ? "" : right;
+//			renderStatusBar(interactive);
+//		}
+//	}
+//
+//	private static void handleTerminalResize(InteractiveTerminal interactive, Terminal.Signal signal) {
+//		if (interactive.previousResizeHandler != null
+//				&& interactive.previousResizeHandler != Terminal.SignalHandler.SIG_DFL
+//				&& interactive.previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
+//			interactive.previousResizeHandler.handle(signal);
+//		}
+//		synchronized (interactive) {
+//			if (interactive.statusBar != null) {
+//				interactive.statusBar.resize();
+//				renderStatusBar(interactive);
+//			}
+//		}
+//	}
+//
+//	private static void renderStatusBar(InteractiveTerminal interactive) {
+//		if (interactive.statusLeft == null && interactive.statusRight == null) return;
+//		if (interactive.statusBar == null) {
+//			interactive.statusBar = Status.getStatus(interactive.terminal);
+//		}
+//		if (interactive.statusBar == null) return;
+//		int columns = interactive.terminal.getColumns();
+//		int width = columns > 0 ? columns : InteractiveTerminal.DEFAULT_COLUMNS;
+//		interactive.statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
+//				interactive.statusActivity,
+//				interactive.statusAccent,
+//				interactive.statusLeft,
+//				interactive.statusRight,
+//				width,
+//				interactive.theme))));
+//	}
+//
+//	/** Left- and right-aligns status content on one full-width row. */
+//	public static String statusBarLine(String left, String right, int width, Theme theme) {
+//		return statusBarLine("", InteractiveTerminal.StatusAccent.NONE, left, right, width, theme);
+//	}
+//
+//	/**
+//	 * Keeps activity ahead of workspace/model metadata. When the terminal is
+//	 * narrow, metadata is discarded before the activity text is truncated.
+//	 */
+//	public static String statusBarLine(
+//			String activity,
+//			InteractiveTerminal.StatusAccent accent,
+//			String left,
+//			String right,
+//			int width,
+//			Theme theme) {
+//		int safeWidth = Math.max(0, width);
+//		String activityText = truncatePlain(activity == null ? "" : activity, safeWidth);
+//		int activityWidth = visibleWidth(activityText);
+//		String separatorAndDetails = "";
+//		int remaining = safeWidth - activityWidth;
+//		if (remaining >= 4
+//				&& (!(left == null || left.isEmpty()) || !(right == null || right.isEmpty()))) {
+//			String details = alignedStatusDetails(left, right, remaining - 3);
+//			if (!details.isEmpty()) separatorAndDetails = " │ " + details;
+//		}
+//
+//		if (activityText.isEmpty()) {
+//			String details = alignedStatusDetails(left, right, safeWidth);
+//			return mutedStatus(details, theme);
+//		}
+//		String activityStyle = statusAccentStyle(theme, accent);
+//		String styledActivity =
+//				activityStyle.isEmpty() ? activityText : activityStyle + activityText + theme.reset;
+//		return styledActivity + mutedStatus(separatorAndDetails, theme);
+//	}
+//
+//	private static String alignedStatusDetails(String left, String right, int width) {
+//		if (width <= 0) return "";
+//		String rightText = truncatePlain(right == null ? "" : right, width);
+//		int rightWidth = visibleWidth(rightText);
+//		int leftLimit = rightWidth == 0 ? width : width - rightWidth - 1;
+//		String leftText = truncatePlain(left == null ? "" : left, Math.max(0, leftLimit));
+//		int leftWidth = visibleWidth(leftText);
+//		int padding = Math.max(leftText.isEmpty() ? 0 : 1, width - leftWidth - rightWidth);
+//		return rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
+//	}
+//
+//	private static String mutedStatus(String text, Theme theme) {
+//		return theme.muted.isEmpty() || text.isEmpty() ? text : theme.muted + text + theme.reset;
+//	}
+//
+//	private static String statusAccentStyle(Theme theme, InteractiveTerminal.StatusAccent accent) {
+//		return switch (accent == null ? InteractiveTerminal.StatusAccent.NONE : accent) {
+//			case NONE -> theme.muted;
+//			case READY -> readyStatus(theme);
+//			case ACTIVE -> activeStatus(theme);
+//			case TOOL -> toolStatus(theme);
+//			case WARNING -> warningStatus(theme);
+//		};
+//	}
+//
+//	private static void suspendStatusBar(InteractiveTerminal interactive) {
+//		synchronized (interactive) {
+//			if (interactive.statusBar != null) interactive.statusBar.suspend();
+//		}
+//	}
+//
+//	private static void restoreStatusBar(InteractiveTerminal interactive) {
+//		synchronized (interactive) {
+//			if (interactive.statusBar == null) return;
+//			interactive.statusBar.restore();
+//			if (interactive.statusBar.size() > 0) {
+//				// Alternate-screen switches can drop the scroll region on some terminals.
+//				int rows = interactive.terminal.getRows() > 0
+//						? interactive.terminal.getRows()
+//						: InteractiveTerminal.DEFAULT_ROWS;
+//				interactive.terminal.puts(Capability.save_cursor);
+//				interactive.terminal.puts(
+//						Capability.change_scroll_region, 0, rows - 1 - interactive.statusBar.size());
+//				interactive.terminal.puts(Capability.restore_cursor);
+//				renderStatusBar(interactive);
+//				interactive.terminal.flush();
+//			}
+//		}
+//	}
+//
+//	private static boolean requestSuspend(InteractiveTerminal interactive) {
+//		interactive.suspendedBuffer = interactive.reader.getBuffer().toString();
+//		interactive.suspendedCursor = interactive.reader.getBuffer().cursor();
+//		throw SUSPEND_REQUESTED;
+//	}
 
 	private static void handleContinue(InteractiveTerminal interactive, Terminal.Signal signal) {
 		try {
@@ -10656,91 +10656,91 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static void rememberCompletedLine(
-			InteractiveTerminal interactive, String prompt, String line, Character mask, Theme promptTheme) {
-		synchronized (interactive) {
-			String displayedLine = line;
-			if (mask != null) {
-				displayedLine =
-						mask.charValue() == 0 ? "" : String.valueOf(mask).repeat(line.length());
-			}
-			int activeLineOffset = activePromptLineOffset(prompt);
-			remember(interactive, prompt.substring(0, activeLineOffset));
-			remember(
-					interactive,
-					promptArea(promptTheme, prompt.substring(activeLineOffset) + displayedLine));
-			remember(interactive, System.lineSeparator());
-		}
-	}
-
-	private static void rememberPrompt(
-			InteractiveTerminal interactive, String prompt, Theme promptTheme) {
-		synchronized (interactive) {
-			int activeLineOffset = activePromptLineOffset(prompt);
-			remember(interactive, prompt.substring(0, activeLineOffset));
-			remember(interactive, promptArea(promptTheme, prompt.substring(activeLineOffset)));
-		}
-	}
-
-	private static void remember(InteractiveTerminal interactive, String text) {
-		synchronized (interactive) {
-			interactive.screenDocument.append(text);
-		}
-	}
-
-	private static void suspendFullScreen(InteractiveTerminal interactive) throws IOException {
-		interactive.fullScreenResumeAttributes =
-				new Attributes(interactive.terminal.getAttributes());
-		interactive.terminal.setAttributes(interactive.shellAttributes);
-		interactive.managedSuspend = true;
-		try {
-			callSuspendAction(interactive.suspendAction);
-		} catch (IOException | RuntimeException | Error error) {
-			restoreFullScreenAttributes(interactive);
-			interactive.managedSuspend = false;
-			throw error;
-		}
-	}
-
-	private static void resumeMainScreen(InteractiveTerminal interactive) {
-		synchronized (interactive) {
-			try {
-				repaintScreen(interactive);
-			} finally {
-				restoreFullScreenAttributes(interactive);
-				interactive.managedSuspend = false;
-			}
-		}
-	}
-
-	private static void restoreFullScreenAttributes(InteractiveTerminal interactive) {
-		if (interactive.fullScreenResumeAttributes != null) {
-			interactive.terminal.setAttributes(interactive.fullScreenResumeAttributes);
-			interactive.fullScreenResumeAttributes = null;
-		}
-	}
-
-	private static void resetPromptBackground(InteractiveTerminal interactive, Theme promptTheme) {
-		if (promptBackground(promptTheme).isEmpty()) return;
-		interactive.terminal.writer().print(promptTheme.reset);
-		interactive.terminal.writer().flush();
-	}
-
-	private static void repaintScreen(InteractiveTerminal interactive) {
-		synchronized (interactive) {
-			interactive.terminal.writer().print(interactive.theme.reset);
-			interactive.terminal.writer().print(InteractiveTerminal.BEGIN_SYNCHRONIZED_OUTPUT);
-			boolean redrawStatusBar = interactive.statusBar != null && interactive.statusBar.size() > 0;
-			// Release the status rows so the redrawn document starts on a clean screen.
-			if (redrawStatusBar) interactive.statusBar.update(List.of());
-			interactive.terminal.writer().print(InteractiveTerminal.CLEAR_SCREEN_AND_SCROLLBACK);
-			// Re-reserve the bottom row before printing so the document scrolls above it.
-			if (redrawStatusBar) renderStatusBar(interactive);
-			interactive.terminal.writer().print(interactive.screenDocument);
-			interactive.terminal.writer().print(InteractiveTerminal.END_SYNCHRONIZED_OUTPUT);
-			interactive.terminal.writer().flush();
-		}
-	}
+//	private static void rememberCompletedLine(
+//			InteractiveTerminal interactive, String prompt, String line, Character mask, Theme promptTheme) {
+//		synchronized (interactive) {
+//			String displayedLine = line;
+//			if (mask != null) {
+//				displayedLine =
+//						mask.charValue() == 0 ? "" : String.valueOf(mask).repeat(line.length());
+//			}
+//			int activeLineOffset = activePromptLineOffset(prompt);
+//			remember(interactive, prompt.substring(0, activeLineOffset));
+//			remember(
+//					interactive,
+//					promptArea(promptTheme, prompt.substring(activeLineOffset) + displayedLine));
+//			remember(interactive, System.lineSeparator());
+//		}
+//	}
+//
+//	private static void rememberPrompt(
+//			InteractiveTerminal interactive, String prompt, Theme promptTheme) {
+//		synchronized (interactive) {
+//			int activeLineOffset = activePromptLineOffset(prompt);
+//			remember(interactive, prompt.substring(0, activeLineOffset));
+//			remember(interactive, promptArea(promptTheme, prompt.substring(activeLineOffset)));
+//		}
+//	}
+//
+//	private static void remember(InteractiveTerminal interactive, String text) {
+//		synchronized (interactive) {
+//			interactive.screenDocument.append(text);
+//		}
+//	}
+//
+//	private static void suspendFullScreen(InteractiveTerminal interactive) throws IOException {
+//		interactive.fullScreenResumeAttributes =
+//				new Attributes(interactive.terminal.getAttributes());
+//		interactive.terminal.setAttributes(interactive.shellAttributes);
+//		interactive.managedSuspend = true;
+//		try {
+//			callSuspendAction(interactive.suspendAction);
+//		} catch (IOException | RuntimeException | Error error) {
+//			restoreFullScreenAttributes(interactive);
+//			interactive.managedSuspend = false;
+//			throw error;
+//		}
+//	}
+//
+//	private static void resumeMainScreen(InteractiveTerminal interactive) {
+//		synchronized (interactive) {
+//			try {
+//				repaintScreen(interactive);
+//			} finally {
+//				restoreFullScreenAttributes(interactive);
+//				interactive.managedSuspend = false;
+//			}
+//		}
+//	}
+//
+//	private static void restoreFullScreenAttributes(InteractiveTerminal interactive) {
+//		if (interactive.fullScreenResumeAttributes != null) {
+//			interactive.terminal.setAttributes(interactive.fullScreenResumeAttributes);
+//			interactive.fullScreenResumeAttributes = null;
+//		}
+//	}
+//
+//	private static void resetPromptBackground(InteractiveTerminal interactive, Theme promptTheme) {
+//		if (promptBackground(promptTheme).isEmpty()) return;
+//		interactive.terminal.writer().print(promptTheme.reset);
+//		interactive.terminal.writer().flush();
+//	}
+//
+//	private static void repaintScreen(InteractiveTerminal interactive) {
+//		synchronized (interactive) {
+//			interactive.terminal.writer().print(interactive.theme.reset);
+//			interactive.terminal.writer().print(InteractiveTerminal.BEGIN_SYNCHRONIZED_OUTPUT);
+//			boolean redrawStatusBar = interactive.statusBar != null && interactive.statusBar.size() > 0;
+//			// Release the status rows so the redrawn document starts on a clean screen.
+//			if (redrawStatusBar) interactive.statusBar.update(List.of());
+//			interactive.terminal.writer().print(InteractiveTerminal.CLEAR_SCREEN_AND_SCROLLBACK);
+//			// Re-reserve the bottom row before printing so the document scrolls above it.
+//			if (redrawStatusBar) renderStatusBar(interactive);
+//			interactive.terminal.writer().print(interactive.screenDocument);
+//			interactive.terminal.writer().print(InteractiveTerminal.END_SYNCHRONIZED_OUTPUT);
+//			interactive.terminal.writer().flush();
+//		}
+//	}
 
 	/** Restores the signal handlers this terminal replaced and closes JLine. */
 	public static void closeTerminal(InteractiveTerminal interactive) throws IOException {
@@ -11125,110 +11125,110 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return activityStatus(ActivityStatus.Phase.NO_MODEL, "", 0, 0, nowNanos, 0);
 	}
 
-	public static ActivityStatus readyActivity(long nowNanos) {
-		return activityStatus(ActivityStatus.Phase.READY, "", 0, 0, nowNanos, 0);
-	}
-
-	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, long nowNanos) {
-		return activeActivity(phase, "", nowNanos);
-	}
-
-	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, String detail, long nowNanos) {
-		return activityStatus(phase, detail, 0, 0, nowNanos, 0);
-	}
-
-	public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
-		long delayNanos;
-		try {
-			delayNanos = Math.multiplyExact(Math.max(0, delayMs), 1_000_000L);
-		} catch (ArithmeticException ignored) {
-			delayNanos = Long.MAX_VALUE;
-		}
-		return activityStatus(
-				ActivityStatus.Phase.RETRYING, "", attempt, maxAttempts, nowNanos, delayNanos);
-	}
-
-	/** Whether a repeated event describes the same phase and should retain its elapsed timer. */
-	public static boolean sameActivity(ActivityStatus status, ActivityStatus other) {
-		return other != null
-				&& status.phase == other.phase
-				&& status.detail.equals(other.detail)
-				&& status.attempt == other.attempt
-				&& status.maxAttempts == other.maxAttempts
-				&& status.retryDelayNanos == other.retryDelayNanos;
-	}
-
-	public static boolean isDynamicActivity(ActivityStatus status) {
-		return status.phase != ActivityStatus.Phase.NO_MODEL
-				&& status.phase != ActivityStatus.Phase.READY;
-	}
-
-	public static String activityLabel(ActivityStatus status, long nowNanos) {
-		return switch (status.phase) {
-			case NO_MODEL -> "○ No model";
-			case READY -> "● Ready";
-			case RUNNING_COMMAND -> activityBusyLabel(
-					status,
-					status.detail.isBlank() ? "Running command" : "Command: " + status.detail,
-					nowNanos);
-			case PREPARING_TOOLS -> activityBusyLabel(status, "Preparing tools", nowNanos);
-			case COMPACTING -> activityBusyLabel(status, "Compacting context", nowNanos);
-			case WAITING_FOR_MODEL -> activityBusyLabel(status, "Waiting for model", nowNanos);
-			case REASONING -> activityBusyLabel(status, "Reasoning", nowNanos);
-			case RESPONDING -> activityBusyLabel(status, "Responding", nowNanos);
-			case PREPARING_TOOL -> activityBusyLabel(
-					status,
-					status.detail.isBlank() ? "Preparing tool call" : "Preparing tool: " + status.detail,
-					nowNanos);
-			case RUNNING_TOOL -> "⚙ Tool: " + (status.detail.isBlank() ? "unknown" : status.detail)
-					+ " · " + formatActivityElapsed(status, nowNanos);
-			case RETRYING -> activityRetryLabel(status, nowNanos);
-			case STOPPING -> "◌ Stopping · " + formatActivityElapsed(status, nowNanos);
-		};
-	}
-
-	public static InteractiveTerminal.StatusAccent activityAccent(ActivityStatus status) {
-		return switch (status.phase) {
-			case READY -> InteractiveTerminal.StatusAccent.READY;
-			case NO_MODEL, RETRYING, STOPPING -> InteractiveTerminal.StatusAccent.WARNING;
-			case RUNNING_TOOL -> InteractiveTerminal.StatusAccent.TOOL;
-			default -> InteractiveTerminal.StatusAccent.ACTIVE;
-		};
-	}
-
-	private static String activityBusyLabel(ActivityStatus status, String description, long nowNanos) {
-		return activitySpinner(status, nowNanos) + " " + description + " · "
-				+ formatActivityElapsed(status, nowNanos);
-	}
-
-	private static String activityRetryLabel(ActivityStatus status, long nowNanos) {
-		String progress = status.attempt + "/" + status.maxAttempts;
-		long remaining = Math.max(0, status.retryDelayNanos - activityElapsedNanos(status, nowNanos));
-		if (remaining > 0) {
-			long seconds = 1 + (remaining - 1) / 1_000_000_000L;
-			return "↻ Retry " + progress + " in " + seconds + "s";
-		}
-		return "↻ Retry " + progress + " · waiting for model";
-	}
-
-	private static String activitySpinner(ActivityStatus status, long nowNanos) {
-		long elapsedSeconds = activityElapsedNanos(status, nowNanos) / 1_000_000_000L;
-		return ActivityStatus.SPINNER[(int) (elapsedSeconds % ActivityStatus.SPINNER.length)];
-	}
-
-	private static String formatActivityElapsed(ActivityStatus status, long nowNanos) {
-		long seconds = activityElapsedNanos(status, nowNanos) / 1_000_000_000L;
-		if (seconds < 60) return seconds + "s";
-		long minutes = seconds / 60;
-		long remainingSeconds = seconds % 60;
-		if (minutes < 60) return minutes + "m" + String.format(Locale.ROOT, "%02ds", remainingSeconds);
-		long hours = minutes / 60;
-		return hours + "h" + String.format(Locale.ROOT, "%02dm", minutes % 60);
-	}
-
-	private static long activityElapsedNanos(ActivityStatus status, long nowNanos) {
-		return Math.max(0, nowNanos - status.startedNanos);
-	}
+//	public static ActivityStatus readyActivity(long nowNanos) {
+//		return activityStatus(ActivityStatus.Phase.READY, "", 0, 0, nowNanos, 0);
+//	}
+//
+//	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, long nowNanos) {
+//		return activeActivity(phase, "", nowNanos);
+//	}
+//
+//	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, String detail, long nowNanos) {
+//		return activityStatus(phase, detail, 0, 0, nowNanos, 0);
+//	}
+//
+//	public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
+//		long delayNanos;
+//		try {
+//			delayNanos = Math.multiplyExact(Math.max(0, delayMs), 1_000_000L);
+//		} catch (ArithmeticException ignored) {
+//			delayNanos = Long.MAX_VALUE;
+//		}
+//		return activityStatus(
+//				ActivityStatus.Phase.RETRYING, "", attempt, maxAttempts, nowNanos, delayNanos);
+//	}
+//
+//	/** Whether a repeated event describes the same phase and should retain its elapsed timer. */
+//	public static boolean sameActivity(ActivityStatus status, ActivityStatus other) {
+//		return other != null
+//				&& status.phase == other.phase
+//				&& status.detail.equals(other.detail)
+//				&& status.attempt == other.attempt
+//				&& status.maxAttempts == other.maxAttempts
+//				&& status.retryDelayNanos == other.retryDelayNanos;
+//	}
+//
+//	public static boolean isDynamicActivity(ActivityStatus status) {
+//		return status.phase != ActivityStatus.Phase.NO_MODEL
+//				&& status.phase != ActivityStatus.Phase.READY;
+//	}
+//
+//	public static String activityLabel(ActivityStatus status, long nowNanos) {
+//		return switch (status.phase) {
+//			case NO_MODEL -> "○ No model";
+//			case READY -> "● Ready";
+//			case RUNNING_COMMAND -> activityBusyLabel(
+//					status,
+//					status.detail.isBlank() ? "Running command" : "Command: " + status.detail,
+//					nowNanos);
+//			case PREPARING_TOOLS -> activityBusyLabel(status, "Preparing tools", nowNanos);
+//			case COMPACTING -> activityBusyLabel(status, "Compacting context", nowNanos);
+//			case WAITING_FOR_MODEL -> activityBusyLabel(status, "Waiting for model", nowNanos);
+//			case REASONING -> activityBusyLabel(status, "Reasoning", nowNanos);
+//			case RESPONDING -> activityBusyLabel(status, "Responding", nowNanos);
+//			case PREPARING_TOOL -> activityBusyLabel(
+//					status,
+//					status.detail.isBlank() ? "Preparing tool call" : "Preparing tool: " + status.detail,
+//					nowNanos);
+//			case RUNNING_TOOL -> "⚙ Tool: " + (status.detail.isBlank() ? "unknown" : status.detail)
+//					+ " · " + formatActivityElapsed(status, nowNanos);
+//			case RETRYING -> activityRetryLabel(status, nowNanos);
+//			case STOPPING -> "◌ Stopping · " + formatActivityElapsed(status, nowNanos);
+//		};
+//	}
+//
+//	public static InteractiveTerminal.StatusAccent activityAccent(ActivityStatus status) {
+//		return switch (status.phase) {
+//			case READY -> InteractiveTerminal.StatusAccent.READY;
+//			case NO_MODEL, RETRYING, STOPPING -> InteractiveTerminal.StatusAccent.WARNING;
+//			case RUNNING_TOOL -> InteractiveTerminal.StatusAccent.TOOL;
+//			default -> InteractiveTerminal.StatusAccent.ACTIVE;
+//		};
+//	}
+//
+//	private static String activityBusyLabel(ActivityStatus status, String description, long nowNanos) {
+//		return activitySpinner(status, nowNanos) + " " + description + " · "
+//				+ formatActivityElapsed(status, nowNanos);
+//	}
+//
+//	private static String activityRetryLabel(ActivityStatus status, long nowNanos) {
+//		String progress = status.attempt + "/" + status.maxAttempts;
+//		long remaining = Math.max(0, status.retryDelayNanos - activityElapsedNanos(status, nowNanos));
+//		if (remaining > 0) {
+//			long seconds = 1 + (remaining - 1) / 1_000_000_000L;
+//			return "↻ Retry " + progress + " in " + seconds + "s";
+//		}
+//		return "↻ Retry " + progress + " · waiting for model";
+//	}
+//
+//	private static String activitySpinner(ActivityStatus status, long nowNanos) {
+//		long elapsedSeconds = activityElapsedNanos(status, nowNanos) / 1_000_000_000L;
+//		return ActivityStatus.SPINNER[(int) (elapsedSeconds % ActivityStatus.SPINNER.length)];
+//	}
+//
+//	private static String formatActivityElapsed(ActivityStatus status, long nowNanos) {
+//		long seconds = activityElapsedNanos(status, nowNanos) / 1_000_000_000L;
+//		if (seconds < 60) return seconds + "s";
+//		long minutes = seconds / 60;
+//		long remainingSeconds = seconds % 60;
+//		if (minutes < 60) return minutes + "m" + String.format(Locale.ROOT, "%02ds", remainingSeconds);
+//		long hours = minutes / 60;
+//		return hours + "h" + String.format(Locale.ROOT, "%02dm", minutes % 60);
+//	}
+//
+//	private static long activityElapsedNanos(ActivityStatus status, long nowNanos) {
+//		return Math.max(0, nowNanos - status.startedNanos);
+//	}
 
 	// ------------------------------------------------------ agent instructions
 
@@ -11256,18 +11256,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return instructions;
 	}
 
-	/** Creates an instruction set for an explicit repository root. */
-	public static AgentInstructions agentInstructionsForRepository(
-			Path repositoryRoot, Path workingDirectory, String baseSystemPrompt) {
-		Path root = Objects.requireNonNull(repositoryRoot, "repositoryRoot").toAbsolutePath().normalize();
-		Path directory = instructionDirectory(workingDirectory);
-		if (directory == null || !directory.startsWith(root)) {
-			throw new IllegalArgumentException("workingDirectory must be inside repositoryRoot");
-		}
-		AgentInstructions instructions = agentInstructions(root, directory, baseSystemPrompt);
-		refreshAgentInstructionsIn(instructions, directory);
-		return instructions;
-	}
+//	/** Creates an instruction set for an explicit repository root. */
+//	public static AgentInstructions agentInstructionsForRepository(
+//			Path repositoryRoot, Path workingDirectory, String baseSystemPrompt) {
+//		Path root = Objects.requireNonNull(repositoryRoot, "repositoryRoot").toAbsolutePath().normalize();
+//		Path directory = instructionDirectory(workingDirectory);
+//		if (directory == null || !directory.startsWith(root)) {
+//			throw new IllegalArgumentException("workingDirectory must be inside repositoryRoot");
+//		}
+//		AgentInstructions instructions = agentInstructions(root, directory, baseSystemPrompt);
+//		refreshAgentInstructionsIn(instructions, directory);
+//		return instructions;
+//	}
 
 	/** Reloads the instruction files applicable to the current scope. */
 	public static boolean refreshAgentInstructions(AgentInstructions instructions) {
@@ -11516,51 +11516,51 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static boolean runShellCommand(InteractiveShell shell, String input)
-			throws InterruptedException, IOException {
-		switch (input.trim()) {
-			case "/exit", "/quit" -> {
-				return true;
-			}
-			case "/help" -> println(shell.terminal, "Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
-			case "/details" -> showShellTurnDetails(shell, false);
-			case "/fork" -> forkShellSession(shell);
-			case "/resume" -> resumeShellSession(shell);
-			case "/login" -> shellLogin(shell);
-			case "/logout" -> shellLogout(shell);
-			case "/models" -> selectShellModel(shell);
-			case "/mcp" -> selectShellMcpServers(shell);
-			case "/settings" -> selectShellSettings(shell);
-			case "/compact" -> {
-				if (shell.agent == null) {
-					println(shell.terminal, "No model is configured.");
-					return false;
-				}
-				try {
-					CompactionResult result = compact(shell.agent, null);
-					println(shell.terminal, "Context compacted: " + result.tokensBefore + " -> " + result.estimatedTokensAfter + " tokens.");
-					refreshShellStatus(shell);
-				} catch (IllegalStateException error) {
-					println(shell.terminal, "Error: " + error.getMessage());
-				}
-			}
-			default -> {
-				if (input.startsWith("/theme ")) {
-					Theme theme = namedTheme(input.substring("/theme ".length()).trim());
-					setTheme(shell.terminal, theme);
-					refreshShellStatus(shell);
-					shell.settings = withSettingsTheme(shell.settings, theme.name);
-					try {
-						setSettingsTheme(shell.settingsStore, theme.name);
-						println(shell.terminal, "Theme: " + terminalTheme(shell.terminal).name);
-					} catch (IOException error) {
-						println(shell.terminal, "Theme changed for this session, but could not be saved: " + error.getMessage());
-					}
-				} else println(shell.terminal, "Unknown command: " + input);
-			}
-		}
-		return false;
-	}
+//	private static boolean runShellCommand(InteractiveShell shell, String input)
+//			throws InterruptedException, IOException {
+//		switch (input.trim()) {
+//			case "/exit", "/quit" -> {
+//				return true;
+//			}
+//			case "/help" -> println(shell.terminal, "Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+//			case "/details" -> showShellTurnDetails(shell, false);
+//			case "/fork" -> forkShellSession(shell);
+//			case "/resume" -> resumeShellSession(shell);
+//			case "/login" -> shellLogin(shell);
+//			case "/logout" -> shellLogout(shell);
+//			case "/models" -> selectShellModel(shell);
+//			case "/mcp" -> selectShellMcpServers(shell);
+//			case "/settings" -> selectShellSettings(shell);
+//			case "/compact" -> {
+//				if (shell.agent == null) {
+//					println(shell.terminal, "No model is configured.");
+//					return false;
+//				}
+//				try {
+//					CompactionResult result = compact(shell.agent, null);
+//					println(shell.terminal, "Context compacted: " + result.tokensBefore + " -> " + result.estimatedTokensAfter + " tokens.");
+//					refreshShellStatus(shell);
+//				} catch (IllegalStateException error) {
+//					println(shell.terminal, "Error: " + error.getMessage());
+//				}
+//			}
+//			default -> {
+//				if (input.startsWith("/theme ")) {
+//					Theme theme = namedTheme(input.substring("/theme ".length()).trim());
+//					setTheme(shell.terminal, theme);
+//					refreshShellStatus(shell);
+//					shell.settings = withSettingsTheme(shell.settings, theme.name);
+//					try {
+//						setSettingsTheme(shell.settingsStore, theme.name);
+//						println(shell.terminal, "Theme: " + terminalTheme(shell.terminal).name);
+//					} catch (IOException error) {
+//						println(shell.terminal, "Theme changed for this session, but could not be saved: " + error.getMessage());
+//					}
+//				} else println(shell.terminal, "Unknown command: " + input);
+//			}
+//		}
+//		return false;
+//	}
 
 	private static void applyShellSavedTheme(InteractiveShell shell) {
 		if (shell.settings.theme != null) {
@@ -11647,471 +11647,471 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static void shellLogin(InteractiveShell shell) throws IOException, InterruptedException {
-		println(shell.terminal, "Log in to a provider:");
-		println(shell.terminal, "  1. GitHub Copilot — sign in through GitHub's device authorization flow");
-		println(shell.terminal, "  2. OpenAI API key — use separately billed Platform API credits");
-		println(shell.terminal, "  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
-		String choice = readLine(shell.terminal, "Select provider [1-3]: ");
-		if (choice == null || choice.isBlank()) {
-			println(shell.terminal, "Login cancelled.");
-			return;
-		}
-		switch (choice.trim().toLowerCase(Locale.ROOT)) {
-			case "1", "github", "github copilot", "copilot" -> shellLoginCopilot(shell);
-			case "2", "openai", "open ai", "openai api", "openai api key" -> shellLoginOpenAi(shell);
-			case "3", "chatgpt", "chatgpt plus", "chatgpt pro", "chatgpt plus/pro" -> shellLoginChatGpt(shell);
-			default -> println(shell.terminal, "Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
-		}
-	}
-
-	private static void shellLoginCopilot(InteractiveShell shell) throws IOException, InterruptedException {
-		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-		GitHubCopilotAuth.DeviceCode device = gitHubCopilotBeginLogin(copilot.auth);
-		println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-		println(shell.terminal, "Waiting for GitHub authorization...");
-		gitHubCopilotCompleteLogin(copilot.auth, device);
-		println(shell.terminal, "Enabling GitHub Copilot models...");
-		GitHubCopilotProvider.ModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
-		if (access.policiesEnabled < copilot.models.size()) {
-			println(shell.terminal, "Some GitHub Copilot models are unavailable for this account.");
-		}
-		List<Model> models = access.models;
-		Model model = shellSavedModelIn(shell, models);
-		if (model == null) model = preferredCopilotModel(models);
-		if (model == null) {
-			println(shell.terminal, "GitHub Copilot login succeeded, but no enabled coding model was returned.");
-			return;
-		}
-		configureShellModel(shell, model, true);
-		println(shell.terminal, "GitHub Copilot is ready with " + model + ".");
-	}
-
-	private static void shellLoginOpenAi(InteractiveShell shell) throws IOException {
-		String apiKey = readPassword(shell.terminal, "OpenAI API key: ");
-		if (apiKey == null || apiKey.isBlank()) {
-			println(shell.terminal, "OpenAI login cancelled.");
-			return;
-		}
-		modifyCredential(
-				defaultCredentialStore(), "openai", ignored -> apiKeyCredential(apiKey.trim()));
-		List<Model> models = providerModels(requireCoreProvider(shell.providers, "openai"));
-		Model model = shellSavedModelIn(shell, models);
-		if (model == null) {
-			model = select(
-					shell.terminal,
-					"Select an OpenAI model",
-					models.stream().map(CodingAgentOperations::shellModelItem).toList(),
-					-1,
-					true);
-		}
-		if (model == null) {
-			println(shell.terminal, "OpenAI API key saved. Run /models when you are ready to select a model.");
-			return;
-		}
-		configureShellModel(shell, model, true);
-		println(shell.terminal, "OpenAI is ready with " + model + ".");
-	}
-
-	private static void shellLoginChatGpt(InteractiveShell shell) throws IOException, InterruptedException {
-		ChatGptProvider chatGpt = shellChatGptProvider(shell);
-		ChatGptAuth.DeviceCode device = chatGptBeginLogin(chatGpt.auth);
-		println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-		println(shell.terminal, "Waiting for ChatGPT authorization...");
-		chatGptCompleteLogin(chatGpt.auth, device);
-		List<Model> models = chatGpt.models;
-		Model model = shellSavedModelIn(shell, models);
-		if (model == null) {
-			model = select(
-					shell.terminal,
-					"Select a ChatGPT model",
-					models.stream().map(CodingAgentOperations::shellModelItem).toList(),
-					-1,
-					true);
-		}
-		if (model == null) {
-			println(shell.terminal, "ChatGPT login saved. Run /models when you are ready to select a model.");
-			return;
-		}
-		configureShellModel(shell, model, true);
-		println(shell.terminal, "ChatGPT Plus/Pro is ready with " + model + ".");
-	}
-
-	private static void shellLogout(InteractiveShell shell) throws IOException {
-		try {
-			if (shell.agent != null && shell.agent.state.model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
-				chatGptLogout(shellChatGptProvider(shell).auth);
-				shell.agent = null;
-				println(shell.terminal, "ChatGPT credentials removed. Run /login or /resume to continue.");
-				return;
-			}
-			if (shell.agent != null && shell.agent.state.model.provider.equals("openai")) {
-				deleteCredential(defaultCredentialStore(), "openai");
-				shell.agent = null;
-				println(shell.terminal, "OpenAI API key removed. Run /login or /resume to continue.");
-				return;
-			}
-			gitHubCopilotLogout(shellCopilotProvider(shell).auth);
-			if (shell.agent != null
-					&& shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-				shell.agent = null;
-				println(shell.terminal, "GitHub Copilot credentials removed. Run /login or /resume to continue.");
-			} else {
-				println(shell.terminal, "GitHub Copilot credentials removed.");
-			}
-		} finally {
-			refreshShellStatus(shell);
-		}
-	}
-
-	private static void resumeShellSession(InteractiveShell shell) throws IOException {
-		if (shell.arguments.noSession) {
-			println(shell.terminal, "Session persistence is disabled by --no-session.");
-			return;
-		}
-		SessionStore store = defaultSessionStore();
-		List<SessionSnapshot> sessions;
-		try {
-			sessions = listSessionSnapshots(store, shell.cwd);
-		} catch (IOException error) {
-			println(shell.terminal, "Failed to list saved sessions: " + error.getMessage());
-			return;
-		}
-		if (sessions.isEmpty()) {
-			println(shell.terminal, "No saved sessions in " + shell.cwd + ".");
-			return;
-		}
-		String currentSessionId = shell.recorder == null ? null : shell.recorder.sessionId;
-		List<SelectItem<SessionSnapshot>> items = sessions.stream()
-				.filter(session -> session.messageCount > 0 && !session.id.equals(currentSessionId))
-				.map(CodingAgentOperations::sessionSelectItem)
-				.toList();
-		if (items.isEmpty()) {
-			println(shell.terminal, "No resumable sessions in " + shell.cwd + ".");
-			return;
-		}
-		SessionSnapshot selected = select(shell.terminal, "Resume Session (Current Folder)", items, -1, true);
-		if (selected == null) return;
-		try {
-			resumeShellSnapshot(shell, store, selected);
-		} catch (IOException | IllegalArgumentException error) {
-			println(shell.terminal, "Failed to resume session: " + error.getMessage());
-		}
-	}
-
-	private static void forkShellSession(InteractiveShell shell) throws IOException {
-		if (shell.agent == null) {
-			println(shell.terminal, "No model is configured.");
-			return;
-		}
-		String name = readLine(shell.terminal, "Fork session name: ", forkName(shell.sessionName));
-		if (name == null || name.isBlank()) {
-			println(shell.terminal, "Fork cancelled.");
-			return;
-		}
-		name = name.strip();
-		AgentState state = shell.agent.state;
-		Model model = state.model;
-		String systemPrompt = state.systemPrompt;
-		ThinkingLevel thinkingLevel = state.thinkingLevel;
-		boolean autoCompactionEnabled = state.autoCompactionEnabled;
-		int compactionReserveTokens = state.compactionReserveTokens;
-		List<Message> forkMessages = resumableMessages(state.messages);
-		SessionRecorder forkRecorder = null;
-		if (!shell.arguments.noSession) {
-			try {
-				forkRecorder = forkSessionRecorder(
-						defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
-			} catch (IOException error) {
-				println(shell.terminal, "Failed to fork session: " + error.getMessage());
-				return;
-			}
-		}
-		configureShellAgent(shell, model, shell.cwd, forkRecorder, name);
-		shell.agent.state.systemPrompt = systemPrompt;
-		shell.agent.state.thinkingLevel = thinkingLevel;
-		shell.agent.state.autoCompactionEnabled = autoCompactionEnabled;
-		shell.agent.state.compactionReserveTokens = compactionReserveTokens;
-		shell.agent.state.messages.addAll(forkMessages);
-		refreshShellStatus(shell);
-		println(shell.terminal, "Forked session " + name + " with " + forkMessages.size() + " message(s).");
-	}
-
-	public static String forkName(String currentSessionName) {
-		return currentSessionName == null || currentSessionName.isBlank()
-				? "fork"
-				: currentSessionName.strip() + " fork";
-	}
-
-	private static void resumeShellSnapshot(
-			InteractiveShell shell, SessionStore store, SessionSnapshot session) throws IOException {
-		if (!Files.isDirectory(session.cwd)) {
-			println(shell.terminal, "Cannot resume session because its working directory is unavailable: " + session.cwd);
-			return;
-		}
-		Model model;
-		try {
-			model = findModelIn(
-					providerModels(requireCoreProvider(shell.providers, session.provider)),
-					session.provider,
-					session.model);
-		} catch (IllegalArgumentException error) {
-			model = null;
-		}
-		if (model == null) {
-			if (shell.agent == null) {
-				println(shell.terminal, "Cannot restore model " + session.provider + "/" + session.model
-						+ "; configure an available model before resuming this session.");
-				return;
-			}
-			model = shell.agent.state.model;
-			println(shell.terminal, "Could not restore model " + session.provider + "/" + session.model
-					+ ". Using " + model + ".");
-		}
-		if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-			GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-			Model enabled = null;
-			try {
-				if (gitHubCopilotHasCredential(copilot.auth)) {
-					enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
-				}
-			} catch (IOException error) {
-				println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
-			}
-			if (enabled == null) {
-				if (shell.agent == null
-						|| shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-					println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id + "; log in or configure another model first.");
-					return;
-				}
-				Model fallback = shell.agent.state.model;
-				println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
-				model = fallback;
-			} else {
-				model = enabled;
-			}
-		}
-		SessionRecorder resumedRecorder = resumeSessionRecorder(store, session.id);
-		// A session snapshot's messages are compaction-aware, so resuming cannot
-		// resurrect summarized transcript entries into the next model request.
-		List<Message> restored = resumableMessages(session.messages);
-		configureShellAgent(shell, model, session.cwd, resumedRecorder, session.name);
-		shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
-		shell.agent.state.messages.addAll(restored);
-		refreshShellStatus(shell);
-		replaceScreen(shell.terminal, renderSessionScreen(
-				model, session.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell.terminal)));
-		try {
-			setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
-		} catch (IOException error) {
-			println(shell.terminal, "Resumed model could not be saved as the default: " + error.getMessage());
-		}
-		println(shell.terminal, "Resumed session " + sessionDisplayName(session) + " with " + restored.size()
-				+ " message(s) using " + model + ".");
-	}
-
-	/** Rebuilds the visible transcript for a resumed session. */
-	public static String renderSessionScreen(
-			Model model, List<Message> messages, boolean hideThinking, Theme theme) {
-		StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
-		Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
-		for (Message message : messages) {
-			if (message instanceof ToolResultMessage result) toolResults.put(result.toolCallId, result);
-		}
-		Set<String> renderedToolResults = new HashSet<>();
-		for (Message message : messages) {
-			switch (message) {
-				case UserMessage user -> screen.append('\n')
-						.append(promptArea(theme, "> " + text(user)))
-						.append('\n');
-				case AssistantMessage assistant -> appendSessionAssistant(
-						screen, assistant, hideThinking, theme, toolResults, renderedToolResults);
-				case ToolResultMessage result -> {
-					if (renderedToolResults.add(result.toolCallId)) appendSessionToolResult(screen, result);
-				}
-			}
-		}
-		return screen.toString();
-	}
-
-	private static String sessionScreenHeader(Model model) {
-		StringBuilder header = new StringBuilder("codingagent ").append(Cli.VERSION);
-		if (model != null) header.append("  ").append(model);
-		header.append('\n');
-		header.append(model == null
-				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-				: "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
-		header.append('\n');
-		return header.toString();
-	}
-
-	private static void appendSessionAssistant(
-			StringBuilder screen,
-			AssistantMessage assistant,
-			boolean hideThinking,
-			Theme theme,
-			Map<String, ToolResultMessage> toolResults,
-			Set<String> renderedToolResults) {
-		for (AssistantContent content : assistant.content) {
-			if (content instanceof ThinkingContent thinking) {
-				if (!hideThinking && !thinking.thinking.isBlank()) {
-					screen.append("\n").append(theme.muted).append("Thinking:").append(theme.reset).append('\n');
-					screen.append(theme.muted).append(thinking.thinking).append(theme.reset).append('\n');
-				}
-			} else if (content instanceof TextContent text) {
-				screen.append(text.text).append('\n');
-			} else if (content instanceof ToolCall call) {
-				screen.append("\n[")
-						.append(call.name)
-						.append("] ")
-						.append(toolCallDescription(call.name, call.arguments))
-						.append('\n');
-				ToolResultMessage result = toolResults.get(call.id);
-				if (result != null) {
-					renderedToolResults.add(result.toolCallId);
-					appendSessionToolResult(screen, result);
-				}
-			}
-		}
-		if (assistant.errorMessage != null) {
-			screen.append("Error: ").append(assistant.errorMessage).append('\n');
-		}
-	}
-
-	private static void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
-		screen.append("  ")
-				.append(result.isError ? "Error" : "Done")
-				.append(": ")
-				.append(toolResultSummary(result.toolName, text(result), result.isError))
-				.append('\n');
-	}
-
-	/** Drops failed turns and synthesizes results for tool calls that never completed. */
-	public static List<Message> resumableMessages(List<Message> messages) {
-		List<Message> result = new ArrayList<>();
-		Map<String, String> pendingToolCalls = new LinkedHashMap<>();
-		for (Message message : messages) {
-			if (message instanceof AssistantMessage assistant) {
-				appendMissingToolResults(result, pendingToolCalls);
-				if (assistant.stopReason == StopReason.ERROR || assistant.stopReason == StopReason.ABORTED) continue;
-				toolCalls(assistant).forEach(call -> pendingToolCalls.put(call.id, call.name));
-				result.add(message);
-			} else if (message instanceof ToolResultMessage toolResult) {
-				if (pendingToolCalls.remove(toolResult.toolCallId) != null) result.add(message);
-			} else {
-				appendMissingToolResults(result, pendingToolCalls);
-				result.add(message);
-			}
-		}
-		appendMissingToolResults(result, pendingToolCalls);
-		return List.copyOf(result);
-	}
-
-	private static void appendMissingToolResults(
-			List<Message> messages, Map<String, String> pendingToolCalls) {
-		for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
-			messages.add(toolResultMessage(
-					toolCall.getKey(), toolCall.getValue(), "No result provided", true));
-		}
-		pendingToolCalls.clear();
-	}
-
-	private static SelectItem<SessionSnapshot> sessionSelectItem(SessionSnapshot session) {
-		String message = abbreviateShellText(sessionDisplayName(session).replaceAll("[\\p{Cntrl}]", " "), 90);
-		String description = session.messageCount + " messages  " + formatSessionAge(session.modified)
-				+ "  [" + session.provider + "/" + session.model + "]";
-		return selectItem(
-				session,
-				message,
-				description,
-				session.id + " " + sessionDisplayName(session) + " " + session.provider + " " + session.model
-						+ " " + session.firstMessage + " " + session.allMessagesText);
-	}
-
-	private static String sessionDisplayName(SessionSnapshot session) {
-		return session.name == null ? session.firstMessage : session.name;
-	}
-
-	/** The text to print after a turn, or null when it was already streamed. */
-	public static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
-		if (response.errorMessage != null) return "Error: " + response.errorMessage;
-		return emittedText ? null : text(response);
-	}
-
-	private static String formatRetryDelay(long delayMs) {
-		if (delayMs < 1_000) return delayMs + "ms";
-		if (delayMs % 1_000 == 0) return delayMs / 1_000 + "s";
-		return String.format(Locale.ROOT, "%.1fs", delayMs / 1_000.0);
-	}
-
-	private static String formatSessionAge(Instant instant) {
-		long minutes = Math.max(0, Duration.between(instant, Instant.now()).toMinutes());
-		if (minutes < 1) return "now";
-		if (minutes < 60) return minutes + "m";
-		long hours = minutes / 60;
-		if (hours < 24) return hours + "h";
-		long days = hours / 24;
-		if (days < 7) return days + "d";
-		if (days < 30) return days / 7 + "w";
-		if (days < 365) return days / 30 + "mo";
-		return days / 365 + "y";
-	}
-
-	private static void selectShellModel(InteractiveShell shell) throws IOException {
-		List<Model> models = shellSelectableModels(shell);
-		List<SelectItem<Model>> items =
-				models.stream().map(CodingAgentOperations::shellModelItem).toList();
-		int currentIndex = shell.agent == null ? -1 : shellModelIndex(models, shell.agent.state.model);
-		Model model = select(shell.terminal, "Select a model", items, currentIndex, true);
-		if (model == null) {
-			return;
-		}
-		configureShellModel(shell, model, true);
-		println(shell.terminal, "Using " + model + " in a new agent session.");
-	}
-
-	private static void selectShellMcpServers(InteractiveShell shell) throws IOException {
-		if (mcpIsEmpty(shell.mcp)) {
-			println(shell.terminal, "No MCP servers configured in ~/.codingagent/settings.json.");
-			return;
-		}
-		McpSelector selector =
-				newMcpSelector(shell.mcp, change -> persistShellMcpChange(shell, change));
-		runComponent(shell.terminal, mcpSelectorComponent(selector));
-		// An OAuth connection may finish asynchronously while the selector is open.
-		syncShellMcpTools(shell);
-	}
-
-	private static void persistShellMcpChange(InteractiveShell shell, McpSelector.Change change) {
-		try {
-			if (change.toolName != null) {
-				setSettingsMcpToolEnabled(
-						shell.settingsStore, change.serverName, change.toolName, change.enabled);
-			} else {
-				setSettingsMcpServerEnabled(shell.settingsStore, change.serverName, change.enabled);
-			}
-		} catch (IOException error) {
-			throw new UncheckedIOException(error);
-		} finally {
-			syncShellMcpTools(shell);
-		}
-	}
-
-	private static void selectShellSettings(InteractiveShell shell) throws IOException {
-		if (shell.agent == null) {
-			println(shell.terminal, "No model is configured.");
-			return;
-		}
-		String selected = select(
-				shell.terminal,
-				"Settings",
-				List.of(selectItem("thinking", "Thinking level", shell.agent.state.thinkingLevel.wire)),
-				0,
-				false);
-		if (selected != null) {
-			selectShellThinkingLevel(shell);
-		}
-	}
+//	private static void shellLogin(InteractiveShell shell) throws IOException, InterruptedException {
+//		println(shell.terminal, "Log in to a provider:");
+//		println(shell.terminal, "  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+//		println(shell.terminal, "  2. OpenAI API key — use separately billed Platform API credits");
+//		println(shell.terminal, "  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+//		String choice = readLine(shell.terminal, "Select provider [1-3]: ");
+//		if (choice == null || choice.isBlank()) {
+//			println(shell.terminal, "Login cancelled.");
+//			return;
+//		}
+//		switch (choice.trim().toLowerCase(Locale.ROOT)) {
+//			case "1", "github", "github copilot", "copilot" -> shellLoginCopilot(shell);
+//			case "2", "openai", "open ai", "openai api", "openai api key" -> shellLoginOpenAi(shell);
+//			case "3", "chatgpt", "chatgpt plus", "chatgpt pro", "chatgpt plus/pro" -> shellLoginChatGpt(shell);
+//			default -> println(shell.terminal, "Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+//		}
+//	}
+//
+//	private static void shellLoginCopilot(InteractiveShell shell) throws IOException, InterruptedException {
+//		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+//		GitHubCopilotAuth.DeviceCode device = gitHubCopilotBeginLogin(copilot.auth);
+//		println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+//		println(shell.terminal, "Waiting for GitHub authorization...");
+//		gitHubCopilotCompleteLogin(copilot.auth, device);
+//		println(shell.terminal, "Enabling GitHub Copilot models...");
+//		GitHubCopilotProvider.ModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
+//		if (access.policiesEnabled < copilot.models.size()) {
+//			println(shell.terminal, "Some GitHub Copilot models are unavailable for this account.");
+//		}
+//		List<Model> models = access.models;
+//		Model model = shellSavedModelIn(shell, models);
+//		if (model == null) model = preferredCopilotModel(models);
+//		if (model == null) {
+//			println(shell.terminal, "GitHub Copilot login succeeded, but no enabled coding model was returned.");
+//			return;
+//		}
+//		configureShellModel(shell, model, true);
+//		println(shell.terminal, "GitHub Copilot is ready with " + model + ".");
+//	}
+//
+//	private static void shellLoginOpenAi(InteractiveShell shell) throws IOException {
+//		String apiKey = readPassword(shell.terminal, "OpenAI API key: ");
+//		if (apiKey == null || apiKey.isBlank()) {
+//			println(shell.terminal, "OpenAI login cancelled.");
+//			return;
+//		}
+//		modifyCredential(
+//				defaultCredentialStore(), "openai", ignored -> apiKeyCredential(apiKey.trim()));
+//		List<Model> models = providerModels(requireCoreProvider(shell.providers, "openai"));
+//		Model model = shellSavedModelIn(shell, models);
+//		if (model == null) {
+//			model = select(
+//					shell.terminal,
+//					"Select an OpenAI model",
+//					models.stream().map(CodingAgentOperations::shellModelItem).toList(),
+//					-1,
+//					true);
+//		}
+//		if (model == null) {
+//			println(shell.terminal, "OpenAI API key saved. Run /models when you are ready to select a model.");
+//			return;
+//		}
+//		configureShellModel(shell, model, true);
+//		println(shell.terminal, "OpenAI is ready with " + model + ".");
+//	}
+//
+//	private static void shellLoginChatGpt(InteractiveShell shell) throws IOException, InterruptedException {
+//		ChatGptProvider chatGpt = shellChatGptProvider(shell);
+//		ChatGptAuth.DeviceCode device = chatGptBeginLogin(chatGpt.auth);
+//		println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+//		println(shell.terminal, "Waiting for ChatGPT authorization...");
+//		chatGptCompleteLogin(chatGpt.auth, device);
+//		List<Model> models = chatGpt.models;
+//		Model model = shellSavedModelIn(shell, models);
+//		if (model == null) {
+//			model = select(
+//					shell.terminal,
+//					"Select a ChatGPT model",
+//					models.stream().map(CodingAgentOperations::shellModelItem).toList(),
+//					-1,
+//					true);
+//		}
+//		if (model == null) {
+//			println(shell.terminal, "ChatGPT login saved. Run /models when you are ready to select a model.");
+//			return;
+//		}
+//		configureShellModel(shell, model, true);
+//		println(shell.terminal, "ChatGPT Plus/Pro is ready with " + model + ".");
+//	}
+//
+//	private static void shellLogout(InteractiveShell shell) throws IOException {
+//		try {
+//			if (shell.agent != null && shell.agent.state.model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+//				chatGptLogout(shellChatGptProvider(shell).auth);
+//				shell.agent = null;
+//				println(shell.terminal, "ChatGPT credentials removed. Run /login or /resume to continue.");
+//				return;
+//			}
+//			if (shell.agent != null && shell.agent.state.model.provider.equals("openai")) {
+//				deleteCredential(defaultCredentialStore(), "openai");
+//				shell.agent = null;
+//				println(shell.terminal, "OpenAI API key removed. Run /login or /resume to continue.");
+//				return;
+//			}
+//			gitHubCopilotLogout(shellCopilotProvider(shell).auth);
+//			if (shell.agent != null
+//					&& shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+//				shell.agent = null;
+//				println(shell.terminal, "GitHub Copilot credentials removed. Run /login or /resume to continue.");
+//			} else {
+//				println(shell.terminal, "GitHub Copilot credentials removed.");
+//			}
+//		} finally {
+//			refreshShellStatus(shell);
+//		}
+//	}
+//
+//	private static void resumeShellSession(InteractiveShell shell) throws IOException {
+//		if (shell.arguments.noSession) {
+//			println(shell.terminal, "Session persistence is disabled by --no-session.");
+//			return;
+//		}
+//		SessionStore store = defaultSessionStore();
+//		List<SessionSnapshot> sessions;
+//		try {
+//			sessions = listSessionSnapshots(store, shell.cwd);
+//		} catch (IOException error) {
+//			println(shell.terminal, "Failed to list saved sessions: " + error.getMessage());
+//			return;
+//		}
+//		if (sessions.isEmpty()) {
+//			println(shell.terminal, "No saved sessions in " + shell.cwd + ".");
+//			return;
+//		}
+//		String currentSessionId = shell.recorder == null ? null : shell.recorder.sessionId;
+//		List<SelectItem<SessionSnapshot>> items = sessions.stream()
+//				.filter(session -> session.messageCount > 0 && !session.id.equals(currentSessionId))
+//				.map(CodingAgentOperations::sessionSelectItem)
+//				.toList();
+//		if (items.isEmpty()) {
+//			println(shell.terminal, "No resumable sessions in " + shell.cwd + ".");
+//			return;
+//		}
+//		SessionSnapshot selected = select(shell.terminal, "Resume Session (Current Folder)", items, -1, true);
+//		if (selected == null) return;
+//		try {
+//			resumeShellSnapshot(shell, store, selected);
+//		} catch (IOException | IllegalArgumentException error) {
+//			println(shell.terminal, "Failed to resume session: " + error.getMessage());
+//		}
+//	}
+//
+//	private static void forkShellSession(InteractiveShell shell) throws IOException {
+//		if (shell.agent == null) {
+//			println(shell.terminal, "No model is configured.");
+//			return;
+//		}
+//		String name = readLine(shell.terminal, "Fork session name: ", forkName(shell.sessionName));
+//		if (name == null || name.isBlank()) {
+//			println(shell.terminal, "Fork cancelled.");
+//			return;
+//		}
+//		name = name.strip();
+//		AgentState state = shell.agent.state;
+//		Model model = state.model;
+//		String systemPrompt = state.systemPrompt;
+//		ThinkingLevel thinkingLevel = state.thinkingLevel;
+//		boolean autoCompactionEnabled = state.autoCompactionEnabled;
+//		int compactionReserveTokens = state.compactionReserveTokens;
+//		List<Message> forkMessages = resumableMessages(state.messages);
+//		SessionRecorder forkRecorder = null;
+//		if (!shell.arguments.noSession) {
+//			try {
+//				forkRecorder = forkSessionRecorder(
+//						defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
+//			} catch (IOException error) {
+//				println(shell.terminal, "Failed to fork session: " + error.getMessage());
+//				return;
+//			}
+//		}
+//		configureShellAgent(shell, model, shell.cwd, forkRecorder, name);
+//		shell.agent.state.systemPrompt = systemPrompt;
+//		shell.agent.state.thinkingLevel = thinkingLevel;
+//		shell.agent.state.autoCompactionEnabled = autoCompactionEnabled;
+//		shell.agent.state.compactionReserveTokens = compactionReserveTokens;
+//		shell.agent.state.messages.addAll(forkMessages);
+//		refreshShellStatus(shell);
+//		println(shell.terminal, "Forked session " + name + " with " + forkMessages.size() + " message(s).");
+//	}
+//
+//	public static String forkName(String currentSessionName) {
+//		return currentSessionName == null || currentSessionName.isBlank()
+//				? "fork"
+//				: currentSessionName.strip() + " fork";
+//	}
+//
+//	private static void resumeShellSnapshot(
+//			InteractiveShell shell, SessionStore store, SessionSnapshot session) throws IOException {
+//		if (!Files.isDirectory(session.cwd)) {
+//			println(shell.terminal, "Cannot resume session because its working directory is unavailable: " + session.cwd);
+//			return;
+//		}
+//		Model model;
+//		try {
+//			model = findModelIn(
+//					providerModels(requireCoreProvider(shell.providers, session.provider)),
+//					session.provider,
+//					session.model);
+//		} catch (IllegalArgumentException error) {
+//			model = null;
+//		}
+//		if (model == null) {
+//			if (shell.agent == null) {
+//				println(shell.terminal, "Cannot restore model " + session.provider + "/" + session.model
+//						+ "; configure an available model before resuming this session.");
+//				return;
+//			}
+//			model = shell.agent.state.model;
+//			println(shell.terminal, "Could not restore model " + session.provider + "/" + session.model
+//					+ ". Using " + model + ".");
+//		}
+//		if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+//			GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+//			Model enabled = null;
+//			try {
+//				if (gitHubCopilotHasCredential(copilot.auth)) {
+//					enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
+//				}
+//			} catch (IOException error) {
+//				println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
+//			}
+//			if (enabled == null) {
+//				if (shell.agent == null
+//						|| shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+//					println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id + "; log in or configure another model first.");
+//					return;
+//				}
+//				Model fallback = shell.agent.state.model;
+//				println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
+//				model = fallback;
+//			} else {
+//				model = enabled;
+//			}
+//		}
+//		SessionRecorder resumedRecorder = resumeSessionRecorder(store, session.id);
+//		// A session snapshot's messages are compaction-aware, so resuming cannot
+//		// resurrect summarized transcript entries into the next model request.
+//		List<Message> restored = resumableMessages(session.messages);
+//		configureShellAgent(shell, model, session.cwd, resumedRecorder, session.name);
+//		shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
+//		shell.agent.state.messages.addAll(restored);
+//		refreshShellStatus(shell);
+//		replaceScreen(shell.terminal, renderSessionScreen(
+//				model, session.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell.terminal)));
+//		try {
+//			setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
+//		} catch (IOException error) {
+//			println(shell.terminal, "Resumed model could not be saved as the default: " + error.getMessage());
+//		}
+//		println(shell.terminal, "Resumed session " + sessionDisplayName(session) + " with " + restored.size()
+//				+ " message(s) using " + model + ".");
+//	}
+//
+//	/** Rebuilds the visible transcript for a resumed session. */
+//	public static String renderSessionScreen(
+//			Model model, List<Message> messages, boolean hideThinking, Theme theme) {
+//		StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
+//		Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
+//		for (Message message : messages) {
+//			if (message instanceof ToolResultMessage result) toolResults.put(result.toolCallId, result);
+//		}
+//		Set<String> renderedToolResults = new HashSet<>();
+//		for (Message message : messages) {
+//			switch (message) {
+//				case UserMessage user -> screen.append('\n')
+//						.append(promptArea(theme, "> " + text(user)))
+//						.append('\n');
+//				case AssistantMessage assistant -> appendSessionAssistant(
+//						screen, assistant, hideThinking, theme, toolResults, renderedToolResults);
+//				case ToolResultMessage result -> {
+//					if (renderedToolResults.add(result.toolCallId)) appendSessionToolResult(screen, result);
+//				}
+//			}
+//		}
+//		return screen.toString();
+//	}
+//
+//	private static String sessionScreenHeader(Model model) {
+//		StringBuilder header = new StringBuilder("codingagent ").append(Cli.VERSION);
+//		if (model != null) header.append("  ").append(model);
+//		header.append('\n');
+//		header.append(model == null
+//				? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
+//				: "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+//		header.append('\n');
+//		return header.toString();
+//	}
+//
+//	private static void appendSessionAssistant(
+//			StringBuilder screen,
+//			AssistantMessage assistant,
+//			boolean hideThinking,
+//			Theme theme,
+//			Map<String, ToolResultMessage> toolResults,
+//			Set<String> renderedToolResults) {
+//		for (AssistantContent content : assistant.content) {
+//			if (content instanceof ThinkingContent thinking) {
+//				if (!hideThinking && !thinking.thinking.isBlank()) {
+//					screen.append("\n").append(theme.muted).append("Thinking:").append(theme.reset).append('\n');
+//					screen.append(theme.muted).append(thinking.thinking).append(theme.reset).append('\n');
+//				}
+//			} else if (content instanceof TextContent text) {
+//				screen.append(text.text).append('\n');
+//			} else if (content instanceof ToolCall call) {
+//				screen.append("\n[")
+//						.append(call.name)
+//						.append("] ")
+//						.append(toolCallDescription(call.name, call.arguments))
+//						.append('\n');
+//				ToolResultMessage result = toolResults.get(call.id);
+//				if (result != null) {
+//					renderedToolResults.add(result.toolCallId);
+//					appendSessionToolResult(screen, result);
+//				}
+//			}
+//		}
+//		if (assistant.errorMessage != null) {
+//			screen.append("Error: ").append(assistant.errorMessage).append('\n');
+//		}
+//	}
+//
+//	private static void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
+//		screen.append("  ")
+//				.append(result.isError ? "Error" : "Done")
+//				.append(": ")
+//				.append(toolResultSummary(result.toolName, text(result), result.isError))
+//				.append('\n');
+//	}
+//
+//	/** Drops failed turns and synthesizes results for tool calls that never completed. */
+//	public static List<Message> resumableMessages(List<Message> messages) {
+//		List<Message> result = new ArrayList<>();
+//		Map<String, String> pendingToolCalls = new LinkedHashMap<>();
+//		for (Message message : messages) {
+//			if (message instanceof AssistantMessage assistant) {
+//				appendMissingToolResults(result, pendingToolCalls);
+//				if (assistant.stopReason == StopReason.ERROR || assistant.stopReason == StopReason.ABORTED) continue;
+//				toolCalls(assistant).forEach(call -> pendingToolCalls.put(call.id, call.name));
+//				result.add(message);
+//			} else if (message instanceof ToolResultMessage toolResult) {
+//				if (pendingToolCalls.remove(toolResult.toolCallId) != null) result.add(message);
+//			} else {
+//				appendMissingToolResults(result, pendingToolCalls);
+//				result.add(message);
+//			}
+//		}
+//		appendMissingToolResults(result, pendingToolCalls);
+//		return List.copyOf(result);
+//	}
+//
+//	private static void appendMissingToolResults(
+//			List<Message> messages, Map<String, String> pendingToolCalls) {
+//		for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
+//			messages.add(toolResultMessage(
+//					toolCall.getKey(), toolCall.getValue(), "No result provided", true));
+//		}
+//		pendingToolCalls.clear();
+//	}
+//
+//	private static SelectItem<SessionSnapshot> sessionSelectItem(SessionSnapshot session) {
+//		String message = abbreviateShellText(sessionDisplayName(session).replaceAll("[\\p{Cntrl}]", " "), 90);
+//		String description = session.messageCount + " messages  " + formatSessionAge(session.modified)
+//				+ "  [" + session.provider + "/" + session.model + "]";
+//		return selectItem(
+//				session,
+//				message,
+//				description,
+//				session.id + " " + sessionDisplayName(session) + " " + session.provider + " " + session.model
+//						+ " " + session.firstMessage + " " + session.allMessagesText);
+//	}
+//
+//	private static String sessionDisplayName(SessionSnapshot session) {
+//		return session.name == null ? session.firstMessage : session.name;
+//	}
+//
+//	/** The text to print after a turn, or null when it was already streamed. */
+//	public static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
+//		if (response.errorMessage != null) return "Error: " + response.errorMessage;
+//		return emittedText ? null : text(response);
+//	}
+//
+//	private static String formatRetryDelay(long delayMs) {
+//		if (delayMs < 1_000) return delayMs + "ms";
+//		if (delayMs % 1_000 == 0) return delayMs / 1_000 + "s";
+//		return String.format(Locale.ROOT, "%.1fs", delayMs / 1_000.0);
+//	}
+//
+//	private static String formatSessionAge(Instant instant) {
+//		long minutes = Math.max(0, Duration.between(instant, Instant.now()).toMinutes());
+//		if (minutes < 1) return "now";
+//		if (minutes < 60) return minutes + "m";
+//		long hours = minutes / 60;
+//		if (hours < 24) return hours + "h";
+//		long days = hours / 24;
+//		if (days < 7) return days + "d";
+//		if (days < 30) return days / 7 + "w";
+//		if (days < 365) return days / 30 + "mo";
+//		return days / 365 + "y";
+//	}
+//
+//	private static void selectShellModel(InteractiveShell shell) throws IOException {
+//		List<Model> models = shellSelectableModels(shell);
+//		List<SelectItem<Model>> items =
+//				models.stream().map(CodingAgentOperations::shellModelItem).toList();
+//		int currentIndex = shell.agent == null ? -1 : shellModelIndex(models, shell.agent.state.model);
+//		Model model = select(shell.terminal, "Select a model", items, currentIndex, true);
+//		if (model == null) {
+//			return;
+//		}
+//		configureShellModel(shell, model, true);
+//		println(shell.terminal, "Using " + model + " in a new agent session.");
+//	}
+//
+//	private static void selectShellMcpServers(InteractiveShell shell) throws IOException {
+//		if (mcpIsEmpty(shell.mcp)) {
+//			println(shell.terminal, "No MCP servers configured in ~/.codingagent/settings.json.");
+//			return;
+//		}
+//		McpSelector selector =
+//				newMcpSelector(shell.mcp, change -> persistShellMcpChange(shell, change));
+//		runComponent(shell.terminal, mcpSelectorComponent(selector));
+//		// An OAuth connection may finish asynchronously while the selector is open.
+//		syncShellMcpTools(shell);
+//	}
+//
+//	private static void persistShellMcpChange(InteractiveShell shell, McpSelector.Change change) {
+//		try {
+//			if (change.toolName != null) {
+//				setSettingsMcpToolEnabled(
+//						shell.settingsStore, change.serverName, change.toolName, change.enabled);
+//			} else {
+//				setSettingsMcpServerEnabled(shell.settingsStore, change.serverName, change.enabled);
+//			}
+//		} catch (IOException error) {
+//			throw new UncheckedIOException(error);
+//		} finally {
+//			syncShellMcpTools(shell);
+//		}
+//	}
+//
+//	private static void selectShellSettings(InteractiveShell shell) throws IOException {
+//		if (shell.agent == null) {
+//			println(shell.terminal, "No model is configured.");
+//			return;
+//		}
+//		String selected = select(
+//				shell.terminal,
+//				"Settings",
+//				List.of(selectItem("thinking", "Thinking level", shell.agent.state.thinkingLevel.wire)),
+//				0,
+//				false);
+//		if (selected != null) {
+//			selectShellThinkingLevel(shell);
+//		}
+//	}
 
 	private static void selectShellThinkingLevel(InteractiveShell shell) throws IOException {
 		List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.model);
@@ -12146,28 +12146,28 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		};
 	}
 
-	private static List<Model> shellSelectableModels(InteractiveShell shell) {
-		List<Model> models = new ArrayList<>();
-		for (Model model : allCatalogModels(shell.providers.catalog)) {
-			if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-				models.add(model);
-			}
-		}
-		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-		try {
-			if (gitHubCopilotHasCredential(copilot.auth)) {
-				println(shell.terminal, "Refreshing GitHub Copilot models...");
-				models.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
-			} else {
-				models.addAll(copilot.models);
-			}
-		} catch (IOException error) {
-			println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
-			models.addAll(copilot.models);
-		}
-		models.addAll(shellChatGptProvider(shell).models);
-		return List.copyOf(models);
-	}
+//	private static List<Model> shellSelectableModels(InteractiveShell shell) {
+//		List<Model> models = new ArrayList<>();
+//		for (Model model : allCatalogModels(shell.providers.catalog)) {
+//			if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+//				models.add(model);
+//			}
+//		}
+//		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+//		try {
+//			if (gitHubCopilotHasCredential(copilot.auth)) {
+//				println(shell.terminal, "Refreshing GitHub Copilot models...");
+//				models.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
+//			} else {
+//				models.addAll(copilot.models);
+//			}
+//		} catch (IOException error) {
+//			println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
+//			models.addAll(copilot.models);
+//		}
+//		models.addAll(shellChatGptProvider(shell).models);
+//		return List.copyOf(models);
+//	}
 
 	private static void configureShellModel(InteractiveShell shell, Model model, boolean persistModel)
 			throws IOException {
@@ -12192,84 +12192,84 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static void configureShellAgent(
-			InteractiveShell shell,
-			Model model,
-			Path configuredCwd,
-			SessionRecorder nextRecorder,
-			String nextSessionName) {
-		Provider provider = requireCoreProvider(shell.providers, model.provider);
-		Agent configured = newAgent(shell.arguments.systemPrompt, model, provider);
-		configured.apiKey = shell.arguments.apiKey;
-		configured.state.thinkingLevel =
-				initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
-		configureBuiltInTools(configured, configuredCwd, shell.arguments.systemPrompt);
-		configured.state.tools.addAll(mcpTools(shell.mcp));
-		subscribe(configured, event -> onShellAgentEvent(shell, event));
-		shell.cwd = configuredCwd.toAbsolutePath().normalize();
-		shell.agent = configured;
-		shell.recorder = nextRecorder;
-		shell.sessionName = nextSessionName;
-		if (shell.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
-			setShellActivity(shell, readyActivity(System.nanoTime()));
-		}
-		refreshShellStatus(shell);
-	}
-
-	/** Updates cached workspace/model details, then redraws the live activity status. */
-	private static void refreshShellStatus(InteractiveShell shell) {
-		String branch = gitBranch(shell.cwd);
-		shell.statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), shell.cwd)
-				+ (branch == null ? "" : " [" + branch + "]")
-				+ (shell.sessionName == null ? "" : " \u2022 " + shell.sessionName);
-		shell.statusModel = shell.agent == null
-				? ""
-				: modelStatus(
-						shell.agent.state.model,
-						shell.agent.state.thinkingLevel,
-						contextTokens(shell.agent.state.messages));
-		renderShellStatus(shell);
-	}
-
-	private static void tickShellStatus(InteractiveShell shell) {
-		if (!isDynamicActivity(shell.activity)) return;
-		try {
-			renderShellStatus(shell);
-		} catch (RuntimeException ignored) {
-			// A best-effort repaint must not terminate the shell's status ticker.
-		}
-	}
-
-	private static void renderShellStatus(InteractiveShell shell) {
-		ActivityStatus current = shell.activity;
-		setStatus(
-				shell.terminal,
-				activityLabel(current, System.nanoTime()),
-				activityAccent(current),
-				shell.statusLocation,
-				shell.statusModel);
-	}
-
-	private static void setShellIdleActivity(InteractiveShell shell) {
-		setShellActivity(shell, shell.agent == null
-				? noModelActivity(System.nanoTime())
-				: readyActivity(System.nanoTime()));
-	}
-
-	private static void setShellActivity(InteractiveShell shell, ActivityStatus next) {
-		boolean changed;
-		synchronized (shell.activityLock) {
-			ActivityStatus current = shell.activity;
-			if (current.phase == ActivityStatus.Phase.STOPPING
-					&& next.phase != ActivityStatus.Phase.READY
-					&& next.phase != ActivityStatus.Phase.NO_MODEL) {
-				return;
-			}
-			changed = !sameActivity(current, next);
-			if (changed) shell.activity = next;
-		}
-		if (changed) renderShellStatus(shell);
-	}
+//	private static void configureShellAgent(
+//			InteractiveShell shell,
+//			Model model,
+//			Path configuredCwd,
+//			SessionRecorder nextRecorder,
+//			String nextSessionName) {
+//		Provider provider = requireCoreProvider(shell.providers, model.provider);
+//		Agent configured = newAgent(shell.arguments.systemPrompt, model, provider);
+//		configured.apiKey = shell.arguments.apiKey;
+//		configured.state.thinkingLevel =
+//				initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
+//		configureBuiltInTools(configured, configuredCwd, shell.arguments.systemPrompt);
+//		configured.state.tools.addAll(mcpTools(shell.mcp));
+//		subscribe(configured, event -> onShellAgentEvent(shell, event));
+//		shell.cwd = configuredCwd.toAbsolutePath().normalize();
+//		shell.agent = configured;
+//		shell.recorder = nextRecorder;
+//		shell.sessionName = nextSessionName;
+//		if (shell.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
+//			setShellActivity(shell, readyActivity(System.nanoTime()));
+//		}
+//		refreshShellStatus(shell);
+//	}
+//
+//	/** Updates cached workspace/model details, then redraws the live activity status. */
+//	private static void refreshShellStatus(InteractiveShell shell) {
+//		String branch = gitBranch(shell.cwd);
+//		shell.statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), shell.cwd)
+//				+ (branch == null ? "" : " [" + branch + "]")
+//				+ (shell.sessionName == null ? "" : " \u2022 " + shell.sessionName);
+//		shell.statusModel = shell.agent == null
+//				? ""
+//				: modelStatus(
+//						shell.agent.state.model,
+//						shell.agent.state.thinkingLevel,
+//						contextTokens(shell.agent.state.messages));
+//		renderShellStatus(shell);
+//	}
+//
+//	private static void tickShellStatus(InteractiveShell shell) {
+//		if (!isDynamicActivity(shell.activity)) return;
+//		try {
+//			renderShellStatus(shell);
+//		} catch (RuntimeException ignored) {
+//			// A best-effort repaint must not terminate the shell's status ticker.
+//		}
+//	}
+//
+//	private static void renderShellStatus(InteractiveShell shell) {
+//		ActivityStatus current = shell.activity;
+//		setStatus(
+//				shell.terminal,
+//				activityLabel(current, System.nanoTime()),
+//				activityAccent(current),
+//				shell.statusLocation,
+//				shell.statusModel);
+//	}
+//
+//	private static void setShellIdleActivity(InteractiveShell shell) {
+//		setShellActivity(shell, shell.agent == null
+//				? noModelActivity(System.nanoTime())
+//				: readyActivity(System.nanoTime()));
+//	}
+//
+//	private static void setShellActivity(InteractiveShell shell, ActivityStatus next) {
+//		boolean changed;
+//		synchronized (shell.activityLock) {
+//			ActivityStatus current = shell.activity;
+//			if (current.phase == ActivityStatus.Phase.STOPPING
+//					&& next.phase != ActivityStatus.Phase.READY
+//					&& next.phase != ActivityStatus.Phase.NO_MODEL) {
+//				return;
+//			}
+//			changed = !sameActivity(current, next);
+//			if (changed) shell.activity = next;
+//		}
+//		if (changed) renderShellStatus(shell);
+//	}
 
 	private static String shellCommandName(String input) {
 		String trimmed = input.trim();
@@ -12279,409 +12279,409 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return trimmed;
 	}
 
-	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
-	public static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
-		StringBuilder status = new StringBuilder(model.name);
-		if (level != null && level != ThinkingLevel.OFF) {
-			status.append(' ').append(shellThinkingLabel(level));
-		}
-		long percent = model.contextWindow > 0
-				? Math.max(0, Math.round(100.0 * contextTokens / model.contextWindow))
-				: 0;
-		return status.append(" (").append(percent).append("%)").toString();
-	}
-
-	private static String shellThinkingLabel(ThinkingLevel level) {
-		return switch (level) {
-			case OFF -> "Off";
-			case MINIMAL -> "Minimal";
-			case LOW -> "Low";
-			case MEDIUM -> "Medium";
-			case HIGH -> "High";
-			case XHIGH -> "XHigh";
-			case MAX -> "Max";
-		};
-	}
-
-	/** Context tokens consumed by the most recent successful assistant response. */
-	public static long contextTokens(List<Message> messages) {
-		for (int index = messages.size() - 1; index >= 0; index--) {
-			if (messages.get(index) instanceof AssistantMessage assistant
-					&& assistant.stopReason != StopReason.ERROR
-					&& assistant.stopReason != StopReason.ABORTED) {
-				Usage usage = assistant.usage;
-				long total = usage.totalTokens > 0
-						? usage.totalTokens
-						: usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-				if (total > 0) return total;
-			}
-		}
-		return 0;
-	}
-
-	/** Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}. */
-	public static String displayPath(Path home, Path cwd) {
-		Path absolute = cwd.toAbsolutePath().normalize();
-		if (home != null && !home.toString().isEmpty()) {
-			Path absoluteHome = home.toAbsolutePath().normalize();
-			if (absolute.startsWith(absoluteHome)) {
-				String relative = absoluteHome.relativize(absolute).toString().replace('\\', '/');
-				return relative.isEmpty() ? "~" : "~/" + relative;
-			}
-		}
-		return absolute.toString();
-	}
-
-	/** Reads the checked-out branch (or short detached commit) without spawning git. */
-	public static String gitBranch(Path directory) {
-		try {
-			for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
-				Path gitPath = current.resolve(".git");
-				if (Files.isRegularFile(gitPath)) {
-					// Worktree or submodule: .git is a file pointing at the real git dir.
-					String content = Files.readString(gitPath).trim();
-					if (!content.startsWith("gitdir:")) return null;
-					return readGitHead(current.resolve(content.substring("gitdir:".length()).trim()).normalize());
-				}
-				if (Files.isDirectory(gitPath)) return readGitHead(gitPath);
-			}
-		} catch (IOException | InvalidPathException ignored) {
-			// A missing or unreadable repository simply hides the branch segment.
-		}
-		return null;
-	}
-
-	private static String readGitHead(Path gitDir) throws IOException {
-		Path head = gitDir.resolve("HEAD");
-		if (!Files.isRegularFile(head)) return null;
-		String content = Files.readString(head).trim();
-		if (content.startsWith("ref:")) {
-			String ref = content.substring("ref:".length()).trim();
-			return ref.startsWith("refs/heads/") ? ref.substring("refs/heads/".length()) : ref;
-		}
-		if (content.isEmpty()) return null;
-		return content.length() > 7 ? content.substring(0, 7) : content;
-	}
-
-	private static void syncShellMcpTools(InteractiveShell shell) {
-		if (shell.agent == null || shell.agent.state.isStreaming) return;
-		shell.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
-		shell.agent.state.tools.addAll(mcpTools(shell.mcp));
-	}
-
-	private static GitHubCopilotProvider shellCopilotProvider(InteractiveShell shell) {
-		return (GitHubCopilotProvider)
-				requireCoreProvider(shell.providers, GitHubCopilotAuth.PROVIDER_ID);
-	}
-
-	private static ChatGptProvider shellChatGptProvider(InteractiveShell shell) {
-		return (ChatGptProvider) requireCoreProvider(shell.providers, ChatGptAuth.PROVIDER_ID);
-	}
-
-	private static Model shellSavedModelIn(InteractiveShell shell, List<Model> models) {
-		if (shell.settings.defaultProvider == null || shell.settings.defaultModel == null) return null;
-		return findModelIn(models, shell.settings.defaultProvider, shell.settings.defaultModel);
-	}
-
-	/** Clamps the configured (or default) thinking level to what the model supports. */
-	public static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
-		return clampThinkingLevel(model, configuredLevel == null ? ThinkingLevel.MEDIUM : configuredLevel);
-	}
-
-	public static Model preferredCopilotModel(List<Model> models) {
-		for (Model model : models) {
-			if (model.id.equals("gpt-5.4")) {
-				return model;
-			}
-		}
-		return models.isEmpty() ? null : models.getFirst();
-	}
-
-	public static Model preferredChatGptModel(List<Model> models) {
-		for (String preferred : List.of("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4")) {
-			for (Model model : models) {
-				if (model.id.equals(preferred)) return model;
-			}
-		}
-		return models.isEmpty() ? null : models.getFirst();
-	}
-
-	private static Model findModelIn(List<Model> models, String provider, String id) {
-		for (Model model : models) {
-			if (model.provider.equals(provider) && model.id.equals(id)) return model;
-		}
-		return null;
-	}
-
-	private static SelectItem<Model> shellModelItem(Model model) {
-		String description = "[" + model.provider + "] " + model.name;
-		return selectItem(
-				model, model.id, description, model.provider + " " + model.id + " " + model.name);
-	}
-
-	private static int shellModelIndex(List<Model> models, Model selected) {
-		for (int index = 0; index < models.size(); index++) {
-			Model model = models.get(index);
-			if (model.provider.equals(selected.provider) && model.id.equals(selected.id)) {
-				return index;
-			}
-		}
-		return -1;
-	}
-
-	private static void showShellTurnDetails(InteractiveShell shell, boolean lineEditorActive) {
-		if (shell.agent == null) {
-			showShellShortcutStatus(shell, "No model is configured.", lineEditorActive);
-			return;
-		}
-		TurnDetailsComponent details =
-				turnDetailsForLatestTurn(shell.agent.state.messages, shell.hideThinkingBlock);
-		if (details == null) {
-			showShellShortcutStatus(
-					shell, "The latest turn has no reasoning or tool details.", lineEditorActive);
-			return;
-		}
-		try {
-			boolean hiddenAfter = runComponent(shell.terminal, turnDetailsComponent(details));
-			if (hiddenAfter != shell.hideThinkingBlock) {
-				setShellHideThinkingBlock(shell, hiddenAfter, lineEditorActive);
-			}
-		} catch (IOException error) {
-			showShellShortcutStatus(
-					shell, "Could not open turn details: " + error.getMessage(), lineEditorActive);
-		}
-	}
-
-	private static void setShellHideThinkingBlock(
-			InteractiveShell shell, boolean hidden, boolean lineEditorActive) {
-		shell.hideThinkingBlock = hidden;
-		shell.settings = withSettingsHideThinkingBlock(shell.settings, hidden);
-		String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
-		try {
-			setSettingsHideThinkingBlock(shell.settingsStore, hidden);
-		} catch (IOException error) {
-			status += " (could not save: " + error.getMessage() + ")";
-		}
-		showShellShortcutStatus(shell, status, lineEditorActive);
-	}
-
-	private static void showShellShortcutStatus(
-			InteractiveShell shell, String status, boolean lineEditorActive) {
-		if (lineEditorActive) printAbove(shell.terminal, status);
-		else println(shell.terminal, status);
-	}
-
-	private static void onShellAgentEvent(InteractiveShell shell, AgentEvent event) {
-		switch (event) {
-			case AgentEvent.AgentStart ignored -> setShellActivity(
-					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-			case AgentEvent.AgentEnd ignored -> setShellActivity(shell, readyActivity(System.nanoTime()));
-			case AgentEvent.InstructionLoaded loaded -> {
-				finishShellStreamOutput(shell);
-				println(shell.terminal, instructionLoadedMessage(loaded.path));
-			}
-			case AgentEvent.CompactionStart ignored -> setShellActivity(
-					shell, activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
-			case AgentEvent.CompactionEnd end -> {
-				persistShellCompaction(shell, end.result);
-				if (shell.agent != null && shell.agent.state.isStreaming) {
-					setShellActivity(
-							shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-				} else {
-					setShellActivity(shell, readyActivity(System.nanoTime()));
-				}
-				refreshShellStatus(shell);
-			}
-			case AgentEvent.TurnStart ignored -> setShellActivity(
-					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
-			case AgentEvent.MessageUpdate update -> onShellMessageUpdate(shell, update.providerEvent);
-			case AgentEvent.MessageEnd end -> {
-				if (end.message instanceof AssistantMessage) {
-					finishShellStreamOutput(shell);
-					refreshShellStatus(shell);
-				}
-			}
-			case AgentEvent.AutoRetryStart retry -> {
-				setShellActivity(shell, retryingActivity(
-						retry.attempt, retry.maxAttempts, retry.delayMs, System.nanoTime()));
-				finishShellStreamOutput(shell);
-				println(shell.terminal, "\nTransient provider error; retrying in "
-						+ formatRetryDelay(retry.delayMs)
-						+ " (" + retry.attempt + "/" + retry.maxAttempts + "): "
-						+ retry.errorMessage);
-			}
-			case AgentEvent.ToolExecutionStart start -> {
-				setShellActivity(shell, activeActivity(
-						ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
-				finishShellStreamOutput(shell);
-				println(shell.terminal, "\n[" + start.toolName + "] "
-						+ toolCallDescription(start.toolName, start.arguments));
-			}
-			case AgentEvent.ToolExecutionEnd end -> {
-				String label = end.result.isError ? "Error" : "Done";
-				println(shell.terminal, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
-			}
-			default -> {
-				// Turn-end and low-level update events do not change the presentation phase.
-			}
-		}
-	}
-
-	/** Saves every successful manual or automatic compaction as a resume boundary. */
-	private static void persistShellCompaction(InteractiveShell shell, CompactionResult result) {
-		if (shell.recorder == null) return;
-		try {
-			appendSessionCompaction(shell.recorder, result);
-		} catch (IOException error) {
-			// The live agent state has already been compacted. Keep the turn usable,
-			// but make the loss of the resume boundary visible to the user.
-			println(shell.terminal, "Warning: compacted context could not be saved for resume: " + error.getMessage());
-		}
-	}
-
-	private static void onShellMessageUpdate(InteractiveShell shell, AssistantMessageEvent event) {
-		updateShellStreamingActivity(shell, event);
-		Theme theme = terminalTheme(shell.terminal);
-		switch (event) {
-			case AssistantMessageEvent.ThinkingStart ignored -> {
-				if (!shell.hideThinkingBlock) {
-					finishShellStreamOutput(shell);
-					print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-					shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
-					shell.streamedThinkingCharacters = 0;
-				}
-			}
-			case AssistantMessageEvent.ThinkingDelta delta -> {
-				if (!shell.hideThinkingBlock) {
-					if (shell.streamOutput != InteractiveShell.StreamOutput.THINKING) {
-						print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-						shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
-						shell.streamedThinkingCharacters = 0;
-					}
-					print(shell.terminal, theme.muted + delta.delta + theme.reset);
-					shell.streamedThinkingCharacters += delta.delta.length();
-				}
-			}
-			case AssistantMessageEvent.ThinkingEnd end -> {
-				if (!shell.hideThinkingBlock
-						&& shell.streamOutput == InteractiveShell.StreamOutput.THINKING) {
-					if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-						print(shell.terminal, theme.muted + end.content + theme.reset);
-					}
-					finishShellStreamOutput(shell);
-				}
-			}
-			case AssistantMessageEvent.TextStart ignored -> {
-				finishShellStreamOutput(shell);
-				shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
-			}
-			case AssistantMessageEvent.TextDelta delta -> {
-				if (shell.streamOutput != InteractiveShell.StreamOutput.TEXT) {
-					finishShellStreamOutput(shell);
-					shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
-				}
-				print(shell.terminal, delta.delta);
-				shell.emittedText = true;
-			}
-			case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput(shell);
-			default -> {
-				// Tool-call argument streaming is rendered once execution starts.
-			}
-		}
-	}
-
-	private static void updateShellStreamingActivity(
-			InteractiveShell shell, AssistantMessageEvent event) {
-		long now = System.nanoTime();
-		switch (event) {
-			case AssistantMessageEvent.ThinkingStart ignored -> setShellActivity(
-					shell, activeActivity(ActivityStatus.Phase.REASONING, now));
-			case AssistantMessageEvent.TextStart ignored -> setShellActivity(
-					shell, activeActivity(ActivityStatus.Phase.RESPONDING, now));
-			case AssistantMessageEvent.ToolCallStart start -> setShellActivity(shell, activeActivity(
-					ActivityStatus.Phase.PREPARING_TOOL,
-					streamedToolName(start.contentIndex, start.partial),
-					now));
-			case AssistantMessageEvent.ToolCallEnd end -> setShellActivity(shell, activeActivity(
-					ActivityStatus.Phase.PREPARING_TOOL, end.toolCall.name, now));
-			default -> {
-				// End events retain the current phase until another block or AgentEnd.
-			}
-		}
-	}
-
-	private static String streamedToolName(int contentIndex, AssistantMessage message) {
-		if (contentIndex >= 0
-				&& contentIndex < message.content.size()
-				&& message.content.get(contentIndex) instanceof ToolCall call) {
-			return call.name;
-		}
-		return "";
-	}
-
-	private static void finishShellStreamOutput(InteractiveShell shell) {
-		if (shell.streamOutput != InteractiveShell.StreamOutput.NONE) {
-			println(shell.terminal, "");
-			shell.streamOutput = InteractiveShell.StreamOutput.NONE;
-		}
-	}
-
-	/** One-line description of the work a tool call is about to perform. */
-	public static String toolCallDescription(String toolName, ObjectNode arguments) {
-		return switch (toolName) {
-			case "read" -> {
-				int offset = arguments.path("offset").asInt(1);
-				int limit = arguments.path("limit").asInt();
-				yield "Reading " + toolTextArgument(arguments, "path", ".")
-						+ (limit > 0 ? " (lines " + offset + "-" + (offset + limit - 1) + ")" : " (from line " + offset + ")");
-			}
-			case "write" -> "Writing " + toolTextArgument(arguments, "path", ".") + " (" + toolTextArgument(arguments, "content", "").length() + " characters)";
-			case "edit" -> "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
-			case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
-			case "grep" -> "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-			case "find" -> "Finding " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-			case "ls" -> "Listing " + toolTextArgument(arguments, "path", ".");
-			default -> abbreviateShellText(arguments.toString(), 240);
-		};
-	}
-
-	/** One-line summary of a completed tool result. */
-	public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
-		return toolResultSummary(toolName, toolResultContentText(result.content), result.isError);
-	}
-
-	private static String toolResultSummary(String toolName, String output, boolean error) {
-		if (output.isBlank()) {
-			return error ? "Tool failed without an error message." : "Completed.";
-		}
-		if (toolName.equals("read") && !error) {
-			return "Read " + output.lines().count() + " line(s).";
-		}
-		return abbreviateShellText(output, error ? 480 : 320);
-	}
-
-	private static String toolResultContentText(List<UserContent> content) {
-		StringBuilder text = new StringBuilder();
-		for (UserContent block : content) {
-			if (block instanceof TextContent value) {
-				if (!text.isEmpty()) {
-					text.append('\n');
-				}
-				text.append(value.text);
-			}
-		}
-		return text.toString();
-	}
-
-	private static String toolTextArgument(ObjectNode arguments, String name, String fallback) {
-		JsonNode value = arguments.get(name);
-		return value != null && value.isTextual() ? value.asText() : fallback;
-	}
-
-	private static String abbreviateShellText(String value, int maximumLength) {
-		String normalized = value.replaceAll("\\s+", " ").trim();
-		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
-	}
+//	/** Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}. */
+//	public static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
+//		StringBuilder status = new StringBuilder(model.name);
+//		if (level != null && level != ThinkingLevel.OFF) {
+//			status.append(' ').append(shellThinkingLabel(level));
+//		}
+//		long percent = model.contextWindow > 0
+//				? Math.max(0, Math.round(100.0 * contextTokens / model.contextWindow))
+//				: 0;
+//		return status.append(" (").append(percent).append("%)").toString();
+//	}
+//
+//	private static String shellThinkingLabel(ThinkingLevel level) {
+//		return switch (level) {
+//			case OFF -> "Off";
+//			case MINIMAL -> "Minimal";
+//			case LOW -> "Low";
+//			case MEDIUM -> "Medium";
+//			case HIGH -> "High";
+//			case XHIGH -> "XHigh";
+//			case MAX -> "Max";
+//		};
+//	}
+//
+//	/** Context tokens consumed by the most recent successful assistant response. */
+//	public static long contextTokens(List<Message> messages) {
+//		for (int index = messages.size() - 1; index >= 0; index--) {
+//			if (messages.get(index) instanceof AssistantMessage assistant
+//					&& assistant.stopReason != StopReason.ERROR
+//					&& assistant.stopReason != StopReason.ABORTED) {
+//				Usage usage = assistant.usage;
+//				long total = usage.totalTokens > 0
+//						? usage.totalTokens
+//						: usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+//				if (total > 0) return total;
+//			}
+//		}
+//		return 0;
+//	}
+//
+//	/** Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}. */
+//	public static String displayPath(Path home, Path cwd) {
+//		Path absolute = cwd.toAbsolutePath().normalize();
+//		if (home != null && !home.toString().isEmpty()) {
+//			Path absoluteHome = home.toAbsolutePath().normalize();
+//			if (absolute.startsWith(absoluteHome)) {
+//				String relative = absoluteHome.relativize(absolute).toString().replace('\\', '/');
+//				return relative.isEmpty() ? "~" : "~/" + relative;
+//			}
+//		}
+//		return absolute.toString();
+//	}
+//
+//	/** Reads the checked-out branch (or short detached commit) without spawning git. */
+//	public static String gitBranch(Path directory) {
+//		try {
+//			for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
+//				Path gitPath = current.resolve(".git");
+//				if (Files.isRegularFile(gitPath)) {
+//					// Worktree or submodule: .git is a file pointing at the real git dir.
+//					String content = Files.readString(gitPath).trim();
+//					if (!content.startsWith("gitdir:")) return null;
+//					return readGitHead(current.resolve(content.substring("gitdir:".length()).trim()).normalize());
+//				}
+//				if (Files.isDirectory(gitPath)) return readGitHead(gitPath);
+//			}
+//		} catch (IOException | InvalidPathException ignored) {
+//			// A missing or unreadable repository simply hides the branch segment.
+//		}
+//		return null;
+//	}
+//
+//	private static String readGitHead(Path gitDir) throws IOException {
+//		Path head = gitDir.resolve("HEAD");
+//		if (!Files.isRegularFile(head)) return null;
+//		String content = Files.readString(head).trim();
+//		if (content.startsWith("ref:")) {
+//			String ref = content.substring("ref:".length()).trim();
+//			return ref.startsWith("refs/heads/") ? ref.substring("refs/heads/".length()) : ref;
+//		}
+//		if (content.isEmpty()) return null;
+//		return content.length() > 7 ? content.substring(0, 7) : content;
+//	}
+//
+//	private static void syncShellMcpTools(InteractiveShell shell) {
+//		if (shell.agent == null || shell.agent.state.isStreaming) return;
+//		shell.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
+//		shell.agent.state.tools.addAll(mcpTools(shell.mcp));
+//	}
+//
+//	private static GitHubCopilotProvider shellCopilotProvider(InteractiveShell shell) {
+//		return (GitHubCopilotProvider)
+//				requireCoreProvider(shell.providers, GitHubCopilotAuth.PROVIDER_ID);
+//	}
+//
+//	private static ChatGptProvider shellChatGptProvider(InteractiveShell shell) {
+//		return (ChatGptProvider) requireCoreProvider(shell.providers, ChatGptAuth.PROVIDER_ID);
+//	}
+//
+//	private static Model shellSavedModelIn(InteractiveShell shell, List<Model> models) {
+//		if (shell.settings.defaultProvider == null || shell.settings.defaultModel == null) return null;
+//		return findModelIn(models, shell.settings.defaultProvider, shell.settings.defaultModel);
+//	}
+//
+//	/** Clamps the configured (or default) thinking level to what the model supports. */
+//	public static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
+//		return clampThinkingLevel(model, configuredLevel == null ? ThinkingLevel.MEDIUM : configuredLevel);
+//	}
+//
+//	public static Model preferredCopilotModel(List<Model> models) {
+//		for (Model model : models) {
+//			if (model.id.equals("gpt-5.4")) {
+//				return model;
+//			}
+//		}
+//		return models.isEmpty() ? null : models.getFirst();
+//	}
+//
+//	public static Model preferredChatGptModel(List<Model> models) {
+//		for (String preferred : List.of("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4")) {
+//			for (Model model : models) {
+//				if (model.id.equals(preferred)) return model;
+//			}
+//		}
+//		return models.isEmpty() ? null : models.getFirst();
+//	}
+//
+//	private static Model findModelIn(List<Model> models, String provider, String id) {
+//		for (Model model : models) {
+//			if (model.provider.equals(provider) && model.id.equals(id)) return model;
+//		}
+//		return null;
+//	}
+//
+//	private static SelectItem<Model> shellModelItem(Model model) {
+//		String description = "[" + model.provider + "] " + model.name;
+//		return selectItem(
+//				model, model.id, description, model.provider + " " + model.id + " " + model.name);
+//	}
+//
+//	private static int shellModelIndex(List<Model> models, Model selected) {
+//		for (int index = 0; index < models.size(); index++) {
+//			Model model = models.get(index);
+//			if (model.provider.equals(selected.provider) && model.id.equals(selected.id)) {
+//				return index;
+//			}
+//		}
+//		return -1;
+//	}
+//
+//	private static void showShellTurnDetails(InteractiveShell shell, boolean lineEditorActive) {
+//		if (shell.agent == null) {
+//			showShellShortcutStatus(shell, "No model is configured.", lineEditorActive);
+//			return;
+//		}
+//		TurnDetailsComponent details =
+//				turnDetailsForLatestTurn(shell.agent.state.messages, shell.hideThinkingBlock);
+//		if (details == null) {
+//			showShellShortcutStatus(
+//					shell, "The latest turn has no reasoning or tool details.", lineEditorActive);
+//			return;
+//		}
+//		try {
+//			boolean hiddenAfter = runComponent(shell.terminal, turnDetailsComponent(details));
+//			if (hiddenAfter != shell.hideThinkingBlock) {
+//				setShellHideThinkingBlock(shell, hiddenAfter, lineEditorActive);
+//			}
+//		} catch (IOException error) {
+//			showShellShortcutStatus(
+//					shell, "Could not open turn details: " + error.getMessage(), lineEditorActive);
+//		}
+//	}
+//
+//	private static void setShellHideThinkingBlock(
+//			InteractiveShell shell, boolean hidden, boolean lineEditorActive) {
+//		shell.hideThinkingBlock = hidden;
+//		shell.settings = withSettingsHideThinkingBlock(shell.settings, hidden);
+//		String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
+//		try {
+//			setSettingsHideThinkingBlock(shell.settingsStore, hidden);
+//		} catch (IOException error) {
+//			status += " (could not save: " + error.getMessage() + ")";
+//		}
+//		showShellShortcutStatus(shell, status, lineEditorActive);
+//	}
+//
+//	private static void showShellShortcutStatus(
+//			InteractiveShell shell, String status, boolean lineEditorActive) {
+//		if (lineEditorActive) printAbove(shell.terminal, status);
+//		else println(shell.terminal, status);
+//	}
+//
+//	private static void onShellAgentEvent(InteractiveShell shell, AgentEvent event) {
+//		switch (event) {
+//			case AgentEvent.AgentStart ignored -> setShellActivity(
+//					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+//			case AgentEvent.AgentEnd ignored -> setShellActivity(shell, readyActivity(System.nanoTime()));
+//			case AgentEvent.InstructionLoaded loaded -> {
+//				finishShellStreamOutput(shell);
+//				println(shell.terminal, instructionLoadedMessage(loaded.path));
+//			}
+//			case AgentEvent.CompactionStart ignored -> setShellActivity(
+//					shell, activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
+//			case AgentEvent.CompactionEnd end -> {
+//				persistShellCompaction(shell, end.result);
+//				if (shell.agent != null && shell.agent.state.isStreaming) {
+//					setShellActivity(
+//							shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+//				} else {
+//					setShellActivity(shell, readyActivity(System.nanoTime()));
+//				}
+//				refreshShellStatus(shell);
+//			}
+//			case AgentEvent.TurnStart ignored -> setShellActivity(
+//					shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+//			case AgentEvent.MessageUpdate update -> onShellMessageUpdate(shell, update.providerEvent);
+//			case AgentEvent.MessageEnd end -> {
+//				if (end.message instanceof AssistantMessage) {
+//					finishShellStreamOutput(shell);
+//					refreshShellStatus(shell);
+//				}
+//			}
+//			case AgentEvent.AutoRetryStart retry -> {
+//				setShellActivity(shell, retryingActivity(
+//						retry.attempt, retry.maxAttempts, retry.delayMs, System.nanoTime()));
+//				finishShellStreamOutput(shell);
+//				println(shell.terminal, "\nTransient provider error; retrying in "
+//						+ formatRetryDelay(retry.delayMs)
+//						+ " (" + retry.attempt + "/" + retry.maxAttempts + "): "
+//						+ retry.errorMessage);
+//			}
+//			case AgentEvent.ToolExecutionStart start -> {
+//				setShellActivity(shell, activeActivity(
+//						ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
+//				finishShellStreamOutput(shell);
+//				println(shell.terminal, "\n[" + start.toolName + "] "
+//						+ toolCallDescription(start.toolName, start.arguments));
+//			}
+//			case AgentEvent.ToolExecutionEnd end -> {
+//				String label = end.result.isError ? "Error" : "Done";
+//				println(shell.terminal, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
+//			}
+//			default -> {
+//				// Turn-end and low-level update events do not change the presentation phase.
+//			}
+//		}
+//	}
+//
+//	/** Saves every successful manual or automatic compaction as a resume boundary. */
+//	private static void persistShellCompaction(InteractiveShell shell, CompactionResult result) {
+//		if (shell.recorder == null) return;
+//		try {
+//			appendSessionCompaction(shell.recorder, result);
+//		} catch (IOException error) {
+//			// The live agent state has already been compacted. Keep the turn usable,
+//			// but make the loss of the resume boundary visible to the user.
+//			println(shell.terminal, "Warning: compacted context could not be saved for resume: " + error.getMessage());
+//		}
+//	}
+//
+//	private static void onShellMessageUpdate(InteractiveShell shell, AssistantMessageEvent event) {
+//		updateShellStreamingActivity(shell, event);
+//		Theme theme = terminalTheme(shell.terminal);
+//		switch (event) {
+//			case AssistantMessageEvent.ThinkingStart ignored -> {
+//				if (!shell.hideThinkingBlock) {
+//					finishShellStreamOutput(shell);
+//					print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+//					shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+//					shell.streamedThinkingCharacters = 0;
+//				}
+//			}
+//			case AssistantMessageEvent.ThinkingDelta delta -> {
+//				if (!shell.hideThinkingBlock) {
+//					if (shell.streamOutput != InteractiveShell.StreamOutput.THINKING) {
+//						print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+//						shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+//						shell.streamedThinkingCharacters = 0;
+//					}
+//					print(shell.terminal, theme.muted + delta.delta + theme.reset);
+//					shell.streamedThinkingCharacters += delta.delta.length();
+//				}
+//			}
+//			case AssistantMessageEvent.ThinkingEnd end -> {
+//				if (!shell.hideThinkingBlock
+//						&& shell.streamOutput == InteractiveShell.StreamOutput.THINKING) {
+//					if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
+//						print(shell.terminal, theme.muted + end.content + theme.reset);
+//					}
+//					finishShellStreamOutput(shell);
+//				}
+//			}
+//			case AssistantMessageEvent.TextStart ignored -> {
+//				finishShellStreamOutput(shell);
+//				shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+//			}
+//			case AssistantMessageEvent.TextDelta delta -> {
+//				if (shell.streamOutput != InteractiveShell.StreamOutput.TEXT) {
+//					finishShellStreamOutput(shell);
+//					shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+//				}
+//				print(shell.terminal, delta.delta);
+//				shell.emittedText = true;
+//			}
+//			case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput(shell);
+//			default -> {
+//				// Tool-call argument streaming is rendered once execution starts.
+//			}
+//		}
+//	}
+//
+//	private static void updateShellStreamingActivity(
+//			InteractiveShell shell, AssistantMessageEvent event) {
+//		long now = System.nanoTime();
+//		switch (event) {
+//			case AssistantMessageEvent.ThinkingStart ignored -> setShellActivity(
+//					shell, activeActivity(ActivityStatus.Phase.REASONING, now));
+//			case AssistantMessageEvent.TextStart ignored -> setShellActivity(
+//					shell, activeActivity(ActivityStatus.Phase.RESPONDING, now));
+//			case AssistantMessageEvent.ToolCallStart start -> setShellActivity(shell, activeActivity(
+//					ActivityStatus.Phase.PREPARING_TOOL,
+//					streamedToolName(start.contentIndex, start.partial),
+//					now));
+//			case AssistantMessageEvent.ToolCallEnd end -> setShellActivity(shell, activeActivity(
+//					ActivityStatus.Phase.PREPARING_TOOL, end.toolCall.name, now));
+//			default -> {
+//				// End events retain the current phase until another block or AgentEnd.
+//			}
+//		}
+//	}
+//
+//	private static String streamedToolName(int contentIndex, AssistantMessage message) {
+//		if (contentIndex >= 0
+//				&& contentIndex < message.content.size()
+//				&& message.content.get(contentIndex) instanceof ToolCall call) {
+//			return call.name;
+//		}
+//		return "";
+//	}
+//
+//	private static void finishShellStreamOutput(InteractiveShell shell) {
+//		if (shell.streamOutput != InteractiveShell.StreamOutput.NONE) {
+//			println(shell.terminal, "");
+//			shell.streamOutput = InteractiveShell.StreamOutput.NONE;
+//		}
+//	}
+//
+//	/** One-line description of the work a tool call is about to perform. */
+//	public static String toolCallDescription(String toolName, ObjectNode arguments) {
+//		return switch (toolName) {
+//			case "read" -> {
+//				int offset = arguments.path("offset").asInt(1);
+//				int limit = arguments.path("limit").asInt();
+//				yield "Reading " + toolTextArgument(arguments, "path", ".")
+//						+ (limit > 0 ? " (lines " + offset + "-" + (offset + limit - 1) + ")" : " (from line " + offset + ")");
+//			}
+//			case "write" -> "Writing " + toolTextArgument(arguments, "path", ".") + " (" + toolTextArgument(arguments, "content", "").length() + " characters)";
+//			case "edit" -> "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
+//			case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
+//			case "grep" -> "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
+//			case "find" -> "Finding " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
+//			case "ls" -> "Listing " + toolTextArgument(arguments, "path", ".");
+//			default -> abbreviateShellText(arguments.toString(), 240);
+//		};
+//	}
+//
+//	/** One-line summary of a completed tool result. */
+//	public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
+//		return toolResultSummary(toolName, toolResultContentText(result.content), result.isError);
+//	}
+//
+//	private static String toolResultSummary(String toolName, String output, boolean error) {
+//		if (output.isBlank()) {
+//			return error ? "Tool failed without an error message." : "Completed.";
+//		}
+//		if (toolName.equals("read") && !error) {
+//			return "Read " + output.lines().count() + " line(s).";
+//		}
+//		return abbreviateShellText(output, error ? 480 : 320);
+//	}
+//
+//	private static String toolResultContentText(List<UserContent> content) {
+//		StringBuilder text = new StringBuilder();
+//		for (UserContent block : content) {
+//			if (block instanceof TextContent value) {
+//				if (!text.isEmpty()) {
+//					text.append('\n');
+//				}
+//				text.append(value.text);
+//			}
+//		}
+//		return text.toString();
+//	}
+//
+//	private static String toolTextArgument(ObjectNode arguments, String name, String fallback) {
+//		JsonNode value = arguments.get(name);
+//		return value != null && value.isTextual() ? value.asText() : fallback;
+//	}
+//
+//	private static String abbreviateShellText(String value, int maximumLength) {
+//		String normalized = value.replaceAll("\\s+", " ").trim();
+//		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
+//	}
 
 	// ------------------------------------------------------------- rpc server
 
@@ -12789,157 +12789,157 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	private static void promptRpc(RpcServer server, String id, ObjectNode command)
-			throws InterruptedException, IOException {
-		JsonNode message = command.get("message");
-		if (message == null || !message.isTextual() || message.asText().isBlank()) {
-			throw new IllegalArgumentException("prompt requires a non-empty string message");
-		}
-		mcpAwaitReady(server.mcp);
-		syncRpcMcpTools(server);
-		List<Message> messages = prompt(server.agent, message.asText());
-		if (server.recorder != null) appendSessionMessages(server.recorder, messages);
-		respondRpc(id, "prompt", true, null, null);
-	}
-
-	private static void setRpcModel(RpcServer server, String id, ObjectNode command) throws IOException {
-		String provider = requiredRpcText(command, "provider");
-		String modelId = requiredRpcText(command, "modelId");
-		Model model = requireCatalogModel(server.providers.catalog, provider, modelId);
-		resetRpcAgent(server, model);
-		respondRpc(id, "set_model", true, Json.MAPPER.valueToTree(model), null);
-	}
-
-	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
-		Provider provider = requireCoreProvider(server.providers, model.provider);
-		server.agent = newAgent(server.arguments.systemPrompt, model, provider);
-		server.agent.apiKey = server.arguments.apiKey;
-		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
-		server.agent.state.tools.addAll(mcpTools(server.mcp));
-		subscribe(server.agent, event -> onRpcAgentEvent(server, event));
-		server.recorder = server.arguments.noSession
-				? null
-				: createSessionRecorder(defaultSessionStore(), Path.of("."), model.provider, model.id);
-	}
-
-	private static void syncRpcMcpTools(RpcServer server) {
-		server.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
-		server.agent.state.tools.addAll(mcpTools(server.mcp));
-	}
-
-	private static Model resolveRpcModel(CoreProviders providers, String providerArg, String modelArg) {
-		if (modelArg == null) {
-			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
-		}
-		if (modelArg.contains("/")) {
-			String[] parts = modelArg.split("/", 2);
-			if (providerArg != null && !providerArg.equals(parts[0])) {
-				throw new IllegalArgumentException("--provider conflicts with the provider in --model");
-			}
-			return requireCatalogModel(providers.catalog, parts[0], parts[1]);
-		}
-		if (providerArg == null) {
-			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
-		}
-		return requireCatalogModel(providers.catalog, providerArg, modelArg);
-	}
-
-	private static ObjectNode rpcState(RpcServer server) {
-		ObjectNode data = jsonObject();
-		data.set("model", Json.MAPPER.valueToTree(server.agent.state.model));
-		data.put("isStreaming", server.agent.state.isStreaming);
-		data.put("isCompacting", server.agent.state.isCompacting);
-		data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
-		data.put("messageCount", server.agent.state.messages.size());
-		data.put("sessionId", server.recorder == null ? "" : server.recorder.sessionId);
-		return data;
-	}
-
-	private static void onRpcAgentEvent(RpcServer server, AgentEvent event) {
-		ObjectNode node = jsonObject();
-		switch (event) {
-			case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
-			case AgentEvent.AgentEnd end -> {
-				node.put("type", "agent_settled");
-				node.put("messageCount", end.newMessages.size());
-			}
-			case AgentEvent.InstructionLoaded loaded -> {
-				node.put("type", "instruction_loaded");
-				node.put("path", loaded.path.toString());
-			}
-			case AgentEvent.CompactionStart start -> {
-				node.put("type", "compaction_start");
-				node.put("tokensBefore", start.tokensBefore);
-			}
-			case AgentEvent.CompactionEnd end -> {
-				persistRpcCompaction(server, end.result);
-				node.put("type", "compaction_end");
-				node.put("tokensBefore", end.result.tokensBefore);
-				node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
-			}
-			case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
-			case AgentEvent.TurnEnd end -> {
-				node.put("type", "turn_end");
-				node.put("toolResultCount", end.toolResults.size());
-			}
-			case AgentEvent.AutoRetryStart retry -> {
-				node.put("type", "auto_retry_start");
-				node.put("attempt", retry.attempt);
-				node.put("maxAttempts", retry.maxAttempts);
-				node.put("delayMs", retry.delayMs);
-				node.put("error", retry.errorMessage);
-			}
-			case AgentEvent.AutoRetryEnd retry -> {
-				node.put("type", "auto_retry_end");
-				node.put("success", retry.success);
-				node.put("attempt", retry.attempt);
-				if (retry.finalError != null) node.put("error", retry.finalError);
-			}
-			case AgentEvent.MessageStart start -> {
-				node.put("type", "message_start");
-				node.put("role", role(start.message));
-			}
-			case AgentEvent.MessageEnd end -> {
-				node.put("type", "message_end");
-				node.put("role", role(end.message));
-				if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
-			}
-			case AgentEvent.MessageUpdate update -> {
-				if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
-					node.put("type", "message_update");
-					node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
-				} else return;
-			}
-			case AgentEvent.ToolExecutionStart start -> {
-				node.put("type", "tool_execution_start");
-				node.put("toolCallId", start.toolCallId);
-				node.put("toolName", start.toolName);
-				node.set("arguments", start.arguments);
-			}
-			case AgentEvent.ToolExecutionUpdate ignored -> {
-				return;
-			}
-			case AgentEvent.ToolExecutionEnd end -> {
-				node.put("type", "tool_execution_end");
-				node.put("toolCallId", end.toolCallId);
-				node.put("toolName", end.toolName);
-				node.put("isError", end.result.isError);
-			}
-		}
-		outputRpc(node);
-	}
-
-	/** Saves every successful manual or automatic compaction as a resume boundary. */
-	private static void persistRpcCompaction(RpcServer server, CompactionResult result) {
-		if (server.recorder == null) return;
-		try {
-			appendSessionCompaction(server.recorder, result);
-		} catch (IOException error) {
-			// Never contaminate the JSONL protocol on stdout. The live state remains
-			// valid even if its append-only resume marker could not be written.
-			System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
-		}
-	}
+//	private static void promptRpc(RpcServer server, String id, ObjectNode command)
+//			throws InterruptedException, IOException {
+//		JsonNode message = command.get("message");
+//		if (message == null || !message.isTextual() || message.asText().isBlank()) {
+//			throw new IllegalArgumentException("prompt requires a non-empty string message");
+//		}
+//		mcpAwaitReady(server.mcp);
+//		syncRpcMcpTools(server);
+//		List<Message> messages = prompt(server.agent, message.asText());
+//		if (server.recorder != null) appendSessionMessages(server.recorder, messages);
+//		respondRpc(id, "prompt", true, null, null);
+//	}
+//
+//	private static void setRpcModel(RpcServer server, String id, ObjectNode command) throws IOException {
+//		String provider = requiredRpcText(command, "provider");
+//		String modelId = requiredRpcText(command, "modelId");
+//		Model model = requireCatalogModel(server.providers.catalog, provider, modelId);
+//		resetRpcAgent(server, model);
+//		respondRpc(id, "set_model", true, Json.MAPPER.valueToTree(model), null);
+//	}
+//
+//	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
+//		Provider provider = requireCoreProvider(server.providers, model.provider);
+//		server.agent = newAgent(server.arguments.systemPrompt, model, provider);
+//		server.agent.apiKey = server.arguments.apiKey;
+//		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
+//		server.agent.state.tools.addAll(mcpTools(server.mcp));
+//		subscribe(server.agent, event -> onRpcAgentEvent(server, event));
+//		server.recorder = server.arguments.noSession
+//				? null
+//				: createSessionRecorder(defaultSessionStore(), Path.of("."), model.provider, model.id);
+//	}
+//
+//	private static void syncRpcMcpTools(RpcServer server) {
+//		server.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
+//		server.agent.state.tools.addAll(mcpTools(server.mcp));
+//	}
+//
+//	private static Model resolveRpcModel(CoreProviders providers, String providerArg, String modelArg) {
+//		if (modelArg == null) {
+//			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
+//		}
+//		if (modelArg.contains("/")) {
+//			String[] parts = modelArg.split("/", 2);
+//			if (providerArg != null && !providerArg.equals(parts[0])) {
+//				throw new IllegalArgumentException("--provider conflicts with the provider in --model");
+//			}
+//			return requireCatalogModel(providers.catalog, parts[0], parts[1]);
+//		}
+//		if (providerArg == null) {
+//			throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
+//		}
+//		return requireCatalogModel(providers.catalog, providerArg, modelArg);
+//	}
+//
+//	private static ObjectNode rpcState(RpcServer server) {
+//		ObjectNode data = jsonObject();
+//		data.set("model", Json.MAPPER.valueToTree(server.agent.state.model));
+//		data.put("isStreaming", server.agent.state.isStreaming);
+//		data.put("isCompacting", server.agent.state.isCompacting);
+//		data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
+//		data.put("messageCount", server.agent.state.messages.size());
+//		data.put("sessionId", server.recorder == null ? "" : server.recorder.sessionId);
+//		return data;
+//	}
+//
+//	private static void onRpcAgentEvent(RpcServer server, AgentEvent event) {
+//		ObjectNode node = jsonObject();
+//		switch (event) {
+//			case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
+//			case AgentEvent.AgentEnd end -> {
+//				node.put("type", "agent_settled");
+//				node.put("messageCount", end.newMessages.size());
+//			}
+//			case AgentEvent.InstructionLoaded loaded -> {
+//				node.put("type", "instruction_loaded");
+//				node.put("path", loaded.path.toString());
+//			}
+//			case AgentEvent.CompactionStart start -> {
+//				node.put("type", "compaction_start");
+//				node.put("tokensBefore", start.tokensBefore);
+//			}
+//			case AgentEvent.CompactionEnd end -> {
+//				persistRpcCompaction(server, end.result);
+//				node.put("type", "compaction_end");
+//				node.put("tokensBefore", end.result.tokensBefore);
+//				node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
+//			}
+//			case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
+//			case AgentEvent.TurnEnd end -> {
+//				node.put("type", "turn_end");
+//				node.put("toolResultCount", end.toolResults.size());
+//			}
+//			case AgentEvent.AutoRetryStart retry -> {
+//				node.put("type", "auto_retry_start");
+//				node.put("attempt", retry.attempt);
+//				node.put("maxAttempts", retry.maxAttempts);
+//				node.put("delayMs", retry.delayMs);
+//				node.put("error", retry.errorMessage);
+//			}
+//			case AgentEvent.AutoRetryEnd retry -> {
+//				node.put("type", "auto_retry_end");
+//				node.put("success", retry.success);
+//				node.put("attempt", retry.attempt);
+//				if (retry.finalError != null) node.put("error", retry.finalError);
+//			}
+//			case AgentEvent.MessageStart start -> {
+//				node.put("type", "message_start");
+//				node.put("role", role(start.message));
+//			}
+//			case AgentEvent.MessageEnd end -> {
+//				node.put("type", "message_end");
+//				node.put("role", role(end.message));
+//				if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
+//			}
+//			case AgentEvent.MessageUpdate update -> {
+//				if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
+//					node.put("type", "message_update");
+//					node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
+//				} else return;
+//			}
+//			case AgentEvent.ToolExecutionStart start -> {
+//				node.put("type", "tool_execution_start");
+//				node.put("toolCallId", start.toolCallId);
+//				node.put("toolName", start.toolName);
+//				node.set("arguments", start.arguments);
+//			}
+//			case AgentEvent.ToolExecutionUpdate ignored -> {
+//				return;
+//			}
+//			case AgentEvent.ToolExecutionEnd end -> {
+//				node.put("type", "tool_execution_end");
+//				node.put("toolCallId", end.toolCallId);
+//				node.put("toolName", end.toolName);
+//				node.put("isError", end.result.isError);
+//			}
+//		}
+//		outputRpc(node);
+//	}
+//
+//	/** Saves every successful manual or automatic compaction as a resume boundary. */
+//	private static void persistRpcCompaction(RpcServer server, CompactionResult result) {
+//		if (server.recorder == null) return;
+//		try {
+//			appendSessionCompaction(server.recorder, result);
+//		} catch (IOException error) {
+//			// Never contaminate the JSONL protocol on stdout. The live state remains
+//			// valid even if its append-only resume marker could not be written.
+//			System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
+//		}
+//	}
 
 	private static void respondRpc(
 			String id, String command, boolean success, JsonNode data, String error) {
@@ -12953,800 +12953,800 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		outputRpc(response);
 	}
 
-	private static String requiredRpcText(ObjectNode command, String field) {
-		JsonNode value = command.get(field);
-		if (value == null || !value.isTextual() || value.asText().isBlank()) {
-			throw new IllegalArgumentException(field + " must be a non-empty string");
-		}
-		return value.asText();
-	}
+//	private static String requiredRpcText(ObjectNode command, String field) {
+//		JsonNode value = command.get(field);
+//		if (value == null || !value.isTextual() || value.asText().isBlank()) {
+//			throw new IllegalArgumentException(field + " must be a non-empty string");
+//		}
+//		return value.asText();
+//	}
 
 	private static synchronized void outputRpc(ObjectNode node) {
 		System.out.println(node);
 		System.out.flush();
 	}
 
-	// ----------------------------------------------------------- mcp selector
-
-	/**
-	 * Creates the MCP server/tool selector. Every applied change is passed to
-	 * {@code onChange}, which reports a failed save with UncheckedIOException.
-	 */
-	public static McpSelector newMcpSelector(McpManager manager, Consumer<McpSelector.Change> onChange) {
-		McpSelector selector = new McpSelector();
-		selector.manager = manager;
-		selector.onChange = onChange;
-		selector.names = mcpStatuses(manager).stream().map(status -> status.name).toList();
-		selector.filtered = selector.names;
-		return selector;
-	}
-
-	/** Binds a selector carrier to the full-screen host. */
-	public static TuiComponent<Void> mcpSelectorComponent(McpSelector selector) {
-		return new TuiComponent<>(
-				frame -> renderMcpSelector(selector, frame.width, frame.height, frame.theme),
-				input -> handleMcpSelectorInput(selector, input),
-				() -> selector.complete,
-				() -> null);
-	}
-
-	public static List<String> renderMcpSelector(McpSelector selector, int width, int height, Theme theme) {
-		if (selector.view == McpSelector.View.TOOLS) refreshMcpSelectorTools(selector);
-
-		List<String> lines = new ArrayList<>();
-		String title = selector.view == McpSelector.View.SERVERS
-				? "MCP Servers"
-				: "MCP Tools: " + selector.toolServer;
-		lines.add(theme.heading + truncatePlain(title, width) + theme.reset);
-		lines.add("");
-		String before = selector.query.substring(0, selector.queryCursor);
-		String after = selector.query.substring(selector.queryCursor);
-		lines.add(truncatePlain("Search: " + before + "|" + after, width));
-		lines.add("");
-		selector.optionStartRow = lines.size();
-		selector.visibleCount = Math.max(1, Math.min(10, height - 9));
-		int itemCount = mcpSelectorItemCount(selector);
-		selector.visibleStart = Math.max(0, Math.min(
-				selector.selectedIndex - selector.visibleCount / 2,
-				Math.max(0, itemCount - selector.visibleCount)));
-		int end = Math.min(itemCount, selector.visibleStart + selector.visibleCount);
-		if (itemCount == 0) {
-			String empty = selector.view == McpSelector.View.SERVERS
-					? "  No matching servers"
-					: "  No tools available";
-			lines.add(theme.muted + empty + theme.reset);
-		} else {
-			for (int index = selector.visibleStart; index < end; index++) {
-				String row = (index == selector.selectedIndex ? "> " : "  ")
-						+ mcpSelectorStatusLine(selector, index);
-				row = truncatePlain(row, width);
-				lines.add(index == selector.selectedIndex ? theme.heading + row + theme.reset : row);
-			}
-			if (selector.visibleStart > 0 || end < itemCount) {
-				lines.add(theme.muted + "  " + (selector.selectedIndex + 1) + "/" + itemCount + theme.reset);
-			}
-		}
-		lines.add("");
-		String detail = selector.changeError == null ? mcpSelectorDetail(selector) : selector.changeError;
-		if (detail != null) {
-			String style = selector.changeError == null ? theme.muted : warningStatus(theme);
-			lines.add(style + truncatePlain("  " + detail, width) + theme.reset);
-		}
-		if (selector.view == McpSelector.View.SERVERS && !selector.filtered.isEmpty()) {
-			McpManager.ServerStatus selected =
-					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
-			if (selected.authorizationUrl != null) {
-				String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, width - 2));
-				String link = hyperlink(label, selected.authorizationUrl);
-				lines.add(theme.muted + "  " + link + theme.reset);
-			}
-		}
-		String hint = selector.view == McpSelector.View.SERVERS
-				? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
-				: "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
-		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
-		return lines;
-	}
-
-	private static int mcpSelectorItemCount(McpSelector selector) {
-		return selector.view == McpSelector.View.SERVERS
-				? selector.filtered.size()
-				: selector.filteredTools.size();
-	}
-
-	private static String mcpSelectorStatusLine(McpSelector selector, int index) {
-		return selector.view == McpSelector.View.SERVERS
-				? mcpServerStatusLine(mcpStatus(selector.manager, selector.filtered.get(index)))
-				: mcpToolStatusLine(selector.filteredTools.get(index));
-	}
-
-	private static String mcpServerStatusLine(McpManager.ServerStatus status) {
-		return switch (status.state) {
-			case CONNECTING -> "⋯ " + status.name + "  Connecting";
-			case AUTHENTICATING -> "⋯ " + status.name + "  Waiting for OAuth";
-			case AUTH_REQUIRED -> "! " + status.name + "  Authentication required";
-			case CONNECTED -> "✓ " + status.name + "  Enabled · " + mcpServerToolCount(status);
-			case DISABLED -> "○ " + status.name + "  Disabled";
-			case FAILED -> "✗ " + status.name + "  Failed";
-		};
-	}
-
-	private static String mcpServerToolCount(McpManager.ServerStatus status) {
-		if (status.enabledToolCount == status.toolCount) return status.toolCount + " tool(s)";
-		return status.enabledToolCount + "/" + status.toolCount + " tool(s)";
-	}
-
-	private static String mcpToolStatusLine(McpManager.ToolStatus status) {
-		return (status.enabled ? "✓ " : "○ ") + status.name + "  " + (status.enabled ? "Enabled" : "Disabled");
-	}
-
-	private static String mcpSelectorDetail(McpSelector selector) {
-		if (selector.view == McpSelector.View.SERVERS) {
-			if (selector.filtered.isEmpty()) return null;
-			McpManager.ServerStatus selected =
-					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
-			return selected.message == null ? selected.target : selected.message;
-		}
-		if (selector.filteredTools.isEmpty()) return null;
-		String description = selector.filteredTools.get(selector.selectedIndex).description;
-		return description.isBlank() ? "No description" : description;
-	}
-
-	public static void handleMcpSelectorInput(McpSelector selector, TuiInput input) {
-		switch (input) {
-			case TuiInput.Key key -> handleMcpSelectorKey(selector, key);
-			case TuiInput.Mouse mouse -> handleMcpSelectorMouse(selector, mouse);
-			case TuiInput.Resize ignored -> {}
-		}
-	}
-
-	private static void handleMcpSelectorKey(McpSelector selector, TuiInput.Key key) {
-		switch (key.type) {
-			case UP -> moveMcpSelector(selector, -1);
-			case DOWN -> moveMcpSelector(selector, 1);
-			case PAGE_UP -> moveMcpSelector(selector, -Math.max(1, selector.visibleCount));
-			case PAGE_DOWN -> moveMcpSelector(selector, Math.max(1, selector.visibleCount));
-			case ENTER -> toggleMcpSelectorItem(selector);
-			case TAB -> toggleMcpSelectorView(selector);
-			case ESCAPE, CANCEL -> {
-				if (selector.view == McpSelector.View.TOOLS) closeMcpSelectorTools(selector);
-				else selector.complete = true;
-			}
-			case CHARACTER, PASTE -> insertMcpSelectorQuery(selector, key.text);
-			case BACKSPACE -> backspaceMcpSelectorQuery(selector);
-			case DELETE -> deleteMcpSelectorQuery(selector);
-			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
-			case RIGHT -> selector.queryCursor = Math.min(selector.query.length(), selector.queryCursor + 1);
-			case HOME -> selector.queryCursor = 0;
-			case END -> selector.queryCursor = selector.query.length();
-			case CLEAR -> {
-				selector.query.setLength(0);
-				selector.queryCursor = 0;
-				filterMcpSelector(selector);
-			}
-			default -> {}
-		}
-	}
-
-	private static void handleMcpSelectorMouse(McpSelector selector, TuiInput.Mouse mouse) {
-		switch (mouse.action) {
-			case SCROLL_UP -> moveMcpSelector(selector, -1);
-			case SCROLL_DOWN -> moveMcpSelector(selector, 1);
-			case PRESS -> {
-				int offset = mouse.y - 1 - selector.optionStartRow;
-				int index = selector.visibleStart + offset;
-				if (mouse.button == 0
-						&& offset >= 0
-						&& offset < selector.visibleCount
-						&& index < mcpSelectorItemCount(selector)) {
-					selector.selectedIndex = index;
-				}
-			}
-			default -> {}
-		}
-	}
-
-	private static void toggleMcpSelectorItem(McpSelector selector) {
-		if (selector.view == McpSelector.View.SERVERS) {
-			if (selector.filtered.isEmpty()) return;
-			McpManager.ServerStatus status = mcpToggleServerAsync(
-					selector.manager, selector.filtered.get(selector.selectedIndex));
-			notifyMcpSelectorChange(selector, new McpSelector.Change(
-					status.name, null, mcpIsEnabled(selector.manager, status.name)));
-		} else {
-			toggleMcpSelectorTool(selector);
-		}
-	}
-
-	private static void toggleMcpSelectorTool(McpSelector selector) {
-		refreshMcpSelectorTools(selector);
-		if (selector.filteredTools.isEmpty()) return;
-		try {
-			McpManager.ToolStatus status = mcpToggleTool(
-					selector.manager,
-					selector.toolServer,
-					selector.filteredTools.get(selector.selectedIndex).name);
-			notifyMcpSelectorChange(
-					selector, new McpSelector.Change(status.serverName, status.name, status.enabled));
-			refreshMcpSelectorTools(selector);
-		} catch (IllegalStateException | IllegalArgumentException ignored) {
-			// The server or its catalog may have changed while this selector was open.
-			refreshMcpSelectorTools(selector);
-		}
-	}
-
-	private static void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
-		try {
-			selector.onChange.accept(change);
-			selector.changeError = null;
-		} catch (UncheckedIOException error) {
-			IOException cause = error.getCause();
-			String message = cause == null ? error.getMessage() : cause.getMessage();
-			String detail = message == null || message.isBlank()
-					? String.valueOf(cause == null ? error : cause)
-					: message;
-			selector.changeError =
-					"Change applied, but not saved: " + detail.replaceAll("\\s+", " ").trim();
-		}
-	}
-
-	private static void toggleMcpSelectorView(McpSelector selector) {
-		if (selector.view == McpSelector.View.SERVERS) openMcpSelectorTools(selector);
-		else closeMcpSelectorTools(selector);
-	}
-
-	private static void openMcpSelectorTools(McpSelector selector) {
-		if (selector.view == McpSelector.View.TOOLS || selector.filtered.isEmpty()) return;
-		String server = selector.filtered.get(selector.selectedIndex);
-		if (mcpStatus(selector.manager, server).state != McpManager.State.CONNECTED) return;
-		selector.view = McpSelector.View.TOOLS;
-		selector.toolServer = server;
-		clearMcpSelectorQuery(selector);
-		refreshMcpSelectorTools(selector);
-	}
-
-	private static void closeMcpSelectorTools(McpSelector selector) {
-		if (selector.view != McpSelector.View.TOOLS) return;
-		String server = selector.toolServer;
-		selector.view = McpSelector.View.SERVERS;
-		selector.toolServer = null;
-		clearMcpSelectorQuery(selector);
-		filterMcpSelector(selector);
-		int index = selector.filtered.indexOf(server);
-		if (index >= 0) selector.selectedIndex = index;
-	}
-
-	private static void moveMcpSelector(McpSelector selector, int delta) {
-		int itemCount = mcpSelectorItemCount(selector);
-		if (itemCount > 0) selector.selectedIndex = Math.floorMod(selector.selectedIndex + delta, itemCount);
-	}
-
-	private static void insertMcpSelectorQuery(McpSelector selector, String text) {
-		if (text == null || text.isEmpty()) return;
-		String normalized = text.replace('\r', ' ').replace('\n', ' ');
-		selector.query.insert(selector.queryCursor, normalized);
-		selector.queryCursor += normalized.length();
-		filterMcpSelector(selector);
-	}
-
-	private static void backspaceMcpSelectorQuery(McpSelector selector) {
-		if (selector.queryCursor == 0) return;
-		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
-		selector.query.delete(start, selector.queryCursor);
-		selector.queryCursor = start;
-		filterMcpSelector(selector);
-	}
-
-	private static void deleteMcpSelectorQuery(McpSelector selector) {
-		if (selector.queryCursor >= selector.query.length()) return;
-		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
-		selector.query.delete(selector.queryCursor, end);
-		filterMcpSelector(selector);
-	}
-
-	private static void clearMcpSelectorQuery(McpSelector selector) {
-		selector.query.setLength(0);
-		selector.queryCursor = 0;
-	}
-
-	private static void filterMcpSelector(McpSelector selector) {
-		if (selector.view == McpSelector.View.SERVERS) {
-			selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
-				McpManager.ServerStatus status = mcpStatus(selector.manager, name);
-				return name + " " + status.state + " " + status.target;
-			});
-		} else {
-			refreshMcpSelectorTools(selector);
-		}
-		selector.selectedIndex = 0;
-	}
-
-	private static void refreshMcpSelectorTools(McpSelector selector) {
-		if (selector.toolServer == null) {
-			selector.filteredTools = List.of();
-			return;
-		}
-		List<McpManager.ToolStatus> tools = mcpToolStatuses(selector.manager, selector.toolServer);
-		selector.filteredTools = fuzzyFilter(
-				tools,
-				selector.query.toString(),
-				tool -> tool.name + " " + tool.description + " " + (tool.enabled ? "enabled" : "disabled"));
-		if (selector.selectedIndex >= selector.filteredTools.size()) {
-			selector.selectedIndex = Math.max(0, selector.filteredTools.size() - 1);
-		}
-	}
-
-	// ------------------------------------------------------------ turn details
-
-	/**
-	 * Builds the inspector for the reasoning and tool steps that follow the
-	 * latest user message, or null when that turn has none.
-	 */
-	public static TurnDetailsComponent turnDetailsForLatestTurn(
-			List<Message> messages, boolean thinkingHidden) {
-		int start = 0;
-		for (int index = messages.size() - 1; index >= 0; index--) {
-			if (messages.get(index) instanceof UserMessage) {
-				start = index + 1;
-				break;
-			}
-		}
-
-		Map<String, ToolResultMessage> results = new LinkedHashMap<>();
-		for (int index = start; index < messages.size(); index++) {
-			if (messages.get(index) instanceof ToolResultMessage result) {
-				results.put(result.toolCallId, result);
-			}
-		}
-
-		List<TurnDetailsComponent.Section> sections = new ArrayList<>();
-		int thinkingNumber = 0;
-		for (int index = start; index < messages.size(); index++) {
-			if (!(messages.get(index) instanceof AssistantMessage assistant)) continue;
-			for (AssistantContent content : assistant.content) {
-				if (content instanceof ThinkingContent thinking && !thinking.thinking.isBlank()) {
-					thinkingNumber++;
-					String body = turnDetailsSafePlain(thinking.thinking.strip());
-					sections.add(new TurnDetailsComponent.Section(
-							TurnDetailsComponent.Kind.THINKING,
-							"Thinking " + thinkingNumber,
-							body,
-							turnDetailsFirstLine(body),
-							!thinkingHidden));
-				} else if (content instanceof ToolCall call) {
-					ToolResultMessage result = results.get(call.id);
-					String description =
-							turnDetailsSingleLine(toolCallDescription(call.name, call.arguments));
-					String title = call.name + (description.isBlank() ? "" : "  " + description);
-					StringBuilder body = new StringBuilder("Arguments\n").append(call.arguments.toPrettyString());
-					String summary = result == null
-							? "pending"
-							: result.isError ? "error" : turnDetailsResultSummary(text(result));
-					body.append("\n\nResult");
-					if (result != null && result.isError) body.append(" (error)");
-					body.append('\n').append(result == null ? "Pending" : text(result));
-					sections.add(new TurnDetailsComponent.Section(
-							TurnDetailsComponent.Kind.TOOL,
-							title,
-							turnDetailsSafePlain(body.toString()),
-							summary,
-							false));
-				}
-			}
-		}
-		if (sections.isEmpty()) return null;
-		TurnDetailsComponent details = new TurnDetailsComponent();
-		details.sections = sections;
-		details.thinkingHidden = thinkingHidden;
-		return details;
-	}
-
-	/** Binds a turn-details carrier to the full-screen host. */
-	public static TuiComponent<Boolean> turnDetailsComponent(TurnDetailsComponent details) {
-		return new TuiComponent<>(
-				frame -> renderTurnDetails(details, frame.width, frame.height, frame.theme),
-				input -> handleTurnDetailsInput(details, input),
-				() -> details.complete,
-				() -> details.thinkingHidden);
-	}
-
-	public static List<String> renderTurnDetails(
-			TurnDetailsComponent details, int width, int height, Theme theme) {
-		int safeWidth = Math.max(20, width);
-		details.viewportHeight = Math.max(
-				1, height - TurnDetailsComponent.HEADER_LINES - TurnDetailsComponent.FOOTER_LINES);
-		List<TurnDetailsComponent.RenderedLine> content = renderTurnDetailsContent(details, safeWidth, theme);
-		int selectedRow = turnDetailsHeadingRow(content, details.selectedIndex);
-		if (details.keepSelectionVisible) {
-			if (selectedRow < details.scrollTop) {
-				details.scrollTop = selectedRow;
-			} else if (selectedRow >= details.scrollTop + details.viewportHeight) {
-				details.scrollTop = selectedRow - details.viewportHeight + 1;
-			}
-		}
-		details.scrollTop = Math.max(
-				0, Math.min(details.scrollTop, Math.max(0, content.size() - details.viewportHeight)));
-
-		List<String> lines = new ArrayList<>();
-		lines.add(theme.heading + "Turn details" + theme.reset);
-		lines.add("");
-		details.visibleSectionsByRow.clear();
-		int visibleEnd = Math.min(content.size(), details.scrollTop + details.viewportHeight);
-		for (int index = details.scrollTop; index < visibleEnd; index++) {
-			TurnDetailsComponent.RenderedLine line = content.get(index);
-			if (line.heading) details.visibleSectionsByRow.put(lines.size(), line.sectionIndex);
-			lines.add(line.text);
-		}
-		String hint = "Up/Down select  Enter expand/collapse  PgUp/PgDn scroll  Ctrl-T thinking  Ctrl-O tools  Esc close";
-		lines.add(theme.muted + truncatePlain(hint, safeWidth) + theme.reset);
-		return lines;
-	}
-
-	public static void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
-		switch (input) {
-			case TuiInput.Key key -> handleTurnDetailsKey(details, key);
-			case TuiInput.Mouse mouse -> handleTurnDetailsMouse(details, mouse);
-			case TuiInput.Resize ignored -> {
-				// Rendering uses the current dimensions directly.
-			}
-		}
-	}
-
-	private static List<TurnDetailsComponent.RenderedLine> renderTurnDetailsContent(
-			TurnDetailsComponent details, int width, Theme theme) {
-		List<TurnDetailsComponent.RenderedLine> lines = new ArrayList<>();
-		for (int index = 0; index < details.sections.size(); index++) {
-			TurnDetailsComponent.Section section = details.sections.get(index);
-			String marker = section.expanded ? "▼ " : "▶ ";
-			String suffix = section.expanded || section.summary.isBlank() ? "" : " — " + section.summary;
-			String heading = truncatePlain(marker + section.title + suffix, width);
-			if (index == details.selectedIndex) heading = theme.heading + heading + theme.reset;
-			else heading = theme.strong + heading + theme.reset;
-			lines.add(new TurnDetailsComponent.RenderedLine(heading, index, true));
-			if (section.expanded) {
-				for (String bodyLine : wrapPlain(section.body, Math.max(1, width - 3))) {
-					String rendered = "   " + bodyLine;
-					if (section.kind == TurnDetailsComponent.Kind.THINKING) {
-						rendered = theme.muted + rendered + theme.reset;
-					}
-					lines.add(new TurnDetailsComponent.RenderedLine(rendered, index, false));
-				}
-			}
-			if (index + 1 < details.sections.size()) {
-				lines.add(new TurnDetailsComponent.RenderedLine("", index, false));
-			}
-		}
-		return lines;
-	}
-
-	private static void handleTurnDetailsKey(TurnDetailsComponent details, TuiInput.Key key) {
-		switch (key.type) {
-			case UP -> moveTurnDetails(details, -1);
-			case DOWN -> moveTurnDetails(details, 1);
-			case PAGE_UP -> scrollTurnDetails(details, -Math.max(1, details.viewportHeight - 1));
-			case PAGE_DOWN -> scrollTurnDetails(details, Math.max(1, details.viewportHeight - 1));
-			case HOME -> {
-				details.selectedIndex = 0;
-				details.keepSelectionVisible = true;
-			}
-			case END -> {
-				details.selectedIndex = details.sections.size() - 1;
-				details.keepSelectionVisible = true;
-			}
-			case ENTER -> toggleSelectedTurnDetail(details);
-			case TOGGLE_THINKING -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.THINKING);
-			case EXPAND_TOOLS -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.TOOL);
-			case ESCAPE, CANCEL, EXIT -> details.complete = true;
-			case CHARACTER -> {
-				if (key.text.equals(" ")) toggleSelectedTurnDetail(details);
-				else if (key.text.equalsIgnoreCase("q")) details.complete = true;
-			}
-			default -> {
-				// Other keys do not affect the inspector.
-			}
-		}
-	}
-
-	private static void handleTurnDetailsMouse(TurnDetailsComponent details, TuiInput.Mouse mouse) {
-		switch (mouse.action) {
-			case SCROLL_UP -> scrollTurnDetails(details, -3);
-			case SCROLL_DOWN -> scrollTurnDetails(details, 3);
-			case PRESS -> {
-				if (mouse.button != 0) return;
-				Integer section = details.visibleSectionsByRow.get(mouse.y - 1);
-				if (section != null) {
-					details.selectedIndex = section;
-					toggleSelectedTurnDetail(details);
-				}
-			}
-			default -> {
-				// Release and drag do not affect expansion.
-			}
-		}
-	}
-
-	private static void moveTurnDetails(TurnDetailsComponent details, int delta) {
-		details.selectedIndex = Math.floorMod(details.selectedIndex + delta, details.sections.size());
-		details.keepSelectionVisible = true;
-	}
-
-	private static void scrollTurnDetails(TurnDetailsComponent details, int delta) {
-		details.scrollTop = Math.max(0, details.scrollTop + delta);
-		details.keepSelectionVisible = false;
-	}
-
-	private static void toggleSelectedTurnDetail(TurnDetailsComponent details) {
-		TurnDetailsComponent.Section section = details.sections.get(details.selectedIndex);
-		section.expanded = !section.expanded;
-		details.keepSelectionVisible = true;
-	}
-
-	private static void toggleTurnDetailsKind(
-			TurnDetailsComponent details, TurnDetailsComponent.Kind kind) {
-		if (details.sections.stream().noneMatch(section -> section.kind == kind)) return;
-		boolean expand =
-				details.sections.stream().anyMatch(section -> section.kind == kind && !section.expanded);
-		for (TurnDetailsComponent.Section section : details.sections) {
-			if (section.kind == kind) section.expanded = expand;
-		}
-		if (kind == TurnDetailsComponent.Kind.THINKING) details.thinkingHidden = !expand;
-		details.keepSelectionVisible = true;
-	}
-
-	private static int turnDetailsHeadingRow(
-			List<TurnDetailsComponent.RenderedLine> lines, int sectionIndex) {
-		for (int index = 0; index < lines.size(); index++) {
-			TurnDetailsComponent.RenderedLine line = lines.get(index);
-			if (line.heading && line.sectionIndex == sectionIndex) return index;
-		}
-		return 0;
-	}
-
-	private static String turnDetailsResultSummary(String text) {
-		if (text == null || text.isBlank()) return "done";
-		long lines = text.lines().count();
-		return lines == 1 ? "done" : lines + " lines";
-	}
-
-	private static String turnDetailsFirstLine(String text) {
-		if (text == null || text.isBlank()) return "";
-		String line = text.lines().filter(value -> !value.isBlank()).findFirst().orElse("").strip();
-		return line.length() <= 100 ? line : line.substring(0, 100) + "...";
-	}
-
-	private static String turnDetailsSingleLine(String value) {
-		return turnDetailsSafePlain(value).replaceAll("\\s+", " ").strip();
-	}
-
-	private static String turnDetailsSafePlain(String value) {
-		String stripped = stripAnsi(value == null ? "" : value);
-		StringBuilder safe = new StringBuilder(stripped.length());
-		for (int index = 0; index < stripped.length(); ) {
-			int codePoint = stripped.codePointAt(index);
-			if (codePoint == '\n' || codePoint == '\t' || (!Character.isISOControl(codePoint) && codePoint != 0x1b)) {
-				safe.appendCodePoint(codePoint);
-			}
-			index += Character.charCount(codePoint);
-		}
-		return safe.toString();
-	}
-
-	// ------------------------------------------------------------ session codec
-
-	/** JSON representation shared by session recording and restoration. */
-	public static ObjectNode encodeSessionMessage(Message message) {
-		ObjectNode node = jsonObject();
-		node.put("role", role(message));
-		node.put("timestamp", timestamp(message));
-		ArrayNode content = node.putArray("content");
-		switch (message) {
-			case UserMessage user -> encodeSessionUserContent(content, user.content);
-			case AssistantMessage assistant -> {
-				putNullableSessionText(node, "api", assistant.api);
-				putNullableSessionText(node, "provider", assistant.provider);
-				putNullableSessionText(node, "model", assistant.model);
-				putNullableSessionText(node, "responseModel", assistant.responseModel);
-				putNullableSessionText(node, "responseId", assistant.responseId);
-				node.put("stopReason", assistant.stopReason.wire);
-				putNullableSessionText(node, "error", assistant.errorMessage);
-				putNullableSessionText(node, "rawStopReason", assistant.rawStopReason);
-				encodeSessionUsage(node.putObject("usage"), assistant);
-				for (AssistantContent block : assistant.content) {
-					if (block instanceof TextContent text) {
-						ObjectNode encoded = content.addObject().put("type", "text").put("text", text.text);
-						putNullableSessionText(encoded, "textSignature", text.textSignature);
-					} else if (block instanceof ThinkingContent thinking) {
-						ObjectNode encoded = content.addObject()
-								.put("type", "thinking")
-								.put("text", thinking.thinking)
-								.put("redacted", thinking.redacted);
-						putNullableSessionText(encoded, "thinkingSignature", thinking.thinkingSignature);
-					} else if (block instanceof ToolCall call) {
-						ObjectNode encoded = content.addObject()
-								.put("type", "toolCall")
-								.put("id", call.id)
-								.put("name", call.name);
-						encoded.set("arguments", call.arguments);
-						putNullableSessionText(encoded, "thoughtSignature", call.thoughtSignature);
-					}
-				}
-			}
-			case ToolResultMessage result -> {
-				node.put("toolCallId", result.toolCallId);
-				node.put("toolName", result.toolName);
-				node.put("isError", result.isError);
-				if (result.details != null) {
-					node.set("details", Json.MAPPER.valueToTree(result.details));
-				}
-				encodeSessionUserContent(content, result.content);
-			}
-		}
-		return node;
-	}
-
-	public static Message decodeSessionMessage(JsonNode node) throws IOException {
-		if (node == null || !node.isObject() || !node.path("role").isTextual()) {
-			throw new IOException("Message payload must be an object with a string role");
-		}
-		long timestamp = node.path("timestamp").isIntegralNumber()
-				? node.path("timestamp").asLong()
-				: System.currentTimeMillis();
-		return switch (node.path("role").asText()) {
-			case "user" -> userMessage(decodeSessionUserContent(node.get("content")), timestamp);
-			case "assistant" -> decodeSessionAssistant(node, timestamp);
-			case "toolResult" -> toolResultMessage(
-					requiredSessionText(node, "toolCallId"),
-					requiredSessionText(node, "toolName"),
-					decodeSessionUserContent(node.get("content")),
-					node.has("details") ? Json.MAPPER.treeToValue(node.get("details"), Object.class) : null,
-					node.path("isError").asBoolean(false),
-					timestamp);
-			default -> throw new IOException("Unknown session message role: " + node.path("role").asText());
-		};
-	}
-
-	private static AssistantMessage decodeSessionAssistant(JsonNode node, long timestamp) throws IOException {
-		AssistantMessage assistant = new AssistantMessage(
-				optionalSessionText(node, "api"),
-				optionalSessionText(node, "provider"),
-				optionalSessionText(node, "model"));
-		assistant.timestamp = timestamp;
-		assistant.responseModel = optionalSessionText(node, "responseModel");
-		assistant.responseId = optionalSessionText(node, "responseId");
-		assistant.errorMessage = optionalSessionText(node, "error");
-		assistant.rawStopReason = optionalSessionText(node, "rawStopReason");
-		String stopReason = optionalSessionText(node, "stopReason");
-		if (stopReason != null) {
-			try {
-				assistant.stopReason = stopReasonFromWire(stopReason);
-			} catch (IllegalArgumentException error) {
-				try {
-					assistant.stopReason = StopReason.valueOf(stopReason.toUpperCase(Locale.ROOT));
-				} catch (IllegalArgumentException ignored) {
-					throw new IOException("Unknown assistant stop reason: " + stopReason, error);
-				}
-			}
-		}
-		decodeSessionUsage(node.get("usage"), assistant);
-		JsonNode content = node.get("content");
-		if (content != null && !content.isArray()) {
-			throw new IOException("Assistant message content must be an array");
-		}
-		if (content != null) {
-			for (JsonNode block : content) {
-				String type = requiredSessionText(block, "type");
-				switch (type) {
-					case "text" -> assistant.content.add(textContent(
-							requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-					case "thinking" -> assistant.content.add(thinkingContent(
-							requiredSessionText(block, "text"),
-							optionalSessionText(block, "thinkingSignature"),
-							block.path("redacted").asBoolean(false)));
-					case "toolCall" -> {
-						JsonNode arguments = block.get("arguments");
-						if (!(arguments instanceof ObjectNode object)) {
-							throw new IOException("Tool call arguments must be an object");
-						}
-						assistant.content.add(toolCall(
-								requiredSessionText(block, "id"),
-								requiredSessionText(block, "name"),
-								object.deepCopy(),
-								optionalSessionText(block, "thoughtSignature")));
-					}
-					default -> throw new IOException("Unknown assistant content type: " + type);
-				}
-			}
-		}
-		return assistant;
-	}
-
-	private static void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
-		for (UserContent block : source) {
-			if (block instanceof TextContent text) {
-				ObjectNode encoded = target.addObject().put("type", "text").put("text", text.text);
-				putNullableSessionText(encoded, "textSignature", text.textSignature);
-			} else if (block instanceof ImageContent image) {
-				target.addObject().put("type", "image").put("data", image.data).put("mimeType", image.mimeType);
-			}
-		}
-	}
-
-	private static List<UserContent> decodeSessionUserContent(JsonNode content) throws IOException {
-		if (content == null || content.isNull()) {
-			return List.of();
-		}
-		if (!content.isArray()) {
-			throw new IOException("Message content must be an array");
-		}
-		List<UserContent> decoded = new ArrayList<>();
-		for (JsonNode block : content) {
-			String type = requiredSessionText(block, "type");
-			switch (type) {
-				case "text" -> decoded.add(textContent(
-						requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-				case "image" -> decoded.add(imageContent(
-						requiredSessionText(block, "data"), requiredSessionText(block, "mimeType")));
-				default -> throw new IOException("Unknown user content type: " + type);
-			}
-		}
-		return List.copyOf(decoded);
-	}
-
-	private static void encodeSessionUsage(ObjectNode node, AssistantMessage assistant) {
-		node.put("input", assistant.usage.input);
-		node.put("output", assistant.usage.output);
-		node.put("cacheRead", assistant.usage.cacheRead);
-		node.put("cacheWrite", assistant.usage.cacheWrite);
-		if (assistant.usage.cacheWrite1h != null) node.put("cacheWrite1h", assistant.usage.cacheWrite1h);
-		if (assistant.usage.reasoning != null) node.put("reasoning", assistant.usage.reasoning);
-		node.put("totalTokens", assistant.usage.totalTokens);
-		ObjectNode cost = node.putObject("cost");
-		cost.put("input", assistant.usage.cost.input);
-		cost.put("output", assistant.usage.cost.output);
-		cost.put("cacheRead", assistant.usage.cost.cacheRead);
-		cost.put("cacheWrite", assistant.usage.cost.cacheWrite);
-		cost.put("total", assistant.usage.cost.total);
-	}
-
-	private static void decodeSessionUsage(JsonNode node, AssistantMessage assistant) {
-		if (node == null || !node.isObject()) return;
-		assistant.usage.input = node.path("input").asLong();
-		assistant.usage.output = node.path("output").asLong();
-		assistant.usage.cacheRead = node.path("cacheRead").asLong();
-		assistant.usage.cacheWrite = node.path("cacheWrite").asLong();
-		if (node.path("cacheWrite1h").isIntegralNumber()) {
-			assistant.usage.cacheWrite1h = node.path("cacheWrite1h").asLong();
-		}
-		if (node.path("reasoning").isIntegralNumber()) {
-			assistant.usage.reasoning = node.path("reasoning").asLong();
-		}
-		assistant.usage.totalTokens = node.path("totalTokens").asLong();
-		JsonNode cost = node.get("cost");
-		if (cost != null && cost.isObject()) {
-			assistant.usage.cost.input = cost.path("input").asDouble();
-			assistant.usage.cost.output = cost.path("output").asDouble();
-			assistant.usage.cost.cacheRead = cost.path("cacheRead").asDouble();
-			assistant.usage.cost.cacheWrite = cost.path("cacheWrite").asDouble();
-			assistant.usage.cost.total = cost.path("total").asDouble();
-		}
-	}
-
-	private static String requiredSessionText(JsonNode node, String field) throws IOException {
-		JsonNode value = node == null ? null : node.get(field);
-		if (value == null || !value.isTextual()) {
-			throw new IOException(field + " must be a string");
-		}
-		return value.asText();
-	}
-
-	private static String optionalSessionText(JsonNode node, String field) {
-		JsonNode value = node == null ? null : node.get(field);
-		return value != null && value.isTextual() ? value.asText() : null;
-	}
-
-	private static void putNullableSessionText(ObjectNode node, String field, String value) {
-		if (value != null) node.put(field, value);
-	}
+//	// ----------------------------------------------------------- mcp selector
+//
+//	/**
+//	 * Creates the MCP server/tool selector. Every applied change is passed to
+//	 * {@code onChange}, which reports a failed save with UncheckedIOException.
+//	 */
+//	public static McpSelector newMcpSelector(McpManager manager, Consumer<McpSelector.Change> onChange) {
+//		McpSelector selector = new McpSelector();
+//		selector.manager = manager;
+//		selector.onChange = onChange;
+//		selector.names = mcpStatuses(manager).stream().map(status -> status.name).toList();
+//		selector.filtered = selector.names;
+//		return selector;
+//	}
+//
+//	/** Binds a selector carrier to the full-screen host. */
+//	public static TuiComponent<Void> mcpSelectorComponent(McpSelector selector) {
+//		return new TuiComponent<>(
+//				frame -> renderMcpSelector(selector, frame.width, frame.height, frame.theme),
+//				input -> handleMcpSelectorInput(selector, input),
+//				() -> selector.complete,
+//				() -> null);
+//	}
+//
+//	public static List<String> renderMcpSelector(McpSelector selector, int width, int height, Theme theme) {
+//		if (selector.view == McpSelector.View.TOOLS) refreshMcpSelectorTools(selector);
+//
+//		List<String> lines = new ArrayList<>();
+//		String title = selector.view == McpSelector.View.SERVERS
+//				? "MCP Servers"
+//				: "MCP Tools: " + selector.toolServer;
+//		lines.add(theme.heading + truncatePlain(title, width) + theme.reset);
+//		lines.add("");
+//		String before = selector.query.substring(0, selector.queryCursor);
+//		String after = selector.query.substring(selector.queryCursor);
+//		lines.add(truncatePlain("Search: " + before + "|" + after, width));
+//		lines.add("");
+//		selector.optionStartRow = lines.size();
+//		selector.visibleCount = Math.max(1, Math.min(10, height - 9));
+//		int itemCount = mcpSelectorItemCount(selector);
+//		selector.visibleStart = Math.max(0, Math.min(
+//				selector.selectedIndex - selector.visibleCount / 2,
+//				Math.max(0, itemCount - selector.visibleCount)));
+//		int end = Math.min(itemCount, selector.visibleStart + selector.visibleCount);
+//		if (itemCount == 0) {
+//			String empty = selector.view == McpSelector.View.SERVERS
+//					? "  No matching servers"
+//					: "  No tools available";
+//			lines.add(theme.muted + empty + theme.reset);
+//		} else {
+//			for (int index = selector.visibleStart; index < end; index++) {
+//				String row = (index == selector.selectedIndex ? "> " : "  ")
+//						+ mcpSelectorStatusLine(selector, index);
+//				row = truncatePlain(row, width);
+//				lines.add(index == selector.selectedIndex ? theme.heading + row + theme.reset : row);
+//			}
+//			if (selector.visibleStart > 0 || end < itemCount) {
+//				lines.add(theme.muted + "  " + (selector.selectedIndex + 1) + "/" + itemCount + theme.reset);
+//			}
+//		}
+//		lines.add("");
+//		String detail = selector.changeError == null ? mcpSelectorDetail(selector) : selector.changeError;
+//		if (detail != null) {
+//			String style = selector.changeError == null ? theme.muted : warningStatus(theme);
+//			lines.add(style + truncatePlain("  " + detail, width) + theme.reset);
+//		}
+//		if (selector.view == McpSelector.View.SERVERS && !selector.filtered.isEmpty()) {
+//			McpManager.ServerStatus selected =
+//					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+//			if (selected.authorizationUrl != null) {
+//				String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, width - 2));
+//				String link = hyperlink(label, selected.authorizationUrl);
+//				lines.add(theme.muted + "  " + link + theme.reset);
+//			}
+//		}
+//		String hint = selector.view == McpSelector.View.SERVERS
+//				? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
+//				: "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
+//		lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
+//		return lines;
+//	}
+//
+//	private static int mcpSelectorItemCount(McpSelector selector) {
+//		return selector.view == McpSelector.View.SERVERS
+//				? selector.filtered.size()
+//				: selector.filteredTools.size();
+//	}
+//
+//	private static String mcpSelectorStatusLine(McpSelector selector, int index) {
+//		return selector.view == McpSelector.View.SERVERS
+//				? mcpServerStatusLine(mcpStatus(selector.manager, selector.filtered.get(index)))
+//				: mcpToolStatusLine(selector.filteredTools.get(index));
+//	}
+//
+//	private static String mcpServerStatusLine(McpManager.ServerStatus status) {
+//		return switch (status.state) {
+//			case CONNECTING -> "⋯ " + status.name + "  Connecting";
+//			case AUTHENTICATING -> "⋯ " + status.name + "  Waiting for OAuth";
+//			case AUTH_REQUIRED -> "! " + status.name + "  Authentication required";
+//			case CONNECTED -> "✓ " + status.name + "  Enabled · " + mcpServerToolCount(status);
+//			case DISABLED -> "○ " + status.name + "  Disabled";
+//			case FAILED -> "✗ " + status.name + "  Failed";
+//		};
+//	}
+//
+//	private static String mcpServerToolCount(McpManager.ServerStatus status) {
+//		if (status.enabledToolCount == status.toolCount) return status.toolCount + " tool(s)";
+//		return status.enabledToolCount + "/" + status.toolCount + " tool(s)";
+//	}
+//
+//	private static String mcpToolStatusLine(McpManager.ToolStatus status) {
+//		return (status.enabled ? "✓ " : "○ ") + status.name + "  " + (status.enabled ? "Enabled" : "Disabled");
+//	}
+//
+//	private static String mcpSelectorDetail(McpSelector selector) {
+//		if (selector.view == McpSelector.View.SERVERS) {
+//			if (selector.filtered.isEmpty()) return null;
+//			McpManager.ServerStatus selected =
+//					mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+//			return selected.message == null ? selected.target : selected.message;
+//		}
+//		if (selector.filteredTools.isEmpty()) return null;
+//		String description = selector.filteredTools.get(selector.selectedIndex).description;
+//		return description.isBlank() ? "No description" : description;
+//	}
+//
+//	public static void handleMcpSelectorInput(McpSelector selector, TuiInput input) {
+//		switch (input) {
+//			case TuiInput.Key key -> handleMcpSelectorKey(selector, key);
+//			case TuiInput.Mouse mouse -> handleMcpSelectorMouse(selector, mouse);
+//			case TuiInput.Resize ignored -> {}
+//		}
+//	}
+//
+//	private static void handleMcpSelectorKey(McpSelector selector, TuiInput.Key key) {
+//		switch (key.type) {
+//			case UP -> moveMcpSelector(selector, -1);
+//			case DOWN -> moveMcpSelector(selector, 1);
+//			case PAGE_UP -> moveMcpSelector(selector, -Math.max(1, selector.visibleCount));
+//			case PAGE_DOWN -> moveMcpSelector(selector, Math.max(1, selector.visibleCount));
+//			case ENTER -> toggleMcpSelectorItem(selector);
+//			case TAB -> toggleMcpSelectorView(selector);
+//			case ESCAPE, CANCEL -> {
+//				if (selector.view == McpSelector.View.TOOLS) closeMcpSelectorTools(selector);
+//				else selector.complete = true;
+//			}
+//			case CHARACTER, PASTE -> insertMcpSelectorQuery(selector, key.text);
+//			case BACKSPACE -> backspaceMcpSelectorQuery(selector);
+//			case DELETE -> deleteMcpSelectorQuery(selector);
+//			case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
+//			case RIGHT -> selector.queryCursor = Math.min(selector.query.length(), selector.queryCursor + 1);
+//			case HOME -> selector.queryCursor = 0;
+//			case END -> selector.queryCursor = selector.query.length();
+//			case CLEAR -> {
+//				selector.query.setLength(0);
+//				selector.queryCursor = 0;
+//				filterMcpSelector(selector);
+//			}
+//			default -> {}
+//		}
+//	}
+//
+//	private static void handleMcpSelectorMouse(McpSelector selector, TuiInput.Mouse mouse) {
+//		switch (mouse.action) {
+//			case SCROLL_UP -> moveMcpSelector(selector, -1);
+//			case SCROLL_DOWN -> moveMcpSelector(selector, 1);
+//			case PRESS -> {
+//				int offset = mouse.y - 1 - selector.optionStartRow;
+//				int index = selector.visibleStart + offset;
+//				if (mouse.button == 0
+//						&& offset >= 0
+//						&& offset < selector.visibleCount
+//						&& index < mcpSelectorItemCount(selector)) {
+//					selector.selectedIndex = index;
+//				}
+//			}
+//			default -> {}
+//		}
+//	}
+//
+//	private static void toggleMcpSelectorItem(McpSelector selector) {
+//		if (selector.view == McpSelector.View.SERVERS) {
+//			if (selector.filtered.isEmpty()) return;
+//			McpManager.ServerStatus status = mcpToggleServerAsync(
+//					selector.manager, selector.filtered.get(selector.selectedIndex));
+//			notifyMcpSelectorChange(selector, new McpSelector.Change(
+//					status.name, null, mcpIsEnabled(selector.manager, status.name)));
+//		} else {
+//			toggleMcpSelectorTool(selector);
+//		}
+//	}
+//
+//	private static void toggleMcpSelectorTool(McpSelector selector) {
+//		refreshMcpSelectorTools(selector);
+//		if (selector.filteredTools.isEmpty()) return;
+//		try {
+//			McpManager.ToolStatus status = mcpToggleTool(
+//					selector.manager,
+//					selector.toolServer,
+//					selector.filteredTools.get(selector.selectedIndex).name);
+//			notifyMcpSelectorChange(
+//					selector, new McpSelector.Change(status.serverName, status.name, status.enabled));
+//			refreshMcpSelectorTools(selector);
+//		} catch (IllegalStateException | IllegalArgumentException ignored) {
+//			// The server or its catalog may have changed while this selector was open.
+//			refreshMcpSelectorTools(selector);
+//		}
+//	}
+//
+//	private static void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
+//		try {
+//			selector.onChange.accept(change);
+//			selector.changeError = null;
+//		} catch (UncheckedIOException error) {
+//			IOException cause = error.getCause();
+//			String message = cause == null ? error.getMessage() : cause.getMessage();
+//			String detail = message == null || message.isBlank()
+//					? String.valueOf(cause == null ? error : cause)
+//					: message;
+//			selector.changeError =
+//					"Change applied, but not saved: " + detail.replaceAll("\\s+", " ").trim();
+//		}
+//	}
+//
+//	private static void toggleMcpSelectorView(McpSelector selector) {
+//		if (selector.view == McpSelector.View.SERVERS) openMcpSelectorTools(selector);
+//		else closeMcpSelectorTools(selector);
+//	}
+//
+//	private static void openMcpSelectorTools(McpSelector selector) {
+//		if (selector.view == McpSelector.View.TOOLS || selector.filtered.isEmpty()) return;
+//		String server = selector.filtered.get(selector.selectedIndex);
+//		if (mcpStatus(selector.manager, server).state != McpManager.State.CONNECTED) return;
+//		selector.view = McpSelector.View.TOOLS;
+//		selector.toolServer = server;
+//		clearMcpSelectorQuery(selector);
+//		refreshMcpSelectorTools(selector);
+//	}
+//
+//	private static void closeMcpSelectorTools(McpSelector selector) {
+//		if (selector.view != McpSelector.View.TOOLS) return;
+//		String server = selector.toolServer;
+//		selector.view = McpSelector.View.SERVERS;
+//		selector.toolServer = null;
+//		clearMcpSelectorQuery(selector);
+//		filterMcpSelector(selector);
+//		int index = selector.filtered.indexOf(server);
+//		if (index >= 0) selector.selectedIndex = index;
+//	}
+//
+//	private static void moveMcpSelector(McpSelector selector, int delta) {
+//		int itemCount = mcpSelectorItemCount(selector);
+//		if (itemCount > 0) selector.selectedIndex = Math.floorMod(selector.selectedIndex + delta, itemCount);
+//	}
+//
+//	private static void insertMcpSelectorQuery(McpSelector selector, String text) {
+//		if (text == null || text.isEmpty()) return;
+//		String normalized = text.replace('\r', ' ').replace('\n', ' ');
+//		selector.query.insert(selector.queryCursor, normalized);
+//		selector.queryCursor += normalized.length();
+//		filterMcpSelector(selector);
+//	}
+//
+//	private static void backspaceMcpSelectorQuery(McpSelector selector) {
+//		if (selector.queryCursor == 0) return;
+//		int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
+//		selector.query.delete(start, selector.queryCursor);
+//		selector.queryCursor = start;
+//		filterMcpSelector(selector);
+//	}
+//
+//	private static void deleteMcpSelectorQuery(McpSelector selector) {
+//		if (selector.queryCursor >= selector.query.length()) return;
+//		int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
+//		selector.query.delete(selector.queryCursor, end);
+//		filterMcpSelector(selector);
+//	}
+//
+//	private static void clearMcpSelectorQuery(McpSelector selector) {
+//		selector.query.setLength(0);
+//		selector.queryCursor = 0;
+//	}
+//
+//	private static void filterMcpSelector(McpSelector selector) {
+//		if (selector.view == McpSelector.View.SERVERS) {
+//			selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
+//				McpManager.ServerStatus status = mcpStatus(selector.manager, name);
+//				return name + " " + status.state + " " + status.target;
+//			});
+//		} else {
+//			refreshMcpSelectorTools(selector);
+//		}
+//		selector.selectedIndex = 0;
+//	}
+//
+//	private static void refreshMcpSelectorTools(McpSelector selector) {
+//		if (selector.toolServer == null) {
+//			selector.filteredTools = List.of();
+//			return;
+//		}
+//		List<McpManager.ToolStatus> tools = mcpToolStatuses(selector.manager, selector.toolServer);
+//		selector.filteredTools = fuzzyFilter(
+//				tools,
+//				selector.query.toString(),
+//				tool -> tool.name + " " + tool.description + " " + (tool.enabled ? "enabled" : "disabled"));
+//		if (selector.selectedIndex >= selector.filteredTools.size()) {
+//			selector.selectedIndex = Math.max(0, selector.filteredTools.size() - 1);
+//		}
+//	}
+//
+//	// ------------------------------------------------------------ turn details
+//
+//	/**
+//	 * Builds the inspector for the reasoning and tool steps that follow the
+//	 * latest user message, or null when that turn has none.
+//	 */
+//	public static TurnDetailsComponent turnDetailsForLatestTurn(
+//			List<Message> messages, boolean thinkingHidden) {
+//		int start = 0;
+//		for (int index = messages.size() - 1; index >= 0; index--) {
+//			if (messages.get(index) instanceof UserMessage) {
+//				start = index + 1;
+//				break;
+//			}
+//		}
+//
+//		Map<String, ToolResultMessage> results = new LinkedHashMap<>();
+//		for (int index = start; index < messages.size(); index++) {
+//			if (messages.get(index) instanceof ToolResultMessage result) {
+//				results.put(result.toolCallId, result);
+//			}
+//		}
+//
+//		List<TurnDetailsComponent.Section> sections = new ArrayList<>();
+//		int thinkingNumber = 0;
+//		for (int index = start; index < messages.size(); index++) {
+//			if (!(messages.get(index) instanceof AssistantMessage assistant)) continue;
+//			for (AssistantContent content : assistant.content) {
+//				if (content instanceof ThinkingContent thinking && !thinking.thinking.isBlank()) {
+//					thinkingNumber++;
+//					String body = turnDetailsSafePlain(thinking.thinking.strip());
+//					sections.add(new TurnDetailsComponent.Section(
+//							TurnDetailsComponent.Kind.THINKING,
+//							"Thinking " + thinkingNumber,
+//							body,
+//							turnDetailsFirstLine(body),
+//							!thinkingHidden));
+//				} else if (content instanceof ToolCall call) {
+//					ToolResultMessage result = results.get(call.id);
+//					String description =
+//							turnDetailsSingleLine(toolCallDescription(call.name, call.arguments));
+//					String title = call.name + (description.isBlank() ? "" : "  " + description);
+//					StringBuilder body = new StringBuilder("Arguments\n").append(call.arguments.toPrettyString());
+//					String summary = result == null
+//							? "pending"
+//							: result.isError ? "error" : turnDetailsResultSummary(text(result));
+//					body.append("\n\nResult");
+//					if (result != null && result.isError) body.append(" (error)");
+//					body.append('\n').append(result == null ? "Pending" : text(result));
+//					sections.add(new TurnDetailsComponent.Section(
+//							TurnDetailsComponent.Kind.TOOL,
+//							title,
+//							turnDetailsSafePlain(body.toString()),
+//							summary,
+//							false));
+//				}
+//			}
+//		}
+//		if (sections.isEmpty()) return null;
+//		TurnDetailsComponent details = new TurnDetailsComponent();
+//		details.sections = sections;
+//		details.thinkingHidden = thinkingHidden;
+//		return details;
+//	}
+//
+//	/** Binds a turn-details carrier to the full-screen host. */
+//	public static TuiComponent<Boolean> turnDetailsComponent(TurnDetailsComponent details) {
+//		return new TuiComponent<>(
+//				frame -> renderTurnDetails(details, frame.width, frame.height, frame.theme),
+//				input -> handleTurnDetailsInput(details, input),
+//				() -> details.complete,
+//				() -> details.thinkingHidden);
+//	}
+//
+//	public static List<String> renderTurnDetails(
+//			TurnDetailsComponent details, int width, int height, Theme theme) {
+//		int safeWidth = Math.max(20, width);
+//		details.viewportHeight = Math.max(
+//				1, height - TurnDetailsComponent.HEADER_LINES - TurnDetailsComponent.FOOTER_LINES);
+//		List<TurnDetailsComponent.RenderedLine> content = renderTurnDetailsContent(details, safeWidth, theme);
+//		int selectedRow = turnDetailsHeadingRow(content, details.selectedIndex);
+//		if (details.keepSelectionVisible) {
+//			if (selectedRow < details.scrollTop) {
+//				details.scrollTop = selectedRow;
+//			} else if (selectedRow >= details.scrollTop + details.viewportHeight) {
+//				details.scrollTop = selectedRow - details.viewportHeight + 1;
+//			}
+//		}
+//		details.scrollTop = Math.max(
+//				0, Math.min(details.scrollTop, Math.max(0, content.size() - details.viewportHeight)));
+//
+//		List<String> lines = new ArrayList<>();
+//		lines.add(theme.heading + "Turn details" + theme.reset);
+//		lines.add("");
+//		details.visibleSectionsByRow.clear();
+//		int visibleEnd = Math.min(content.size(), details.scrollTop + details.viewportHeight);
+//		for (int index = details.scrollTop; index < visibleEnd; index++) {
+//			TurnDetailsComponent.RenderedLine line = content.get(index);
+//			if (line.heading) details.visibleSectionsByRow.put(lines.size(), line.sectionIndex);
+//			lines.add(line.text);
+//		}
+//		String hint = "Up/Down select  Enter expand/collapse  PgUp/PgDn scroll  Ctrl-T thinking  Ctrl-O tools  Esc close";
+//		lines.add(theme.muted + truncatePlain(hint, safeWidth) + theme.reset);
+//		return lines;
+//	}
+//
+//	public static void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
+//		switch (input) {
+//			case TuiInput.Key key -> handleTurnDetailsKey(details, key);
+//			case TuiInput.Mouse mouse -> handleTurnDetailsMouse(details, mouse);
+//			case TuiInput.Resize ignored -> {
+//				// Rendering uses the current dimensions directly.
+//			}
+//		}
+//	}
+//
+//	private static List<TurnDetailsComponent.RenderedLine> renderTurnDetailsContent(
+//			TurnDetailsComponent details, int width, Theme theme) {
+//		List<TurnDetailsComponent.RenderedLine> lines = new ArrayList<>();
+//		for (int index = 0; index < details.sections.size(); index++) {
+//			TurnDetailsComponent.Section section = details.sections.get(index);
+//			String marker = section.expanded ? "▼ " : "▶ ";
+//			String suffix = section.expanded || section.summary.isBlank() ? "" : " — " + section.summary;
+//			String heading = truncatePlain(marker + section.title + suffix, width);
+//			if (index == details.selectedIndex) heading = theme.heading + heading + theme.reset;
+//			else heading = theme.strong + heading + theme.reset;
+//			lines.add(new TurnDetailsComponent.RenderedLine(heading, index, true));
+//			if (section.expanded) {
+//				for (String bodyLine : wrapPlain(section.body, Math.max(1, width - 3))) {
+//					String rendered = "   " + bodyLine;
+//					if (section.kind == TurnDetailsComponent.Kind.THINKING) {
+//						rendered = theme.muted + rendered + theme.reset;
+//					}
+//					lines.add(new TurnDetailsComponent.RenderedLine(rendered, index, false));
+//				}
+//			}
+//			if (index + 1 < details.sections.size()) {
+//				lines.add(new TurnDetailsComponent.RenderedLine("", index, false));
+//			}
+//		}
+//		return lines;
+//	}
+//
+//	private static void handleTurnDetailsKey(TurnDetailsComponent details, TuiInput.Key key) {
+//		switch (key.type) {
+//			case UP -> moveTurnDetails(details, -1);
+//			case DOWN -> moveTurnDetails(details, 1);
+//			case PAGE_UP -> scrollTurnDetails(details, -Math.max(1, details.viewportHeight - 1));
+//			case PAGE_DOWN -> scrollTurnDetails(details, Math.max(1, details.viewportHeight - 1));
+//			case HOME -> {
+//				details.selectedIndex = 0;
+//				details.keepSelectionVisible = true;
+//			}
+//			case END -> {
+//				details.selectedIndex = details.sections.size() - 1;
+//				details.keepSelectionVisible = true;
+//			}
+//			case ENTER -> toggleSelectedTurnDetail(details);
+//			case TOGGLE_THINKING -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.THINKING);
+//			case EXPAND_TOOLS -> toggleTurnDetailsKind(details, TurnDetailsComponent.Kind.TOOL);
+//			case ESCAPE, CANCEL, EXIT -> details.complete = true;
+//			case CHARACTER -> {
+//				if (key.text.equals(" ")) toggleSelectedTurnDetail(details);
+//				else if (key.text.equalsIgnoreCase("q")) details.complete = true;
+//			}
+//			default -> {
+//				// Other keys do not affect the inspector.
+//			}
+//		}
+//	}
+//
+//	private static void handleTurnDetailsMouse(TurnDetailsComponent details, TuiInput.Mouse mouse) {
+//		switch (mouse.action) {
+//			case SCROLL_UP -> scrollTurnDetails(details, -3);
+//			case SCROLL_DOWN -> scrollTurnDetails(details, 3);
+//			case PRESS -> {
+//				if (mouse.button != 0) return;
+//				Integer section = details.visibleSectionsByRow.get(mouse.y - 1);
+//				if (section != null) {
+//					details.selectedIndex = section;
+//					toggleSelectedTurnDetail(details);
+//				}
+//			}
+//			default -> {
+//				// Release and drag do not affect expansion.
+//			}
+//		}
+//	}
+//
+//	private static void moveTurnDetails(TurnDetailsComponent details, int delta) {
+//		details.selectedIndex = Math.floorMod(details.selectedIndex + delta, details.sections.size());
+//		details.keepSelectionVisible = true;
+//	}
+//
+//	private static void scrollTurnDetails(TurnDetailsComponent details, int delta) {
+//		details.scrollTop = Math.max(0, details.scrollTop + delta);
+//		details.keepSelectionVisible = false;
+//	}
+//
+//	private static void toggleSelectedTurnDetail(TurnDetailsComponent details) {
+//		TurnDetailsComponent.Section section = details.sections.get(details.selectedIndex);
+//		section.expanded = !section.expanded;
+//		details.keepSelectionVisible = true;
+//	}
+//
+//	private static void toggleTurnDetailsKind(
+//			TurnDetailsComponent details, TurnDetailsComponent.Kind kind) {
+//		if (details.sections.stream().noneMatch(section -> section.kind == kind)) return;
+//		boolean expand =
+//				details.sections.stream().anyMatch(section -> section.kind == kind && !section.expanded);
+//		for (TurnDetailsComponent.Section section : details.sections) {
+//			if (section.kind == kind) section.expanded = expand;
+//		}
+//		if (kind == TurnDetailsComponent.Kind.THINKING) details.thinkingHidden = !expand;
+//		details.keepSelectionVisible = true;
+//	}
+//
+//	private static int turnDetailsHeadingRow(
+//			List<TurnDetailsComponent.RenderedLine> lines, int sectionIndex) {
+//		for (int index = 0; index < lines.size(); index++) {
+//			TurnDetailsComponent.RenderedLine line = lines.get(index);
+//			if (line.heading && line.sectionIndex == sectionIndex) return index;
+//		}
+//		return 0;
+//	}
+//
+//	private static String turnDetailsResultSummary(String text) {
+//		if (text == null || text.isBlank()) return "done";
+//		long lines = text.lines().count();
+//		return lines == 1 ? "done" : lines + " lines";
+//	}
+//
+//	private static String turnDetailsFirstLine(String text) {
+//		if (text == null || text.isBlank()) return "";
+//		String line = text.lines().filter(value -> !value.isBlank()).findFirst().orElse("").strip();
+//		return line.length() <= 100 ? line : line.substring(0, 100) + "...";
+//	}
+//
+//	private static String turnDetailsSingleLine(String value) {
+//		return turnDetailsSafePlain(value).replaceAll("\\s+", " ").strip();
+//	}
+//
+//	private static String turnDetailsSafePlain(String value) {
+//		String stripped = stripAnsi(value == null ? "" : value);
+//		StringBuilder safe = new StringBuilder(stripped.length());
+//		for (int index = 0; index < stripped.length(); ) {
+//			int codePoint = stripped.codePointAt(index);
+//			if (codePoint == '\n' || codePoint == '\t' || (!Character.isISOControl(codePoint) && codePoint != 0x1b)) {
+//				safe.appendCodePoint(codePoint);
+//			}
+//			index += Character.charCount(codePoint);
+//		}
+//		return safe.toString();
+//	}
+//
+//	// ------------------------------------------------------------ session codec
+//
+//	/** JSON representation shared by session recording and restoration. */
+//	public static ObjectNode encodeSessionMessage(Message message) {
+//		ObjectNode node = jsonObject();
+//		node.put("role", role(message));
+//		node.put("timestamp", timestamp(message));
+//		ArrayNode content = node.putArray("content");
+//		switch (message) {
+//			case UserMessage user -> encodeSessionUserContent(content, user.content);
+//			case AssistantMessage assistant -> {
+//				putNullableSessionText(node, "api", assistant.api);
+//				putNullableSessionText(node, "provider", assistant.provider);
+//				putNullableSessionText(node, "model", assistant.model);
+//				putNullableSessionText(node, "responseModel", assistant.responseModel);
+//				putNullableSessionText(node, "responseId", assistant.responseId);
+//				node.put("stopReason", assistant.stopReason.wire);
+//				putNullableSessionText(node, "error", assistant.errorMessage);
+//				putNullableSessionText(node, "rawStopReason", assistant.rawStopReason);
+//				encodeSessionUsage(node.putObject("usage"), assistant);
+//				for (AssistantContent block : assistant.content) {
+//					if (block instanceof TextContent text) {
+//						ObjectNode encoded = content.addObject().put("type", "text").put("text", text.text);
+//						putNullableSessionText(encoded, "textSignature", text.textSignature);
+//					} else if (block instanceof ThinkingContent thinking) {
+//						ObjectNode encoded = content.addObject()
+//								.put("type", "thinking")
+//								.put("text", thinking.thinking)
+//								.put("redacted", thinking.redacted);
+//						putNullableSessionText(encoded, "thinkingSignature", thinking.thinkingSignature);
+//					} else if (block instanceof ToolCall call) {
+//						ObjectNode encoded = content.addObject()
+//								.put("type", "toolCall")
+//								.put("id", call.id)
+//								.put("name", call.name);
+//						encoded.set("arguments", call.arguments);
+//						putNullableSessionText(encoded, "thoughtSignature", call.thoughtSignature);
+//					}
+//				}
+//			}
+//			case ToolResultMessage result -> {
+//				node.put("toolCallId", result.toolCallId);
+//				node.put("toolName", result.toolName);
+//				node.put("isError", result.isError);
+//				if (result.details != null) {
+//					node.set("details", Json.MAPPER.valueToTree(result.details));
+//				}
+//				encodeSessionUserContent(content, result.content);
+//			}
+//		}
+//		return node;
+//	}
+//
+//	public static Message decodeSessionMessage(JsonNode node) throws IOException {
+//		if (node == null || !node.isObject() || !node.path("role").isTextual()) {
+//			throw new IOException("Message payload must be an object with a string role");
+//		}
+//		long timestamp = node.path("timestamp").isIntegralNumber()
+//				? node.path("timestamp").asLong()
+//				: System.currentTimeMillis();
+//		return switch (node.path("role").asText()) {
+//			case "user" -> userMessage(decodeSessionUserContent(node.get("content")), timestamp);
+//			case "assistant" -> decodeSessionAssistant(node, timestamp);
+//			case "toolResult" -> toolResultMessage(
+//					requiredSessionText(node, "toolCallId"),
+//					requiredSessionText(node, "toolName"),
+//					decodeSessionUserContent(node.get("content")),
+//					node.has("details") ? Json.MAPPER.treeToValue(node.get("details"), Object.class) : null,
+//					node.path("isError").asBoolean(false),
+//					timestamp);
+//			default -> throw new IOException("Unknown session message role: " + node.path("role").asText());
+//		};
+//	}
+//
+//	private static AssistantMessage decodeSessionAssistant(JsonNode node, long timestamp) throws IOException {
+//		AssistantMessage assistant = new AssistantMessage(
+//				optionalSessionText(node, "api"),
+//				optionalSessionText(node, "provider"),
+//				optionalSessionText(node, "model"));
+//		assistant.timestamp = timestamp;
+//		assistant.responseModel = optionalSessionText(node, "responseModel");
+//		assistant.responseId = optionalSessionText(node, "responseId");
+//		assistant.errorMessage = optionalSessionText(node, "error");
+//		assistant.rawStopReason = optionalSessionText(node, "rawStopReason");
+//		String stopReason = optionalSessionText(node, "stopReason");
+//		if (stopReason != null) {
+//			try {
+//				assistant.stopReason = stopReasonFromWire(stopReason);
+//			} catch (IllegalArgumentException error) {
+//				try {
+//					assistant.stopReason = StopReason.valueOf(stopReason.toUpperCase(Locale.ROOT));
+//				} catch (IllegalArgumentException ignored) {
+//					throw new IOException("Unknown assistant stop reason: " + stopReason, error);
+//				}
+//			}
+//		}
+//		decodeSessionUsage(node.get("usage"), assistant);
+//		JsonNode content = node.get("content");
+//		if (content != null && !content.isArray()) {
+//			throw new IOException("Assistant message content must be an array");
+//		}
+//		if (content != null) {
+//			for (JsonNode block : content) {
+//				String type = requiredSessionText(block, "type");
+//				switch (type) {
+//					case "text" -> assistant.content.add(textContent(
+//							requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
+//					case "thinking" -> assistant.content.add(thinkingContent(
+//							requiredSessionText(block, "text"),
+//							optionalSessionText(block, "thinkingSignature"),
+//							block.path("redacted").asBoolean(false)));
+//					case "toolCall" -> {
+//						JsonNode arguments = block.get("arguments");
+//						if (!(arguments instanceof ObjectNode object)) {
+//							throw new IOException("Tool call arguments must be an object");
+//						}
+//						assistant.content.add(toolCall(
+//								requiredSessionText(block, "id"),
+//								requiredSessionText(block, "name"),
+//								object.deepCopy(),
+//								optionalSessionText(block, "thoughtSignature")));
+//					}
+//					default -> throw new IOException("Unknown assistant content type: " + type);
+//				}
+//			}
+//		}
+//		return assistant;
+//	}
+//
+//	private static void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
+//		for (UserContent block : source) {
+//			if (block instanceof TextContent text) {
+//				ObjectNode encoded = target.addObject().put("type", "text").put("text", text.text);
+//				putNullableSessionText(encoded, "textSignature", text.textSignature);
+//			} else if (block instanceof ImageContent image) {
+//				target.addObject().put("type", "image").put("data", image.data).put("mimeType", image.mimeType);
+//			}
+//		}
+//	}
+//
+//	private static List<UserContent> decodeSessionUserContent(JsonNode content) throws IOException {
+//		if (content == null || content.isNull()) {
+//			return List.of();
+//		}
+//		if (!content.isArray()) {
+//			throw new IOException("Message content must be an array");
+//		}
+//		List<UserContent> decoded = new ArrayList<>();
+//		for (JsonNode block : content) {
+//			String type = requiredSessionText(block, "type");
+//			switch (type) {
+//				case "text" -> decoded.add(textContent(
+//						requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
+//				case "image" -> decoded.add(imageContent(
+//						requiredSessionText(block, "data"), requiredSessionText(block, "mimeType")));
+//				default -> throw new IOException("Unknown user content type: " + type);
+//			}
+//		}
+//		return List.copyOf(decoded);
+//	}
+//
+//	private static void encodeSessionUsage(ObjectNode node, AssistantMessage assistant) {
+//		node.put("input", assistant.usage.input);
+//		node.put("output", assistant.usage.output);
+//		node.put("cacheRead", assistant.usage.cacheRead);
+//		node.put("cacheWrite", assistant.usage.cacheWrite);
+//		if (assistant.usage.cacheWrite1h != null) node.put("cacheWrite1h", assistant.usage.cacheWrite1h);
+//		if (assistant.usage.reasoning != null) node.put("reasoning", assistant.usage.reasoning);
+//		node.put("totalTokens", assistant.usage.totalTokens);
+//		ObjectNode cost = node.putObject("cost");
+//		cost.put("input", assistant.usage.cost.input);
+//		cost.put("output", assistant.usage.cost.output);
+//		cost.put("cacheRead", assistant.usage.cost.cacheRead);
+//		cost.put("cacheWrite", assistant.usage.cost.cacheWrite);
+//		cost.put("total", assistant.usage.cost.total);
+//	}
+//
+//	private static void decodeSessionUsage(JsonNode node, AssistantMessage assistant) {
+//		if (node == null || !node.isObject()) return;
+//		assistant.usage.input = node.path("input").asLong();
+//		assistant.usage.output = node.path("output").asLong();
+//		assistant.usage.cacheRead = node.path("cacheRead").asLong();
+//		assistant.usage.cacheWrite = node.path("cacheWrite").asLong();
+//		if (node.path("cacheWrite1h").isIntegralNumber()) {
+//			assistant.usage.cacheWrite1h = node.path("cacheWrite1h").asLong();
+//		}
+//		if (node.path("reasoning").isIntegralNumber()) {
+//			assistant.usage.reasoning = node.path("reasoning").asLong();
+//		}
+//		assistant.usage.totalTokens = node.path("totalTokens").asLong();
+//		JsonNode cost = node.get("cost");
+//		if (cost != null && cost.isObject()) {
+//			assistant.usage.cost.input = cost.path("input").asDouble();
+//			assistant.usage.cost.output = cost.path("output").asDouble();
+//			assistant.usage.cost.cacheRead = cost.path("cacheRead").asDouble();
+//			assistant.usage.cost.cacheWrite = cost.path("cacheWrite").asDouble();
+//			assistant.usage.cost.total = cost.path("total").asDouble();
+//		}
+//	}
+//
+//	private static String requiredSessionText(JsonNode node, String field) throws IOException {
+//		JsonNode value = node == null ? null : node.get(field);
+//		if (value == null || !value.isTextual()) {
+//			throw new IOException(field + " must be a string");
+//		}
+//		return value.asText();
+//	}
+//
+//	private static String optionalSessionText(JsonNode node, String field) {
+//		JsonNode value = node == null ? null : node.get(field);
+//		return value != null && value.isTextual() ? value.asText() : null;
+//	}
+//
+//	private static void putNullableSessionText(ObjectNode node, String field, String value) {
+//		if (value != null) node.put(field, value);
+//	}
 
 	// --------------------------------------------------------- session recorder
 
@@ -13769,25 +13769,25 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new SessionRecorder(store, id);
 	}
 
-	/** Creates a named child session containing a copy of the supplied conversation. */
-	public static SessionRecorder forkSessionRecorder(
-			SessionStore store,
-			Path cwd,
-			String provider,
-			String model,
-			String sessionName,
-			List<Message> messages)
-			throws IOException {
-		SessionRecorder fork = createSessionRecorder(store, cwd, provider, model, sessionName);
-		appendSessionMessages(fork, messages);
-		return fork;
-	}
-
-	/** Opens an existing session so future messages continue in the same JSONL file. */
-	public static SessionRecorder resumeSessionRecorder(SessionStore store, String sessionId) throws IOException {
-		sessionSnapshot(store, sessionId);
-		return new SessionRecorder(store, sessionId);
-	}
+//	/** Creates a named child session containing a copy of the supplied conversation. */
+//	public static SessionRecorder forkSessionRecorder(
+//			SessionStore store,
+//			Path cwd,
+//			String provider,
+//			String model,
+//			String sessionName,
+//			List<Message> messages)
+//			throws IOException {
+//		SessionRecorder fork = createSessionRecorder(store, cwd, provider, model, sessionName);
+//		appendSessionMessages(fork, messages);
+//		return fork;
+//	}
+//
+//	/** Opens an existing session so future messages continue in the same JSONL file. */
+//	public static SessionRecorder resumeSessionRecorder(SessionStore store, String sessionId) throws IOException {
+//		sessionSnapshot(store, sessionId);
+//		return new SessionRecorder(store, sessionId);
+//	}
 
 	/** Appends finished agent messages in chronological order. */
 	public static void appendSessionMessages(SessionRecorder recorder, List<Message> messages) throws IOException {
@@ -13796,22 +13796,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	/**
-	 * Appends a compaction boundary without rewriting the prior transcript. On
-	 * resume, the latest boundary rebuilds the active model context from that
-	 * checkpoint and later messages only.
-	 */
-	public static void appendSessionCompaction(SessionRecorder recorder, CompactionResult result) throws IOException {
-		Objects.requireNonNull(result, "result");
-		if (result.summary == null || result.summary.isBlank()) {
-			throw new IllegalArgumentException("Compaction summary must not be blank");
-		}
-		ObjectNode checkpoint = jsonObject();
-		checkpoint.put("summary", result.summary);
-		checkpoint.put("tokensBefore", result.tokensBefore);
-		checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
-		appendSessionEntry(recorder.store, recorder.sessionId, "compaction", checkpoint);
-	}
+//	/**
+//	 * Appends a compaction boundary without rewriting the prior transcript. On
+//	 * resume, the latest boundary rebuilds the active model context from that
+//	 * checkpoint and later messages only.
+//	 */
+//	public static void appendSessionCompaction(SessionRecorder recorder, CompactionResult result) throws IOException {
+//		Objects.requireNonNull(result, "result");
+//		if (result.summary == null || result.summary.isBlank()) {
+//			throw new IllegalArgumentException("Compaction summary must not be blank");
+//		}
+//		ObjectNode checkpoint = jsonObject();
+//		checkpoint.put("summary", result.summary);
+//		checkpoint.put("tokensBefore", result.tokensBefore);
+//		checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
+//		appendSessionEntry(recorder.store, recorder.sessionId, "compaction", checkpoint);
+//	}
 
 	// ------------------------------------------------------------ session store
 
@@ -13841,16 +13841,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				List.of(home.resolve(".pi-java").resolve("sessions")));
 	}
 
-	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
-	public static String createSession(SessionStore store) throws IOException {
-		Files.createDirectories(store.directory);
-		setPosixPermissions(store.directory, SessionStore.DIRECTORY_PERMISSIONS);
-		String id = uuidv7();
-		Path file = store.directory.resolve(id + ".jsonl");
-		Files.createFile(file);
-		setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
-		return id;
-	}
+//	/** Creates an empty JSONL session and returns its time-sortable UUIDv7 id. */
+//	public static String createSession(SessionStore store) throws IOException {
+//		Files.createDirectories(store.directory);
+//		setPosixPermissions(store.directory, SessionStore.DIRECTORY_PERMISSIONS);
+//		String id = uuidv7();
+//		Path file = store.directory.resolve(id + ".jsonl");
+//		Files.createFile(file);
+//		setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
+//		return id;
+//	}
 
 	/** Appends a typed payload to an existing session. */
 	public static void appendSessionEntry(SessionStore store, String sessionId, String type, JsonNode payload)
@@ -13877,171 +13877,171 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-	/** Reads and validates all complete entries in file order. */
-	public static List<SessionStore.Entry> readSession(SessionStore store, String sessionId) throws IOException {
-		validateSessionId(sessionId);
-		Path file = existingSessionPath(store, sessionId);
-		if (file == null) {
-			throw new IOException("Unknown session: " + sessionId);
-		}
-		List<SessionStore.Entry> entries = new ArrayList<>();
-		try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-			int index = 0;
-			String line;
-			while ((line = reader.readLine()) != null) {
-				index++;
-				if (line.isBlank()) {
-					continue;
-				}
-				JsonNode node;
-				try {
-					node = Json.MAPPER.readTree(line);
-				} catch (IOException e) {
-					throw new IOException("Invalid JSONL entry at " + file + ":" + index, e);
-				}
-				if (!node.isObject()
-						|| !node.path("timestamp").isIntegralNumber()
-						|| !node.path("type").isTextual()
-						|| !node.has("payload")) {
-					throw new IOException("Invalid JSONL entry at " + file + ":" + index);
-				}
-				entries.add(new SessionStore.Entry(
-						node.path("timestamp").asLong(), node.path("type").asText(), node.path("payload")));
-			}
-		}
-		return List.copyOf(entries);
-	}
-
-	/** Lists session ids newest first. */
-	public static List<String> listSessions(SessionStore store) throws IOException {
-		return sessionFiles(store).stream()
-				.map(path -> sessionIdFor(path.getFileName()))
-				.sorted(Comparator.reverseOrder())
-				.toList();
-	}
-
-	/** Lists resumable sessions newest first, optionally limited to one working directory. */
-	public static List<SessionSnapshot> listSessionSnapshots(SessionStore store, Path cwd) throws IOException {
-		Path normalizedCwd = cwd == null ? null : cwd.toAbsolutePath().normalize();
-		List<SessionSnapshot> snapshots = new ArrayList<>();
-		for (Path file : sessionFiles(store)) {
-			try {
-				SessionSnapshot snapshot = sessionSnapshot(store, sessionIdFor(file.getFileName()));
-				if (normalizedCwd == null || sameSessionCwd(snapshot.cwd, normalizedCwd)) {
-					snapshots.add(snapshot);
-				}
-			} catch (IOException | IllegalArgumentException ignored) {
-				// Discovery is best effort: one corrupt session must not hide the rest.
-			}
-		}
-		snapshots.sort(Comparator.comparing((SessionSnapshot snapshot) -> snapshot.modified).reversed());
-		return List.copyOf(snapshots);
-	}
-
-	/** Loads metadata, the complete transcript, and compaction-aware continuation context. */
-	public static SessionSnapshot sessionSnapshot(SessionStore store, String sessionId) throws IOException {
-		List<SessionStore.Entry> entries = readSession(store, sessionId);
-		if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
-			throw new IOException("Session has no session_start entry: " + sessionId);
-		}
-		SessionStore.Entry start = entries.getFirst();
-		JsonNode payload = start.payload;
-		String cwdText = requiredSessionPayloadText(payload, "cwd", sessionId);
-		String provider = requiredSessionPayloadText(payload, "provider", sessionId);
-		String model = requiredSessionPayloadText(payload, "model", sessionId);
-		String name = optionalSessionText(payload, "name");
-		List<Message> transcriptMessages = new ArrayList<>();
-		List<Message> messages = new ArrayList<>();
-		String firstMessage = "";
-		StringBuilder allMessages = new StringBuilder();
-		long modified = start.timestamp;
-		for (SessionStore.Entry entry : entries) {
-			modified = Math.max(modified, entry.timestamp);
-			if (entry.type.equals("compaction")) {
-				messages.clear();
-				messages.add(sessionCompactionCheckpoint(entry.payload, entry.timestamp, sessionId));
-				continue;
-			}
-			if (!entry.type.equals("message")) continue;
-			Message message;
-			try {
-				message = decodeSessionMessage(entry.payload);
-			} catch (IOException | RuntimeException error) {
-				throw new IOException("Invalid message in session " + sessionId, error);
-			}
-			transcriptMessages.add(message);
-			messages.add(message);
-			String text = sessionMessageText(message);
-			if (!text.isBlank()) {
-				if (!allMessages.isEmpty()) allMessages.append(' ');
-				allMessages.append(text);
-				if (firstMessage.isEmpty() && message instanceof UserMessage) firstMessage = text;
-			}
-		}
-		Path file = existingSessionPath(store, sessionId);
-		if (file == null) throw new IOException("Unknown session: " + sessionId);
-		Path sessionCwd;
-		try {
-			sessionCwd = Path.of(cwdText).toAbsolutePath().normalize();
-		} catch (RuntimeException error) {
-			throw new IOException("Session " + sessionId + " has an invalid cwd", error);
-		}
-		return newSessionSnapshot(
-				sessionId,
-				name,
-				file,
-				sessionCwd,
-				provider,
-				model,
-				Instant.ofEpochMilli(start.timestamp),
-				Instant.ofEpochMilli(modified),
-				transcriptMessages.size(),
-				firstMessage.isEmpty() ? "(no messages)" : firstMessage,
-				allMessages.toString(),
-				messages,
-				transcriptMessages);
-	}
-
-	/**
-	 * Creates a session snapshot. Every field except the display name is
-	 * required; a blank name normalizes to null and both message lists are
-	 * copied.
-	 */
-	public static SessionSnapshot newSessionSnapshot(
-			String id,
-			String name,
-			Path path,
-			Path cwd,
-			String provider,
-			String model,
-			Instant created,
-			Instant modified,
-			int messageCount,
-			String firstMessage,
-			String allMessagesText,
-			List<Message> messages,
-			List<Message> transcriptMessages) {
-		return new SessionSnapshot(
-				Objects.requireNonNull(id, "id"),
-				normalizeSessionName(name),
-				Objects.requireNonNull(path, "path"),
-				Objects.requireNonNull(cwd, "cwd"),
-				Objects.requireNonNull(provider, "provider"),
-				Objects.requireNonNull(model, "model"),
-				Objects.requireNonNull(created, "created"),
-				Objects.requireNonNull(modified, "modified"),
-				messageCount,
-				Objects.requireNonNull(firstMessage, "firstMessage"),
-				Objects.requireNonNull(allMessagesText, "allMessagesText"),
-				List.copyOf(messages),
-				List.copyOf(transcriptMessages));
-	}
-
-	/** Strips a session display name, treating blank names as absent. */
-	public static String normalizeSessionName(String name) {
-		String normalized = name == null ? null : name.strip();
-		return normalized == null || normalized.isEmpty() ? null : normalized;
-	}
+//	/** Reads and validates all complete entries in file order. */
+//	public static List<SessionStore.Entry> readSession(SessionStore store, String sessionId) throws IOException {
+//		validateSessionId(sessionId);
+//		Path file = existingSessionPath(store, sessionId);
+//		if (file == null) {
+//			throw new IOException("Unknown session: " + sessionId);
+//		}
+//		List<SessionStore.Entry> entries = new ArrayList<>();
+//		try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+//			int index = 0;
+//			String line;
+//			while ((line = reader.readLine()) != null) {
+//				index++;
+//				if (line.isBlank()) {
+//					continue;
+//				}
+//				JsonNode node;
+//				try {
+//					node = Json.MAPPER.readTree(line);
+//				} catch (IOException e) {
+//					throw new IOException("Invalid JSONL entry at " + file + ":" + index, e);
+//				}
+//				if (!node.isObject()
+//						|| !node.path("timestamp").isIntegralNumber()
+//						|| !node.path("type").isTextual()
+//						|| !node.has("payload")) {
+//					throw new IOException("Invalid JSONL entry at " + file + ":" + index);
+//				}
+//				entries.add(new SessionStore.Entry(
+//						node.path("timestamp").asLong(), node.path("type").asText(), node.path("payload")));
+//			}
+//		}
+//		return List.copyOf(entries);
+//	}
+//
+//	/** Lists session ids newest first. */
+//	public static List<String> listSessions(SessionStore store) throws IOException {
+//		return sessionFiles(store).stream()
+//				.map(path -> sessionIdFor(path.getFileName()))
+//				.sorted(Comparator.reverseOrder())
+//				.toList();
+//	}
+//
+//	/** Lists resumable sessions newest first, optionally limited to one working directory. */
+//	public static List<SessionSnapshot> listSessionSnapshots(SessionStore store, Path cwd) throws IOException {
+//		Path normalizedCwd = cwd == null ? null : cwd.toAbsolutePath().normalize();
+//		List<SessionSnapshot> snapshots = new ArrayList<>();
+//		for (Path file : sessionFiles(store)) {
+//			try {
+//				SessionSnapshot snapshot = sessionSnapshot(store, sessionIdFor(file.getFileName()));
+//				if (normalizedCwd == null || sameSessionCwd(snapshot.cwd, normalizedCwd)) {
+//					snapshots.add(snapshot);
+//				}
+//			} catch (IOException | IllegalArgumentException ignored) {
+//				// Discovery is best effort: one corrupt session must not hide the rest.
+//			}
+//		}
+//		snapshots.sort(Comparator.comparing((SessionSnapshot snapshot) -> snapshot.modified).reversed());
+//		return List.copyOf(snapshots);
+//	}
+//
+//	/** Loads metadata, the complete transcript, and compaction-aware continuation context. */
+//	public static SessionSnapshot sessionSnapshot(SessionStore store, String sessionId) throws IOException {
+//		List<SessionStore.Entry> entries = readSession(store, sessionId);
+//		if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
+//			throw new IOException("Session has no session_start entry: " + sessionId);
+//		}
+//		SessionStore.Entry start = entries.getFirst();
+//		JsonNode payload = start.payload;
+//		String cwdText = requiredSessionPayloadText(payload, "cwd", sessionId);
+//		String provider = requiredSessionPayloadText(payload, "provider", sessionId);
+//		String model = requiredSessionPayloadText(payload, "model", sessionId);
+//		String name = optionalSessionText(payload, "name");
+//		List<Message> transcriptMessages = new ArrayList<>();
+//		List<Message> messages = new ArrayList<>();
+//		String firstMessage = "";
+//		StringBuilder allMessages = new StringBuilder();
+//		long modified = start.timestamp;
+//		for (SessionStore.Entry entry : entries) {
+//			modified = Math.max(modified, entry.timestamp);
+//			if (entry.type.equals("compaction")) {
+//				messages.clear();
+//				messages.add(sessionCompactionCheckpoint(entry.payload, entry.timestamp, sessionId));
+//				continue;
+//			}
+//			if (!entry.type.equals("message")) continue;
+//			Message message;
+//			try {
+//				message = decodeSessionMessage(entry.payload);
+//			} catch (IOException | RuntimeException error) {
+//				throw new IOException("Invalid message in session " + sessionId, error);
+//			}
+//			transcriptMessages.add(message);
+//			messages.add(message);
+//			String text = sessionMessageText(message);
+//			if (!text.isBlank()) {
+//				if (!allMessages.isEmpty()) allMessages.append(' ');
+//				allMessages.append(text);
+//				if (firstMessage.isEmpty() && message instanceof UserMessage) firstMessage = text;
+//			}
+//		}
+//		Path file = existingSessionPath(store, sessionId);
+//		if (file == null) throw new IOException("Unknown session: " + sessionId);
+//		Path sessionCwd;
+//		try {
+//			sessionCwd = Path.of(cwdText).toAbsolutePath().normalize();
+//		} catch (RuntimeException error) {
+//			throw new IOException("Session " + sessionId + " has an invalid cwd", error);
+//		}
+//		return newSessionSnapshot(
+//				sessionId,
+//				name,
+//				file,
+//				sessionCwd,
+//				provider,
+//				model,
+//				Instant.ofEpochMilli(start.timestamp),
+//				Instant.ofEpochMilli(modified),
+//				transcriptMessages.size(),
+//				firstMessage.isEmpty() ? "(no messages)" : firstMessage,
+//				allMessages.toString(),
+//				messages,
+//				transcriptMessages);
+//	}
+//
+//	/**
+//	 * Creates a session snapshot. Every field except the display name is
+//	 * required; a blank name normalizes to null and both message lists are
+//	 * copied.
+//	 */
+//	public static SessionSnapshot newSessionSnapshot(
+//			String id,
+//			String name,
+//			Path path,
+//			Path cwd,
+//			String provider,
+//			String model,
+//			Instant created,
+//			Instant modified,
+//			int messageCount,
+//			String firstMessage,
+//			String allMessagesText,
+//			List<Message> messages,
+//			List<Message> transcriptMessages) {
+//		return new SessionSnapshot(
+//				Objects.requireNonNull(id, "id"),
+//				normalizeSessionName(name),
+//				Objects.requireNonNull(path, "path"),
+//				Objects.requireNonNull(cwd, "cwd"),
+//				Objects.requireNonNull(provider, "provider"),
+//				Objects.requireNonNull(model, "model"),
+//				Objects.requireNonNull(created, "created"),
+//				Objects.requireNonNull(modified, "modified"),
+//				messageCount,
+//				Objects.requireNonNull(firstMessage, "firstMessage"),
+//				Objects.requireNonNull(allMessagesText, "allMessagesText"),
+//				List.copyOf(messages),
+//				List.copyOf(transcriptMessages));
+//	}
+//
+//	/** Strips a session display name, treating blank names as absent. */
+//	public static String normalizeSessionName(String name) {
+//		String normalized = name == null ? null : name.strip();
+//		return normalized == null || normalized.isEmpty() ? null : normalized;
+//	}
 
 	private static UserMessage sessionCompactionCheckpoint(JsonNode payload, long timestamp, String sessionId)
 			throws IOException {
@@ -14049,43 +14049,43 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return userMessage(List.of(textContent("[Conversation checkpoint]\n" + summary)), timestamp);
 	}
 
-	private static List<Path> sessionFiles(SessionStore store) throws IOException {
-		Map<String, Path> filesById = new LinkedHashMap<>();
-		List<Path> directories = new ArrayList<>(store.legacyDirectories.size() + 1);
-		directories.add(store.directory);
-		directories.addAll(store.legacyDirectories);
-		for (Path candidateDirectory : directories) {
-			if (!Files.isDirectory(candidateDirectory)) continue;
-			try (Stream<Path> files = Files.list(candidateDirectory)) {
-				files.filter(Files::isRegularFile)
-						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-						.forEach(path -> filesById.putIfAbsent(sessionIdFor(path.getFileName()), path));
-			}
-		}
-		return List.copyOf(filesById.values());
-	}
-
-	private static Path existingSessionPath(SessionStore store, String sessionId) {
-		Path current = store.directory.resolve(sessionId + ".jsonl");
-		if (Files.isRegularFile(current)) return current;
-		for (Path legacyDirectory : store.legacyDirectories) {
-			Path legacy = legacyDirectory.resolve(sessionId + ".jsonl");
-			if (Files.isRegularFile(legacy)) return legacy;
-		}
-		return null;
-	}
-
-	private static String sessionIdFor(Path fileName) {
-		return fileName.toString().replaceFirst("\\.jsonl$", "");
-	}
-
-	private static boolean sameSessionCwd(Path left, Path right) {
-		try {
-			return left.toRealPath().equals(right.toRealPath());
-		} catch (IOException ignored) {
-			return left.equals(right);
-		}
-	}
+//	private static List<Path> sessionFiles(SessionStore store) throws IOException {
+//		Map<String, Path> filesById = new LinkedHashMap<>();
+//		List<Path> directories = new ArrayList<>(store.legacyDirectories.size() + 1);
+//		directories.add(store.directory);
+//		directories.addAll(store.legacyDirectories);
+//		for (Path candidateDirectory : directories) {
+//			if (!Files.isDirectory(candidateDirectory)) continue;
+//			try (Stream<Path> files = Files.list(candidateDirectory)) {
+//				files.filter(Files::isRegularFile)
+//						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
+//						.forEach(path -> filesById.putIfAbsent(sessionIdFor(path.getFileName()), path));
+//			}
+//		}
+//		return List.copyOf(filesById.values());
+//	}
+//
+//	private static Path existingSessionPath(SessionStore store, String sessionId) {
+//		Path current = store.directory.resolve(sessionId + ".jsonl");
+//		if (Files.isRegularFile(current)) return current;
+//		for (Path legacyDirectory : store.legacyDirectories) {
+//			Path legacy = legacyDirectory.resolve(sessionId + ".jsonl");
+//			if (Files.isRegularFile(legacy)) return legacy;
+//		}
+//		return null;
+//	}
+//
+//	private static String sessionIdFor(Path fileName) {
+//		return fileName.toString().replaceFirst("\\.jsonl$", "");
+//	}
+//
+//	private static boolean sameSessionCwd(Path left, Path right) {
+//		try {
+//			return left.toRealPath().equals(right.toRealPath());
+//		} catch (IOException ignored) {
+//			return left.equals(right);
+//		}
+//	}
 
 	private static String requiredSessionPayloadText(JsonNode payload, String field, String sessionId)
 			throws IOException {
@@ -14096,13 +14096,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return value.asText();
 	}
 
-	private static String sessionMessageText(Message message) {
-		return switch (message) {
-			case UserMessage user -> text(user);
-			case AssistantMessage assistant -> text(assistant);
-			case ToolResultMessage result -> text(result);
-		};
-	}
+//	private static String sessionMessageText(Message message) {
+//		return switch (message) {
+//			case UserMessage user -> text(user);
+//			case AssistantMessage assistant -> text(assistant);
+//			case ToolResultMessage result -> text(result);
+//		};
+//	}
 
 	private static void validateSessionId(String sessionId) {
 		if (sessionId == null
@@ -14123,40 +14123,40 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return settingsStore(Path.of(System.getProperty("user.home"), ".codingagent", "settings.json"));
 	}
 
-	public static SettingsStore.Settings emptySettings() {
-		return new SettingsStore.Settings(null, null, null, null, false);
-	}
-
-	public static SettingsStore.Settings withSettingsDefaultModel(
-			SettingsStore.Settings settings, String provider, String model) {
-		return new SettingsStore.Settings(
-				provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
-	}
-
-	public static SettingsStore.Settings withSettingsDefaultThinkingLevel(
-			SettingsStore.Settings settings, ThinkingLevel level) {
-		return new SettingsStore.Settings(
-				settings.defaultProvider, settings.defaultModel, level, settings.theme, settings.hideThinkingBlock);
-	}
-
-	public static SettingsStore.Settings withSettingsTheme(SettingsStore.Settings settings, String value) {
-		return new SettingsStore.Settings(
-				settings.defaultProvider,
-				settings.defaultModel,
-				settings.defaultThinkingLevel,
-				value,
-				settings.hideThinkingBlock);
-	}
-
-	public static SettingsStore.Settings withSettingsHideThinkingBlock(
-			SettingsStore.Settings settings, boolean hide) {
-		return new SettingsStore.Settings(
-				settings.defaultProvider,
-				settings.defaultModel,
-				settings.defaultThinkingLevel,
-				settings.theme,
-				hide);
-	}
+//	public static SettingsStore.Settings emptySettings() {
+//		return new SettingsStore.Settings(null, null, null, null, false);
+//	}
+//
+//	public static SettingsStore.Settings withSettingsDefaultModel(
+//			SettingsStore.Settings settings, String provider, String model) {
+//		return new SettingsStore.Settings(
+//				provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
+//	}
+//
+//	public static SettingsStore.Settings withSettingsDefaultThinkingLevel(
+//			SettingsStore.Settings settings, ThinkingLevel level) {
+//		return new SettingsStore.Settings(
+//				settings.defaultProvider, settings.defaultModel, level, settings.theme, settings.hideThinkingBlock);
+//	}
+//
+//	public static SettingsStore.Settings withSettingsTheme(SettingsStore.Settings settings, String value) {
+//		return new SettingsStore.Settings(
+//				settings.defaultProvider,
+//				settings.defaultModel,
+//				settings.defaultThinkingLevel,
+//				value,
+//				settings.hideThinkingBlock);
+//	}
+//
+//	public static SettingsStore.Settings withSettingsHideThinkingBlock(
+//			SettingsStore.Settings settings, boolean hide) {
+//		return new SettingsStore.Settings(
+//				settings.defaultProvider,
+//				settings.defaultModel,
+//				settings.defaultThinkingLevel,
+//				settings.theme,
+//				hide);
+//	}
 
 	/** Loads the current settings, or an empty settings object when no file exists. */
 	public static SettingsStore.Settings loadSettings(SettingsStore store) throws IOException {
@@ -14178,85 +14178,85 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				provider, model, thinkingLevel, theme, optionalSettingsBoolean(root, "hideThinkingBlock", false));
 	}
 
-	public static void setSettingsDefaultModelAndProvider(SettingsStore store, String provider, String model)
-			throws IOException {
-		requireSettingsValue(provider, "provider");
-		requireSettingsValue(model, "model");
-		modifySettings(store, root -> {
-			root.put("defaultProvider", provider);
-			root.put("defaultModel", model);
-		});
-	}
-
-	public static void setSettingsDefaultThinkingLevel(SettingsStore store, ThinkingLevel level) throws IOException {
-		if (level == null) throw new IllegalArgumentException("level must not be null");
-		modifySettings(store, root -> root.put("defaultThinkingLevel", level.wire));
-	}
-
-	public static void setSettingsTheme(SettingsStore store, String theme) throws IOException {
-		requireSettingsValue(theme, "theme");
-		modifySettings(store, root -> root.put("theme", theme));
-	}
-
-	public static void setSettingsHideThinkingBlock(SettingsStore store, boolean hide) throws IOException {
-		modifySettings(store, root -> root.put("hideThinkingBlock", hide));
-	}
-
-	/** Persists whether a configured MCP server should connect on future starts. */
-	public static void setSettingsMcpServerEnabled(SettingsStore store, String serverName, boolean enabled)
-			throws IOException {
-		requireSettingsValue(serverName, "serverName");
-		modifySettings(store, root -> settingsMcpServer(root, serverName).put("enabled", enabled));
-	}
-
-	/**
-	 * Persists a per-server tool override. Enabled tools are omitted from
-	 * {@code disabledTools}, because enabled is the default.
-	 */
-	public static void setSettingsMcpToolEnabled(
-			SettingsStore store, String serverName, String toolName, boolean enabled) throws IOException {
-		requireSettingsValue(serverName, "serverName");
-		requireSettingsValue(toolName, "toolName");
-		modifySettings(store, root -> {
-			ObjectNode server = settingsMcpServer(root, serverName);
-			ArrayNode disabledTools = settingsDisabledTools(server, serverName);
-			if (enabled) {
-				if (disabledTools == null) return;
-				ArrayNode retained = Json.MAPPER.createArrayNode();
-				for (JsonNode tool : disabledTools) {
-					String name = settingsDisabledToolName(serverName, tool);
-					if (!name.equals(toolName)) retained.add(name);
-				}
-				if (retained.isEmpty()) server.remove("disabledTools");
-				else server.set("disabledTools", retained);
-				return;
-			}
-			if (disabledTools == null) disabledTools = server.putArray("disabledTools");
-			for (JsonNode tool : disabledTools) {
-				if (settingsDisabledToolName(serverName, tool).equals(toolName)) return;
-			}
-			disabledTools.add(toolName);
-		});
-	}
-
-	/**
-	 * Serializes an update across processes, preserves unknown settings, and
-	 * replaces the file atomically. The update reports invalid stored JSON with
-	 * UncheckedIOException, which is unwrapped into the declared IOException.
-	 */
-	private static void modifySettings(SettingsStore store, Consumer<ObjectNode> operation) throws IOException {
-		ensureSettingsParentDirectory(store);
-		try (FileChannel channel =
-						FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-				FileLock ignored = channel.lock()) {
-			setPosixPermissions(store.lockPath, SettingsStore.FILE_PERMISSIONS);
-			ObjectNode root = readSettingsObject(store);
-			operation.accept(root);
-			writeSettingsObject(store, root);
-		} catch (UncheckedIOException error) {
-			throw error.getCause();
-		}
-	}
+//	public static void setSettingsDefaultModelAndProvider(SettingsStore store, String provider, String model)
+//			throws IOException {
+//		requireSettingsValue(provider, "provider");
+//		requireSettingsValue(model, "model");
+//		modifySettings(store, root -> {
+//			root.put("defaultProvider", provider);
+//			root.put("defaultModel", model);
+//		});
+//	}
+//
+//	public static void setSettingsDefaultThinkingLevel(SettingsStore store, ThinkingLevel level) throws IOException {
+//		if (level == null) throw new IllegalArgumentException("level must not be null");
+//		modifySettings(store, root -> root.put("defaultThinkingLevel", level.wire));
+//	}
+//
+//	public static void setSettingsTheme(SettingsStore store, String theme) throws IOException {
+//		requireSettingsValue(theme, "theme");
+//		modifySettings(store, root -> root.put("theme", theme));
+//	}
+//
+//	public static void setSettingsHideThinkingBlock(SettingsStore store, boolean hide) throws IOException {
+//		modifySettings(store, root -> root.put("hideThinkingBlock", hide));
+//	}
+//
+//	/** Persists whether a configured MCP server should connect on future starts. */
+//	public static void setSettingsMcpServerEnabled(SettingsStore store, String serverName, boolean enabled)
+//			throws IOException {
+//		requireSettingsValue(serverName, "serverName");
+//		modifySettings(store, root -> settingsMcpServer(root, serverName).put("enabled", enabled));
+//	}
+//
+//	/**
+//	 * Persists a per-server tool override. Enabled tools are omitted from
+//	 * {@code disabledTools}, because enabled is the default.
+//	 */
+//	public static void setSettingsMcpToolEnabled(
+//			SettingsStore store, String serverName, String toolName, boolean enabled) throws IOException {
+//		requireSettingsValue(serverName, "serverName");
+//		requireSettingsValue(toolName, "toolName");
+//		modifySettings(store, root -> {
+//			ObjectNode server = settingsMcpServer(root, serverName);
+//			ArrayNode disabledTools = settingsDisabledTools(server, serverName);
+//			if (enabled) {
+//				if (disabledTools == null) return;
+//				ArrayNode retained = Json.MAPPER.createArrayNode();
+//				for (JsonNode tool : disabledTools) {
+//					String name = settingsDisabledToolName(serverName, tool);
+//					if (!name.equals(toolName)) retained.add(name);
+//				}
+//				if (retained.isEmpty()) server.remove("disabledTools");
+//				else server.set("disabledTools", retained);
+//				return;
+//			}
+//			if (disabledTools == null) disabledTools = server.putArray("disabledTools");
+//			for (JsonNode tool : disabledTools) {
+//				if (settingsDisabledToolName(serverName, tool).equals(toolName)) return;
+//			}
+//			disabledTools.add(toolName);
+//		});
+//	}
+//
+//	/**
+//	 * Serializes an update across processes, preserves unknown settings, and
+//	 * replaces the file atomically. The update reports invalid stored JSON with
+//	 * UncheckedIOException, which is unwrapped into the declared IOException.
+//	 */
+//	private static void modifySettings(SettingsStore store, Consumer<ObjectNode> operation) throws IOException {
+//		ensureSettingsParentDirectory(store);
+//		try (FileChannel channel =
+//						FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+//				FileLock ignored = channel.lock()) {
+//			setPosixPermissions(store.lockPath, SettingsStore.FILE_PERMISSIONS);
+//			ObjectNode root = readSettingsObject(store);
+//			operation.accept(root);
+//			writeSettingsObject(store, root);
+//		} catch (UncheckedIOException error) {
+//			throw error.getCause();
+//		}
+//	}
 
 	private static ObjectNode readSettingsObject(SettingsStore store) throws IOException {
 		if (!Files.exists(store.settingsPath)) {
@@ -14275,70 +14275,70 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return object;
 	}
 
-	private static void writeSettingsObject(SettingsStore store, ObjectNode root) throws IOException {
-		Path temp = Files.createTempFile(store.settingsPath.getParent(), "settings-", ".json");
-		try {
-			Files.writeString(
-					temp,
-					Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
-					StandardCharsets.UTF_8,
-					StandardOpenOption.WRITE,
-					StandardOpenOption.TRUNCATE_EXISTING);
-			setPosixPermissions(temp, SettingsStore.FILE_PERMISSIONS);
-			try {
-				Files.move(temp, store.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-			} catch (AtomicMoveNotSupportedException error) {
-				Files.move(temp, store.settingsPath, StandardCopyOption.REPLACE_EXISTING);
-			}
-			setPosixPermissions(store.settingsPath, SettingsStore.FILE_PERMISSIONS);
-		} finally {
-			Files.deleteIfExists(temp);
-		}
-	}
-
-	private static void ensureSettingsParentDirectory(SettingsStore store) throws IOException {
-		Path parent = store.settingsPath.getParent();
-		if (parent == null) {
-			throw new IOException("Settings path has no parent directory: " + store.settingsPath);
-		}
-		Files.createDirectories(parent);
-		setPosixPermissions(parent, SettingsStore.DIRECTORY_PERMISSIONS);
-	}
-
-	private static ObjectNode settingsMcpServer(ObjectNode root, String serverName) {
-		JsonNode mcp = root.get("mcp");
-		if (!(mcp instanceof ObjectNode servers)) {
-			throw new UncheckedIOException(
-					new IOException("Cannot update MCP server \"" + serverName + "\": mcp must be an object"));
-		}
-		JsonNode server = servers.get(serverName);
-		if (!(server instanceof ObjectNode object)) {
-			throw new UncheckedIOException(
-					new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured"));
-		}
-		return object;
-	}
-
-	private static ArrayNode settingsDisabledTools(ObjectNode server, String serverName) {
-		JsonNode value = server.get("disabledTools");
-		if (value == null || value.isNull()) return null;
-		if (!(value instanceof ArrayNode tools)) {
-			throw new UncheckedIOException(new IOException(
-					"Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
-		}
-		for (JsonNode tool : tools) {
-			settingsDisabledToolName(serverName, tool);
-		}
-		return tools;
-	}
-
-	private static String settingsDisabledToolName(String serverName, JsonNode tool) {
-		if (!tool.isTextual() || tool.asText().isBlank()) {
-			throw new UncheckedIOException(new IOException(
-					"Invalid MCP server \"" + serverName + "\": disabledTools must contain non-empty strings"));
-		}
-		return tool.asText();
-	}
+//	private static void writeSettingsObject(SettingsStore store, ObjectNode root) throws IOException {
+//		Path temp = Files.createTempFile(store.settingsPath.getParent(), "settings-", ".json");
+//		try {
+//			Files.writeString(
+//					temp,
+//					Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
+//					StandardCharsets.UTF_8,
+//					StandardOpenOption.WRITE,
+//					StandardOpenOption.TRUNCATE_EXISTING);
+//			setPosixPermissions(temp, SettingsStore.FILE_PERMISSIONS);
+//			try {
+//				Files.move(temp, store.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+//			} catch (AtomicMoveNotSupportedException error) {
+//				Files.move(temp, store.settingsPath, StandardCopyOption.REPLACE_EXISTING);
+//			}
+//			setPosixPermissions(store.settingsPath, SettingsStore.FILE_PERMISSIONS);
+//		} finally {
+//			Files.deleteIfExists(temp);
+//		}
+//	}
+//
+//	private static void ensureSettingsParentDirectory(SettingsStore store) throws IOException {
+//		Path parent = store.settingsPath.getParent();
+//		if (parent == null) {
+//			throw new IOException("Settings path has no parent directory: " + store.settingsPath);
+//		}
+//		Files.createDirectories(parent);
+//		setPosixPermissions(parent, SettingsStore.DIRECTORY_PERMISSIONS);
+//	}
+//
+//	private static ObjectNode settingsMcpServer(ObjectNode root, String serverName) {
+//		JsonNode mcp = root.get("mcp");
+//		if (!(mcp instanceof ObjectNode servers)) {
+//			throw new UncheckedIOException(
+//					new IOException("Cannot update MCP server \"" + serverName + "\": mcp must be an object"));
+//		}
+//		JsonNode server = servers.get(serverName);
+//		if (!(server instanceof ObjectNode object)) {
+//			throw new UncheckedIOException(
+//					new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured"));
+//		}
+//		return object;
+//	}
+//
+//	private static ArrayNode settingsDisabledTools(ObjectNode server, String serverName) {
+//		JsonNode value = server.get("disabledTools");
+//		if (value == null || value.isNull()) return null;
+//		if (!(value instanceof ArrayNode tools)) {
+//			throw new UncheckedIOException(new IOException(
+//					"Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
+//		}
+//		for (JsonNode tool : tools) {
+//			settingsDisabledToolName(serverName, tool);
+//		}
+//		return tools;
+//	}
+//
+//	private static String settingsDisabledToolName(String serverName, JsonNode tool) {
+//		if (!tool.isTextual() || tool.asText().isBlank()) {
+//			throw new UncheckedIOException(new IOException(
+//					"Invalid MCP server \"" + serverName + "\": disabledTools must contain non-empty strings"));
+//		}
+//		return tool.asText();
+//	}
 
 	private static String optionalSettingsText(ObjectNode root, String field) throws IOException {
 		JsonNode value = root.get(field);
@@ -14349,19 +14349,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return value.asText();
 	}
 
-	private static boolean optionalSettingsBoolean(ObjectNode root, String field, boolean defaultValue)
-			throws IOException {
-		JsonNode value = root.get(field);
-		if (value == null || value.isNull()) return defaultValue;
-		if (!value.isBoolean()) {
-			throw new IOException("Invalid setting " + field + ": expected a boolean");
-		}
-		return value.asBoolean();
-	}
+//	private static boolean optionalSettingsBoolean(ObjectNode root, String field, boolean defaultValue)
+//			throws IOException {
+//		JsonNode value = root.get(field);
+//		if (value == null || value.isNull()) return defaultValue;
+//		if (!value.isBoolean()) {
+//			throw new IOException("Invalid setting " + field + ": expected a boolean");
+//		}
+//		return value.asBoolean();
+//	}
+//
+//	private static void requireSettingsValue(String value, String name) {
+//		if (value == null || value.isBlank()) {
+//			throw new IllegalArgumentException(name + " must not be blank");
+//		}
+//	}
 
-	private static void requireSettingsValue(String value, String name) {
-		if (value == null || value.isBlank()) {
-			throw new IllegalArgumentException(name + " must not be blank");
-		}
-	}
 }
