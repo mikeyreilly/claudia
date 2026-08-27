@@ -360,21 +360,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 	}
 
-//	/** Terminates the stream without a terminal event, optionally supplying the result. */
-//	public static <T, R> void end(EventStream<T, R> stream, R result) {
-//		synchronized (stream) {
-//			stream.done = true;
-//			if (result != null) {
-//				stream.finalResult.complete(result);
-//			}
-//			stream.notifyAll();
-//		}
-//	}
-//
-//	public static <T, R> void end(EventStream<T, R> stream) {
-//		end(stream, null);
-//	}
-
 	/** Blocks until the terminal event arrives and returns the extracted result. */
 	public static <T, R> R result(EventStream<T, R> stream) throws InterruptedException {
 		try {
@@ -601,16 +586,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	public static ThinkingContent withSignature(ThinkingContent block, String signature) {
 		return thinkingContent(block.thinking, signature, block.redacted);
 	}
-
-//	// --------------------------------------------------------------- context
-//
-//	/** Shallow copy: message and tool lists are duplicated, elements shared. */
-//	public static Context copy(Context context) {
-//		Context copy = new Context(context.systemPrompt);
-//		copy.messages.addAll(context.messages);
-//		copy.tools.addAll(context.tools);
-//		return copy;
-//	}
 
 	// --------------------------------------------------------------- model
 
@@ -1015,18 +990,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 			}
 		};
 	}
-
-//	public static List<CredentialStore.CredentialInfo> listCredentials(CredentialStore store) throws IOException {
-//		return switch (store) {
-//			case FileCredentialStore file -> {
-//				List<CredentialStore.CredentialInfo> result = new ArrayList<>();
-//				for (Map.Entry<String, Credential> entry : readAllCredentials(file).entrySet()) {
-//					result.add(new CredentialStore.CredentialInfo(entry.getKey(), credentialType(entry.getValue())));
-//				}
-//				yield List.copyOf(result);
-//			}
-//		};
-//	}
 
 	/**
 	 * Atomically applies a mutation to a provider credential. Returning null
@@ -1828,13 +1791,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		}
 		return clamped.wire;
 	}
-
-//	public static boolean modelsAreEqual(Model a, Model b) {
-//		if (a == null || b == null) {
-//			return false;
-//		}
-//		return a.id.equals(b.id) && a.provider.equals(b.provider);
-//	}
 
 	// -------------------------------------------------------- model catalog
 
@@ -4048,63 +4004,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 			default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
 		};
 	}
-
-//	// --------------------------------------------------------- faux provider
-//
-//	/** Creates a deterministic test provider; at least one model is required. */
-//	public static FauxProvider fauxProvider(String api, String id, List<Model> models) {
-//		Objects.requireNonNull(api);
-//		Objects.requireNonNull(id);
-//		List<Model> catalog = List.copyOf(models);
-//		if (catalog.isEmpty()) {
-//			throw new IllegalArgumentException("Faux provider needs at least one model");
-//		}
-//		return new FauxProvider(api, id, catalog);
-//	}
-//
-//	public static FauxProvider newFauxProvider() {
-//		return fauxProvider(FauxProvider.DEFAULT_API, FauxProvider.DEFAULT_PROVIDER, List.of(fauxDefaultModel()));
-//	}
-//
-//	public static Model fauxDefaultModel() {
-//		Model model = new Model();
-//		model.id = FauxProvider.DEFAULT_MODEL_ID;
-//		model.name = "Faux Model";
-//		model.api = FauxProvider.DEFAULT_API;
-//		model.provider = FauxProvider.DEFAULT_PROVIDER;
-//		model.baseUrl = "http://localhost:0";
-//		model.input = new ArrayList<>(List.of("text", "image"));
-//		model.cost = ModelCost.FREE;
-//		model.contextWindow = 128_000;
-//		model.maxTokens = 16_384;
-//		return model;
-//	}
-//
-//	/** Replaces the provider's FIFO script of literal or context-dependent responses. */
-//	public static void setFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
-//		synchronized (provider) {
-//			provider.pendingResponses.clear();
-//			provider.pendingResponses.addAll(responses);
-//		}
-//	}
-//
-//	public static void appendFauxResponses(FauxProvider provider, List<FauxProvider.ResponseStep> responses) {
-//		synchronized (provider) {
-//			provider.pendingResponses.addAll(responses);
-//		}
-//	}
-//
-//	public static int fauxPendingResponseCount(FauxProvider provider) {
-//		synchronized (provider) {
-//			return provider.pendingResponses.size();
-//		}
-//	}
-//
-//	public static int fauxCallCount(FauxProvider provider) {
-//		synchronized (provider.state) {
-//			return provider.state.callCount;
-//		}
-//	}
 
 	public static AssistantMessageEventStream fauxStream(
 			FauxProvider provider, Model model, Context context, StreamOptions options) {
