@@ -213,8 +213,10 @@ contents are appended to the model's instruction context in that order, so
 more deeply nested files are more specific. `AGENTS.override.md` takes
 precedence over `AGENTS.md` when both are in the same directory. As local tools
 move into a deeper descendant directory, any newly applicable instructions are
-loaded before the next model request. These files are prompt text only; they do
-not impose separate filesystem restrictions.
+loaded before the next model request. Each file is reported once when it first
+applies, for example `Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md`.
+These files are prompt text only; they do not impose separate filesystem
+restrictions.
 
 ## RPC mode
 

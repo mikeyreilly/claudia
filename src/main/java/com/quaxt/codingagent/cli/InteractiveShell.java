@@ -1135,6 +1135,10 @@ final class InteractiveShell implements AutoCloseable {
 					setActivity(ActivityStatus.active(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
 			case AgentEvent.AgentEnd ignored ->
 					setActivity(ActivityStatus.ready(System.nanoTime()));
+			case AgentEvent.InstructionLoaded loaded -> {
+				finishStreamOutput();
+				terminal.println(Cli.instructionLoadedMessage(loaded.path()));
+			}
 			case AgentEvent.CompactionStart ignored ->
 					setActivity(ActivityStatus.active(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
 			case AgentEvent.CompactionEnd ignored -> {

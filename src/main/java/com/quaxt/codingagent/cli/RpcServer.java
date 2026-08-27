@@ -200,6 +200,10 @@ final class RpcServer {
 				node.put("type", "agent_settled");
 				node.put("messageCount", end.newMessages().size());
 			}
+			case AgentEvent.InstructionLoaded loaded -> {
+				node.put("type", "instruction_loaded");
+				node.put("path", loaded.path().toString());
+			}
 			case AgentEvent.CompactionStart start -> {
 				node.put("type", "compaction_start");
 				node.put("tokensBefore", start.tokensBefore());

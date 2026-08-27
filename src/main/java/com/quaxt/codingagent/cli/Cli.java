@@ -2,7 +2,9 @@ package com.quaxt.codingagent.cli;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
 import com.quaxt.codingagent.ai.json.Json;
@@ -86,6 +88,8 @@ final class Cli {
 			agent.state().tools.addAll(mcp.tools());
 			if (arguments.mode.equals("json")) {
 				agent.subscribe(Cli::printJsonEvent);
+			} else {
+				agent.subscribe(Cli::printInstructionLoaded);
 			}
 			SessionRecorder recorder = arguments.noSession
 					? null
@@ -116,18 +120,41 @@ final class Cli {
 	 */
 	static void configureBuiltInTools(Agent agent, Path cwd, String baseSystemPrompt) {
 		AgentInstructions instructions = AgentInstructions.forWorkingDirectory(cwd, baseSystemPrompt);
+		Set<Path> announcedSources = new LinkedHashSet<>();
 		agent.state().systemPrompt = instructions.systemPrompt();
 		agent.subscribe(event -> {
 			if (event instanceof AgentEvent.AgentStart) {
 				instructions.refresh();
-				agent.state().systemPrompt = instructions.systemPrompt();
+				applyInstructions(agent, instructions, announcedSources);
 			}
 		});
 		agent.state().tools.addAll(BuiltInTools.create(cwd, path -> {
 			if (instructions.observe(path)) {
-				agent.state().systemPrompt = instructions.systemPrompt();
+				applyInstructions(agent, instructions, announcedSources);
 			}
 		}));
+	}
+
+	private static void applyInstructions(
+			Agent agent, AgentInstructions instructions, Set<Path> announcedSources) {
+		agent.state().systemPrompt = instructions.systemPrompt();
+		List<Path> sources = instructions.sources();
+		announcedSources.retainAll(sources);
+		for (Path source : sources) {
+			if (announcedSources.add(source)) {
+				agent.instructionLoaded(source);
+			}
+		}
+	}
+
+	static String instructionLoadedMessage(Path path) {
+		return "Found " + path;
+	}
+
+	private static void printInstructionLoaded(AgentEvent event) {
+		if (event instanceof AgentEvent.InstructionLoaded loaded) {
+			System.err.println(instructionLoadedMessage(loaded.path()));
+		}
 	}
 
 	private static void printJsonEvent(AgentEvent event) {
@@ -137,6 +164,10 @@ final class Cli {
 			case AgentEvent.AgentEnd end -> {
 				node.put("type", "agent_end");
 				node.put("messageCount", end.newMessages().size());
+			}
+			case AgentEvent.InstructionLoaded loaded -> {
+				node.put("type", "instruction_loaded");
+				node.put("path", loaded.path().toString());
 			}
 			case AgentEvent.CompactionStart start -> {
 				node.put("type", "compaction_start");

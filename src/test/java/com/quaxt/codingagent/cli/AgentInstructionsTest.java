@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.agent.Agent;
+import com.quaxt.codingagent.agent.AgentEvent;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
 
@@ -124,6 +125,12 @@ class AgentInstructionsTest {
 				})));
 		Agent agent = new Agent("Base prompt.", provider.models().getFirst(), provider::stream);
 		Cli.configureBuiltInTools(agent, repository, "Base prompt.");
+		List<Path> loadedSources = new CopyOnWriteArrayList<>();
+		agent.subscribe(event -> {
+			if (event instanceof AgentEvent.InstructionLoaded loaded) {
+				loadedSources.add(loaded.path());
+			}
+		});
 
 		agent.prompt("Inspect the schema.");
 
@@ -132,6 +139,14 @@ class AgentInstructionsTest {
 						"Base prompt.\n\nRepository rule.",
 						"Base prompt.\n\nRepository rule.\n\nDatabase rule."),
 				prompts);
+		assertEquals(List.of(repository.resolve("AGENTS.md"), nested.resolve("AGENTS.md")), loadedSources);
+	}
+
+	@Test
+	void formatsLoadedInstructionFilesForTheUser() {
+		Path source = Path.of("/Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md");
+
+		assertEquals("Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md", Cli.instructionLoadedMessage(source));
 	}
 
 	private Path repository() throws Exception {
