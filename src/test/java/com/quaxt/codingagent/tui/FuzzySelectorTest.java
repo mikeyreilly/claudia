@@ -13,9 +13,12 @@ class FuzzySelectorTest {
 	@Test
 	void filtersAcrossMultipleTokensAndSelectsTheBestMatch() {
 		List<SelectItem<String>> items = List.of(
-				CodingAgentOperations.selectItem("sonnet", "claude-sonnet-4.5", "[github-copilot] Claude Sonnet"),
-				CodingAgentOperations.selectItem("terra", "gpt-5.6-terra", "[github-copilot] GPT 5.6 Terra"),
-				CodingAgentOperations.selectItem("gpt54", "gpt-5.4", "[github-copilot] GPT 5.4"));
+				new SelectItem<>("sonnet", "claude-sonnet-4.5", "[github-copilot] Claude Sonnet",
+						"claude-sonnet-4.5 [github-copilot] Claude Sonnet"),
+				new SelectItem<>("terra", "gpt-5.6-terra", "[github-copilot] GPT 5.6 Terra",
+						"gpt-5.6-terra [github-copilot] GPT 5.6 Terra"),
+				new SelectItem<>("gpt54", "gpt-5.4", "[github-copilot] GPT 5.4",
+						"gpt-5.4 [github-copilot] GPT 5.4"));
 		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Models", items, 2, true);
 
 		CodingAgentOperations.handleFuzzySelectorInput(
@@ -31,9 +34,9 @@ class FuzzySelectorTest {
 	@Test
 	void restoresCurrentSelectionWhenSearchIsClearedAndSupportsCancel() {
 		List<SelectItem<String>> items = List.of(
-				CodingAgentOperations.selectItem("one", "One"),
-				CodingAgentOperations.selectItem("two", "Two"),
-				CodingAgentOperations.selectItem("three", "Three"));
+				new SelectItem<>("one", "One", "", "One"),
+				new SelectItem<>("two", "Two", "", "Two"),
+				new SelectItem<>("three", "Three", "", "Three"));
 		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Options", items, 1, true);
 
 		CodingAgentOperations.handleFuzzySelectorInput(
@@ -50,7 +53,8 @@ class FuzzySelectorTest {
 	@Test
 	void rendersAWindowedListWithCurrentAndNavigationHints() {
 		List<SelectItem<Integer>> items = java.util.stream.IntStream.range(0, 20)
-				.mapToObj(index -> CodingAgentOperations.selectItem(index, "Model " + index, "Description " + index))
+				.mapToObj(index -> new SelectItem<>(index, "Model " + index, "Description " + index,
+						"Model " + index + " Description " + index))
 				.toList();
 		FuzzySelector<Integer> selector = CodingAgentOperations.fuzzySelector("Models", items, 12, true);
 

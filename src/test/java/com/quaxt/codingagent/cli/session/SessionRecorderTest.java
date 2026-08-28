@@ -26,15 +26,21 @@ class SessionRecorderTest {
 
 	@Test
 	void recordsACompleteAgentTranscript() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"));
+		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
-		assistant.content.add(CodingAgentOperations.textContent("I will use a tool."));
+		assistant.content.add(new TextContent("I will use a tool.", null));
 		assistant.stopReason = StopReason.TOOL_USE;
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(
 				CodingAgentOperations.userMessage("read file"),
 				assistant,
-				CodingAgentOperations.toolResultMessage("call-1", "read", "file contents", false)));
+				new ToolResultMessage(
+						"call-1",
+						"read",
+						List.of(new TextContent("file contents", null)),
+						null,
+						false,
+						System.currentTimeMillis())));
 
 		var entries = CodingAgentOperations.readSession(store, recorder.sessionId);
 		assertEquals(4, entries.size());
@@ -47,7 +53,7 @@ class SessionRecorderTest {
 
 	@Test
 	void forksTheTranscriptIntoANamedSession() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"));
+		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		SessionRecorder source = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("first prompt"), CodingAgentOperations.userMessage("second prompt"));
 		CodingAgentOperations.appendSessionMessages(source, messages);
@@ -65,7 +71,7 @@ class SessionRecorderTest {
 
 	@Test
 	void restoresCompactedSessionsUsingOnlyTheCheckpointAndLaterMessagesAsContext() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"));
+		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(
 				CodingAgentOperations.userMessage("PRE-COMPACTION-SENTINEL"),
@@ -94,7 +100,7 @@ class SessionRecorderTest {
 
 	@Test
 	void usesTheLatestCompactionBoundaryWhenASessionIsCompactedAgain() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"));
+		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("first history")));
 		CodingAgentOperations.appendSessionCompaction(recorder, new CompactionResult("first checkpoint", 100, 10));
@@ -111,21 +117,22 @@ class SessionRecorderTest {
 
 	@Test
 	void restoresTypedMessagesAndContinuesTheSameSession() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"));
+		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux-api", "faux", "faux-1");
-		assistant.content.add(CodingAgentOperations.thinkingContent("reasoning", "opaque", false));
-		assistant.content.add(CodingAgentOperations.textContent("answer", "text-signature"));
-		assistant.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), "thought"));
+		assistant.content.add(new ThinkingContent("reasoning", "opaque", false));
+		assistant.content.add(new TextContent("answer", "text-signature"));
+		assistant.content.add(new ToolCall(
+				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), "thought"));
 		assistant.stopReason = StopReason.TOOL_USE;
 		assistant.usage.input = 12;
 		assistant.usage.output = 7;
-		UserMessage user = CodingAgentOperations.userMessage(
-				List.of(CodingAgentOperations.textContent("look"), CodingAgentOperations.imageContent("aW1hZ2U=", "image/png")), 1234);
-		ToolResultMessage result = CodingAgentOperations.toolResultMessage(
+		UserMessage user = new UserMessage(
+				List.of(new TextContent("look", null), new ImageContent("aW1hZ2U=", "image/png")), 1234);
+		ToolResultMessage result = new ToolResultMessage(
 				"call-1",
 				"read",
-				List.of(CodingAgentOperations.textContent("contents")),
+				List.of(new TextContent("contents", null)),
 				Map.of("path", "README.md"),
 				false,
 				5678);

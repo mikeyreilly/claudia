@@ -374,7 +374,7 @@ class InteractiveTerminalTest {
 					CodingAgentOperations.runComponent(
 							interactive,
 							CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
-									"Details", List.of(CodingAgentOperations.selectItem("done", "Done")), 0, false)));
+									"Details", List.of(new SelectItem<>("done", "Done", "", "Done")), 0, false)));
 				} catch (java.io.IOException error) {
 					throw new AssertionError(error);
 				}
@@ -425,7 +425,7 @@ class InteractiveTerminalTest {
 							interactive,
 							CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
 									"Models",
-									List.of(CodingAgentOperations.selectItem("gpt", "gpt-5.6-terra")),
+									List.of(new SelectItem<>("gpt", "gpt-5.6-terra", "", "gpt-5.6-terra")),
 									0,
 									true))));
 
@@ -446,23 +446,28 @@ class InteractiveTerminalTest {
 	@Test
 	void alignsStatusBarSegmentsToTheFullTerminalWidth() {
 		String line = CodingAgentOperations.statusBarLine(
+				"", InteractiveTerminal.StatusAccent.NONE,
 				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60, Theme.PLAIN);
 
 		assertEquals(60, line.length());
 		assertTrue(line.startsWith("~/xa/coding-agent [main]"));
 		assertTrue(line.endsWith("GPT-5.6 Sol Max (0%)"));
 
-		String styled = CodingAgentOperations.statusBarLine("left", "right", 20, Theme.DARK);
+		String styled = CodingAgentOperations.statusBarLine(
+				"", InteractiveTerminal.StatusAccent.NONE, "left", "right", 20, Theme.DARK);
 		assertTrue(styled.startsWith(Theme.DARK.muted));
 		assertTrue(styled.endsWith(Theme.DARK.reset));
 
 		String narrow = CodingAgentOperations.statusBarLine(
+				"", InteractiveTerminal.StatusAccent.NONE,
 				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30, Theme.PLAIN);
 		assertTrue(CodingAgentOperations.visibleWidth(narrow) <= 30);
 		assertTrue(narrow.endsWith("GPT-5.6 Sol Max (0%)"));
 
-		assertEquals("left only", CodingAgentOperations.statusBarLine("left only", "", 20, Theme.PLAIN));
-		assertEquals("", CodingAgentOperations.statusBarLine("", "", 20, Theme.PLAIN));
+		assertEquals("left only", CodingAgentOperations.statusBarLine(
+				"", InteractiveTerminal.StatusAccent.NONE, "left only", "", 20, Theme.PLAIN));
+		assertEquals("", CodingAgentOperations.statusBarLine(
+				"", InteractiveTerminal.StatusAccent.NONE, "", "", 20, Theme.PLAIN));
 	}
 
 	@Test

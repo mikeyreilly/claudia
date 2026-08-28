@@ -10,8 +10,10 @@ import org.junit.jupiter.api.Test;
 import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
+import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ToolCall;
+import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.tui.Theme;
 import com.quaxt.codingagent.tui.TuiInput;
 
@@ -57,9 +59,9 @@ class TurnDetailsComponentTest {
 	@Test
 	void scrollsWithinAnExpandedLongStep() {
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
-		assistant.content.add(CodingAgentOperations.thinkingContent(String.join("\n", IntStream.range(0, 30)
+		assistant.content.add(new ThinkingContent(String.join("\n", IntStream.range(0, 30)
 				.mapToObj(index -> "reasoning line " + index)
-				.toList())));
+				.toList()), null, false));
 		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(
 				List.of(CodingAgentOperations.userMessage("inspect"), assistant), false);
 
@@ -75,9 +77,9 @@ class TurnDetailsComponentTest {
 	@Test
 	void onlyInspectsTheLatestUserTurnAndSanitizesTerminalControls() {
 		AssistantMessage old = new AssistantMessage("faux", "faux", "old");
-		old.content.add(CodingAgentOperations.thinkingContent("old thought"));
+		old.content.add(new ThinkingContent("old thought", null, false));
 		AssistantMessage latest = new AssistantMessage("faux", "faux", "new");
-		latest.content.add(CodingAgentOperations.thinkingContent("new \u001b[31mthought\u001b[0m"));
+		latest.content.add(new ThinkingContent("new \u001b[31mthought\u001b[0m", null, false));
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("old"), old, CodingAgentOperations.userMessage("new"), latest);
 
 		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(messages, false);
@@ -91,15 +93,21 @@ class TurnDetailsComponentTest {
 
 	private static TurnDetailsComponent details(boolean hideThinking) {
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
-		assistant.content.add(CodingAgentOperations.thinkingContent("Inspect the repository\nThen choose files"));
-		assistant.content.add(CodingAgentOperations.toolCall("read-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
-		assistant.content.add(CodingAgentOperations.toolCall("bash-1", "bash", CodingAgentOperations.jsonObject().put("command", "mvn test")));
+		assistant.content.add(new ThinkingContent("Inspect the repository\nThen choose files", null, false));
+		assistant.content.add(new ToolCall(
+				"read-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
+		assistant.content.add(new ToolCall(
+				"bash-1", "bash", CodingAgentOperations.jsonObject().put("command", "mvn test"), null));
 		return CodingAgentOperations.turnDetailsForLatestTurn(
 				List.of(
 						CodingAgentOperations.userMessage("inspect"),
 						assistant,
-						CodingAgentOperations.toolResultMessage("read-1", "read", "secret read output", false),
-						CodingAgentOperations.toolResultMessage("bash-1", "bash", "tests passed", false)),
+						new ToolResultMessage(
+								"read-1", "read", List.of(new TextContent("secret read output", null)), null, false,
+								System.currentTimeMillis()),
+						new ToolResultMessage(
+								"bash-1", "bash", List.of(new TextContent("tests passed", null)), null, false,
+								System.currentTimeMillis())),
 				hideThinking);
 	}
 

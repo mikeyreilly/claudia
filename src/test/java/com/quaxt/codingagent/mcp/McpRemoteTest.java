@@ -33,7 +33,7 @@ class McpRemoteTest {
 		http.createContext("/mcp", exchange -> handle(exchange, sawSession, sawProtocol));
 		http.start();
 		try {
-			var remote = CodingAgentOperations.remoteMcpServerConfig(
+			var remote = new McpServerConfig.Remote(
 					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
 					Map.of("X-Test", "yes"),
 					null,
@@ -42,7 +42,7 @@ class McpRemoteTest {
 					List.of(),
 					List.of());
 			McpManager manager = CodingAgentOperations.mcpCreateManager(
-					CodingAgentOperations.mcpConfiguration(Map.of("remote", remote), List.of()), tempDir);
+					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
 			try {
 				CodingAgentOperations.mcpAwaitReady(manager);
 				assertEquals(McpManager.State.CONNECTED, CodingAgentOperations.mcpStatus(manager, "remote").state);

@@ -24,6 +24,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -471,33 +472,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	}
 
 	public static UserMessage userMessage(String text) {
-		return userMessage(List.of(textContent(text)), System.currentTimeMillis());
-	}
-
-	public static UserMessage userMessage(List<UserContent> content) {
-		return userMessage(content, System.currentTimeMillis());
-	}
-
-	/** Creates a user message with an unmodifiable copy of the supplied content. */
-	public static UserMessage userMessage(List<UserContent> content, long timestamp) {
-		return new UserMessage(List.copyOf(content), timestamp);
-	}
-
-	public static ToolResultMessage toolResultMessage(
-			String toolCallId, String toolName, String text, boolean isError) {
-		return toolResultMessage(
-				toolCallId, toolName, List.of(textContent(text)), null, isError, System.currentTimeMillis());
-	}
-
-	/** Creates a tool result message with an unmodifiable copy of the supplied content. */
-	public static ToolResultMessage toolResultMessage(
-			String toolCallId,
-			String toolName,
-			List<UserContent> content,
-			Object details,
-			boolean isError,
-			long timestamp) {
-		return new ToolResultMessage(toolCallId, toolName, List.copyOf(content), details, isError, timestamp);
+		return new UserMessage(List.of(new TextContent(text, null)), System.currentTimeMillis());
 	}
 
 	private static String contentText(List<?> content) {
@@ -510,71 +485,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return sb.toString();
 	}
 
-	// --------------------------------------------------------- content blocks
-
-	public static TextContent textContent(String text) {
-		return textContent(text, null);
-	}
-
-	/** Creates a text block; the text itself is required. */
-	public static TextContent textContent(String text, String textSignature) {
-		if (text == null) {
-			throw new IllegalArgumentException("text must not be null");
-		}
-		return new TextContent(text, textSignature);
-	}
-
-	public static ThinkingContent thinkingContent(String thinking) {
-		return thinkingContent(thinking, null, false);
-	}
-
-	/** Creates a thinking block; the thinking text itself is required. */
-	public static ThinkingContent thinkingContent(String thinking, String thinkingSignature, boolean redacted) {
-		if (thinking == null) {
-			throw new IllegalArgumentException("thinking must not be null");
-		}
-		return new ThinkingContent(thinking, thinkingSignature, redacted);
-	}
-
-	/** Creates an image block; both the payload and its mime type are required. */
-	public static ImageContent imageContent(String data, String mimeType) {
-		if (data == null || mimeType == null) {
-			throw new IllegalArgumentException("data and mimeType must not be null");
-		}
-		return new ImageContent(data, mimeType);
-	}
-
-	public static ToolCall toolCall(String id, String name, ObjectNode arguments) {
-		return toolCall(id, name, arguments, null);
-	}
-
-	/** Creates a tool call; only the Google-specific thought signature is optional. */
-	public static ToolCall toolCall(String id, String name, ObjectNode arguments, String thoughtSignature) {
-		if (id == null || name == null || arguments == null) {
-			throw new IllegalArgumentException("id, name, and arguments must not be null");
-		}
-		return new ToolCall(id, name, arguments, thoughtSignature);
-	}
-
-	public static TextContent withText(TextContent block, String newText) {
-		return textContent(newText, block.textSignature);
-	}
-
-	public static ThinkingContent withThinking(ThinkingContent block, String newThinking) {
-		return thinkingContent(newThinking, block.thinkingSignature, block.redacted);
-	}
-
 	// --------------------------------------------------------------- model
-
-	public static ModelCost modelCost(double input, double output, double cacheRead, double cacheWrite) {
-		return modelCost(input, output, cacheRead, cacheWrite, List.of());
-	}
-
-	/** Creates model pricing; a missing tier list becomes the empty list. */
-	public static ModelCost modelCost(
-			double input, double output, double cacheRead, double cacheWrite, List<ModelCost.Tier> tiers) {
-		return new ModelCost(input, output, cacheRead, cacheWrite, tiers == null ? List.of() : List.copyOf(tiers));
-	}
 
 	/** Copy of a model with its mutable collections duplicated. */
 	public static Model copyModel(Model source) {
@@ -585,13 +496,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		copy.provider = source.provider;
 		copy.baseUrl = source.baseUrl;
 		copy.reasoning = source.reasoning;
-		Map<ThinkingLevel, String> result = null;
+		copy.thinkingLevelMap = null;
 		if (source.thinkingLevelMap != null) {
-			Map<ThinkingLevel, String> copy1 = new EnumMap<>(ThinkingLevel.class);
-			copy1.putAll(source.thinkingLevelMap);
-			result = copy1;
+			copy.thinkingLevelMap = new EnumMap<>(ThinkingLevel.class);
+			copy.thinkingLevelMap.putAll(source.thinkingLevelMap);
 		}
-		copy.thinkingLevelMap = result;
 		copy.input = new ArrayList<>(source.input);
 		copy.cost = source.cost;
 		copy.contextWindow = source.contextWindow;
@@ -718,20 +627,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 				errorBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
 			}
 			int status = response.statusCode();
-			String result;
 			String trimmed = errorBody == null ? "" : errorBody.trim();
-			if (trimmed.isEmpty()) {
-				result = status + " status code (no body)";
-			} else {
-				String result1;
-				if (trimmed.length() <= HttpException.MAX_ERROR_BODY_CHARS) {
-					result1 = trimmed;
-				} else {
-					result1 = trimmed.substring(0, HttpException.MAX_ERROR_BODY_CHARS) + "... [truncated " + (trimmed.length() - HttpException.MAX_ERROR_BODY_CHARS) + " chars]";
-				}
-				result = status + ": " + result1;
-			}
-			throw new HttpException(status, errorBody, result);
+			String detail = trimmed.length() <= HttpException.MAX_ERROR_BODY_CHARS
+					? trimmed
+					: trimmed.substring(0, HttpException.MAX_ERROR_BODY_CHARS) + "... [truncated "
+							+ (trimmed.length() - HttpException.MAX_ERROR_BODY_CHARS) + " chars]";
+			throw new HttpException(
+					status, errorBody, trimmed.isEmpty() ? status + " status code (no body)" : status + ": " + detail);
 		}
 		InputStream bodyStream = response.body();
 		if (signal != null) {
@@ -858,42 +760,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 	}
 
 	// ----------------------------------------------------------- credentials
-
-	public static Credential.ApiKeyCredential apiKeyCredential(String key) {
-		return apiKeyCredential(key, Map.of());
-	}
-
-	/** Creates an API key credential with an unmodifiable copy of its configuration values. */
-	public static Credential.ApiKeyCredential apiKeyCredential(String key, Map<String, String> env) {
-		return new Credential.ApiKeyCredential(key, env == null ? Map.of() : Map.copyOf(env));
-	}
-
-	public static Credential.OAuthCredential oauthCredential(
-			String access, String refresh, long expires, List<String> availableModelIds) {
-		return oauthCredential(access, refresh, expires, availableModelIds, Map.of());
-	}
-
-	/**
-	 * Creates an OAuth credential. A missing model list stays null (meaning "not
-	 * restricted"); missing metadata becomes the empty map.
-	 */
-	public static Credential.OAuthCredential oauthCredential(
-			String access,
-			String refresh,
-			long expires,
-			List<String> availableModelIds,
-			Map<String, String> metadata) {
-		return new Credential.OAuthCredential(
-				access,
-				refresh,
-				expires,
-				availableModelIds == null ? null : List.copyOf(availableModelIds),
-				metadata == null ? Map.of() : Map.copyOf(metadata));
-	}
-
-	public static FileCredentialStore fileCredentialStore(Path authPath) {
-		return fileCredentialStore(authPath, null);
-	}
 
 	/** Resolves the credential file, its sibling lock file, and the optional legacy file. */
 	public static FileCredentialStore fileCredentialStore(Path authPath, Path fallbackAuthPath) {
@@ -1029,16 +895,10 @@ root.set(entry.getKey(), node);
 			}
 			result.put(entry.getKey(), switch (node.path("type").asText()) {
 				case "api_key" -> {
-					String result1 = null;
 					JsonNode value = node.get("key");
-					if (value != null) {
-						if (!value.isTextual()) {
-							throw new IOException("Invalid credential field: " + "key");
-						}
-						result1 = value.asText();
-					}
-					yield apiKeyCredential(
-							result1, parseCredentialEnv(providerId, node.get("env")));
+					if (value != null && !value.isTextual()) throw new IOException("Invalid credential field: key");
+					yield new Credential.ApiKeyCredential(
+							value == null ? null : value.asText(), Map.copyOf(parseCredentialEnv(providerId, node.get("env"))));
 				}
 				case "oauth" -> {
 					if (!node.path("access").isTextual()
@@ -1061,12 +921,12 @@ root.set(entry.getKey(), node);
 						}
 						result1 = values;
 					}
-					yield oauthCredential(
+					yield new Credential.OAuthCredential(
 							node.path("access").asText(),
 							node.path("refresh").asText(),
 							node.path("expires").asLong(),
-							result1,
-							parseCredentialEnv(providerId, node.get("metadata")));
+							result1 == null ? null : List.copyOf(result1),
+							Map.copyOf(parseCredentialEnv(providerId, node.get("metadata"))));
 				}
 				default -> throw invalidCredential(providerId);
 			});
@@ -1121,20 +981,23 @@ root.set(entry.getKey(), node);
 	/** Starts the Codex device flow. Display the URI and code before completing it. */
 	public static ChatGptAuth.DeviceCode chatGptBeginLogin(ChatGptAuth auth) throws IOException {
 		ObjectNode request = jsonObject().put("client_id", auth.clientId);
-		JsonNode response = authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"), request);
-		String deviceAuthId = requiredOpenAiText(response, "device_auth_id");
-		String userCode = requiredOpenAiText(response, "user_code");
+		JsonNode response = authPost(
+				auth.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
+				Map.of("Accept", "application/json"),
+				Json.MAPPER.writeValueAsBytes(request),
+				false);
+		String deviceAuthId = requiredAuthText(response, "device_auth_id", "OpenAI");
+		String userCode = requiredAuthText(response, "user_code", "OpenAI");
 		JsonNode node = response.path("interval");
-		int interval1;
+		int interval;
 		try {
-			interval1 = node.isIntegralNumber() ? node.asInt() : Integer.parseInt(node.asText("5"));
+			interval = node.isIntegralNumber() ? node.asInt() : Integer.parseInt(node.asText("5"));
 		} catch (NumberFormatException error) {
 			throw new IOException("Invalid OpenAI device response: invalid interval", error);
 		}
-		if (interval1 < 0) {
+		if (interval < 0) {
 			throw new IOException("Invalid OpenAI device response: interval must not be negative");
 		}
-		int interval = interval1;
 		return new ChatGptAuth.DeviceCode(
 				deviceAuthId,
 				userCode,
@@ -1147,14 +1010,16 @@ root.set(entry.getKey(), node);
 	public static Credential.OAuthCredential chatGptCompleteLogin(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
 			throws IOException, InterruptedException {
 		JsonNode authorization = null;
-		boolean finished = false;
 		ObjectNode request = jsonObject()
 				.put("device_auth_id", device.deviceAuthId)
 				.put("user_code", device.userCode);
 		while (System.currentTimeMillis() < device.expiresAtMs) {
 			try {
-				authorization = authPostJson(auth.authBaseUrl.resolve("/api/accounts/deviceauth/token"), request);
-				finished = true;
+				authorization = authPost(
+						auth.authBaseUrl.resolve("/api/accounts/deviceauth/token"),
+						Map.of("Accept", "application/json"),
+						Json.MAPPER.writeValueAsBytes(request),
+						false);
 				break;
 			} catch (HttpException error) {
 				if (error.status != 403 && error.status != 404) {
@@ -1163,32 +1028,32 @@ root.set(entry.getKey(), node);
 				sleepSeconds(device.intervalSeconds);
 			}
 		}
-		if (!finished) {
+		if (authorization == null) {
 			throw new IOException("ChatGPT device authorization expired before completion");
 		}
 		Map<String, String> form = new LinkedHashMap<>();
 		form.put("grant_type", "authorization_code");
-		form.put("code", requiredOpenAiText(authorization, "authorization_code"));
+		form.put("code", requiredAuthText(authorization, "authorization_code", "OpenAI"));
 		form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
 		form.put("client_id", auth.clientId);
-		form.put("code_verifier", requiredOpenAiText(authorization, "code_verifier"));
+		form.put("code_verifier", requiredAuthText(authorization, "code_verifier", "OpenAI"));
 		Credential.OAuthCredential credential =
-				chatGptCredentialFromTokenResponse(authPostForm(auth.authBaseUrl.resolve("/oauth/token"), form), null);
+				chatGptCredentialFromTokenResponse(authPost(
+						auth.authBaseUrl.resolve("/oauth/token"),
+						Map.of("Accept", "application/json"),
+						mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
+						true), null);
 		modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> credential);
 		return credential;
 	}
 
 	/** Returns a usable ChatGPT bearer token, refreshing it when close to expiry. */
 	public static ChatGptAuth.ChatGptToken chatGptResolveToken(ChatGptAuth auth) throws IOException {
-		Credential.OAuthCredential result;
 		Credential credential = readCredential(auth.credentials, ChatGptAuth.PROVIDER_ID)
 				.orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
-		if (credential instanceof Credential.OAuthCredential oauth1) {
-			result = oauth1;
-		} else {
+		if (!(credential instanceof Credential.OAuthCredential oauth)) {
 			throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
 		}
-		Credential.OAuthCredential oauth = result;
 		if (oauth.expires > System.currentTimeMillis() && !oauth.access.isBlank()) {
 			return chatGptToken(oauth);
 		}
@@ -1197,17 +1062,17 @@ root.set(entry.getKey(), node);
 		form.put("refresh_token", oauth.refresh);
 		form.put("client_id", auth.clientId);
 		Credential.OAuthCredential refreshed =
-				chatGptCredentialFromTokenResponse(authPostForm(auth.authBaseUrl.resolve("/oauth/token"), form), oauth);
+				chatGptCredentialFromTokenResponse(authPost(
+						auth.authBaseUrl.resolve("/oauth/token"),
+						Map.of("Accept", "application/json"),
+						mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
+						true), oauth);
 		modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> refreshed);
 		return chatGptToken(refreshed);
 	}
 
 	public static boolean chatGptHasCredential(ChatGptAuth auth) throws IOException {
-		Optional<Credential> credential = readCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
-		return credential.filter(Credential.OAuthCredential.class::isInstance)
-				.map(Credential.OAuthCredential.class::cast)
-				.map(value -> !value.refresh.isBlank())
-				.orElse(false);
+		return hasRefreshCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
 	}
 
 	public static void chatGptLogout(ChatGptAuth auth) throws IOException {
@@ -1216,7 +1081,7 @@ root.set(entry.getKey(), node);
 
 	private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
 			JsonNode response, Credential.OAuthCredential previous) throws IOException {
-		String access = requiredOpenAiText(response, "access_token");
+		String access = requiredAuthText(response, "access_token", "OpenAI");
 		String refresh = response.path("refresh_token").asText(previous == null ? "" : previous.refresh);
 		if (refresh.isBlank()) {
 			throw new IOException("Invalid OpenAI response: missing refresh_token");
@@ -1249,7 +1114,7 @@ root.set(entry.getKey(), node);
 		if (!metadata.containsKey(ChatGptAuth.ACCOUNT_ID)) {
 			throw new IOException("OpenAI login did not return a ChatGPT account id");
 		}
-		return oauthCredential(access, refresh, expires, null, metadata);
+		return new Credential.OAuthCredential(access, refresh, expires, null, Map.copyOf(metadata));
 	}
 
 	private static ChatGptAuth.ChatGptToken chatGptToken(Credential.OAuthCredential credential) throws IOException {
@@ -1260,9 +1125,11 @@ root.set(entry.getKey(), node);
 		return new ChatGptAuth.ChatGptToken(credential.access, accountId);
 	}
 
-	private static JsonNode authPostJson(URI url, JsonNode body) throws IOException {
-		HttpTransport.Response response = httpPostJson(
-				url.toString(), Map.of("Accept", "application/json"), Json.MAPPER.writeValueAsBytes(body), null, null);
+	private static JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
+			throws IOException {
+		HttpTransport.Response response = form
+				? httpPostForm(url.toString(), headers, body, null, null)
+				: httpPostJson(url.toString(), headers, body, null, null);
 		try {
 			return Json.MAPPER.readTree(response.body);
 		} finally {
@@ -1270,28 +1137,17 @@ root.set(entry.getKey(), node);
 		}
 	}
 
-	private static JsonNode authPostForm(URI url, Map<String, String> parameters) throws IOException {
-		String body = parameters.entrySet().stream()
-				.map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8) + "="
-						+ URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
-				.reduce((left, right) -> left + "&" + right)
-				.orElse("");
-		HttpTransport.Response response = httpPostForm(
-				url.toString(),
-				Map.of("Accept", "application/json"),
-				body.getBytes(StandardCharsets.UTF_8),
-				null,
-				null);
-		try {
-			return Json.MAPPER.readTree(response.body);
-		} finally {
-			closeHttpResponse(response);
-		}
+	private static boolean hasRefreshCredential(CredentialStore store, String provider) throws IOException {
+		return readCredential(store, provider)
+				.filter(Credential.OAuthCredential.class::isInstance)
+				.map(Credential.OAuthCredential.class::cast)
+				.map(value -> !value.refresh.isBlank())
+				.orElse(false);
 	}
 
-	private static String requiredOpenAiText(JsonNode node, String field) throws IOException {
+	private static String requiredAuthText(JsonNode node, String field, String service) throws IOException {
 		if (!node.path(field).isTextual() || node.path(field).asText().isBlank()) {
-			throw new IOException("Invalid OpenAI response: missing " + field);
+			throw new IOException("Invalid " + service + " response: missing " + field);
 		}
 		return node.path(field).asText();
 	}
@@ -1323,13 +1179,16 @@ root.set(entry.getKey(), node);
 
 	/** Starts the device flow. Display the resulting URI and code before completing the login. */
 	public static GitHubCopilotAuth.DeviceCode gitHubCopilotBeginLogin(GitHubCopilotAuth auth) throws IOException {
-		JsonNode response = gitHubPostForm(
+		JsonNode response = authPost(
 				auth.githubBaseUrl.resolve("/login/device/code"),
-				Map.of("client_id", GitHubCopilotAuth.CLIENT_ID, "scope", "read:user"));
-		String deviceCode = requiredGitHubText(response, "device_code");
-		String userCode = requiredGitHubText(response, "user_code");
+				Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
+				mcpFormEncode(Map.of("client_id", GitHubCopilotAuth.CLIENT_ID, "scope", "read:user"))
+						.getBytes(StandardCharsets.UTF_8),
+				true);
+		String deviceCode = requiredAuthText(response, "device_code", "GitHub");
+		String userCode = requiredAuthText(response, "user_code", "GitHub");
 		URI verificationUri = requireAbsoluteHttpUri(
-				URI.create(requiredGitHubText(response, "verification_uri")), "verification_uri");
+				URI.create(requiredAuthText(response, "verification_uri", "GitHub")), "verification_uri");
 		long expiresIn = requiredPositiveLong(response, "expires_in");
 		int interval = response.path("interval").isIntegralNumber() ? response.path("interval").asInt() : 5;
 		if (interval < 0) {
@@ -1343,18 +1202,19 @@ root.set(entry.getKey(), node);
 	public static Credential.OAuthCredential gitHubCopilotCompleteLogin(
 			GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device) throws IOException, InterruptedException {
 		String githubAccessToken = null;
-		boolean finished = false;
 		int intervalSeconds = device.intervalSeconds;
 		while (System.currentTimeMillis() < device.expiresAtMs) {
-			JsonNode response = gitHubPostForm(
+			JsonNode response = authPost(
 					auth.githubBaseUrl.resolve("/login/oauth/access_token"),
-					Map.of(
+					Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
+					mcpFormEncode(Map.of(
 							"client_id", GitHubCopilotAuth.CLIENT_ID,
 							"device_code", device.deviceCode,
-							"grant_type", "urn:ietf:params:oauth:grant-type:device_code"));
+							"grant_type", "urn:ietf:params:oauth:grant-type:device_code"))
+							.getBytes(StandardCharsets.UTF_8),
+					true);
 			if (response.path("access_token").isTextual()) {
 				githubAccessToken = response.path("access_token").asText();
-				finished = true;
 				break;
 			}
 			String error = response.path("error").asText();
@@ -1371,7 +1231,7 @@ root.set(entry.getKey(), node);
 			throw new IOException(
 					"GitHub device authorization failed: " + error + (description.isBlank() ? "" : ": " + description));
 		}
-		if (!finished) {
+		if (githubAccessToken == null) {
 			throw new IOException("GitHub device authorization expired before completion");
 		}
 		Credential.OAuthCredential credential = createCopilotCredential(auth, githubAccessToken, null);
@@ -1408,11 +1268,7 @@ root.set(entry.getKey(), node);
 
 	/** Reports whether a saved GitHub OAuth credential can be refreshed. */
 	public static boolean gitHubCopilotHasCredential(GitHubCopilotAuth auth) throws IOException {
-		Optional<Credential> credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
-		return credential.filter(Credential.OAuthCredential.class::isInstance)
-				.map(Credential.OAuthCredential.class::cast)
-				.map(value -> !value.refresh.isBlank())
-				.orElse(false);
+		return hasRefreshCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
 	}
 
 	public static void gitHubCopilotLogout(GitHubCopilotAuth auth) throws IOException {
@@ -1448,17 +1304,17 @@ root.set(entry.getKey(), node);
 	public static GitHubCopilotAuth.CopilotToken gitHubCopilotRefreshAvailableModels(GitHubCopilotAuth auth)
 			throws IOException {
 		GitHubCopilotAuth.CopilotToken current = gitHubCopilotResolveToken(auth);
-		Credential.OAuthCredential result;
 		Credential credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID)
 				.orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
-		if (credential instanceof Credential.OAuthCredential oauth1) {
-			result = oauth1;
-		} else {
+		if (!(credential instanceof Credential.OAuthCredential oauth)) {
 			throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
 		}
-		Credential.OAuthCredential oauth = result;
-		Credential.OAuthCredential refreshed = oauthCredential(
-				oauth.access, oauth.refresh, oauth.expires, fetchCopilotAvailableModelIds(auth, current.accessToken));
+		Credential.OAuthCredential refreshed = new Credential.OAuthCredential(
+				oauth.access,
+				oauth.refresh,
+				oauth.expires,
+				List.copyOf(fetchCopilotAvailableModelIds(auth, current.accessToken)),
+				Map.of());
 		modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> refreshed);
 		return copilotToken(auth, refreshed);
 	}
@@ -1476,18 +1332,23 @@ root.set(entry.getKey(), node);
 		} finally {
 			closeHttpResponse(http);
 		}
-		String token = requiredGitHubText(response, "token");
+		String token = requiredAuthText(response, "token", "GitHub");
 		long expiresAtSeconds = requiredPositiveLong(response, "expires_at");
 		long expires = Math.max(
 				System.currentTimeMillis(), expiresAtSeconds * 1000 - GitHubCopilotAuth.REFRESH_SKEW_MS);
-		return oauthCredential(token, githubAccessToken, expires, availableModelIds);
+		return new Credential.OAuthCredential(
+				token,
+				githubAccessToken,
+				expires,
+				availableModelIds == null ? null : List.copyOf(availableModelIds),
+				Map.of());
 	}
 
 	private static Credential.OAuthCredential withCopilotAvailableModels(
 			GitHubCopilotAuth auth, Credential.OAuthCredential credential) throws IOException {
 		List<String> available = fetchCopilotAvailableModelIds(auth, credential.access);
-		return oauthCredential(
-				credential.access, credential.refresh, credential.expires, available);
+		return new Credential.OAuthCredential(
+				credential.access, credential.refresh, credential.expires, List.copyOf(available), Map.of());
 	}
 
 	private static List<String> fetchCopilotAvailableModelIds(GitHubCopilotAuth auth, String copilotToken)
@@ -1568,33 +1429,6 @@ root.set(entry.getKey(), node);
 
 	public static String encodeUrlPathSegment(String value) {
 		return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
-	}
-
-	private static JsonNode gitHubPostForm(URI url, Map<String, String> parameters) throws IOException {
-		String body = parameters.entrySet().stream()
-				.map(entry -> URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)
-						+ "="
-						+ URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
-				.reduce((left, right) -> left + "&" + right)
-				.orElse("");
-		HttpTransport.Response response = httpPostForm(
-				url.toString(),
-				Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
-				body.getBytes(StandardCharsets.UTF_8),
-				null,
-				null);
-		try {
-			return Json.MAPPER.readTree(response.body);
-		} finally {
-			closeHttpResponse(response);
-		}
-	}
-
-	private static String requiredGitHubText(JsonNode node, String field) throws IOException {
-		if (!node.path(field).isTextual() || node.path(field).asText().isBlank()) {
-			throw new IOException("Invalid GitHub response: missing " + field);
-		}
-		return node.path(field).asText();
 	}
 
 	private static long requiredPositiveLong(JsonNode node, String field) throws IOException {
@@ -1735,12 +1569,12 @@ root.set(entry.getKey(), node);
 										tier.path("cacheWrite").asDouble()));
 							}
 						}
-						model1.cost = modelCost(
+						model1.cost = new ModelCost(
 								node2.path("input").asDouble(),
 								node2.path("output").asDouble(),
 								node2.path("cacheRead").asDouble(),
 								node2.path("cacheWrite").asDouble(),
-								tiers);
+								List.copyOf(tiers));
 						model1.contextWindow = node.path("contextWindow").asLong();
 						model1.maxTokens = node.path("maxTokens").asLong();
 
@@ -1845,25 +1679,6 @@ root.set(entry.getKey(), node);
 		return provider;
 	}
 
-	/**
-	 * Creates a one-model provider for a user-configured Chat
-	 * Completions-compatible service (including local models).
-	 */
-	public static OpenAiCompatibleProvider openAiCompatibleProvider(
-			String providerId, String providerName, String baseUrl, String modelId) {
-		Model model = new Model();
-		model.id = modelId;
-		model.name = modelId;
-		model.api = "openai-completions";
-		model.provider = providerId;
-		model.baseUrl = baseUrl;
-		model.input = new ArrayList<>(List.of("text", "image"));
-		model.cost = ModelCost.FREE;
-		model.contextWindow = 128_000;
-		model.maxTokens = 16_384;
-		return openAiCompatibleProvider(providerId, providerName, baseUrl, List.of(model));
-	}
-
 	// -------------------------------------------------------- stream options
 
 	public static boolean isAborted(StreamOptions options) {
@@ -1918,15 +1733,14 @@ root.set(entry.getKey(), node);
 		int attempt = 0;
 		Integer lastRetryAttempt = null;
 		while (true) {
-			AssistantMessage result;
+			AssistantMessage response;
 			try {
-				result = produce.call();
+				response = produce.call();
 			} catch (InterruptedException | RuntimeException e) {
 				throw e;
 			} catch (Exception e) {
 				throw new IllegalStateException(e);
 			}
-			AssistantMessage response = result;
 
 			if (response.stopReason == StopReason.ABORTED) {
 				if (lastRetryAttempt != null) {
@@ -1955,10 +1769,8 @@ root.set(entry.getKey(), node);
 				callbacks.onRetryScheduled.accept(new Retry.Scheduled(attempt, maxAttempts, delayMs, errorMessage));
 			}
 
-			boolean result1 = false;
 			if (signal == null) {
 				Thread.sleep(delayMs);
-				result1 = true;
 			} else if (!isAborted(signal)) {
 				Object monitor = new Object();
 				onAbort(signal, () -> {
@@ -1970,15 +1782,12 @@ root.set(entry.getKey(), node);
 				synchronized (monitor) {
 					while (!isAborted(signal)) {
 						long remaining = deadline - System.currentTimeMillis();
-						if (remaining <= 0) {
-							result1 = true;
-							break;
-						}
+						if (remaining <= 0) break;
 						monitor.wait(remaining);
 					}
 				}
 			}
-			if (!result1) {
+			if (signal != null && isAborted(signal)) {
 				notifyRetryFinished(callbacks, false, attempt, errorMessage);
 				response.stopReason = StopReason.ABORTED;
 				response.errorMessage = null;
@@ -2014,6 +1823,54 @@ root.set(entry.getKey(), node);
 		return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
 	}
 
+	@FunctionalInterface
+	private interface ProviderStreamOperation {
+		void run(AssistantMessageEventStream stream, AssistantMessage output, StreamOptions options) throws Exception;
+	}
+
+	@FunctionalInterface
+	private interface SseOperation {
+		void run(SseReader reader) throws Exception;
+	}
+
+	private static AssistantMessageEventStream providerStream(
+			Model model, StreamOptions options, ProviderStreamOperation operation) {
+		AssistantMessageEventStream stream = new AssistantMessageEventStream();
+		StreamOptions requestOptions = options != null ? options : new StreamOptions();
+		Thread.startVirtualThread(() -> {
+			AssistantMessage output = new AssistantMessage(model.api, model.provider, model.id);
+			try {
+				operation.run(stream, output, requestOptions);
+			} catch (Exception error) {
+				output.stopReason = isAborted(requestOptions) ? StopReason.ABORTED : StopReason.ERROR;
+				output.errorMessage = isAborted(requestOptions) ? "Request was aborted" : displayError(error);
+				push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
+			}
+		});
+		return stream;
+	}
+
+	private static void postJsonSse(
+			String url,
+			Map<String, String> headers,
+			JsonNode request,
+			StreamOptions options,
+			SseOperation operation)
+			throws Exception {
+		HttpTransport.Response response = httpPostJson(
+				url, headers, Json.MAPPER.writeValueAsBytes(request), options.timeoutMs, options.signal);
+		try {
+			SseReader reader = sseReader(response.body);
+			try {
+				operation.run(reader);
+			} finally {
+				closeSseReader(reader);
+			}
+		} finally {
+			closeHttpResponse(response);
+		}
+	}
+
 	private static void abortStream(AssistantMessageEventStream stream, AssistantMessage output) {
 		output.stopReason = StopReason.ABORTED;
 		output.errorMessage = "Request was aborted";
@@ -2022,59 +1879,43 @@ root.set(entry.getKey(), node);
 
 	private static void ensureContentIndex(AssistantMessage output, int index, AssistantContent value) {
 		while (output.content.size() <= index) {
-			output.content.add(textContent(""));
+			output.content.add(new TextContent("", null));
 		}
 		output.content.set(index, value);
 	}
 
 	// ------------------------------------------------------------- anthropic
 
-	/** Creates an Anthropic Messages provider with unmodifiable model and env-var lists. */
-	public static AnthropicProvider anthropicProvider(
-			String id, String name, List<Model> models, List<String> apiKeyEnvVars, boolean bearerAuthentication) {
-		return new AnthropicProvider(id, name, List.copyOf(models), List.copyOf(apiKeyEnvVars), bearerAuthentication);
-	}
-
 	public static AssistantMessageEventStream anthropicStream(
 			AnthropicProvider provider, Model model, Context context, StreamOptions options) {
 		if (!model.api.equals(AnthropicProvider.API)) {
 			throw new IllegalArgumentException("Model " + model + " is not an Anthropic Messages model");
 		}
-		AssistantMessageEventStream stream = new AssistantMessageEventStream();
-		StreamOptions requestOptions = options != null ? options : new StreamOptions();
-		Thread.startVirtualThread(() -> {
-			AssistantMessage output = new AssistantMessage(model.api, model.provider, model.id);
-			try {
-				Map<String, String> headers = null;
-				boolean finished2 = false;
-				Map<String, String> headers1 = new LinkedHashMap<>(model.headers);
-				headers1.putAll(requestOptions.headers);
-				headers1.putIfAbsent("anthropic-version", AnthropicProvider.API_VERSION);
-				if (headers1.containsKey("authorization")
-						|| headers1.containsKey("Authorization")
-						|| headers1.containsKey("x-api-key")) {
-					headers = headers1;
-				} else {
+		return providerStream(model, options, (stream, output, requestOptions) -> {
+				Map<String, String> headers = new LinkedHashMap<>(model.headers);
+				headers.putAll(requestOptions.headers);
+				headers.putIfAbsent("anthropic-version", AnthropicProvider.API_VERSION);
+				if (!headers.containsKey("authorization")
+						&& !headers.containsKey("Authorization")
+						&& !headers.containsKey("x-api-key")) {
 					String key = requestOptions.apiKey;
 					if (!provider.bearerAuthentication) {
 						String bearer = System.getenv(EnvApiKeys.ANTHROPIC_AUTH_TOKEN_ENV);
 						if (bearer != null && !bearer.isBlank()) {
-							headers1.put("authorization", "Bearer " + bearer);
-							headers = headers1;
-							finished2 = true;
+							headers.put("authorization", "Bearer " + bearer);
+							key = bearer;
 						}
 					}
-					if (!finished2) {
+					if (!headers.containsKey("authorization")) {
 						if ((key == null || key.isBlank()) && !provider.bearerAuthentication) {
 							key = resolveSystemApiKey("anthropic").orElse(null);
 						}
 						if (key == null || key.isBlank()) {
 							throw new IllegalStateException("No API key for provider: " + provider.id);
 						}
-						headers1.put(
+						headers.put(
 								provider.bearerAuthentication ? "Authorization" : "x-api-key",
 								provider.bearerAuthentication ? "Bearer " + key : key);
-						headers = headers1;
 					}
 				}
 				ObjectNode request1 = jsonObject();
@@ -2093,27 +1934,18 @@ root.set(entry.getKey(), node);
 							&& Boolean.TRUE.equals(compat.forceAdaptiveThinking)) {
 						thinking1.put("type", "adaptive");
 						thinking1.put("display", "summarized");
-String result = null;
-boolean finished1 = false;
-ThinkingLevel level = clampThinkingLevel(model, requestOptions.reasoning);
-if (model.thinkingLevelMap != null) {
-String mapped = model.thinkingLevelMap.get(level);
-if (mapped != null) {
-result = mapped;
-finished1 = true;
-}
-}
-if (!finished1) {
-result = switch (level) {
-case MINIMAL, LOW -> "low";
-case MEDIUM -> "medium";
-case HIGH, XHIGH, MAX -> "high";
-case OFF ->
-throw new IllegalArgumentException("Adaptive thinking requires a non-off thinking level");
-};
-}
-request1.putObject("output_config")
-								.put("effort", result);
+						ThinkingLevel level = clampThinkingLevel(model, requestOptions.reasoning);
+						String effort = model.thinkingLevelMap == null ? null : model.thinkingLevelMap.get(level);
+						if (effort == null) {
+							effort = switch (level) {
+								case MINIMAL, LOW -> "low";
+								case MEDIUM -> "medium";
+								case HIGH, XHIGH, MAX -> "high";
+								case OFF -> throw new IllegalArgumentException(
+										"Adaptive thinking requires a non-off thinking level");
+							};
+						}
+						request1.putObject("output_config").put("effort", effort);
 					} else {
 						thinking1.put("type", "enabled");
 						thinking1.put("budget_tokens", Math.min(model.maxTokens, 16_000));
@@ -2186,25 +2018,19 @@ anthropicAppendContent(toolResult.putArray("content"), result.content);
 						target.set("input_schema", tool1.parameters);
 					}
 				}
-				ObjectNode request = request1;
-				HttpTransport.Response response = httpPostJson(
+				postJsonSse(
 						providerBaseUrl(model, requestOptions) + "/v1/messages",
 						headers,
-						Json.MAPPER.writeValueAsBytes(request),
-						requestOptions.timeoutMs,
-						requestOptions.signal);
-				try {
-					SseReader reader = sseReader(response.body);
-					try {
+						request1,
+						requestOptions,
+						reader -> {
 						push(stream, new AssistantMessageEvent.Start(output));
-						boolean finished = false;
 						Map<Integer, AnthropicProvider.ToolCallAccumulator> tools = new LinkedHashMap<>();
 						SseReader.SseEvent sse;
 						while ((sse = nextSseEvent(reader)) != null) {
 							if (isAborted(requestOptions)) {
 								abortStream(stream, output);
-								finished = true;
-								break;
+								return;
 							}
 							JsonNode event = Json.MAPPER.readTree(sse.data);
 							if (event == null) {
@@ -2222,13 +2048,13 @@ anthropicReadUsage(message.path("usage"), output);
 									JsonNode block = event.path("content_block");
 									switch (block.path("type").asText()) {
 										case "text" -> {
-											ensureContentIndex(output, index, textContent(""));
+											ensureContentIndex(output, index, new TextContent("", null));
 											push(stream, new AssistantMessageEvent.TextStart(index, output));
 										}
 										case "thinking" -> {
 JsonNode value = block.get("signature");
-ensureContentIndex(
-		output, index, thinkingContent("", value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : null, false));
+ensureContentIndex(output, index, new ThinkingContent(
+		"", value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : null, false));
 											push(stream, new AssistantMessageEvent.ThinkingStart(index, output));
 										}
 										case "tool_use" -> {
@@ -2236,7 +2062,7 @@ ensureContentIndex(
 											tool.id = block.path("id").asText();
 											tool.name = block.path("name").asText();
 											tools.put(index, tool);
-											ensureContentIndex(output, index, toolCall(tool.id, tool.name, jsonObject()));
+											ensureContentIndex(output, index, new ToolCall(tool.id, tool.name, jsonObject(), null));
 											push(stream, new AssistantMessageEvent.ToolCallStart(index, output));
 										}
 										default -> {
@@ -2251,13 +2077,14 @@ switch (delta.path("type").asText()) {
 case "text_delta" -> {
 TextContent current = (TextContent) output.content.get(index);
 String text = delta.path("text").asText();
-output.content.set(index, withText(current, current.text + text));
+output.content.set(index, new TextContent(current.text + text, current.textSignature));
 push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 }
 case "thinking_delta" -> {
 ThinkingContent current = (ThinkingContent) output.content.get(index);
 String thinking = delta.path("thinking").asText();
-output.content.set(index, withThinking(current, current.thinking + thinking));
+output.content.set(index, new ThinkingContent(
+		current.thinking + thinking, current.thinkingSignature, current.redacted));
 push(stream, new AssistantMessageEvent.ThinkingDelta(index, thinking, output));
 }
 case "signature_delta" -> {
@@ -2266,7 +2093,7 @@ String signature = delta.path("signature").asText();
 if (!signature.isEmpty()) {
 String previous = current.thinkingSignature;
 	String signature1 = (previous == null ? "" : previous) + signature;
-	output.content.set(index, thinkingContent(current.thinking, signature1, current.redacted));
+	output.content.set(index, new ThinkingContent(current.thinking, signature1, current.redacted));
 }
 }
 case "input_json_delta" -> {
@@ -2318,8 +2145,7 @@ if (output.stopReason == StopReason.PENDING) {
 									}
 									calculateCost(model, output.usage);
 									push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
-									finished = true;
-									break;
+									return;
 								}
 								case "error" ->
 									throw new IOException(event.path("error").path("message").asText("Anthropic stream error"));
@@ -2327,24 +2153,10 @@ if (output.stopReason == StopReason.PENDING) {
 									// ping and unknown future events do not affect the public stream.
 								}
 							}
-							if (finished) break;
 						}
-						if (!finished) {
-							throw new IOException("Anthropic stream ended before message_stop");
-						}
-					} finally {
-						closeSseReader(reader);
-					}
-				} finally {
-					closeHttpResponse(response);
-				}
-			} catch (Exception e) {
-				output.stopReason = isAborted(requestOptions) ? StopReason.ABORTED : StopReason.ERROR;
-				output.errorMessage = isAborted(requestOptions) ? "Request was aborted" : displayError(e);
-				push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
-			}
+						throw new IOException("Anthropic stream ended before message_stop");
+					});
 		});
-		return stream;
 	}
 
 	private static String providerBaseUrl(Model model, StreamOptions options) {
@@ -2378,7 +2190,7 @@ if (output.stopReason == StopReason.PENDING) {
 		if (!(parsed instanceof ObjectNode arguments)) {
 			throw new IOException("Anthropic tool input must be a JSON object");
 		}
-		ToolCall completed = toolCall(tool.id, tool.name, arguments);
+		ToolCall completed = new ToolCall(tool.id, tool.name, arguments, null);
 		output.content.set(index, completed);
 		push(stream, new AssistantMessageEvent.ToolCallEnd(index, completed, output));
 	}
@@ -2410,10 +2222,6 @@ if (output.stopReason == StopReason.PENDING) {
 	// ---------------------------------------------------------------- google
 
 	/** Creates a Google Generative AI provider with an unmodifiable model list. */
-	public static GoogleProvider googleProvider(List<Model> models) {
-		return new GoogleProvider(List.copyOf(models));
-	}
-
 	// ------------------------------------------------- openai chat completions
 
 	/** Validates the identity and endpoint of a Chat Completions-compatible service. */
@@ -2431,24 +2239,19 @@ if (output.stopReason == StopReason.PENDING) {
 		if (!model.api.equals(OpenAiCompatibleProvider.API)) {
 			throw new IllegalArgumentException("Model " + model + " is not a Chat Completions model");
 		}
-		AssistantMessageEventStream stream = new AssistantMessageEventStream();
-		StreamOptions requestOptions = options != null ? options : new StreamOptions();
-		Thread.startVirtualThread(() -> {
-			AssistantMessage output = new AssistantMessage(model.api, model.provider, model.id);
-			try {
-				Map<String, String> headers1 = new LinkedHashMap<>(model.headers);
-				headers1.putAll(requestOptions.headers);
+		return providerStream(model, options, (stream, output, requestOptions) -> {
+				Map<String, String> headers = new LinkedHashMap<>(model.headers);
+				headers.putAll(requestOptions.headers);
 				String key = requestOptions.apiKey;
 				if (key == null || key.isBlank()) {
 					key = resolveSystemApiKey(provider.id).orElse(null);
 				}
-				if (!headers1.containsKey("Authorization") && !headers1.containsKey("authorization")) {
+				if (!headers.containsKey("Authorization") && !headers.containsKey("authorization")) {
 					if (key == null || key.isBlank()) {
 						throw new IllegalStateException("No API key for provider: " + provider.id);
 					}
-					headers1.put("Authorization", "Bearer " + key);
+					headers.put("Authorization", "Bearer " + key);
 				}
-				Map<String, String> headers = headers1;
 				ObjectNode request1 = jsonObject();
 				request1.put("model", model.id);
 				request1.put("stream", true);
@@ -2529,29 +2332,21 @@ case ToolResultMessage toolResult -> messages.addObject()
 						function1.set("parameters", tool.parameters);
 					}
 				}
-				ObjectNode request = request1;
-HttpTransport.Response response = httpPostJson(
+				postJsonSse(
 						(requestOptions.baseUrl == null || requestOptions.baseUrl.isBlank()
 ? model.baseUrl
 : trimTrailingSlash(requestOptions.baseUrl)) + "/chat/completions",
 						headers,
-						Json.MAPPER.writeValueAsBytes(request),
-						requestOptions.timeoutMs,
-						requestOptions.signal);
-				try {
-					SseReader reader = sseReader(response.body);
-					try {
+						request1,
+						requestOptions,
+						reader -> {
 						push(stream, new AssistantMessageEvent.Start(output));
-						boolean finished = false;
 						Map<Integer, OpenAiCompatibleProvider.ToolCallAccumulator> tools = new LinkedHashMap<>();
 						SseReader.SseEvent event;
 						while ((event = nextSseEvent(reader)) != null) {
 							if (isAborted(requestOptions)) {
-								output.stopReason = StopReason.ABORTED;
-								output.errorMessage = "Request was aborted";
-								push(stream, new AssistantMessageEvent.Error(StopReason.ABORTED, output));
-								finished = true;
-								break;
+								abortStream(stream, output);
+								return;
 							}
 							if (event.data.equals("[DONE]")) {
 								break;
@@ -2583,11 +2378,11 @@ String text = delta.path("content").asText();
 int index = lastContentIndex(output, TextContent.class);
 if (index == -1) {
 index = output.content.size();
-output.content.add(textContent(""));
+output.content.add(new TextContent("", null));
 push(stream, new AssistantMessageEvent.TextStart(index, output));
 }
 TextContent content = (TextContent) output.content.get(index);
-output.content.set(index, withText(content, content.text + text));
+output.content.set(index, new TextContent(content.text + text, content.textSignature));
 push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 }
 								JsonNode value = delta.has("reasoning_content") ? delta.path("reasoning_content") : delta.path("reasoning");
@@ -2596,11 +2391,12 @@ push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 									int index = lastContentIndex(output, ThinkingContent.class);
 									if (index == -1) {
 										index = output.content.size();
-										output.content.add(thinkingContent(""));
+										output.content.add(new ThinkingContent("", null, false));
 										push(stream, new AssistantMessageEvent.ThinkingStart(index, output));
 									}
 									ThinkingContent content = (ThinkingContent) output.content.get(index);
-									output.content.set(index, withThinking(content, content.thinking + thinking));
+									output.content.set(index, new ThinkingContent(
+											content.thinking + thinking, content.thinkingSignature, content.redacted));
 									push(stream, new AssistantMessageEvent.ThinkingDelta(index, thinking, output));
 								}
 								JsonNode deltas = delta.path("tool_calls");
@@ -2639,12 +2435,13 @@ push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 
 										if (accumulator.contentIndex == -1 && accumulator.hasMeaningfulData) {
 											accumulator.contentIndex = output.content.size();
-											output.content.add(toolCall(accumulator.id, accumulator.name, jsonObject()));
+											output.content.add(new ToolCall(accumulator.id, accumulator.name, jsonObject(), null));
 											push(stream, new AssistantMessageEvent.ToolCallStart(accumulator.contentIndex, output));
 										}
 										if (accumulator.contentIndex != -1) {
 											output.content.set(
-													accumulator.contentIndex, toolCall(accumulator.id, accumulator.name, jsonObject()));
+													accumulator.contentIndex,
+													new ToolCall(accumulator.id, accumulator.name, jsonObject(), null));
 											if (argumentFragment != null) {
 												push(
 														stream,
@@ -2664,8 +2461,7 @@ push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 								};
 							}
 						}
-						if (!finished) {
-							for (OpenAiCompatibleProvider.ToolCallAccumulator accumulator : tools.values()) {
+						for (OpenAiCompatibleProvider.ToolCallAccumulator accumulator : tools.values()) {
 								if (accumulator.contentIndex == -1) {
 									// Some OpenAI-compatible streams emit a second, index-only/blank
 									// tool-call entry. It carries no call data and should not create a
@@ -2688,29 +2484,17 @@ push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 								if (!(parsed instanceof ObjectNode arguments)) {
 									throw invalidOpenAiToolCall(accumulator, null);
 								}
-								ToolCall call = toolCall(accumulator.id, accumulator.name, arguments);
+								ToolCall call = new ToolCall(accumulator.id, accumulator.name, arguments, null);
 								output.content.set(accumulator.contentIndex, call);
 								push(stream, new AssistantMessageEvent.ToolCallEnd(accumulator.contentIndex, call, output));
-							}
-							if (output.stopReason == StopReason.PENDING) {
-								output.stopReason = toolCalls(output).isEmpty() ? StopReason.STOP : StopReason.TOOL_USE;
-							}
-							calculateCost(model, output.usage);
-							push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 						}
-					} finally {
-						closeSseReader(reader);
-					}
-				} finally {
-					closeHttpResponse(response);
-				}
-			} catch (Exception e) {
-				output.stopReason = isAborted(requestOptions) ? StopReason.ABORTED : StopReason.ERROR;
-				output.errorMessage = isAborted(requestOptions) ? "Request was aborted" : displayError(e);
-				push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
-			}
+						if (output.stopReason == StopReason.PENDING) {
+								output.stopReason = toolCalls(output).isEmpty() ? StopReason.STOP : StopReason.TOOL_USE;
+						}
+						calculateCost(model, output.usage);
+						push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
+					});
 		});
-		return stream;
 	}
 
 	private static boolean openAiFragmentHasValue(JsonNode fragment) {
@@ -2743,60 +2527,12 @@ push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
 
 	// ------------------------------------------------------ openai responses
 
-	public static OpenAiResponsesProvider openAiResponsesProvider(List<Model> models) {
-		return openAiResponsesProvider(
-				"openai",
-				"OpenAI",
-				models,
-				List.of("OPENAI_API_KEY"),
-				null,
-				OpenAiResponsesProvider.RequestProfile.STANDARD);
-	}
-
-	public static OpenAiResponsesProvider openAiResponsesProvider(List<Model> models, CredentialStore credentials) {
-		return openAiResponsesProvider(
-				"openai",
-				"OpenAI",
-				models,
-				List.of("OPENAI_API_KEY"),
-				credentials,
-				OpenAiResponsesProvider.RequestProfile.STANDARD);
-	}
-
-	public static OpenAiResponsesProvider openAiResponsesProvider(
-			String id, String name, List<Model> models, List<String> apiKeyEnvVars, CredentialStore credentials) {
-		return openAiResponsesProvider(
-				id, name, models, apiKeyEnvVars, credentials, OpenAiResponsesProvider.RequestProfile.STANDARD);
-	}
-
-	/** Creates a Responses provider with unmodifiable model and env-var lists. */
-	public static OpenAiResponsesProvider openAiResponsesProvider(
-			String id,
-			String name,
-			List<Model> models,
-			List<String> apiKeyEnvVars,
-			CredentialStore credentials,
-			OpenAiResponsesProvider.RequestProfile requestProfile) {
-		return new OpenAiResponsesProvider(
-				id, name, List.copyOf(models), List.copyOf(apiKeyEnvVars), credentials, requestProfile);
-	}
-
-	/** Codex-profile Responses provider used by the ChatGPT subscription adapter. */
-	public static OpenAiResponsesProvider codexResponsesProvider(String id, String name, List<Model> models) {
-		return openAiResponsesProvider(
-				id, name, models, List.of(), null, OpenAiResponsesProvider.RequestProfile.CODEX);
-	}
-
 	public static AssistantMessageEventStream openAiResponsesStream(
 			OpenAiResponsesProvider provider, Model model, Context context, StreamOptions options) {
 		if (!model.api.equals(OpenAiResponsesProvider.API)) {
 			throw new IllegalArgumentException("Model " + model + " is not an OpenAI Responses model");
 		}
-		AssistantMessageEventStream stream = new AssistantMessageEventStream();
-		StreamOptions requestOptions = options != null ? options : new StreamOptions();
-		Thread.startVirtualThread(() -> {
-			AssistantMessage output = new AssistantMessage(model.api, model.provider, model.id);
-			try {
+		return providerStream(model, options, (stream, output, requestOptions) -> {
 				boolean codex = provider.requestProfile == OpenAiResponsesProvider.RequestProfile.CODEX;
 				ObjectNode request1 = jsonObject();
 				request1.put("model", model.id);
@@ -2887,7 +2623,6 @@ case ToolResultMessage result -> input.addObject()
 						target.set("parameters", tool.parameters);
 					}
 				}
-				ObjectNode request = request1;
 				Map<String, String> headers = new LinkedHashMap<>(model.headers);
 				headers.putAll(requestOptions.headers);
 				if (!headers.containsKey("Authorization") && !headers.containsKey("authorization")) {
@@ -2907,24 +2642,19 @@ case ToolResultMessage result -> input.addObject()
 					}
 					headers.put("Authorization", "Bearer " + key);
 				}
-				HttpTransport.Response response = httpPostJson(
+				postJsonSse(
 						providerBaseUrl(model, requestOptions) + "/responses",
 						headers,
-						Json.MAPPER.writeValueAsBytes(request),
-						requestOptions.timeoutMs,
-						requestOptions.signal);
-				try {
-					SseReader reader = sseReader(response.body);
-					try {
+						request1,
+						requestOptions,
+						reader -> {
 						push(stream, new AssistantMessageEvent.Start(output));
-						boolean finished = false;
 						Map<String, OpenAiResponsesProvider.OutputItem> items = new HashMap<>();
 						SseReader.SseEvent sse;
 						while ((sse = nextSseEvent(reader)) != null) {
 							if (isAborted(requestOptions)) {
 								abortStream(stream, output);
-								finished = true;
-								break;
+								return;
 							}
 							JsonNode event = Json.MAPPER.readTree(sse.data);
 							if (event == null) {
@@ -2942,17 +2672,18 @@ case ToolResultMessage result -> input.addObject()
 									items.put(itemId, outputItem);
 									switch (type) {
 										case "message" -> {
-											output.content.add(textContent(""));
+											output.content.add(new TextContent("", null));
 											push(stream, new AssistantMessageEvent.TextStart(contentIndex, output));
 										}
 										case "reasoning" -> {
-											output.content.add(thinkingContent(""));
+											output.content.add(new ThinkingContent("", null, false));
 											push(stream, new AssistantMessageEvent.ThinkingStart(contentIndex, output));
 										}
 										case "function_call" -> {
 											outputItem.callId = item.path("call_id").asText();
 											outputItem.name = item.path("name").asText();
-											output.content.add(toolCall(outputItem.callId, outputItem.name, jsonObject()));
+											output.content.add(new ToolCall(
+													outputItem.callId, outputItem.name, jsonObject(), null));
 											push(stream, new AssistantMessageEvent.ToolCallStart(contentIndex, output));
 										}
 										default -> items.remove(itemId);
@@ -2963,7 +2694,8 @@ case ToolResultMessage result -> input.addObject()
 									if (item != null && item.type.equals("message")) {
 										String delta = event.path("delta").asText();
 										TextContent current = (TextContent) output.content.get(item.contentIndex);
-										output.content.set(item.contentIndex, withText(current, current.text + delta));
+										output.content.set(item.contentIndex, new TextContent(
+												current.text + delta, current.textSignature));
 										push(stream, new AssistantMessageEvent.TextDelta(item.contentIndex, delta, output));
 									}
 								}
@@ -3006,7 +2738,7 @@ if (completedThinking.isBlank()) {
 completedThinking = thinking.thinking.stripTrailing();
 }
 String signature = completedItem.isObject() ? completedItem.toString() : thinking.thinkingSignature;
-thinking = thinkingContent(completedThinking, signature, thinking.redacted);
+thinking = new ThinkingContent(completedThinking, signature, thinking.redacted);
 output.content.set(item.contentIndex, thinking);
 push(stream, new AssistantMessageEvent.ThinkingEnd(item.contentIndex, thinking.thinking, output));
 items.remove(itemId);
@@ -3067,7 +2799,7 @@ ThinkingContent thinking = (ThinkingContent) output.content.get(fallbackIndex);
 String text = openAiResponsesReasoningText(responseItem);
 output.content.set(
 fallbackIndex,
-thinkingContent(
+new ThinkingContent(
 text.isBlank() ? thinking.thinking : text, responseItem.toString(), thinking.redacted));
 }
 }
@@ -3092,8 +2824,7 @@ openAiResponsesFinishTool(stream, output, synthetic, items);
 }
 }
 push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
-									finished = true;
-									break;
+									return;
 								}
 								case "response.failed", "error" ->
 									throw new IOException(
@@ -3102,24 +2833,10 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 									// Other emitted event types do not change the normalized stream.
 								}
 							}
-							if (finished) break;
 						}
-						if (!finished) {
-							throw new IOException("OpenAI Responses stream ended without completion");
-						}
-					} finally {
-						closeSseReader(reader);
-					}
-				} finally {
-					closeHttpResponse(response);
-				}
-			} catch (Exception e) {
-				output.stopReason = isAborted(requestOptions) ? StopReason.ABORTED : StopReason.ERROR;
-				output.errorMessage = isAborted(requestOptions) ? "Request was aborted" : displayError(e);
-				push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
-			}
+						throw new IOException("OpenAI Responses stream ended without completion");
+					});
 		});
-		return stream;
 	}
 
 	private static void openAiResponsesAppendThinkingDelta(
@@ -3131,7 +2848,8 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 			return;
 		}
 		ThinkingContent current = (ThinkingContent) output.content.get(item.contentIndex);
-		output.content.set(item.contentIndex, withThinking(current, current.thinking + delta));
+		output.content.set(item.contentIndex, new ThinkingContent(
+				current.thinking + delta, current.thinkingSignature, current.redacted));
 		push(stream, new AssistantMessageEvent.ThinkingDelta(item.contentIndex, delta, output));
 	}
 
@@ -3150,7 +2868,7 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 		if (!(parsed instanceof ObjectNode arguments)) {
 			throw new IOException("OpenAI function call arguments must be a JSON object");
 		}
-		ToolCall call = toolCall(item.callId, item.name, arguments);
+		ToolCall call = new ToolCall(item.callId, item.name, arguments, null);
 		output.content.set(item.contentIndex, call);
 		push(stream, new AssistantMessageEvent.ToolCallEnd(item.contentIndex, call, output));
 	}
@@ -3212,14 +2930,7 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 	}
 
 	private static AssistantMessageEventStream providerErrorStream(Model model, IOException error) {
-		AssistantMessageEventStream stream = new AssistantMessageEventStream();
-		Thread.startVirtualThread(() -> {
-			AssistantMessage message = new AssistantMessage(model.api, model.provider, model.id);
-			message.stopReason = StopReason.ERROR;
-			message.errorMessage = error.getMessage() == null ? error.toString() : error.getMessage();
-			push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, message));
-		});
-		return stream;
+		return providerStream(model, null, (stream, output, options) -> { throw error; });
 	}
 
 	// ----------------------------------------------- github copilot provider
@@ -3231,10 +2942,10 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 		return new GitHubCopilotProvider(
 				all,
 				auth,
-				anthropicProvider(
+				new AnthropicProvider(
 						GitHubCopilotAuth.PROVIDER_ID,
 						GitHubCopilotProvider.NAME,
-						copilotModelsFor(all, AnthropicProvider.API),
+						List.copyOf(copilotModelsFor(all, AnthropicProvider.API)),
 						List.of(),
 						true),
 				openAiCompatibleProvider(
@@ -3242,8 +2953,13 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 						GitHubCopilotProvider.NAME,
 						GitHubCopilotProvider.COMPLETIONS_BASE_URL,
 						copilotModelsFor(all, OpenAiCompatibleProvider.API)),
-				openAiResponsesProvider(
-						GitHubCopilotAuth.PROVIDER_ID, GitHubCopilotProvider.NAME, models1, List.of(), null, OpenAiResponsesProvider.RequestProfile.STANDARD));
+				new OpenAiResponsesProvider(
+						GitHubCopilotAuth.PROVIDER_ID,
+						GitHubCopilotProvider.NAME,
+						List.copyOf(models1),
+						List.of(),
+						null,
+						OpenAiResponsesProvider.RequestProfile.STANDARD));
 	}
 
 	private static List<Model> copilotModelsFor(List<Model> models, String api) {
@@ -3316,18 +3032,16 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 		return switch (provider) {
 			case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
 			case ChatGptProvider chatGpt -> {
-				AssistantMessageEventStream result;
 				if (!model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
 					throw new IllegalArgumentException("Model " + model + " is not a ChatGPT subscription model");
 				}
 				StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
 				try {
 					configureCodexRequest(requestOptions, chatGptResolveToken(chatGpt.auth));
-					result = openAiResponsesStream(chatGpt.responses, model, context, requestOptions);
 				} catch (IOException error) {
-					result = providerErrorStream(model, error);
+					yield providerErrorStream(model, error);
 				}
-				yield result;
+				yield openAiResponsesStream(chatGpt.responses, model, context, requestOptions);
 			}
 			case FauxProvider faux -> {
 				AssistantMessageEventStream stream = new AssistantMessageEventStream();
@@ -3339,7 +3053,7 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 					}
 				}
 				Thread.startVirtualThread(() -> {
-StreamOptions options1 = options != null ? options : new StreamOptions();
+StreamOptions requestOptions = options != null ? options : new StreamOptions();
 try {
 AssistantMessage response;
 	response = step == null ? fauxErrorMessage(model, "No more faux responses queued") : switch (step) {
@@ -3356,7 +3070,7 @@ AssistantMessage response;
 			yield copy;
 		}
 		case FauxProvider.ResponseStep.Factory factory ->
-				factory.factory.apply(new FauxProvider.Request(context, options1, faux.state, model));
+				factory.factory.apply(new FauxProvider.Request(context, requestOptions, faux.state, model));
 	};
 	response.api = faux.api;
 response.provider = faux.id;
@@ -3372,85 +3086,61 @@ long output = fauxEstimateTokens(text(response)) + fauxEstimateTokens(thinking(r
 response.usage.input = input;
 response.usage.output = output;
 response.usage.totalTokens = input + output;
-Model costModel = new Model();
-costModel.id = response.model;
-costModel.api = response.api;
-costModel.provider = response.provider;
-costModel.baseUrl = "http://localhost:0";
-costModel.cost = ModelCost.FREE;
-calculateCost(costModel, response.usage);
-boolean finished = false;
 AssistantMessage partial = new AssistantMessage(response.api, response.provider, response.model);
 partial.responseId = response.responseId;
 partial.usage = response.usage;
 push(stream, new AssistantMessageEvent.Start(partial));
 
 for (int index = 0; index < response.content.size(); index++) {
-if (isAborted(options1)) {
+if (isAborted(requestOptions)) {
 abortStream(stream, partial);
-finished = true;
-break;
+return;
 }
 AssistantContent block = response.content.get(index);
 if (block instanceof TextContent text) {
-boolean finished1 = false;
-partial.content.add(textContent("", text.textSignature));
+partial.content.add(new TextContent("", text.textSignature));
 push(stream, new AssistantMessageEvent.TextStart(index, partial));
 StringBuilder value = new StringBuilder();
 for (String chunk : fauxChunks(text.text)) {
-if (isAborted(options1)) {
-finished1 = true;
-break;
+if (isAborted(requestOptions)) {
+abortStream(stream, partial);
+return;
 }
 value.append(chunk);
-partial.content.set(index, textContent(value.toString(), text.textSignature));
+partial.content.set(index, new TextContent(value.toString(), text.textSignature));
 push(stream, new AssistantMessageEvent.TextDelta(index, chunk, partial));
 }
-if (!finished1) {
 push(stream, new AssistantMessageEvent.TextEnd(index, text.text, partial));
-}
 } else if (block instanceof ThinkingContent thinking) {
-boolean finished1 = false;
-partial.content.add(thinkingContent("", thinking.thinkingSignature, thinking.redacted));
+partial.content.add(new ThinkingContent("", thinking.thinkingSignature, thinking.redacted));
 push(stream, new AssistantMessageEvent.ThinkingStart(index, partial));
 StringBuilder value = new StringBuilder();
 for (String chunk : fauxChunks(thinking.thinking)) {
-if (isAborted(options1)) {
-finished1 = true;
-break;
+if (isAborted(requestOptions)) {
+abortStream(stream, partial);
+return;
 }
 value.append(chunk);
 partial.content.set(
-index, thinkingContent(value.toString(), thinking.thinkingSignature, thinking.redacted));
+index, new ThinkingContent(value.toString(), thinking.thinkingSignature, thinking.redacted));
 push(stream, new AssistantMessageEvent.ThinkingDelta(index, chunk, partial));
 }
-if (!finished1) {
 push(stream, new AssistantMessageEvent.ThinkingEnd(index, thinking.thinking, partial));
-}
 } else if (block instanceof ToolCall call) {
-boolean finished1 = false;
-partial.content.add(toolCall(call.id, call.name, jsonObject(), call.thoughtSignature));
+partial.content.add(new ToolCall(call.id, call.name, jsonObject(), call.thoughtSignature));
 push(stream, new AssistantMessageEvent.ToolCallStart(index, partial));
 String encoded = call.arguments.toString();
 for (String chunk : fauxChunks(encoded)) {
-if (isAborted(options1)) {
-finished1 = true;
-break;
+if (isAborted(requestOptions)) {
+abortStream(stream, partial);
+return;
 }
 push(stream, new AssistantMessageEvent.ToolCallDelta(index, chunk, partial));
 }
-if (!finished1) {
 partial.content.set(index, call);
 push(stream, new AssistantMessageEvent.ToolCallEnd(index, call, partial));
 }
 }
-if (isAborted(options1)) {
-abortStream(stream, partial);
-finished = true;
-break;
-}
-}
-if (!finished) {
 partial.usage = response.usage;
 partial.stopReason = response.stopReason;
 partial.errorMessage = response.errorMessage;
@@ -3467,7 +3157,6 @@ push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, partial));
 } else {
 push(stream, new AssistantMessageEvent.Done(response.stopReason, partial));
 }
-}
 
 } catch (Exception e) {
 AssistantMessage error = fauxErrorMessage(model, e.getMessage() != null ? e.getMessage() : e.toString());
@@ -3477,8 +3166,6 @@ push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, error));
 				yield stream;
 			}
 			case GitHubCopilotProvider copilot -> {
-				AssistantMessageEventStream result = null;
-				boolean finished = false;
 				if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
 					throw new IllegalArgumentException("Model " + model + " is not a GitHub Copilot model");
 				}
@@ -3489,12 +3176,10 @@ push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, error));
 						requestOptions.apiKey = token.accessToken;
 						requestOptions.baseUrl = token.baseUrl.toString();
 					} catch (IOException error) {
-						result = providerErrorStream(model, error);
-						finished = true;
+						yield providerErrorStream(model, error);
 					}
 				}
-				if (!finished) {
-					result = switch (model.api) {
+				yield switch (model.api) {
 						case "anthropic-messages" -> anthropicStream(copilot.anthropic, model, context, requestOptions);
 						case "openai-completions" ->
 								openAiCompatibleStream(copilot.completions, model, context, requestOptions);
@@ -3503,18 +3188,12 @@ push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, error));
 						default ->
 								throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
 					};
-				}
-				yield result;
 			}
 			case GoogleProvider google -> {
 				if (!model.api.equals(GoogleProvider.API)) {
 					throw new IllegalArgumentException("Model " + model + " is not a Google Generative AI model");
 				}
-				AssistantMessageEventStream stream = new AssistantMessageEventStream();
-				StreamOptions requestOptions = options != null ? options : new StreamOptions();
-				Thread.startVirtualThread(() -> {
-AssistantMessage output = new AssistantMessage(model.api, model.provider, model.id);
-try {
+				yield providerStream(model, options, (stream, output, requestOptions) -> {
 String key = requestOptions.apiKey;
 if (key == null || key.isBlank()) {
 key = resolveSystemApiKey("google").orElse(null);
@@ -3593,24 +3272,14 @@ declaration.put("description", tool.description);
 declaration.set("parametersJsonSchema", tool.parameters);
 }
 }
-HttpTransport.Response response = httpPostJson(
-url,
-headers,
-Json.MAPPER.writeValueAsBytes(request),
-requestOptions.timeoutMs,
-requestOptions.signal);
-try {
-SseReader reader = sseReader(response.body);
-try {
+postJsonSse(url, headers, request, requestOptions, reader -> {
 push(stream, new AssistantMessageEvent.Start(output));
-boolean finished = false;
 SseReader.SseEvent sse;
 int toolCounter = 0;
 while ((sse = nextSseEvent(reader)) != null) {
 if (isAborted(requestOptions)) {
 abortStream(stream, output);
-finished = true;
-break;
+return;
 }
 JsonNode chunk = Json.MAPPER.readTree(sse.data);
 if (chunk == null) {
@@ -3627,14 +3296,14 @@ if (!output.content.isEmpty() && output.content.getLast() instanceof ThinkingCon
 index = output.content.size() - 1;
 } else {
 int index1 = output.content.size();
-output.content.add(thinkingContent(""));
+output.content.add(new ThinkingContent("", null, false));
 push(stream, new AssistantMessageEvent.ThinkingStart(index1, output));
 index = index1;
 }
 ThinkingContent current = (ThinkingContent) output.content.get(index);
 output.content.set(
 index,
-thinkingContent(
+new ThinkingContent(
 current.thinking + text,
 part.path("thoughtSignature").asText(current.thinkingSignature),
 false));
@@ -3645,14 +3314,14 @@ if (!output.content.isEmpty() && output.content.getLast() instanceof TextContent
 index = output.content.size() - 1;
 } else {
 int index1 = output.content.size();
-output.content.add(textContent(""));
+output.content.add(new TextContent("", null));
 push(stream, new AssistantMessageEvent.TextStart(index1, output));
 index = index1;
 }
 TextContent current = (TextContent) output.content.get(index);
 output.content.set(
 index,
-textContent(
+new TextContent(
 current.text + text,
 part.path("thoughtSignature").asText(current.textSignature)));
 push(stream, new AssistantMessageEvent.TextDelta(index, text, output));
@@ -3665,7 +3334,7 @@ String id = function.path("id").asText("call_" + (++toolCounter));
 String name = function.path("name").asText();
 JsonNode args = function.path("args");
 ObjectNode arguments = args instanceof ObjectNode object ? object : jsonObject();
-ToolCall call = toolCall(id, name, arguments, part.path("thoughtSignature").asText(null));
+ToolCall call = new ToolCall(id, name, arguments, part.path("thoughtSignature").asText(null));
 output.content.add(call);
 push(stream, new AssistantMessageEvent.ToolCallStart(index, output));
 push(stream, new AssistantMessageEvent.ToolCallDelta(index, arguments.toString(), output));
@@ -3693,7 +3362,6 @@ default -> toolCalls(output).isEmpty() ? StopReason.STOP : StopReason.TOOL_USE;
 };
 }
 }
-if (!finished) {
 for (int index = 0; index < output.content.size(); index++) {
 AssistantContent block = output.content.get(index);
 if (block instanceof TextContent text) {
@@ -3712,20 +3380,8 @@ push(stream, new AssistantMessageEvent.Error(StopReason.ERROR, output));
 } else {
 push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 }
-}
-} finally {
-closeSseReader(reader);
-}
-} finally {
-closeHttpResponse(response);
-}
-} catch (Exception e) {
-output.stopReason = isAborted(requestOptions) ? StopReason.ABORTED : StopReason.ERROR;
-output.errorMessage = isAborted(requestOptions) ? "Request was aborted" : displayError(e);
-push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
-}
 });
-				yield stream;
+});
 			}
 			case OpenAiCompatibleProvider compatible -> openAiCompatibleStream(compatible, model, context, options);
 			case OpenAiResponsesProvider responses -> openAiResponsesStream(responses, model, context, options);
@@ -3743,16 +3399,6 @@ push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
 	private static final String COMPACTION_SYSTEM_PROMPT =
 			"You summarize coding-agent conversations. Do not continue the conversation. "
 					+ "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps.";
-
-	/** Creates an agent over freshly initialized state. */
-	public static Agent newAgent(String systemPrompt, Model model, Provider provider) {
-		return new Agent(new AgentState(systemPrompt == null ? "" : systemPrompt, model), provider);
-	}
-
-	/** Creates a tool result with an unmodifiable copy of the supplied content. */
-	public static AgentTool.ToolResult toolResult(List<UserContent> content, Object details, boolean isError) {
-		return new AgentTool.ToolResult(List.copyOf(content), details, isError);
-	}
 
 	/** Registers an agent event listener; closing the result unsubscribes it. */
 	public static AutoCloseable subscribe(Agent agent, Consumer<AgentEvent> listener) {
@@ -3939,7 +3585,8 @@ emit(agent, new AgentEvent.ToolExecutionStart(call.id, call.name, call.arguments
 AgentTool.ToolResult toolResult;
 AgentTool tool = toolsByName.get(call.name);
 if (tool == null) {
-toolResult = toolResultError("Unknown tool: " + call.name);
+toolResult = new AgentTool.ToolResult(
+		List.of(new TextContent("Unknown tool: " + call.name, null)), null, true);
 } else {
 try {
 toolResult = executeTool(
@@ -3949,18 +3596,19 @@ call.arguments,
 agent.activeSignal,
 partial -> emit(agent, new AgentEvent.ToolExecutionUpdate(call.id, call.name, partial)));
 } catch (Exception e) {
-toolResult = toolResultError(e.getMessage() == null ? e.toString() : e.getMessage());
+toolResult = new AgentTool.ToolResult(
+		List.of(new TextContent(e.getMessage() == null ? e.toString() : e.getMessage(), null)), null, true);
 }
 }
 state1.pendingToolCalls.remove(call.id);
 emit(agent, new AgentEvent.ToolExecutionEnd(call.id, call.name, toolResult));
-ToolResultMessage resultMessage = toolResultMessage(
-call.id,
-call.name,
-toolResult.content,
-toolResult.details,
-toolResult.isError,
-System.currentTimeMillis());
+ToolResultMessage resultMessage = new ToolResultMessage(
+		call.id,
+		call.name,
+		List.copyOf(toolResult.content),
+		toolResult.details,
+		toolResult.isError,
+		System.currentTimeMillis());
 state1.messages.add(resultMessage);
 results1.add(resultMessage);
 emit(agent, new AgentEvent.MessageStart(resultMessage));
@@ -4281,8 +3929,6 @@ List<ToolResultMessage> results = results1;
 						yield toolResultText(output.isBlank() ? "(no output)" : output);
 					}
 					case GREP -> {
-						AgentTool.ToolResult res = null;
-						boolean finished = false;
 						String patternText = requiredToolText(arguments, "pattern");
 						boolean literal = optionalToolBoolean(arguments, "literal");
 						int flags = optionalToolBoolean(arguments, "ignoreCase") ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0;
@@ -4307,7 +3953,6 @@ List<ToolResultMessage> results = results1;
 						if (glob == null) {
 							fileMatchers = List.of();
 						} else {
-							List<PathMatcher> result;
 							if (glob.isBlank()) {
 								throw new IllegalArgumentException("glob must be a non-empty string");
 							}
@@ -4325,13 +3970,12 @@ List<ToolResultMessage> results = results1;
 										}
 									}
 								}
-								result = List.copyOf(variants).stream()
+								fileMatchers = List.copyOf(variants).stream()
 										.map(variant -> FileSystems.getDefault().getPathMatcher("glob:" + variant))
 										.toList();
 							} catch (java.util.regex.PatternSyntaxException error) {
 								throw new IllegalArgumentException("Invalid glob '" + glob + "': " + error.getDescription(), error);
 							}
-							fileMatchers = result;
 						}
 						List<Path> files = filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), local.gitIgnore, signal);
 						boolean rootIsDirectory = Files.isDirectory(root);
@@ -4339,31 +3983,15 @@ List<ToolResultMessage> results = results1;
 						int filesConsidered = files.size();
 						int filesSearched = 0;
 						int matches = 0;
+						search:
 						for (Path file : files) {
 							requireNotAborted(signal);
 							Path relative = rootIsDirectory ? root.relativize(file) : file.getFileName();
 							if (!fileMatchers.isEmpty()) {
-								boolean result = false;
-								for (PathMatcher matcher : fileMatchers) {
-									if (matcher.matches(relative)) {
-										result = true;
-										break;
-									}
-								}
-								if (!result) {
-									Path fileName = relative.getFileName();
-									if (fileName != null && !fileName.equals(relative)) {
-										for (PathMatcher matcher : fileMatchers) {
-											if (matcher.matches(fileName)) {
-												result = true;
-												break;
-											}
-										}
-									}
-								}
-								if (!result) {
-									continue;
-								}
+								Path fileName = relative.getFileName();
+								boolean selected = fileMatchers.stream().anyMatch(matcher -> matcher.matches(relative)
+										|| fileName != null && !fileName.equals(relative) && matcher.matches(fileName));
+								if (!selected) continue;
 							}
 							filesSearched++;
 							List<String> lines;
@@ -4387,27 +4015,21 @@ List<ToolResultMessage> results = results1;
 										.append(line1.length() <= 500 ? line1 : line1.substring(0, 500) + "... [truncated]")
 										.append('\n');
 								if (matches >= limit) {
-									res = toolResultText(
-											boundToolOutput(output.toString(), "[" + limit + " matches limit reached]"));
-									finished = true;
-									break;
+									break search;
 								}
 							}
-							if (finished) break;
 						}
-						if (!finished) {
-							if (matches > 0) {
-								res = toolResultText(boundToolOutput(output.toString(), null));
+						if (matches > 0) {
+							yield toolResultText(boundToolOutput(
+									output.toString(), matches >= limit ? "[" + limit + " matches limit reached]" : null));
 							} else if (glob != null && filesSearched == 0 && filesConsidered > 0) {
-								res = toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
-										+ root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
+							yield toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
+									+ root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
 							} else if (glob != null) {
-								res = toolResultText("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
+							yield toolResultText("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
 							} else {
-								res = toolResultText("No matches found in " + filesSearched + " files");
+							yield toolResultText("No matches found in " + filesSearched + " files");
 							}
-						}
-						yield res;
 					}
 					case FIND -> {
 						AgentTool.ToolResult result;
@@ -4502,62 +4124,58 @@ if (result1) dropKeys.addAll(filter.dropKeys);
 				if (content1 != null && content1.isArray()) {
 					for (JsonNode item : content1) {
 if (!item.isObject()) {
-output.add(textContent(item.toString()));
+output.add(new TextContent(item.toString(), null));
 continue;
 }
 switch (item.path("type").asText()) {
-case "text" -> output.add(textContent(item.path("text").asText("")));
+case "text" -> output.add(new TextContent(item.path("text").asText(""), null));
 case "image" -> {
 if (item.path("data").isTextual() && item.path("mimeType").isTextual()) {
-output.add(imageContent(item.path("data").asText(), item.path("mimeType").asText()));
-} else output.add(textContent(item.toString()));
+output.add(new ImageContent(item.path("data").asText(), item.path("mimeType").asText()));
+} else output.add(new TextContent(item.toString(), null));
 }
 case "resource" -> {
 JsonNode resource = item.path("resource");
 if (!resource.isObject()) {
-output.add(textContent(resource.toString()));
+output.add(new TextContent(resource.toString(), null));
 } else if (resource.path("text").isTextual()) {
-output.add(textContent(resource.path("text").asText()));
+output.add(new TextContent(resource.path("text").asText(), null));
 } else if (resource.path("blob").isTextual()
 && resource.path("mimeType").isTextual()
 && resource.path("mimeType").asText().startsWith("image/")) {
-output.add(imageContent(resource.path("blob").asText(), resource.path("mimeType").asText()));
+output.add(new ImageContent(resource.path("blob").asText(), resource.path("mimeType").asText()));
 } else {
-output.add(textContent(resource.toString()));
+output.add(new TextContent(resource.toString(), null));
 }
 }
 case "resource_link" -> {
 String label = item.path("name").isTextual()
 ? item.path("name").asText()
 : item.path("uri").asText("resource");
-output.add(textContent(label + ": " + item.path("uri").asText(item.toString())));
+output.add(new TextContent(label + ": " + item.path("uri").asText(item.toString()), null));
 }
 case "audio" -> output.add(
-textContent("[MCP audio content: " + item.path("mimeType").asText("unknown type") + "]"));
-default -> output.add(textContent(item.toString()));
+new TextContent("[MCP audio content: " + item.path("mimeType").asText("unknown type") + "]", null));
+default -> output.add(new TextContent(item.toString(), null));
 }
 }
 				}
 				if (output.isEmpty()) {
 					JsonNode structured = filtered.get("structuredContent");
-					if (structured != null && !structured.isNull()) output.add(textContent(structured.toString()));
+					if (structured != null && !structured.isNull()) output.add(new TextContent(structured.toString(), null));
 				}
 				List<UserContent> content = List.copyOf(output);
 				if (content.isEmpty()) {
-					content = List.of(textContent(callResult.isError ? "MCP tool returned an error" : ""));
+					content = List.of(new TextContent(callResult.isError ? "MCP tool returned an error" : "", null));
 				}
-				yield toolResult(content, filtered, callResult.isError);
+				yield new AgentTool.ToolResult(List.copyOf(content), filtered, callResult.isError);
 			}
 			default -> throw unknownTool(tool);
 		};
 	}
 
 	public static AgentTool.ToolResult toolResultText(String text) {
-		return toolResult(List.of(textContent(text)), null, false);
-	}
-
-	public static AgentTool.ToolResult toolResultError(String text) {
-		return toolResult(List.of(textContent(text)), null, true);
+		return new AgentTool.ToolResult(List.of(new TextContent(text, null)), null, false);
 	}
 
 	private static IllegalArgumentException unknownTool(AgentTool tool) {
@@ -4566,20 +4184,6 @@ default -> output.add(textContent(item.toString()));
 	}
 
 	// ------------------------------------------------------- built-in tools
-
-	/** Returns tools scoped to the given working directory. */
-	public static List<AgentTool> builtInTools(Path cwd) {
-		return builtInTools(cwd, ignored -> {});
-	}
-
-	/**
-	 * Returns tools scoped to the given working directory and reports paths as
-	 * they are accessed. The callback is observational; it does not alter tool
-	 * permissions or path resolution.
-	 */
-	public static List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
-		return builtInTools(cwd, new GitIgnore("git"), onPathAccess);
-	}
 
 	/** Returns tools that filter search results with the given git-ignore configuration. */
 	public static List<AgentTool> builtInTools(Path cwd, GitIgnore gitIgnore, Consumer<Path> onPathAccess) {
@@ -5045,25 +4649,6 @@ default -> output.add(textContent(item.toString()));
 
 	// ----------------------------------------------------- mcp server config
 
-	/** Creates a remote server configuration, defensively copying its headers and OAuth block. */
-	public static McpServerConfig.Remote remoteMcpServerConfig(
-			URI url,
-			Map<String, String> headers,
-			JsonNode oauth,
-			boolean enabled,
-			Long timeoutMillis,
-			List<McpResultFilter> resultFilters,
-			List<String> disabledTools) {
-		return new McpServerConfig.Remote(
-				url,
-				Map.copyOf(headers),
-				oauth == null ? null : oauth.deepCopy(),
-				enabled,
-				timeoutMillis,
-				List.copyOf(resultFilters),
-				List.copyOf(disabledTools));
-	}
-
 	/** Whether this server should be connected by a manager. */
 	public static boolean mcpConfigEnabled(McpServerConfig config) {
 		return switch (config) {
@@ -5074,20 +4659,10 @@ default -> output.add(textContent(item.toString()));
 
 	// ----------------------------------------------------- mcp configuration
 
-	/** Creates a configuration with its own server map and an unmodifiable source list. */
-	public static McpConfiguration mcpConfiguration(Map<String, McpServerConfig> servers, List<Path> sources) {
-		return new McpConfiguration(new LinkedHashMap<>(servers), List.copyOf(sources));
-	}
-
-	/** Resolves the settings file and captures an unmodifiable substitution environment. */
-	public static McpConfigLoader mcpConfigLoader(Path settingsPath, Map<String, String> environment) {
-		return new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.copyOf(environment));
-	}
-
 	/** Loads configured MCP servers, or an empty configuration when settings do not exist. */
 	public static McpConfiguration mcpLoadConfiguration(McpConfigLoader loader) throws IOException {
 		Path settingsPath = loader.settingsPath;
-		if (!Files.exists(settingsPath)) return mcpConfiguration(Map.of(), List.of());
+		if (!Files.exists(settingsPath)) return new McpConfiguration(new LinkedHashMap<>(), List.of());
 		if (!Files.isRegularFile(settingsPath)) {
 			throw new IOException("Settings path is not a file: " + settingsPath);
 		}
@@ -5145,7 +4720,7 @@ default -> output.add(textContent(item.toString()));
 
 		JsonNode mcp = root.get("mcp");
 		if (mcp == null || mcp.isNull()) {
-			return mcpConfiguration(Map.of(), List.of(settingsPath));
+			return new McpConfiguration(new LinkedHashMap<>(), List.of(settingsPath));
 		}
 		if (!mcp.isObject()) {
 			throw new IOException("Invalid mcp in " + settingsPath + ": expected an object");
@@ -5160,14 +4735,11 @@ default -> output.add(textContent(item.toString()));
 			if (name.isBlank()) throw mcpInvalidServer(name, "server name must not be blank");
 			JsonNode typeNode = server.get("type");
 			if (typeNode == null || !typeNode.isTextual()) throw mcpInvalidServer(name, "type must be a string");
-			boolean enabled;
 			JsonNode node = server.get("enabled");
-			if (node == null || node.isNull()) {
-				enabled = true;
-			} else {
-				if (!node.isBoolean()) throw mcpInvalidServer(name, "enabled" + " must be a boolean");
-				enabled = node.asBoolean();
+			if (node != null && !node.isNull() && !node.isBoolean()) {
+				throw mcpInvalidServer(name, "enabled must be a boolean");
 			}
+			boolean enabled = node == null || node.isNull() || node.asBoolean();
 			Long timeout = null;
 			JsonNode node1 = server.get("timeout");
 			if (node1 != null && !node1.isNull()) {
@@ -5176,13 +4748,10 @@ default -> output.add(textContent(item.toString()));
 				}
 				timeout = node1.asLong();
 			}
-			List<McpResultFilter> resultFilters;
+			List<McpResultFilter> filters = new ArrayList<>();
 			JsonNode node3 = server.get("resultFilters");
-			if (node3 == null || node3.isNull()) {
-				resultFilters = List.of();
-			} else {
+			if (node3 != null && !node3.isNull()) {
 				if (!node3.isArray()) throw mcpInvalidServer(name, "resultFilters must be an array");
-				List<McpResultFilter> filters = new ArrayList<>();
 				for (int index = 0; index < node3.size(); index++) {
 					JsonNode filter = node3.get(index);
 					if (!filter.isObject()) throw mcpInvalidServer(name, "resultFilters[" + index + "] must be an object");
@@ -5203,28 +4772,24 @@ default -> output.add(textContent(item.toString()));
 						}
 						keys.add(key.asText());
 					}
-					String tool = tool1.asText();
-					filters.add(new McpResultFilter(Objects.requireNonNull(tool, "tool"), List.copyOf(keys)));
+					filters.add(new McpResultFilter(tool1.asText(), List.copyOf(keys)));
 				}
-				resultFilters = List.copyOf(filters);
 			}
-			List<String> disabledTools;
+			List<McpResultFilter> resultFilters = List.copyOf(filters);
+			List<String> tools = new ArrayList<>();
 			JsonNode node2 = server.get("disabledTools");
-			if (node2 == null || node2.isNull()) {
-				disabledTools = List.of();
-			} else {
+			if (node2 != null && !node2.isNull()) {
 				if (!node2.isArray()) {
 					throw mcpInvalidServer(name, "disabledTools must be an array of non-empty strings");
 				}
-				List<String> tools = new ArrayList<>();
 				for (JsonNode tool : node2) {
 					if (!tool.isTextual() || tool.asText().isBlank()) {
 						throw mcpInvalidServer(name, "disabledTools must contain non-empty strings");
 					}
 					tools.add(tool.asText());
 				}
-				disabledTools = List.copyOf(tools);
 			}
+			List<String> disabledTools = List.copyOf(tools);
 			servers.put(entry.getKey(), switch (typeNode.asText()) {
 				case "local" -> {
 					JsonNode commandNode = server.get("command");
@@ -5250,9 +4815,10 @@ default -> output.add(textContent(item.toString()));
 							List.copyOf(disabledTools));
 				}
 				case "remote" -> {
-					String result = mcpOptionalText(name, server, "url");
-					if (result == null || result.isBlank()) throw mcpInvalidServer(name, "url" + " must be a non-empty string");
-					String rawUrl = result;
+					String rawUrl = mcpOptionalText(name, server, "url");
+					if (rawUrl == null || rawUrl.isBlank()) {
+						throw mcpInvalidServer(name, "url must be a non-empty string");
+					}
 					URI url;
 					try {
 						url = new URI(rawUrl);
@@ -5309,19 +4875,19 @@ default -> output.add(textContent(item.toString()));
 							}
 						}
 					}
-					yield remoteMcpServerConfig(
+					yield new McpServerConfig.Remote(
 							url,
-							mcpStringMap(name, server, "headers"),
-							oauth,
+							Map.copyOf(mcpStringMap(name, server, "headers")),
+							oauth == null ? null : oauth.deepCopy(),
 							enabled,
 							timeout,
-							resultFilters,
-							disabledTools);
+							List.copyOf(resultFilters),
+							List.copyOf(disabledTools));
 				}
 				default -> throw mcpInvalidServer(name, "type must be local or remote");
 			});
 		}
-		return mcpConfiguration(servers, List.of(settingsPath));
+		return new McpConfiguration(new LinkedHashMap<>(servers), List.of(settingsPath));
 	}
 
 	private static Map<String, String> mcpStringMap(String server, ObjectNode value, String field) throws IOException {
@@ -5356,13 +4922,47 @@ default -> output.add(textContent(item.toString()));
 
 	// --------------------------------------------------------- mcp transport
 
+	private static <T> T mcpAwaitFuture(
+			CompletableFuture<T> future,
+			Duration timeout,
+			AbortSignal signal,
+			String cancelledMessage,
+			String timeoutPrefix,
+			boolean cancelOnAbortOrTimeout)
+			throws Exception {
+		long deadline = System.nanoTime() + timeout.toNanos();
+		while (true) {
+			if ((signal != null && isAborted(signal)) || Thread.currentThread().isInterrupted()) {
+				if (cancelOnAbortOrTimeout) future.cancel(true);
+				throw new InterruptedException(cancelledMessage);
+			}
+			long remaining = deadline - System.nanoTime();
+			if (remaining <= 0) {
+				if (cancelOnAbortOrTimeout) future.cancel(true);
+				throw new TimeoutException(timeoutPrefix + " timed out after " + timeout.toMillis() + "ms");
+			}
+			try {
+				return future.get(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
+			} catch (TimeoutException ignored) {
+				// Poll cooperative cancellation.
+			} catch (InterruptedException error) {
+				future.cancel(true);
+				Thread.currentThread().interrupt();
+				throw error;
+			} catch (ExecutionException error) {
+				Throwable cause = error.getCause();
+				if (cause instanceof Exception exception) throw exception;
+				throw new IOException(String.valueOf(cause), cause);
+			}
+		}
+	}
+
 	/** Sends one JSON-RPC request over the transport that owns this connection. */
 	public static JsonNode mcpTransportRequest(
 			McpTransport transport, String method, ObjectNode params, Duration timeout, AbortSignal signal)
 			throws Exception {
 		return switch (transport) {
 			case StdioMcpTransport stdio -> {
-				JsonNode result;
 				long id = stdio.nextId.getAndIncrement();
 				CompletableFuture<JsonNode> response = new CompletableFuture<>();
 				stdio.pending.put(id, response);
@@ -5375,64 +4975,44 @@ default -> output.add(textContent(item.toString()));
 					throw error;
 				}
 
-				long deadline = System.nanoTime() + timeout.toNanos();
 				try {
-					while (true) {
-						if ((signal != null && isAborted(signal)) || Thread.currentThread().isInterrupted()) {
-							mcpStdioCancel(stdio, id, "Request cancelled");
-							throw new InterruptedException("MCP request cancelled");
-						}
-						long remaining = deadline - System.nanoTime();
-						if (remaining <= 0) {
-							mcpStdioCancel(stdio, id, "Request timed out");
-							throw new TimeoutException(
-									"MCP request " + method + " timed out after " + timeout.toMillis() + "ms");
-						}
-						try {
-							result = response.get(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
-							break;
-						} catch (TimeoutException ignored) {
-							// Poll so the agent's cooperative abort signal is observed promptly.
-						} catch (InterruptedException error) {
-							mcpStdioCancel(stdio, id, "Request cancelled");
-							Thread.currentThread().interrupt();
-							throw error;
-						} catch (ExecutionException error) {
-							Throwable cause = error.getCause();
-							if (cause instanceof Exception exception) throw exception;
-							throw new IOException(String.valueOf(cause), cause);
-						}
-					}
+					yield mcpAwaitFuture(
+							response,
+							timeout,
+							signal,
+							"MCP request cancelled",
+							"MCP request " + method,
+							false);
+				} catch (TimeoutException error) {
+					mcpStdioCancel(stdio, id, "Request timed out");
+					throw error;
+				} catch (InterruptedException error) {
+					mcpStdioCancel(stdio, id, "Request cancelled");
+					throw error;
 				} finally {
 					stdio.pending.remove(id);
 				}
-				yield result;
 			}
 			case StreamableHttpMcpTransport http -> {
-				JsonNode result = null;
-				boolean finished = false;
 				long id = http.nextId.getAndIncrement();
 				ObjectNode envelope = jsonObject().put("jsonrpc", "2.0").put("id", id).put("method", method);
 				if (params != null) envelope.set("params", params);
 				HttpResponse<String> response = mcpStreamablePost(http, envelope, timeout, signal, true);
 				for (JsonNode message : mcpStreamableResponseMessages(http, response)) {
-JsonNode value = message.get("id");
-if (value != null && value.canConvertToLong() && value.asLong() == id && message.get("method") == null) {
+					JsonNode value = message.get("id");
+					if (value != null
+							&& value.canConvertToLong()
+							&& value.asLong() == id
+							&& message.get("method") == null) {
 						JsonNode error = message.get("error");
 						if (error != null && !error.isNull()) throw mcpRpcError(error, true);
-	result = message.get("result");
-	finished = true;
-	break;
-}
+						yield message.get("result");
+					}
 					mcpStreamableDispatchServerMessage(http, message, timeout);
 				}
-				if (!finished) {
-					throw new IOException("MCP HTTP response did not contain JSON-RPC result for " + method);
-				}
-				yield result;
+				throw new IOException("MCP HTTP response did not contain JSON-RPC result for " + method);
 			}
 			case SseHttpMcpTransport sse -> {
-				JsonNode res;
 				URI target = mcpAwaitSse(sse.endpoint, timeout, signal);
 				long id = sse.nextId.getAndIncrement();
 				CompletableFuture<JsonNode> result = new CompletableFuture<>();
@@ -5441,7 +5021,7 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 				if (params != null) envelope.set("params", params);
 				try {
 					mcpSsePost(sse, target, envelope, timeout, signal, true);
-					res = mcpAwaitSse(result, timeout, signal);
+					yield mcpAwaitSse(result, timeout, signal);
 				} catch (TimeoutException | InterruptedException error) {
 					try {
 						mcpSseNotify(
@@ -5453,7 +5033,6 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 				} finally {
 					sse.pending.remove(id);
 				}
-				yield res;
 			}
 		};
 	}
@@ -5464,7 +5043,7 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			case StdioMcpTransport stdio -> {
 				if (!stdio.closed) {
 					stdio.closed = true;
-					mcpStdioFailPending(stdio, new IOException("MCP stdio transport closed"));
+					mcpFailPending(stdio.pending, new IOException("MCP stdio transport closed"));
 					try {
 						stdio.writer.close();
 					} catch (IOException ignored) {
@@ -5499,17 +5078,9 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 					}
 					if (http.sessionId != null) {
 						try {
-							String bearer;
-							if (http.oauth == null) {
-								bearer = null;
-							} else {
-								String result;
-								synchronized (http.oauth) {
-									result = http.oauth.entry == null || http.oauth.entry.tokens == null ? null : http.oauth.entry.tokens.accessToken;
-								}
-								bearer = result;
-							}
-							HttpRequest request = mcpStreamableRequestBuilder(http, http.url, Duration.ofSeconds(2), bearer)
+							String bearer = http.oauth == null ? null : mcpAccessToken(http.oauth);
+							HttpRequest request = mcpHttpRequestBuilder(
+									 http.url, Duration.ofSeconds(2), bearer, http.headers, http.sessionId, http.protocolVersion)
 									.DELETE()
 									.build();
 							http.client.sendAsync(request, HttpResponse.BodyHandlers.discarding());
@@ -5523,7 +5094,7 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 				if (!sse.closed) {
 					sse.closed = true;
 					if (sse.opening != null) sse.opening.cancel(true);
-					mcpSseFailPending(sse, new IOException("MCP SSE transport closed"));
+					mcpFailPending(sse.pending, new IOException("MCP SSE transport closed"));
 					sse.endpoint.completeExceptionally(new IOException("MCP SSE transport closed"));
 					InputStream stream = sse.eventStream;
 					if (stream != null) {
@@ -5557,17 +5128,23 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 		return normalized.length() <= 500 ? normalized : normalized.substring(0, 500) + "...";
 	}
 
-	private static ObjectNode mcpRootsResult(Path workspace) {
-		ObjectNode result = jsonObject();
-		result.putArray("roots")
-				.addObject()
-				.put("uri", workspace.toUri().toString())
-				.put(
-						"name",
-						workspace.getFileName() == null
-								? workspace.toString()
-								: workspace.getFileName().toString());
-		return result;
+	private static ObjectNode mcpClientResponse(JsonNode id, String method, Path workspace) {
+		ObjectNode response = jsonObject().put("jsonrpc", "2.0");
+		response.set("id", id);
+		if (method.equals("ping")) response.set("result", jsonObject());
+		else if (method.equals("roots/list")) {
+			ObjectNode result = jsonObject();
+			result.putArray("roots")
+					.addObject()
+					.put("uri", workspace.toUri().toString())
+					.put("name", workspace.getFileName() == null
+							? workspace.toString()
+							: workspace.getFileName().toString());
+			response.set("result", result);
+		}
+		else response.set(
+				"error", jsonObject().put("code", -32601).put("message", "Client does not support " + method));
+		return response;
 	}
 
 	// --------------------------------------------------- mcp stdio transport
@@ -5590,17 +5167,8 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 		if (method != null && method.isTextual()) {
 			JsonNode params = message.get("params");
 			if (id != null && !id.isNull()) {
-				String method1 = method.asText();
-				ObjectNode response = jsonObject().put("jsonrpc", "2.0");
-				response.set("id", id);
-				switch (method1) {
-					case "ping" -> response.set("result", jsonObject());
-					case "roots/list" -> response.set("result", mcpRootsResult(transport.workspace));
-					default -> response.set(
-							"error", jsonObject().put("code", -32601).put("message", "Client does not support " + method1));
-				}
 				try {
-					mcpStdioWrite(transport, response);
+					mcpStdioWrite(transport, mcpClientResponse(id, method.asText(), transport.workspace));
 				} catch (IOException ignored) {
 					// A transport failure is reported to pending client requests by the reader/process watcher.
 				}
@@ -5655,9 +5223,9 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 		return detail.isBlank() ? status : status + ": " + detail;
 	}
 
-	private static void mcpStdioFailPending(StdioMcpTransport transport, Exception error) {
-		for (CompletableFuture<JsonNode> future : transport.pending.values()) future.completeExceptionally(error);
-		transport.pending.clear();
+	private static void mcpFailPending(Map<Long, CompletableFuture<JsonNode>> pending, Exception error) {
+		for (CompletableFuture<JsonNode> future : pending.values()) future.completeExceptionally(error);
+		pending.clear();
 	}
 
 	// ---------------------------------------- mcp streamable http transport
@@ -5671,40 +5239,21 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			throws Exception {
 		if (transport.closed) throw new IOException("MCP HTTP transport is closed");
 		String bearer = transport.oauth == null ? null : mcpAccessToken(transport.oauth);
-		HttpRequest.Builder request = mcpStreamableRequestBuilder(transport, transport.url, timeout, bearer)
+		HttpRequest.Builder request = mcpHttpRequestBuilder(
+				transport.url, timeout, bearer, transport.headers, transport.sessionId, transport.protocolVersion)
 				.setHeader("Content-Type", "application/json")
 				.setHeader("Accept", "application/json, text/event-stream")
 				.POST(HttpRequest.BodyPublishers.ofString(
 						Json.MAPPER.writeValueAsString(message), StandardCharsets.UTF_8));
-		HttpResponse<String> response;
 		CompletableFuture<HttpResponse<String>> future =
 				transport.client.sendAsync(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-		long deadline = System.nanoTime() + timeout.toNanos();
-		while (true) {
-			if ((signal != null && isAborted(signal)) || Thread.currentThread().isInterrupted()) {
-				future.cancel(true);
-				throw new InterruptedException("MCP HTTP request cancelled");
-			}
-			long remaining = deadline - System.nanoTime();
-			if (remaining <= 0) {
-				future.cancel(true);
-				throw new TimeoutException("MCP HTTP request timed out after " + timeout.toMillis() + "ms");
-			}
-			try {
-				response = future.get(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
-				break;
-			} catch (TimeoutException ignored) {
-				// Poll cancellation.
-			} catch (InterruptedException error) {
-				future.cancel(true);
-				Thread.currentThread().interrupt();
-				throw error;
-			} catch (ExecutionException error) {
-				Throwable cause = error.getCause();
-				if (cause instanceof Exception exception) throw exception;
-				throw new IOException(String.valueOf(cause), cause);
-			}
-		}
+		HttpResponse<String> response = mcpAwaitFuture(
+				future,
+				timeout,
+				signal,
+				"MCP HTTP request cancelled",
+				"MCP HTTP request",
+				true);
 		response.headers().firstValue("Mcp-Session-Id").ifPresent(value -> transport.sessionId = value);
 		int status = response.statusCode();
 		if (status < 200 || status >= 300) {
@@ -5784,14 +5333,8 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			transport.notificationListener.accept(method, params);
 			return;
 		}
-		ObjectNode response = jsonObject().put("jsonrpc", "2.0");
-		response.set("id", id);
-		if (method.equals("ping")) response.set("result", jsonObject());
-		else if (method.equals("roots/list")) response.set("result", mcpRootsResult(transport.workspace));
-		else response.set(
-				"error", jsonObject().put("code", -32601).put("message", "Client does not support " + method));
 		try {
-			mcpStreamablePost(transport, response, timeout, null, true);
+			mcpStreamablePost(transport, mcpClientResponse(id, method, transport.workspace), timeout, null, true);
 		} catch (Exception ignored) {
 			// The original request will report a transport failure if one occurs.
 		}
@@ -5813,18 +5356,21 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 		}
 	}
 
-	private static HttpRequest.Builder mcpStreamableRequestBuilder(
-			StreamableHttpMcpTransport transport, URI target, Duration timeout, String bearer) {
+	private static HttpRequest.Builder mcpHttpRequestBuilder(
+			URI target,
+			Duration timeout,
+			String bearer,
+			Map<String, String> headers,
+			String sessionId,
+			String protocolVersion) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder(target);
 		if (timeout != null) builder.timeout(timeout);
-		for (var header : transport.headers.entrySet()) {
+		for (var header : headers.entrySet()) {
 			if (!mcpRestrictedHeader(header.getKey())) builder.header(header.getKey(), header.getValue());
 		}
 		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
-		if (transport.sessionId != null) builder.setHeader("Mcp-Session-Id", transport.sessionId);
-		if (transport.protocolVersion != null) {
-			builder.setHeader("MCP-Protocol-Version", transport.protocolVersion);
-		}
+		if (sessionId != null) builder.setHeader("Mcp-Session-Id", sessionId);
+		if (protocolVersion != null) builder.setHeader("MCP-Protocol-Version", protocolVersion);
 		return builder;
 	}
 
@@ -5839,7 +5385,13 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			transport.endpoint.completeExceptionally(error);
 			return;
 		}
-		HttpRequest request = mcpSseRequestBuilder(transport, transport.url, Duration.ofSeconds(30), bearer)
+		HttpRequest request = mcpHttpRequestBuilder(
+				transport.url,
+				Duration.ofSeconds(30),
+				bearer,
+				transport.headers,
+				transport.sessionId,
+				transport.protocolVersion)
 				.setHeader("Accept", "text/event-stream")
 				.GET()
 				.build();
@@ -5855,7 +5407,7 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			}
 			if (error != null) {
 				transport.endpoint.completeExceptionally(error);
-				mcpSseFailPending(transport, new IOException("Failed to open MCP SSE stream", error));
+				mcpFailPending(transport.pending, new IOException("Failed to open MCP SSE stream", error));
 				return;
 			}
 			mcpCaptureSseSession(transport, response);
@@ -5880,11 +5432,11 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 					}
 				} catch (Exception refreshError) {
 					transport.endpoint.completeExceptionally(refreshError);
-					mcpSseFailPending(transport, refreshError);
+					mcpFailPending(transport.pending, refreshError);
 					return;
 				}
 				transport.endpoint.completeExceptionally(failure);
-				mcpSseFailPending(transport, failure);
+				mcpFailPending(transport.pending, failure);
 				return;
 			}
 			transport.eventStream = response.body();
@@ -5906,11 +5458,12 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 						}
 					}
 					if (!data.isEmpty()) mcpSseDispatchEvent(transport, event, data.toString());
-					if (!transport.closed) mcpSseFailPending(transport, new IOException("MCP SSE event stream closed"));
+					if (!transport.closed) mcpFailPending(
+							transport.pending, new IOException("MCP SSE event stream closed"));
 				} catch (Exception error1) {
 					if (!transport.closed) {
 						transport.endpoint.completeExceptionally(error1);
-						mcpSseFailPending(transport, error1);
+						mcpFailPending(transport.pending, error1);
 					}
 				}
 			});
@@ -5933,7 +5486,8 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			boolean authRetry)
 			throws Exception {
 		String bearer = transport.oauth == null ? null : mcpAccessToken(transport.oauth);
-		HttpRequest request = mcpSseRequestBuilder(transport, target, timeout, bearer)
+		HttpRequest request = mcpHttpRequestBuilder(
+				 target, timeout, bearer, transport.headers, transport.sessionId, transport.protocolVersion)
 				.setHeader("Content-Type", "application/json")
 				.setHeader("Accept", "application/json")
 				.POST(HttpRequest.BodyPublishers.ofString(
@@ -5989,12 +5543,7 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			JsonNode params = message.get("params");
 			if (id == null || id.isNull()) transport.notificationListener.accept(method, params);
 			else {
-				ObjectNode response = jsonObject().put("jsonrpc", "2.0");
-				response.set("id", id);
-				if (method.equals("ping")) response.set("result", jsonObject());
-				else if (method.equals("roots/list")) response.set("result", mcpRootsResult(transport.workspace));
-				else response.set(
-						"error", jsonObject().put("code", -32601).put("message", "Client does not support " + method));
+				ObjectNode response = mcpClientResponse(id, method, transport.workspace);
 				transport.endpoint.thenAccept(target -> Thread.ofVirtual().start(() -> {
 					try {
 						mcpSsePost(transport, target, response, Duration.ofSeconds(10), null, true);
@@ -6011,52 +5560,14 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 		else result.complete(message.get("result"));
 	}
 
-	private static HttpRequest.Builder mcpSseRequestBuilder(
-			SseHttpMcpTransport transport, URI target, Duration timeout, String bearer) {
-		HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(timeout);
-		for (var header : transport.headers.entrySet()) {
-			if (!mcpRestrictedHeader(header.getKey())) builder.header(header.getKey(), header.getValue());
-		}
-		if (bearer != null) builder.setHeader("Authorization", "Bearer " + bearer);
-		if (transport.sessionId != null) builder.setHeader("Mcp-Session-Id", transport.sessionId);
-		if (transport.protocolVersion != null) {
-			builder.setHeader("MCP-Protocol-Version", transport.protocolVersion);
-		}
-		return builder;
-	}
-
 	private static void mcpCaptureSseSession(SseHttpMcpTransport transport, HttpResponse<?> response) {
 		response.headers().firstValue("Mcp-Session-Id").ifPresent(value -> transport.sessionId = value);
 	}
 
 	private static <T> T mcpAwaitSse(CompletableFuture<T> future, Duration timeout, AbortSignal signal)
 			throws Exception {
-		long deadline = System.nanoTime() + timeout.toNanos();
-		while (true) {
-			if ((signal != null && isAborted(signal)) || Thread.currentThread().isInterrupted()) {
-				throw new InterruptedException("MCP request cancelled");
-			}
-			long remaining = deadline - System.nanoTime();
-			if (remaining <= 0) throw new TimeoutException("MCP request timed out after " + timeout.toMillis() + "ms");
-			try {
-				return future.get(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
-			} catch (TimeoutException ignored) {
-				// Poll cancellation.
-			} catch (InterruptedException error) {
-				future.cancel(true);
-				Thread.currentThread().interrupt();
-				throw error;
-			} catch (ExecutionException error) {
-				Throwable cause = error.getCause();
-				if (cause instanceof Exception exception) throw exception;
-				throw new IOException(String.valueOf(cause), cause);
-			}
-		}
-	}
-
-	private static void mcpSseFailPending(SseHttpMcpTransport transport, Exception error) {
-		for (CompletableFuture<JsonNode> future : transport.pending.values()) future.completeExceptionally(error);
-		transport.pending.clear();
+		return mcpAwaitFuture(
+				future, timeout, signal, "MCP request cancelled", "MCP request", false);
 	}
 
 	private static McpHttpException mcpSseHttpError(
@@ -6104,12 +5615,11 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			McpServerConfig.Remote remote, Path workspace, Duration timeout, McpOAuthClient.Session oauth)
 			throws Exception {
 		Exception streamableFailure;
-		StreamableHttpMcpTransport transport1 = new StreamableHttpMcpTransport();
-		transport1.url = remote.url;
-		transport1.headers = remote.headers;
-		transport1.oauth = oauth;
-		transport1.workspace = workspace.toAbsolutePath().normalize();
-		McpTransport streamable = transport1;
+		StreamableHttpMcpTransport streamable = new StreamableHttpMcpTransport();
+		streamable.url = remote.url;
+		streamable.headers = remote.headers;
+		streamable.oauth = oauth;
+		streamable.workspace = workspace.toAbsolutePath().normalize();
 		try {
 			return mcpInitializeOwned(streamable, timeout);
 		} catch (Exception error) {
@@ -6117,13 +5627,12 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			if (error instanceof InterruptedException || Thread.currentThread().isInterrupted()) throw error;
 			if (oauth != null && mcpIsOAuthChallenge(error)) throw error;
 		}
-		SseHttpMcpTransport transport = new SseHttpMcpTransport();
-		transport.url = remote.url;
-		transport.headers = remote.headers;
-		transport.oauth = oauth;
-		transport.workspace = workspace.toAbsolutePath().normalize();
-		mcpSseOpenEventStream(transport, true);
-		McpTransport sse = transport;
+		SseHttpMcpTransport sse = new SseHttpMcpTransport();
+		sse.url = remote.url;
+		sse.headers = remote.headers;
+		sse.oauth = oauth;
+		sse.workspace = workspace.toAbsolutePath().normalize();
+		mcpSseOpenEventStream(sse, true);
 		try {
 			return mcpInitializeOwned(sse, timeout);
 		} catch (Exception error) {
@@ -6158,75 +5667,67 @@ if (value != null && value.canConvertToLong() && value.asLong() == id && message
 			client.instructions = result.path("instructions").isTextual()
 					? result.path("instructions").asText().trim()
 					: null;
-			ObjectNode params1 = jsonObject();
 			switch (transport) {
-				case StdioMcpTransport stdio -> mcpStdioNotify(stdio, "notifications/initialized", params1);
+				case StdioMcpTransport stdio ->
+						mcpStdioNotify(stdio, "notifications/initialized", jsonObject());
 				case StreamableHttpMcpTransport http -> {
-ObjectNode envelope = jsonObject().put("jsonrpc", "2.0").put("method", "notifications/initialized");
-if (params1 != null) envelope.set("params", params1);
-HttpResponse<String> response = mcpStreamablePost(http, envelope, Duration.ofSeconds(10), null, true);
-for (JsonNode message : mcpStreamableResponseMessages(http, response)) {
-mcpStreamableDispatchServerMessage(http, message, Duration.ofSeconds(10));
-}
-if ("notifications/initialized".equals("notifications/initialized") && response.statusCode() == 202) {
-boolean finished = false;
-if (!http.closed && http.listenerRequest == null) {
-HttpRequest request = null;
-try {
-String bearer = http.oauth == null ? null : mcpAccessToken(http.oauth);
-request = mcpStreamableRequestBuilder(http, http.url, null, bearer)
-.setHeader("Accept", "text/event-stream")
-.GET()
-.build();
-} catch (Exception ignored) {
-finished = true;
-}
-if (!finished) {
-CompletableFuture<HttpResponse<InputStream>> future =
-http.client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
-http.listenerRequest = future;
-future.whenComplete((response1, error) -> {
-if (http.closed || error != null || response1 == null) return;
-if (response1.statusCode() == 405) {
-try {
-response1.body().close();
-} catch (IOException ignored) {
-}
-return;
-}
-if (response1.statusCode() < 200 || response1.statusCode() >= 300) {
-try {
-response1.body().close();
-} catch (IOException ignored) {
-}
-return;
-}
-http.listenerStream = response1.body();
-Thread.ofVirtual()
-.name("mcp-http-listener")
-.start(() -> {
-try (BufferedReader input = new BufferedReader(new InputStreamReader(response1.body(), StandardCharsets.UTF_8))) {
-StringBuilder data = new StringBuilder();
-String line = null;
-while (!http.closed && (line = input.readLine()) != null) {
-if (line.isEmpty()) {
-mcpStreamableDispatchListenerData(http, data);
-} else if (line.startsWith("data:")) {
-if (!data.isEmpty()) data.append('\n');
-data.append(line.substring(5).stripLeading());
-}
-}
-mcpStreamableDispatchListenerData(http, data);
-} catch (IOException ignored) {
-// The optional GET stream may be unavailable or close at any time.
-}
-});
-});
-}
-}
-}
-}
-				case SseHttpMcpTransport sse -> mcpSseNotify(sse, "notifications/initialized", params1);
+					ObjectNode envelope = jsonObject()
+							.put("jsonrpc", "2.0")
+							.put("method", "notifications/initialized");
+					envelope.set("params", jsonObject());
+					HttpResponse<String> response =
+							mcpStreamablePost(http, envelope, Duration.ofSeconds(10), null, true);
+					for (JsonNode message : mcpStreamableResponseMessages(http, response)) {
+						mcpStreamableDispatchServerMessage(http, message, Duration.ofSeconds(10));
+					}
+					if (response.statusCode() == 202 && !http.closed && http.listenerRequest == null) {
+						try {
+							String bearer = http.oauth == null ? null : mcpAccessToken(http.oauth);
+							HttpRequest request = mcpHttpRequestBuilder(
+										http.url,
+										null,
+										bearer,
+										http.headers,
+										http.sessionId,
+										http.protocolVersion)
+									.setHeader("Accept", "text/event-stream")
+									.GET()
+									.build();
+							CompletableFuture<HttpResponse<InputStream>> future =
+									http.client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
+							http.listenerRequest = future;
+							future.whenComplete((listener, error) -> {
+								if (http.closed || error != null || listener == null) return;
+								if (listener.statusCode() < 200 || listener.statusCode() >= 300) {
+									try {
+										listener.body().close();
+									} catch (IOException ignored) {}
+									return;
+								}
+								http.listenerStream = listener.body();
+								Thread.ofVirtual().name("mcp-http-listener").start(() -> {
+									try (BufferedReader input = new BufferedReader(new InputStreamReader(
+											listener.body(), StandardCharsets.UTF_8))) {
+										StringBuilder data = new StringBuilder();
+										String line;
+										while (!http.closed && (line = input.readLine()) != null) {
+											if (line.isEmpty()) mcpStreamableDispatchListenerData(http, data);
+											else if (line.startsWith("data:")) {
+												if (!data.isEmpty()) data.append('\n');
+												data.append(line.substring(5).stripLeading());
+											}
+										}
+										mcpStreamableDispatchListenerData(http, data);
+									} catch (IOException ignored) {
+										// The optional GET stream may be unavailable or close at any time.
+									}
+								});
+							});
+						} catch (Exception ignored) {}
+					}
+				}
+				case SseHttpMcpTransport sse ->
+						mcpSseNotify(sse, "notifications/initialized", jsonObject());
 			}
 			return client;
 		} catch (Exception error) {
@@ -6282,7 +5783,10 @@ mcpStreamableDispatchListenerData(http, data);
 	/** Builds a manager for the MCP servers in {@code ~/.codingagent/settings.json}. */
 	public static McpManager mcpLoadDefaultManager(Path workspace) throws IOException {
 		Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
-		return mcpCreateManager(mcpLoadConfiguration(mcpConfigLoader(settingsPath, System.getenv())), workspace);
+		return mcpCreateManager(
+				mcpLoadConfiguration(new McpConfigLoader(
+						settingsPath.toAbsolutePath().normalize(), Map.copyOf(System.getenv()))),
+				workspace);
 	}
 
 	/** Builds a manager and starts connecting every enabled server. */
@@ -6397,21 +5901,45 @@ case McpServerConfig.Remote remote -> remote.resultFilters;
 	public static void mcpCloseManager(McpManager manager) {
 		if (manager.closed) return;
 		manager.closed = true;
-		for (McpManager.Runtime runtime : manager.servers.values()) {
-			McpClient client;
-			Thread connector;
-			synchronized (runtime.lock) {
-				runtime.generation++;
-				connector = runtime.connector;
-				runtime.connector = null;
-				client = runtime.client;
-				runtime.client = null;
-				runtime.tools = List.of();
-				runtime.state = McpManager.State.DISABLED;
-				runtime.authorizationUrl = null;
+		manager.servers.values().forEach(runtime -> mcpDisconnectRuntime(runtime, false));
+	}
+
+	private static McpManager.ServerStatus mcpDisconnectRuntime(
+			McpManager.Runtime runtime, boolean disable) {
+		McpClient client;
+		Thread connector;
+		synchronized (runtime.lock) {
+			runtime.generation++;
+			connector = runtime.connector;
+			runtime.connector = null;
+			client = runtime.client;
+			runtime.client = null;
+			runtime.tools = List.of();
+			runtime.state = McpManager.State.DISABLED;
+			if (disable) {
+				runtime.enabled = false;
+				runtime.message = null;
 			}
-			if (connector != null) connector.interrupt();
-			if (client != null) mcpCloseClient(client);
+			runtime.authorizationUrl = null;
+		}
+		if (connector != null) connector.interrupt();
+		if (client != null) mcpCloseClient(client);
+		return mcpSnapshot(runtime);
+	}
+
+	private static void mcpFailConnect(
+			McpManager manager,
+			McpManager.Runtime runtime,
+			long generation,
+			McpManager.State state,
+			Exception error) {
+		synchronized (runtime.lock) {
+			if (manager.closed || runtime.generation != generation) return;
+			runtime.state = state;
+			runtime.message = mcpErrorMessage(error);
+			runtime.authorizationUrl = null;
+			runtime.client = null;
+			runtime.tools = List.of();
 		}
 	}
 
@@ -6438,7 +5966,6 @@ case McpServerConfig.Remote remote -> remote.resultFilters;
 					.unstarted(() -> {
 						McpClient candidate = null;
 						try {
-McpClient res;
 Consumer<URI> authorizationListener = url -> {
 synchronized (runtime.lock) {
 if (manager.closed || runtime.generation != generation) return;
@@ -6482,10 +6009,10 @@ if (runtime.config instanceof McpServerConfig.Local local) {
 				mcpStdioDispatch(transport, message);
 			}
 			if (!transport.closed) {
-				mcpStdioFailPending(transport, new IOException(mcpStdioExitMessage(transport)));
+				mcpFailPending(transport.pending, new IOException(mcpStdioExitMessage(transport)));
 			}
 		} catch (IOException error) {
-			if (!transport.closed) mcpStdioFailPending(transport, error);
+			if (!transport.closed) mcpFailPending(transport.pending, error);
 		}
 	});
 	Thread.ofVirtual().name("mcp-stderr-reader").start(() -> {
@@ -6501,29 +6028,27 @@ if (runtime.config instanceof McpServerConfig.Local local) {
 	});
 	transport.process
 			.onExit()
-			.thenRun(() -> mcpStdioFailPending(transport, new IOException(mcpStdioExitMessage(transport))));
-	res = mcpInitializeOwned(transport, timeout);
+			.thenRun(() -> mcpFailPending(
+					transport.pending, new IOException(mcpStdioExitMessage(transport))));
+	candidate = mcpInitializeOwned(transport, timeout);
 } else {
 McpServerConfig.Remote remote = (McpServerConfig.Remote) runtime.config;
 	McpOAuthClient.Session oauthSession = null;
 	if ((remote.oauth == null || !remote.oauth.isBoolean() || remote.oauth.asBoolean()) && !remote.headers.keySet().stream().anyMatch(name1 -> name1.equalsIgnoreCase("Authorization"))) {
-		McpOAuthClient.OAuthSettings result;
-		if (remote.oauth == null || !remote.oauth.isObject()) {
-			result = new McpOAuthClient.OAuthSettings(null, null, null, null, null);
-		} else {
-			Integer port = remote.oauth.path("callbackPort").isIntegralNumber() ? remote.oauth.path("callbackPort").asInt() : null;
-			URI redirect = remote.oauth.path("redirectUri").isTextual() ? URI.create(remote.oauth.path("redirectUri").asText()) : null;
-			result = new McpOAuthClient.OAuthSettings(
-					mcpOAuthOptionalText(remote.oauth, "clientId"),
-					mcpOAuthOptionalText(remote.oauth, "clientSecret"),
-					mcpOAuthOptionalText(remote.oauth, "scope"),
-					port,
-					redirect);
-		}
-		oauthSession = new McpOAuthClient.Session(manager.oauth, runtime.name, remote, result);
+		McpOAuthClient.OAuthSettings settings = remote.oauth instanceof ObjectNode oauth
+				? new McpOAuthClient.OAuthSettings(
+						mcpOAuthOptionalText(oauth, "clientId"),
+						mcpOAuthOptionalText(oauth, "clientSecret"),
+						mcpOAuthOptionalText(oauth, "scope"),
+						oauth.path("callbackPort").isIntegralNumber() ? oauth.path("callbackPort").asInt() : null,
+						oauth.path("redirectUri").isTextual()
+								? URI.create(oauth.path("redirectUri").asText())
+								: null)
+				: new McpOAuthClient.OAuthSettings(null, null, null, null, null);
+		oauthSession = new McpOAuthClient.Session(manager.oauth, runtime.name, remote, settings);
 	}
 	try {
-res = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
+candidate = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
 } catch (Exception error) {
 if (oauthSession == null || !mcpIsOAuthChallenge(error)) throw error;
 if (!interactiveOAuth) {
@@ -6567,92 +6092,64 @@ URI redirectUri = mcpOAuthRedirectUri(oauthSession.settings);
 	if (redirectUri.getFragment() != null) {
 		throw new IllegalArgumentException("MCP OAuth redirectUri must not contain a fragment");
 	}
-	McpOAuthCallback callback1 = new McpOAuthCallback();
-	callback1.redirectUri = redirectUri;
-	callback1.expectedState = state;
+	McpOAuthCallback callback = new McpOAuthCallback();
+	callback.redirectUri = redirectUri;
+	callback.expectedState = state;
 	int port = redirectUri.getPort() >= 0 ? redirectUri.getPort() : 80;
 	InetAddress loopback = InetAddress.getByName(
 			redirectUri.getHost().equalsIgnoreCase("localhost") ? "127.0.0.1" : redirectUri.getHost());
-	callback1.server = HttpServer.create(new InetSocketAddress(loopback, port), 0);
-	callback1.executor = Executors.newVirtualThreadPerTaskExecutor();
-	callback1.server.setExecutor(callback1.executor);
-	callback1.server.createContext("/", exchange -> {
-HttpExchange exchange1 = exchange;
-try (exchange1) {
-String path = callback1.redirectUri.getPath();
-if (!exchange1.getRequestMethod().equals("GET")
-|| !exchange1.getRequestURI().getPath().equals(path == null || path.isEmpty() ? "/" : path)) {
-mcpRespondToRedirect(exchange1, 404, mcpCallbackPage("Not found", false));
-return;
-}
-Map<String, String> parameters2;
-String rawQuery = exchange1.getRequestURI().getRawQuery();
-LinkedHashMap<String, String> values = new LinkedHashMap<>();
-if (rawQuery == null || rawQuery.isEmpty()) {
-parameters2 = values;
-} else {
-for (String part : rawQuery.split("&")) {
-int separator1 = part.indexOf('=');
-String rawName = separator1 < 0 ? part : part.substring(0, separator1);
-String rawValue = separator1 < 0 ? "" : part.substring(separator1 + 1);
-values.put(
-URLDecoder.decode(rawName, StandardCharsets.UTF_8),
-URLDecoder.decode(rawValue, StandardCharsets.UTF_8));
-}
-parameters2 = values;
-}
-String state1 = parameters2.get("state");
-if (state1 == null || !MessageDigest.isEqual(
-callback1.expectedState.getBytes(StandardCharsets.UTF_8), state1.getBytes(StandardCharsets.UTF_8))) {
-mcpRespondToRedirect(
-exchange1,
-400,
-mcpCallbackPage(
-"The OAuth state was missing or invalid. Return to codingagent and try again.",
-false));
-return;
-}
-String oauthError = parameters2.get("error");
-if (oauthError != null) {
-String description = parameters2.getOrDefault("error_description", oauthError);
-mcpRespondToRedirect(exchange1, 200, mcpCallbackPage(description, false));
-callback1.code.completeExceptionally(
-new IOException("OAuth authorization was rejected: " + description));
-return;
-}
-String authorizationCode = parameters2.get("code");
-if (authorizationCode == null || authorizationCode.isBlank()) {
-mcpRespondToRedirect(
-exchange1,
-400,
-mcpCallbackPage(
-"No authorization code was returned. Return to codingagent and try again.", false));
-return;
-}
-if (callback1.code.isDone()) {
-mcpRespondToRedirect(
-exchange1, 400, mcpCallbackPage("This OAuth authorization has already been completed.", false));
-return;
-}
-mcpRespondToRedirect(
-exchange1,
-200,
-mcpCallbackPage("Authorization complete. You can close this window and return to codingagent.", true));
-callback1.code.complete(authorizationCode);
-}
-});
-	callback1.server.start();
-	McpOAuthCallback callback = callback1;
+	callback.server = HttpServer.create(new InetSocketAddress(loopback, port), 0);
+	callback.executor = Executors.newVirtualThreadPerTaskExecutor();
+	callback.server.setExecutor(callback.executor);
+	callback.server.createContext("/", exchange -> {
+		try (exchange) {
+			String path = callback.redirectUri.getPath();
+			if (!exchange.getRequestMethod().equals("GET")
+					|| !exchange.getRequestURI().getPath().equals(path == null || path.isEmpty() ? "/" : path)) {
+				mcpRespondToRedirect(exchange, 404, mcpCallbackPage("Not found", false));
+				return;
+			}
+			Map<String, String> parameters = mcpFormDecode(exchange.getRequestURI().getRawQuery());
+			String returnedState = parameters.get("state");
+			if (returnedState == null || !MessageDigest.isEqual(
+					callback.expectedState.getBytes(StandardCharsets.UTF_8),
+					returnedState.getBytes(StandardCharsets.UTF_8))) {
+				mcpRespondToRedirect(exchange, 400, mcpCallbackPage(
+						"The OAuth state was missing or invalid. Return to codingagent and try again.", false));
+				return;
+			}
+			String oauthError = parameters.get("error");
+			if (oauthError != null) {
+				String description = parameters.getOrDefault("error_description", oauthError);
+				mcpRespondToRedirect(exchange, 200, mcpCallbackPage(description, false));
+				callback.code.completeExceptionally(
+						new IOException("OAuth authorization was rejected: " + description));
+				return;
+			}
+			String code = parameters.get("code");
+			if (code == null || code.isBlank()) {
+				mcpRespondToRedirect(exchange, 400, mcpCallbackPage(
+						"No authorization code was returned. Return to codingagent and try again.", false));
+				return;
+			}
+			if (callback.code.isDone()) {
+				mcpRespondToRedirect(exchange, 400,
+						mcpCallbackPage("This OAuth authorization has already been completed.", false));
+				return;
+			}
+			mcpRespondToRedirect(exchange, 200, mcpCallbackPage(
+					"Authorization complete. You can close this window and return to codingagent.", true));
+			callback.code.complete(code);
+		}
+	});
+	callback.server.start();
 try {
 McpOAuthStore.Entry current = mcpOAuthReload(oauthSession);
-	String scope;
-	if (challenge1 != null && challenge1.scope != null) {
-		scope = challenge1.scope;
-	} else if (discovery.resourceMetadata != null && !discovery.resourceMetadata.scopes.isEmpty()) {
-		scope = String.join(" ", discovery.resourceMetadata.scopes);
-	} else {
-		scope = oauthSession.settings.scope;
-	}
+	String scope = challenge1.scope != null
+			? challenge1.scope
+			: discovery.resourceMetadata != null && !discovery.resourceMetadata.scopes.isEmpty()
+					? String.join(" ", discovery.resourceMetadata.scopes)
+					: oauthSession.settings.scope;
 	McpOAuthStore.ClientInfo clientInfo;
 	if (oauthSession.settings.clientId != null) {
 		clientInfo = new McpOAuthStore.ClientInfo(
@@ -6675,28 +6172,26 @@ McpOAuthStore.Entry current = mcpOAuthReload(oauthSession);
 			}
 			ObjectNode request = jsonObject();
 			request.putArray("redirect_uris").add(redirectUri.toString());
-			request.put("client_name", "codingagent");
-			request.put("client_uri", "https://github.com/mikeyreilly/coding-agent");
+			request.put("client_name", "codingagent")
+					.put("client_uri", "https://github.com/mikeyreilly/coding-agent")
+					.put("token_endpoint_auth_method", "none");
 			request.putArray("grant_types").add("authorization_code").add("refresh_token");
 			request.putArray("response_types").add("code");
-			request.put("token_endpoint_auth_method", "none");
 			if (scope != null) request.put("scope", scope);
 			HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint)
 					.timeout(McpOAuthClient.HTTP_TIMEOUT)
 					.setHeader("Accept", "application/json")
 					.setHeader("Content-Type", "application/json")
 					.POST(HttpRequest.BodyPublishers.ofString(
-							Json.MAPPER.writeValueAsString((JsonNode) request), StandardCharsets.UTF_8));
-			mcpApplyOAuthHeaders(builder, Map.of());
+							Json.MAPPER.writeValueAsString(request), StandardCharsets.UTF_8));
 			McpOAuthClient.Response response =
 					mcpOAuthSend(oauthSession.client, builder.build());
 			if (!mcpOAuthSuccess(response)) {
 				throw mcpOAuthFailure(response, "Dynamic OAuth client registration failed");
 			}
 			JsonNode body = mcpOAuthParseObject(response, "dynamic client registration");
-			String clientId = mcpOAuthRequiredText(body, "client_id", "dynamic client registration");
 			McpOAuthStore.ClientInfo registered = new McpOAuthStore.ClientInfo(
-					clientId,
+					mcpOAuthRequiredText(body, "client_id", "dynamic client registration"),
 					mcpOAuthOptionalText(body, "client_secret"),
 					mcpOAuthOptionalLong(body, "client_id_issued_at"),
 					mcpOAuthOptionalLong(body, "client_secret_expires_at"),
@@ -6727,13 +6222,12 @@ McpOAuthStore.Entry current = mcpOAuthReload(oauthSession);
 	int fragment = value.indexOf('#');
 	if (fragment >= 0) value = value.substring(0, fragment);
 	String separator = discovery.metadata.authorizationEndpoint.getRawQuery() == null ? "?" : "&";
-	URI authorizationUrl =
-			URI.create(value + separator + mcpFormEncode((Map<String, String>) parameters));
-if (authorizationListener != null) authorizationListener.accept(authorizationUrl);
+	URI authorizationUrl = URI.create(value + separator + mcpFormEncode(parameters));
+authorizationListener.accept(authorizationUrl);
 client.browser.test(authorizationUrl);
-String result;
+String code;
 try {
-result = callback.code.get(client.callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
+code = callback.code.get(client.callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
 } catch (TimeoutException error1) {
 throw new IOException("OAuth authorization timed out after " + client.callbackTimeout.toMinutes() + " minutes", error1);
 } catch (ExecutionException error1) {
@@ -6741,7 +6235,6 @@ Throwable cause = error1.getCause();
 if (cause instanceof IOException io) throw io;
 throw new IOException(cause == null ? "OAuth authorization failed" : cause.getMessage(), cause);
 }
-String code = result;
 	LinkedHashMap<String, String> parameters1 = new LinkedHashMap<>();
 	parameters1.put("grant_type", "authorization_code");
 	parameters1.put("code", code);
@@ -6766,7 +6259,7 @@ callback.executor.shutdownNow();
 client.interactiveLock.unlock();
 }
 try {
-res = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
+candidate = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
 } catch (Exception retryError) {
 if (mcpIsOAuthChallenge(retryError)) {
 throw new IOException("MCP server rejected the OAuth token after authorization", retryError);
@@ -6776,11 +6269,10 @@ throw retryError;
 }
 }
 
-candidate = res;
 							List<McpClient.ToolDefinition> tools = mcpListTools(candidate);
 							McpClient connected = candidate;
 							// Keep the last usable catalog when a list-changed refresh fails.
-							BiConsumer<String, JsonNode> listener = (BiConsumer<String, JsonNode>) (method, params) -> {
+							BiConsumer<String, JsonNode> listener = (method, params) -> {
 								if (method.equals("notifications/tools/list_changed")) {
 									Thread.ofVirtual().name("mcp-tools-refresh").start(() -> {
 										try {
@@ -6798,11 +6290,10 @@ candidate = res;
 									});
 								}
 							};
-							BiConsumer<String, JsonNode> effective = listener == null ? (method1, params1) -> {} : listener;
 							switch (candidate.transport) {
-								case StdioMcpTransport stdio -> stdio.notificationListener = effective;
-								case StreamableHttpMcpTransport http -> http.notificationListener = effective;
-								case SseHttpMcpTransport sse -> sse.notificationListener = effective;
+								case StdioMcpTransport stdio -> stdio.notificationListener = listener;
+								case StreamableHttpMcpTransport http -> http.notificationListener = listener;
+								case SseHttpMcpTransport sse -> sse.notificationListener = listener;
 							}
 							synchronized (runtime.lock) {
 								if (manager.closed || runtime.generation != generation || Thread.currentThread().isInterrupted()) {
@@ -6816,25 +6307,11 @@ candidate = res;
 								candidate = null;
 							}
 						} catch (McpOAuthRequiredException error) {
-							synchronized (runtime.lock) {
-								if (!manager.closed && runtime.generation == generation) {
-									runtime.state = McpManager.State.AUTH_REQUIRED;
-									runtime.message = mcpErrorMessage(error);
-									runtime.authorizationUrl = null;
-									runtime.client = null;
-									runtime.tools = List.of();
-								}
-							}
+							mcpFailConnect(
+									manager, runtime, generation, McpManager.State.AUTH_REQUIRED, error);
 						} catch (Exception error) {
-							synchronized (runtime.lock) {
-								if (!manager.closed && runtime.generation == generation) {
-									runtime.state = McpManager.State.FAILED;
-									runtime.message = mcpErrorMessage(error);
-									runtime.authorizationUrl = null;
-									runtime.client = null;
-									runtime.tools = List.of();
-								}
-							}
+							mcpFailConnect(
+									manager, runtime, generation, McpManager.State.FAILED, error);
 						} finally {
 							if (candidate != null) mcpCloseClient(candidate);
 							synchronized (runtime.lock) {
@@ -7380,6 +6857,20 @@ candidate = res;
 				.map(entry -> mcpUrlEncode(entry.getKey()) + "=" + mcpUrlEncode(entry.getValue()))
 				.reduce((left, right) -> left + "&" + right)
 				.orElse("");
+	}
+
+	private static Map<String, String> mcpFormDecode(String query) {
+		Map<String, String> values = new LinkedHashMap<>();
+		if (query == null || query.isEmpty()) return values;
+		for (String part : query.split("&")) {
+			int separator = part.indexOf('=');
+			String name = separator < 0 ? part : part.substring(0, separator);
+			String value = separator < 0 ? "" : part.substring(separator + 1);
+			values.put(
+					URLDecoder.decode(name, StandardCharsets.UTF_8),
+					URLDecoder.decode(value, StandardCharsets.UTF_8));
+		}
+		return values;
 	}
 
 	private static String mcpUrlEncode(String value) {
@@ -8080,32 +7571,6 @@ return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
 
 	// ---------------------------------------------------------- fuzzy selector
 
-	public static <T> SelectItem<T> selectItem(T value, String label) {
-		return selectItem(value, label, "", null);
-	}
-
-	public static <T> SelectItem<T> selectItem(T value, String label, String description) {
-		return selectItem(value, label, description, null);
-	}
-
-	/**
-	 * Creates a selector option. Value and label are required; a missing
-	 * description becomes empty and blank search text falls back to the label
-	 * plus description.
-	 */
-	public static <T> SelectItem<T> selectItem(T value, String label, String description, String searchText) {
-		Objects.requireNonNull(value, "value");
-		Objects.requireNonNull(label, "label");
-		String resolvedDescription = description == null ? "" : description;
-		return new SelectItem<>(
-				value,
-				label,
-				resolvedDescription,
-				searchText == null || searchText.isBlank()
-						? label + (resolvedDescription.isBlank() ? "" : " " + resolvedDescription)
-						: searchText);
-	}
-
 	/** Creates selector state over at least one option, clamping the initial selection. */
 	public static <T> FuzzySelector<T> fuzzySelector(
 			String title, List<SelectItem<T>> items, int initialIndex, boolean searchable) {
@@ -8188,6 +7653,41 @@ return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
 		return lines;
 	}
 
+	private static int editQuery(StringBuilder query, int cursor, TuiInput.Key key, Runnable changed) {
+		switch (key.type) {
+			case CHARACTER, PASTE -> {
+				if (key.text == null || key.text.isEmpty()) return cursor;
+				String normalized = key.text.replace('\r', ' ').replace('\n', ' ');
+				query.insert(cursor, normalized);
+				changed.run();
+				return cursor + normalized.length();
+			}
+			case BACKSPACE -> {
+				if (cursor == 0) return cursor;
+				int start = query.offsetByCodePoints(cursor, -1);
+				query.delete(start, cursor);
+				changed.run();
+				return start;
+			}
+			case DELETE -> {
+				if (cursor == query.length()) return cursor;
+				query.delete(cursor, query.offsetByCodePoints(cursor, 1));
+				changed.run();
+				return cursor;
+			}
+			case LEFT -> { return Math.max(0, cursor - 1); }
+			case RIGHT -> { return Math.min(query.length(), cursor + 1); }
+			case HOME -> { return 0; }
+			case END -> { return query.length(); }
+			case CLEAR -> {
+				query.setLength(0);
+				changed.run();
+				return 0;
+			}
+			default -> { return -1; }
+		}
+	}
+
 	/** Applies one normalized input event to a fuzzy selector. */
 	public static <T> void handleFuzzySelectorInput(FuzzySelector<T> selector, TuiInput input) {
 		switch (input) {
@@ -8204,32 +7704,6 @@ return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
 						}
 					}
 					case ESCAPE, CANCEL -> selector.complete = true;
-					case CHARACTER, PASTE -> {
-						if (selector.searchable && key.text != null && !key.text.isEmpty()) {
-							String normalized = key.text.replace("\r", " ").replace("\n", " ");
-							selector.query.insert(selector.queryCursor, normalized);
-							selector.queryCursor += normalized.length();
-							filterFuzzyItems(selector);
-						}
-					}
-					case BACKSPACE -> {
-						if (selector.searchable && selector.queryCursor != 0) {
-							int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
-							selector.query.delete(start, selector.queryCursor);
-							selector.queryCursor = start;
-							filterFuzzyItems(selector);
-						}
-					}
-					case DELETE -> {
-						if (selector.searchable && selector.queryCursor < selector.query.length()) {
-							int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
-							selector.query.delete(selector.queryCursor, end);
-							filterFuzzyItems(selector);
-						}
-					}
-					case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
-					case RIGHT -> selector.queryCursor =
-							Math.min(selector.query.length(), selector.queryCursor + 1);
 					case HOME -> {
 						if (selector.searchable) {
 							selector.queryCursor = 0;
@@ -8244,13 +7718,12 @@ return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
 							selector.selectedIndex = selector.filteredItems.size() - 1;
 						}
 					}
-					case CLEAR -> {
-						selector.query.setLength(0);
-						selector.queryCursor = 0;
-						filterFuzzyItems(selector);
-					}
 					default -> {
-						// Other normalized keys do not affect selector state.
+						if (selector.searchable || key.type == TuiInput.KeyType.CLEAR) {
+							int cursor = editQuery(
+									selector.query, selector.queryCursor, key, () -> filterFuzzyItems(selector));
+							if (cursor >= 0) selector.queryCursor = cursor;
+						}
 					}
 				}
 			}
@@ -8311,13 +7784,6 @@ return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
 		}
 		return runComponent(
 				terminal, fuzzySelectorComponent(fuzzySelector(title, options, initialIndex, searchable)));
-	}
-
-	public static String select(InteractiveTerminal terminal, String title, List<String> options)
-			throws IOException {
-		List<SelectItem<String>> items =
-				options.stream().map(option -> selectItem(option, option)).toList();
-		return select(terminal, title, items, -1, options.size() > 10);
 	}
 
 	// ------------------------------------------------------------ tui runtime
@@ -8766,15 +8232,7 @@ return true;
 				}
 				initialBuffer = interactive.suspendedBuffer;
 				interactive.restoreCursor = interactive.suspendedCursor;
-				interactive.managedSuspend = true;
-				try {
-					callSuspendAction(interactive.suspendAction);
-				} catch (IOException error) {
-					println(interactive, "Could not suspend process: " + error.getMessage());
-				} finally {
-					repaintScreen(interactive);
-					interactive.managedSuspend = false;
-				}
+				suspendInteractive(interactive, null);
 			} catch (UserInterruptException ignored) {
 				rememberCompletedLine(interactive, prompt, "", mask, promptTheme);
 				return "";
@@ -8927,17 +8385,7 @@ return true;
 				} else if (input instanceof TuiInput.Key key
 						&& key.type == TuiInput.KeyType.SUSPEND
 						&& interactive.supportsSuspend) {
-					interactive.terminal.setAttributes(originalAttributes);
-					interactive.managedSuspend = true;
-					try {
-						callSuspendAction(interactive.suspendAction);
-					} catch (IOException error) {
-						println(interactive, "Could not suspend process: " + error.getMessage());
-					} finally {
-						repaintScreen(interactive);
-						interactive.managedSuspend = false;
-						interactive.terminal.enterRawMode();
-					}
+					suspendInteractive(interactive, originalAttributes);
 				}
 			}
 			try {
@@ -8958,6 +8406,20 @@ return true;
 			throw error;
 		} finally {
 			interactive.terminal.setAttributes(originalAttributes);
+		}
+	}
+
+	private static void suspendInteractive(InteractiveTerminal interactive, Attributes restoreBefore) {
+		if (restoreBefore != null) interactive.terminal.setAttributes(restoreBefore);
+		interactive.managedSuspend = true;
+		try {
+			callSuspendAction(interactive.suspendAction);
+		} catch (IOException error) {
+			println(interactive, "Could not suspend process: " + error.getMessage());
+		} finally {
+			repaintScreen(interactive);
+			interactive.managedSuspend = false;
+			if (restoreBefore != null) interactive.terminal.enterRawMode();
 		}
 	}
 
@@ -9059,10 +8521,6 @@ return true;
 	}
 
 	/** Left- and right-aligns status content on one full-width row. */
-	public static String statusBarLine(String left, String right, int width, Theme theme) {
-		return statusBarLine("", InteractiveTerminal.StatusAccent.NONE, left, right, width, theme);
-	}
-
 	/**
 	 * Keeps activity ahead of workspace/model metadata. When the terminal is
 	 * narrow, metadata is discarded before the activity text is truncated.
@@ -9191,27 +8649,27 @@ return true;
 	/** Parses the command line, runs the selected mode, and returns the exit code. */
 	public static int cliRun(String[] args) {
 		try {
-			Cli result = new Cli();
+			Cli parsed = new Cli();
 			List<String> messageParts = new ArrayList<>();
 			for (int i = 0; i < args.length; i++) {
 				String arg = args[i];
 				switch (arg) {
-					case "-h", "--help" -> result.help = true;
-					case "-v", "--version" -> result.version = true;
+					case "-h", "--help" -> parsed.help = true;
+					case "-v", "--version" -> parsed.version = true;
 					case "--list-models" -> {
-						result.listModels = true;
+						parsed.listModels = true;
 						if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
-							result.modelSearch = args[++i];
+							parsed.modelSearch = args[++i];
 						}
 					}
-					case "--provider" -> result.provider = cliArgumentValue(args, ++i, arg);
-					case "--model" -> result.model = cliArgumentValue(args, ++i, arg);
-					case "--api-key" -> result.apiKey = cliArgumentValue(args, ++i, arg);
-					case "--system-prompt" -> result.systemPrompt = cliArgumentValue(args, ++i, arg);
-					case "--no-session" -> result.noSession = true;
-					case "--mode" -> result.mode = cliArgumentValue(args, ++i, arg);
+					case "--provider" -> parsed.provider = cliArgumentValue(args, ++i, arg);
+					case "--model" -> parsed.model = cliArgumentValue(args, ++i, arg);
+					case "--api-key" -> parsed.apiKey = cliArgumentValue(args, ++i, arg);
+					case "--system-prompt" -> parsed.systemPrompt = cliArgumentValue(args, ++i, arg);
+					case "--no-session" -> parsed.noSession = true;
+					case "--mode" -> parsed.mode = cliArgumentValue(args, ++i, arg);
 					case "-p", "--print" -> {
-						result.print = true;
+						parsed.print = true;
 						if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
 							messageParts.add(args[++i]);
 						}
@@ -9224,11 +8682,10 @@ return true;
 					}
 				}
 			}
-			result.message = String.join(" ", messageParts);
-			if (!result.mode.equals("print") && !result.mode.equals("json") && !result.mode.equals("rpc")) {
+			parsed.message = String.join(" ", messageParts);
+			if (!parsed.mode.equals("print") && !parsed.mode.equals("json") && !parsed.mode.equals("rpc")) {
 				throw new IllegalArgumentException("--mode must be print, json, or rpc");
 			}
-			Cli parsed = result;
 			if (parsed.version) {
 				System.out.println(Cli.VERSION);
 				return 0;
@@ -9266,7 +8723,7 @@ return true;
 			Map<String, Provider> providers1 = new LinkedHashMap<>();
 			providers1.put(
 					"anthropic",
-					anthropicProvider(
+					new AnthropicProvider(
 							"anthropic",
 							"Anthropic",
 							catalogModelsForProvider(catalog, "anthropic").stream()
@@ -9279,33 +8736,44 @@ return true;
 							false));
 			providers1.put(
 					"openai",
-					openAiResponsesProvider(
-							catalogModelsForProvider(catalog, "openai").stream()
+					new OpenAiResponsesProvider(
+							"openai",
+							"OpenAI",
+							List.copyOf(catalogModelsForProvider(catalog, "openai").stream()
 									.filter(model -> model.api.equals("openai-responses"))
-									.toList(),
-							credentials));
+									.toList()),
+							List.of("OPENAI_API_KEY"),
+							credentials,
+							OpenAiResponsesProvider.RequestProfile.STANDARD));
 			ChatGptAuth auth = chatGptAuth((CredentialStore) credentials, URI.create("https://auth.openai.com"), ChatGptAuth.CLIENT_ID);
 			List<Model> models = catalogModelsForProvider(catalog, "openai").stream()
-.filter(model2 -> model2.api.equals("openai-responses"))
-.toList().stream()
+					.filter(model2 -> model2.api.equals("openai-responses"))
 					.filter(model1 -> ChatGptProvider.CODEX_MODEL_IDS.contains(model1.id))
 					.map(source -> {
-Model model1 = copyModel(source);
-model1.provider = ChatGptAuth.PROVIDER_ID;
-model1.baseUrl = ChatGptAuth.CODEX_API_BASE_URL.toString();
-model1.cost = ModelCost.FREE;
-return model1;
-})
+						Model model1 = copyModel(source);
+						model1.provider = ChatGptAuth.PROVIDER_ID;
+						model1.baseUrl = ChatGptAuth.CODEX_API_BASE_URL.toString();
+						model1.cost = ModelCost.FREE;
+						return model1;
+					})
 					.toList();
 			providers1.put(
 					ChatGptAuth.PROVIDER_ID,
 					new ChatGptProvider(
-							models, auth, codexResponsesProvider(ChatGptAuth.PROVIDER_ID, ChatGptProvider.NAME, models)));
+							models,
+							auth,
+							new OpenAiResponsesProvider(
+									ChatGptAuth.PROVIDER_ID,
+									ChatGptProvider.NAME,
+									List.copyOf(models),
+									List.of(),
+									null,
+									OpenAiResponsesProvider.RequestProfile.CODEX)));
 			providers1.put(
 					"google",
-					googleProvider(catalogModelsForProvider(catalog, "google").stream()
+					new GoogleProvider(List.copyOf(catalogModelsForProvider(catalog, "google").stream()
 							.filter(model -> model.api.equals("google-generative-ai"))
-							.toList()));
+							.toList())));
 			providers1.put(
 					"github-copilot",
 					newGitHubCopilotProvider(
@@ -9467,7 +8935,8 @@ respondRpc(id, type, false, null, e.getMessage() == null ? e.toString() : e.getM
 				McpManager mcp = mcpLoadDefaultManager(cwd);
 				try {
 					mcpAwaitReady(mcp);
-					Agent agent = newAgent(parsed.systemPrompt, model, provider);
+					Agent agent = new Agent(
+							new AgentState(parsed.systemPrompt == null ? "" : parsed.systemPrompt, model), provider);
 					agent.apiKey = parsed.apiKey;
 					configureBuiltInTools(agent, cwd, parsed.systemPrompt);
 					agent.state.tools.addAll(mcpTools(mcp));
@@ -9522,18 +8991,12 @@ System.err.println(instructionLoadedMessage(loaded.path));
 							"Invalid defaultThinkingLevel in " + settingsStore.settingsPath + ": " + thinking, error2);
 				}
 			}
-			boolean result2;
 			JsonNode value = root.get("hideThinkingBlock");
-			if (value == null || value.isNull()) {
-				result2 = false;
-			} else {
-				if (!value.isBoolean()) {
-					throw new IOException("Invalid setting " + "hideThinkingBlock" + ": expected a boolean");
-				}
-				result2 = value.asBoolean();
+			if (value != null && !value.isNull() && !value.isBoolean()) {
+				throw new IOException("Invalid setting hideThinkingBlock: expected a boolean");
 			}
 			SettingsStore.Settings settings = new SettingsStore.Settings(
-					provider, model2, thinkingLevel, theme, result2);
+					provider, model2, thinkingLevel, theme, value != null && value.asBoolean(false));
 			Path workspace = Path.of(".").toAbsolutePath().normalize();
 			McpManager mcp = mcpLoadDefaultManager(workspace);
 			try {
@@ -9557,24 +9020,22 @@ TerminalBuilder.builder().system(true).name(Cli.APP_NAME).build(),
 },
 !System.getProperty("os.name").startsWith("Windows"));
 				try {
-InteractiveShell shell1 = new InteractiveShell();
-shell1.providers = providers;
-shell1.arguments = parsed;
-shell1.terminal = terminal;
-shell1.settingsStore = settingsStore;
-shell1.mcp = mcp;
-shell1.settings = settings;
-shell1.hideThinkingBlock = settings.hideThinkingBlock;
-shell1.activity = noModelActivity(System.nanoTime());
-shell1.statusTicker = Executors.newSingleThreadScheduledExecutor(
-Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
-bindAppAction(terminal, "expandTools", () -> showShellTurnDetails(shell1, true));
+				InteractiveShell shell = new InteractiveShell();
+				shell.providers = providers;
+				shell.arguments = parsed;
+				shell.terminal = terminal;
+				shell.settingsStore = settingsStore;
+				shell.mcp = mcp;
+				shell.settings = settings;
+				shell.hideThinkingBlock = settings.hideThinkingBlock;
+				shell.activity = noModelActivity(System.nanoTime());
+				shell.statusTicker = Executors.newSingleThreadScheduledExecutor(
+						Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
+				bindAppAction(terminal, "expandTools", () -> showShellTurnDetails(shell, true));
 bindAppAction(
 terminal,
 "toggleThinking",
-() -> setShellHideThinkingBlock(shell1, !shell1.hideThinkingBlock, true));
-InteractiveShell shell =
-shell1;
+() -> setShellHideThinkingBlock(shell, !shell.hideThinkingBlock, true));
 					try {
 if (shell.settings.theme != null) {
 setTheme(shell.terminal, namedTheme(shell.settings.theme));
@@ -9596,88 +9057,8 @@ if (parsed.model != null) {
 							if (model == null) return 0;
 							configureShellModel(shell, model, true);
 						} else {
-boolean result1 = true;
-SettingsStore.Settings settings1 = shell.settings;
-if (settings1.defaultProvider == null || settings1.defaultModel == null) {
-result1 = false;
-} else {
-Model model1 = null;
-try {
-model1 = findModelIn(
-providerModels(requireCoreProvider(shell.providers, settings1.defaultProvider)),
-settings1.defaultProvider,
-settings1.defaultModel);
-} catch (IllegalArgumentException error1) {
-model1 = null;
-}
-if (model1 == null) {
-println(shell.terminal, "Saved model " + settings1.defaultProvider + "/" + settings1.defaultModel
-+ " is unavailable; selecting a fallback.");
-result1 = false;
-} else {
-if (model1.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-GitHubCopilotProvider copilot1 = shellCopilotProvider(shell);
-try {
-if (!gitHubCopilotHasCredential(copilot1.auth)) {
-result1 = false;
-} else {
-model1 = findModelIn(gitHubCopilotAvailableModels(copilot1), model1.provider, model1.id);
-if (model1 == null) {
-println(shell.terminal, "Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
-result1 = false;
-}
-}
-} catch (IOException error1) {
-println(shell.terminal, "Could not restore the saved GitHub Copilot model: " + error1.getMessage());
-result1 = false;
-}
-}
-if (result1) {
-if (model1.provider.equals(ChatGptAuth.PROVIDER_ID)) {
-try {
-if (!chatGptHasCredential(shellChatGptProvider(shell).auth)) {
-result1 = false;
-}
-} catch (IOException error1) {
-println(shell.terminal, "Could not restore the saved ChatGPT model: " + error1.getMessage());
-result1 = false;
-}
-}
-if (result1) {
-configureShellModel(shell, model1, false);
-}
-}
-}
-}
-if (!result1) {
-boolean result3 = false;
-ChatGptProvider chatGpt = shellChatGptProvider(shell);
-try {
-if (chatGptHasCredential(chatGpt.auth) && !chatGpt.models.isEmpty()) {
-configureShellModel(shell, preferredChatGptModel(chatGpt.models), true);
-result3 = true;
-}
-} catch (IOException error) {
-println(shell.terminal, "ChatGPT login needs attention: " + error.getMessage());
-}
-if (!result3) {
-GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-try {
-if (gitHubCopilotHasCredential(copilot.auth)) {
-List<Model> models1 = gitHubCopilotAvailableModels(copilot);
-Model model = preferredCopilotModel(models1);
-if (model != null) {
-configureShellModel(shell, model, true);
-} else {
-println(shell.terminal, "GitHub Copilot has no enabled coding models. Run /login to refresh access.");
-}
-}
-} catch (IOException error) {
-println(shell.terminal, "GitHub Copilot login needs attention: " + error.getMessage());
-}
-}
-}
-}
+							restoreShellModel(shell);
+						}
 print(shell.terminal, sessionScreenHeader(shell.agent == null ? null : shell.agent.state.model));
 refreshShellStatus(shell);
 shell.statusTicker.scheduleWithFixedDelay(() -> {
@@ -9696,241 +9077,49 @@ return 0;
 }
 if (input.isBlank()) continue;
 if (input.startsWith("/")) {
-boolean exit;
-	String result3 = null;
-	boolean finished2 = false;
 	String trimmed = input.trim();
-	for (int index1 = 0; index1 < trimmed.length(); index1++) {
-		if (Character.isWhitespace(trimmed.charAt(index1))) {
-			result3 = trimmed.substring(0, index1);
-			finished2 = true;
-			break;
-		}
-	}
-	if (!finished2) {
-		result3 = trimmed;
-	}
+	boolean exit = trimmed.equals("/exit") || trimmed.equals("/quit");
 	setShellActivity(shell, activeActivity(
-ActivityStatus.Phase.RUNNING_COMMAND, result3, System.nanoTime()));
+			ActivityStatus.Phase.RUNNING_COMMAND, trimmed.split("\\s+", 2)[0], System.nanoTime()));
 try {
-	boolean res = false;
-	switch (input.trim()) {
-		case "/exit", "/quit" -> {
-			res = true;
-			break;
-		}
+	if (!exit) switch (trimmed) {
 		case "/help" -> println(shell.terminal, "Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
 		case "/details" -> showShellTurnDetails(shell, false);
 		case "/fork" -> {
-boolean finished = false;
-if (shell.agent == null) {
-println(shell.terminal, "No model is configured.");
-} else {
-String name = readLine(shell.terminal, "Fork session name: ", forkName(shell.sessionName));
-if (name == null || name.isBlank()) {
-println(shell.terminal, "Fork cancelled.");
-} else {
-name = name.strip();
-AgentState state = shell.agent.state;
-Model model = state.model;
-String systemPrompt = state.systemPrompt;
-ThinkingLevel thinkingLevel1 = state.thinkingLevel;
-boolean autoCompactionEnabled = state.autoCompactionEnabled;
-int compactionReserveTokens = state.compactionReserveTokens;
-List<Message> forkMessages = resumableMessages(state.messages);
-SessionRecorder forkRecorder = null;
-if (!shell.arguments.noSession) {
-try {
-forkRecorder = forkSessionRecorder(
-defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
-} catch (IOException error) {
-println(shell.terminal, "Failed to fork session: " + error.getMessage());
-finished = true;
-}
-}
-if (!finished) {
-configureShellAgent(shell, model, shell.cwd, forkRecorder, name);
-shell.agent.state.systemPrompt = systemPrompt;
-shell.agent.state.thinkingLevel = thinkingLevel1;
-shell.agent.state.autoCompactionEnabled = autoCompactionEnabled;
-shell.agent.state.compactionReserveTokens = compactionReserveTokens;
-shell.agent.state.messages.addAll(forkMessages);
-refreshShellStatus(shell);
-println(shell.terminal, "Forked session " + name + " with " + forkMessages.size() + " message(s).");
-}
-}
-}
-}
-		case "/resume" -> {
-boolean finished = false;
-if (shell.arguments.noSession) {
-println(shell.terminal, "Session persistence is disabled by --no-session.");
-} else {
-SessionStore store = defaultSessionStore();
-List<SessionSnapshot> sessions = null;
-try {
-Path normalizedCwd = shell.cwd == null ? null : shell.cwd.toAbsolutePath().normalize();
-List<SessionSnapshot> snapshots = new ArrayList<>();
-	Map<String, Path> filesById = new LinkedHashMap<>();
-	List<Path> directories = new ArrayList<>(store.legacyDirectories.size() + 1);
-	directories.add(store.directory);
-	directories.addAll(store.legacyDirectories);
-	for (Path candidateDirectory : directories) {
-		if (!Files.isDirectory(candidateDirectory)) continue;
-		try (Stream<Path> files = Files.list(candidateDirectory)) {
-			files.filter(Files::isRegularFile)
-					.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-					.forEach(path -> filesById.putIfAbsent(sessionIdFor(path.getFileName()), path));
-		}
-	}
-	for (Path file : List.copyOf(filesById.values())) {
-try {
-SessionSnapshot snapshot = sessionSnapshot(store, sessionIdFor(file.getFileName()));
-	boolean result1;
-	try {
-		result1 = snapshot.cwd.toRealPath().equals(normalizedCwd.toRealPath());
-	} catch (IOException ignored) {
-		result1 = snapshot.cwd.equals(normalizedCwd);
-	}
-	if (normalizedCwd == null || result1) {
-snapshots.add(snapshot);
-}
-} catch (IOException | IllegalArgumentException ignored) {
-// Discovery is best effort: one corrupt session must not hide the rest.
-}
-}
-snapshots.sort(Comparator.comparing((SessionSnapshot snapshot) -> snapshot.modified).reversed());
-sessions = List.copyOf(snapshots);
-} catch (IOException error) {
-println(shell.terminal, "Failed to list saved sessions: " + error.getMessage());
-finished = true;
-}
-if (!finished) {
-if (sessions.isEmpty()) {
-println(shell.terminal, "No saved sessions in " + shell.cwd + ".");
-} else {
-String currentSessionId = shell.recorder == null ? null : shell.recorder.sessionId;
-List<SelectItem<SessionSnapshot>> items = sessions.stream()
-.filter(session -> session.messageCount > 0 && !session.id.equals(currentSessionId))
-.map(session -> {
-	String message = abbreviateShellText(sessionDisplayName(session).replaceAll("[\\p{Cntrl}]", " "), 90);
-	String age;
-	long minutes = Math.max(0, Duration.between(session.modified, Instant.now()).toMinutes());
-	if (minutes < 1) {
-		age = "now";
-	} else if (minutes < 60) {
-		age = minutes + "m";
-	} else {
-		long hours = minutes / 60;
-		if (hours < 24) {
-			age = hours + "h";
-		} else {
-			long days = hours / 24;
-			if (days < 7) {
-				age = days + "d";
-			} else if (days < 30) {
-				age = days / 7 + "w";
-			} else if (days < 365) {
-				age = days / 30 + "mo";
-			} else {
-				age = days / 365 + "y";
+			if (shell.agent == null) {
+				println(shell.terminal, "No model is configured.");
+				break;
 			}
+			String name = readLine(shell.terminal, "Fork session name: ", forkName(shell.sessionName));
+			if (name == null || name.isBlank()) {
+				println(shell.terminal, "Fork cancelled.");
+				break;
+			}
+			name = name.strip();
+			AgentState state = shell.agent.state;
+			Model model = state.model;
+			List<Message> forkMessages = resumableMessages(state.messages);
+			SessionRecorder forkRecorder = null;
+			if (!shell.arguments.noSession) {
+				try {
+					forkRecorder = forkSessionRecorder(
+							defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
+				} catch (IOException error) {
+					println(shell.terminal, "Failed to fork session: " + error.getMessage());
+					break;
+				}
+			}
+			configureShellAgent(shell, model, shell.cwd, forkRecorder, name);
+			shell.agent.state.systemPrompt = state.systemPrompt;
+			shell.agent.state.thinkingLevel = state.thinkingLevel;
+			shell.agent.state.autoCompactionEnabled = state.autoCompactionEnabled;
+			shell.agent.state.compactionReserveTokens = state.compactionReserveTokens;
+			shell.agent.state.messages.addAll(forkMessages);
+			refreshShellStatus(shell);
+			println(shell.terminal,
+					"Forked session " + name + " with " + forkMessages.size() + " message(s).");
 		}
-	}
-	String description = session.messageCount + " messages  " + age
-			+ "  [" + session.provider + "/" + session.model + "]";
-	return selectItem(
-			session,
-			message,
-			description,
-			session.id + " " + sessionDisplayName(session) + " " + session.provider + " " + session.model
-					+ " " + session.firstMessage + " " + session.allMessagesText);
-})
-.toList();
-if (items.isEmpty()) {
-println(shell.terminal, "No resumable sessions in " + shell.cwd + ".");
-} else {
-SessionSnapshot selected = select(shell.terminal, "Resume Session (Current Folder)", items, -1, true);
-if (selected != null) {
-try {
-boolean finished1 = false;
-if (!Files.isDirectory(selected.cwd)) {
-println(shell.terminal, "Cannot resume session because its working directory is unavailable: " + selected.cwd);
-} else {
-Model model = null;
-try {
-model = findModelIn(
-providerModels(requireCoreProvider(shell.providers, selected.provider)),
-selected.provider,
-selected.model);
-} catch (IllegalArgumentException error) {
-model = null;
-}
-if (model == null) {
-if (shell.agent == null) {
-println(shell.terminal, "Cannot restore model " + selected.provider + "/" + selected.model
-+ "; configure an available model before resuming this session.");
-finished1 = true;
-} else {
-model = shell.agent.state.model;
-println(shell.terminal, "Could not restore model " + selected.provider + "/" + selected.model
-+ ". Using " + model + ".");
-}
-}
-if (!finished1) {
-if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-Model enabled = null;
-try {
-if (gitHubCopilotHasCredential(copilot.auth)) {
-enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
-}
-} catch (IOException error) {
-println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
-}
-if (enabled == null) {
-if (shell.agent == null
-|| shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id + "; log in or configure another model first.");
-finished1 = true;
-} else {
-Model fallback = shell.agent.state.model;
-println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
-model = fallback;
-}
-} else {
-model = enabled;
-}
-}
-if (!finished1) {
-SessionRecorder resumedRecorder = resumeSessionRecorder(store, selected.id);// A session snapshot's messages are compaction-aware, so resuming cannot
-// resurrect summarized transcript entries into the next model request.
-List<Message> restored = resumableMessages(selected.messages);
-configureShellAgent(shell, model, selected.cwd, resumedRecorder, selected.name);
-shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
-shell.agent.state.messages.addAll(restored);
-refreshShellStatus(shell);
-replaceScreen(shell.terminal, renderSessionScreen(
-model, selected.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell.terminal)));
-try {
-setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
-} catch (IOException error) {
-println(shell.terminal, "Resumed model could not be saved as the default: " + error.getMessage());
-}
-println(shell.terminal, "Resumed session " + sessionDisplayName(selected) + " with " + restored.size()
-+ " message(s) using " + model + ".");
-}
-}
-}
-} catch (IOException | IllegalArgumentException error) {
-println(shell.terminal, "Failed to resume session: " + error.getMessage());
-}
-}
-}
-}
-}
-}
-}
+		case "/resume" -> resumeShellSession(shell);
 		case "/login" -> {
 			println(shell.terminal, "Log in to a provider:");
 			println(shell.terminal, "  1. GitHub Copilot — sign in through GitHub's device authorization flow");
@@ -9968,7 +9157,9 @@ println(shell.terminal, "Failed to resume session: " + error.getMessage());
 							println(shell.terminal, "OpenAI login cancelled.");
 						} else {
 							modifyCredential(
-									defaultCredentialStore(), "openai", ignored -> apiKeyCredential(apiKey.trim()));
+									defaultCredentialStore(),
+									"openai",
+									ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
 							List<Model> models1 = providerModels(requireCoreProvider(shell.providers, "openai"));
 							Model model = shellSavedModelIn(shell, models1);
 							if (model == null) {
@@ -10341,38 +9532,13 @@ if (selector.view != McpSelector.View.TOOLS && !selector.filtered.isEmpty()) {
 												closeMcpSelectorTools(selector);
 											else selector.complete = true;
 										}
-										case CHARACTER, PASTE -> {
-											if (key.text != null && !key.text.isEmpty()) {
-												String normalized = key.text.replace('\r', ' ').replace('\n', ' ');
-												selector.query.insert(selector.queryCursor, normalized);
-												selector.queryCursor += normalized.length();
-												filterMcpSelector(selector);
-											}
-										}
-										case BACKSPACE -> {
-											if (selector.queryCursor != 0) {
-												int start = selector.query.offsetByCodePoints(selector.queryCursor, -1);
-												selector.query.delete(start, selector.queryCursor);
-												selector.queryCursor = start;
-												filterMcpSelector(selector);
-											}
-										}
-										case DELETE -> {
-											if (selector.queryCursor < selector.query.length()) {
-												int end = selector.query.offsetByCodePoints(selector.queryCursor, 1);
-												selector.query.delete(selector.queryCursor, end);
-												filterMcpSelector(selector);
-											}
-										}
-										case LEFT -> selector.queryCursor = Math.max(0, selector.queryCursor - 1);
-										case RIGHT ->
-												selector.queryCursor = Math.min(selector.query.length(), selector.queryCursor + 1);
-										case HOME -> selector.queryCursor = 0;
-										case END -> selector.queryCursor = selector.query.length();
-										case CLEAR -> {
-											selector.query.setLength(0);
-											selector.queryCursor = 0;
-											filterMcpSelector(selector);
+										case CHARACTER, PASTE, BACKSPACE, DELETE, LEFT, RIGHT, HOME, END, CLEAR -> {
+											int cursor = editQuery(
+													selector.query,
+													selector.queryCursor,
+													key,
+													() -> filterMcpSelector(selector));
+											if (cursor >= 0) selector.queryCursor = cursor;
 										}
 										default -> {
 										}
@@ -10412,21 +9578,29 @@ if (selector.view != McpSelector.View.TOOLS && !selector.filtered.isEmpty()) {
 				String selected = select(
 						shell.terminal,
 						"Settings",
-						List.of(selectItem("thinking", "Thinking level", shell.agent.state.thinkingLevel.wire)),
+						List.of(new SelectItem<>(
+								"thinking",
+								"Thinking level",
+								shell.agent.state.thinkingLevel.wire,
+								"Thinking level " + shell.agent.state.thinkingLevel.wire)),
 						0,
 						false);
 				if (selected != null) {
 					List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.model);
 					List<SelectItem<ThinkingLevel>> items = levels.stream()
-							.map(level -> selectItem(level, level.wire, switch ((ThinkingLevel) level) {
-								case OFF -> "No reasoning";
-								case MINIMAL -> "Very brief reasoning";
-								case LOW -> "Light reasoning";
-								case MEDIUM -> "Moderate reasoning";
-								case HIGH -> "Deep reasoning";
-								case XHIGH -> "Extra-high reasoning";
-								case MAX -> "Maximum reasoning";
-							}))
+							.map(level -> {
+								String description = switch (level) {
+									case OFF -> "No reasoning";
+									case MINIMAL -> "Very brief reasoning";
+									case LOW -> "Light reasoning";
+									case MEDIUM -> "Moderate reasoning";
+									case HIGH -> "Deep reasoning";
+									case XHIGH -> "Extra-high reasoning";
+									case MAX -> "Maximum reasoning";
+								};
+								return new SelectItem<>(
+										level, level.wire, description, level.wire + " " + description);
+							})
 							.toList();
 					int currentIndex = Math.max(0, levels.indexOf(shell.agent.state.thinkingLevel));
 					ThinkingLevel level = select(shell.terminal, "Thinking level", items, currentIndex, false);
@@ -10480,7 +9654,6 @@ if (selector.view != McpSelector.View.TOOLS && !selector.filtered.isEmpty()) {
 			} else println(shell.terminal, "Unknown command: " + input);
 		}
 	}
-	exit = res;
 } finally {
 	setShellActivity(shell, shell.agent == null
 			? noModelActivity(System.nanoTime())
@@ -10569,22 +9742,16 @@ Thread.currentThread().interrupt();
 		if (directory == null) {
 			throw new IllegalArgumentException("workingDirectory must have a parent directory");
 		}
-		Path repositoryRoot = null;
-		boolean finished = false;
+		Path repositoryRoot = directory;
 		for (Path current = directory; current != null; current = current.getParent()) {
 			if (Files.exists(current.resolve(".git"))) {
 				repositoryRoot = current;
-				finished = true;
 				break;
 			}
 		}
-		if (!finished) {
-			repositoryRoot = directory;
-		}
-		AgentInstructions instructions1 = new AgentInstructions(
+		AgentInstructions instructions = new AgentInstructions(
 				repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
-		refreshAgentInstructionsIn(instructions1, directory);
-		AgentInstructions instructions = instructions1;
+		refreshAgentInstructionsIn(instructions, directory);
 		Set<Path> announcedSources = new LinkedHashSet<>();
 		agent.state.systemPrompt = instructions.systemPrompt;
 		subscribe(agent, event -> {
@@ -10595,7 +9762,7 @@ Thread.currentThread().interrupt();
 				applyAgentInstructions(agent, instructions, announcedSources);
 			}
 		});
-		agent.state.tools.addAll(builtInTools(cwd, path -> {
+		agent.state.tools.addAll(builtInTools(cwd, new GitIgnore("git"), path -> {
 			boolean result;
 			synchronized (instructions) {
 				Path directory1 = instructionDirectory((Path) path);
@@ -10652,29 +9819,12 @@ Thread.currentThread().interrupt();
 
 	// -------------------------------------------------------- activity status
 
-	/** Creates a status; the phase is required and a missing detail becomes empty. */
-	public static ActivityStatus activityStatus(
-			ActivityStatus.Phase phase,
-			String detail,
-			int attempt,
-			int maxAttempts,
-			long startedNanos,
-			long retryDelayNanos) {
-		return new ActivityStatus(
-				Objects.requireNonNull(phase, "phase"),
-				detail == null ? "" : detail,
-				attempt,
-				maxAttempts,
-				startedNanos,
-				retryDelayNanos);
-	}
-
 	public static ActivityStatus noModelActivity(long nowNanos) {
-		return activityStatus(ActivityStatus.Phase.NO_MODEL, "", 0, 0, nowNanos, 0);
+		return new ActivityStatus(ActivityStatus.Phase.NO_MODEL, "", 0, 0, nowNanos, 0);
 	}
 
 	public static ActivityStatus readyActivity(long nowNanos) {
-		return activityStatus(ActivityStatus.Phase.READY, "", 0, 0, nowNanos, 0);
+		return new ActivityStatus(ActivityStatus.Phase.READY, "", 0, 0, nowNanos, 0);
 	}
 
 	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, long nowNanos) {
@@ -10682,7 +9832,7 @@ Thread.currentThread().interrupt();
 	}
 
 	public static ActivityStatus activeActivity(ActivityStatus.Phase phase, String detail, long nowNanos) {
-		return activityStatus(phase, detail, 0, 0, nowNanos, 0);
+		return new ActivityStatus(phase, detail, 0, 0, nowNanos, 0);
 	}
 
 	public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
@@ -10692,7 +9842,7 @@ Thread.currentThread().interrupt();
 		} catch (ArithmeticException ignored) {
 			delayNanos = Long.MAX_VALUE;
 		}
-		return activityStatus(
+		return new ActivityStatus(
 				ActivityStatus.Phase.RETRYING, "", attempt, maxAttempts, nowNanos, delayNanos);
 	}
 
@@ -10784,22 +9934,18 @@ Thread.currentThread().interrupt();
 		if (!instructions.baseSystemPrompt.isBlank()) {
 			promptParts.add(instructions.baseSystemPrompt);
 		}
-		List<Path> result = null;
-		boolean finished = false;
 		List<Path> directories = new ArrayList<>();
 		for (Path current = directory; current != null; current = current.getParent()) {
 			directories.add(current);
 			if (current.equals(instructions.repositoryRoot)) {
 				Collections.reverse(directories);
-				result = directories;
-				finished = true;
 				break;
 			}
 		}
-		if (!finished) {
-			result = List.of();
+		if (directories.isEmpty() || !directories.getFirst().equals(instructions.repositoryRoot)) {
+			directories.clear();
 		}
-		for (Path scope : result) {
+		for (Path scope : directories) {
 			Path instructionFile;
 			Path override = scope.resolve(AgentInstructions.OVERRIDE_FILE);
 			if (isReadableRegularFile(override)) {
@@ -10942,14 +10088,175 @@ Thread.currentThread().interrupt();
 	private static void appendMissingToolResults(
 			List<Message> messages, Map<String, String> pendingToolCalls) {
 		for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
-			messages.add(toolResultMessage(
-					toolCall.getKey(), toolCall.getValue(), "No result provided", true));
+			messages.add(new ToolResultMessage(
+					toolCall.getKey(),
+					toolCall.getValue(),
+					List.of(new TextContent("No result provided", null)),
+					null,
+					true,
+					System.currentTimeMillis()));
 		}
 		pendingToolCalls.clear();
 	}
 
 	private static String sessionDisplayName(SessionSnapshot session) {
 		return session.name == null ? session.firstMessage : session.name;
+	}
+
+	private static void resumeShellSession(InteractiveShell shell) throws IOException {
+		if (shell.arguments.noSession) {
+			println(shell.terminal, "Session persistence is disabled by --no-session.");
+			return;
+		}
+		SessionStore store = defaultSessionStore();
+		List<SessionSnapshot> sessions;
+		try {
+			sessions = shellSessionSnapshots(store, shell.cwd);
+		} catch (IOException error) {
+			println(shell.terminal, "Failed to list saved sessions: " + error.getMessage());
+			return;
+		}
+		if (sessions.isEmpty()) {
+			println(shell.terminal, "No saved sessions in " + shell.cwd + ".");
+			return;
+		}
+		String currentId = shell.recorder == null ? null : shell.recorder.sessionId;
+		List<SelectItem<SessionSnapshot>> items = sessions.stream()
+				.filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
+				.map(CodingAgentOperations::shellSessionItem)
+				.toList();
+		if (items.isEmpty()) {
+			println(shell.terminal, "No resumable sessions in " + shell.cwd + ".");
+			return;
+		}
+		SessionSnapshot selected =
+				select(shell.terminal, "Resume Session (Current Folder)", items, -1, true);
+		if (selected == null) return;
+		try {
+			resumeSelectedShellSession(shell, store, selected);
+		} catch (IOException | IllegalArgumentException error) {
+			println(shell.terminal, "Failed to resume session: " + error.getMessage());
+		}
+	}
+
+	private static List<SessionSnapshot> shellSessionSnapshots(SessionStore store, Path cwd)
+			throws IOException {
+		Set<String> ids = new LinkedHashSet<>();
+		for (Path directory : Stream.concat(Stream.of(store.directory), store.legacyDirectories.stream()).toList()) {
+			if (!Files.isDirectory(directory)) continue;
+			try (Stream<Path> files = Files.list(directory)) {
+				files.filter(Files::isRegularFile)
+						.filter(path -> path.getFileName().toString().endsWith(".jsonl"))
+						.map(path -> sessionIdFor(path.getFileName()))
+						.forEach(ids::add);
+			}
+		}
+		Path normalizedCwd = cwd == null ? null : cwd.toAbsolutePath().normalize();
+		List<SessionSnapshot> snapshots = new ArrayList<>();
+		for (String id : ids) {
+			try {
+				SessionSnapshot snapshot = sessionSnapshot(store, id);
+				boolean sameDirectory = normalizedCwd == null;
+				if (!sameDirectory) try {
+					sameDirectory = snapshot.cwd.toRealPath().equals(normalizedCwd.toRealPath());
+				} catch (IOException ignored) {
+					sameDirectory = snapshot.cwd.equals(normalizedCwd);
+				}
+				if (sameDirectory) snapshots.add(snapshot);
+			} catch (IOException | IllegalArgumentException ignored) {
+				// Discovery is best effort: one corrupt session must not hide the rest.
+			}
+		}
+		snapshots.sort(Comparator.comparing((SessionSnapshot snapshot) -> snapshot.modified).reversed());
+		return List.copyOf(snapshots);
+	}
+
+	private static SelectItem<SessionSnapshot> shellSessionItem(SessionSnapshot session) {
+		String name = sessionDisplayName(session);
+		String label = abbreviateShellText(name.replaceAll("[\\p{Cntrl}]", " "), 90);
+		long minutes = Math.max(0, Duration.between(session.modified, Instant.now()).toMinutes());
+		long hours = minutes / 60;
+		long days = hours / 24;
+		String age = minutes < 1 ? "now"
+				: minutes < 60 ? minutes + "m"
+				: hours < 24 ? hours + "h"
+				: days < 7 ? days + "d"
+				: days < 30 ? days / 7 + "w"
+				: days < 365 ? days / 30 + "mo" : days / 365 + "y";
+		String description = session.messageCount + " messages  " + age
+				+ "  [" + session.provider + "/" + session.model + "]";
+		return new SelectItem<>(session, label, description,
+				session.id + " " + name + " " + session.provider + " " + session.model + " "
+						+ session.firstMessage + " " + session.allMessagesText);
+	}
+
+	private static void resumeSelectedShellSession(
+			InteractiveShell shell, SessionStore store, SessionSnapshot selected) throws IOException {
+		if (!Files.isDirectory(selected.cwd)) {
+			println(shell.terminal,
+					"Cannot resume session because its working directory is unavailable: " + selected.cwd);
+			return;
+		}
+		Model model;
+		try {
+			model = findModelIn(
+					providerModels(requireCoreProvider(shell.providers, selected.provider)),
+					selected.provider,
+					selected.model);
+		} catch (IllegalArgumentException ignored) {
+			model = null;
+		}
+		if (model == null) {
+			if (shell.agent == null) {
+				println(shell.terminal, "Cannot restore model " + selected.provider + "/" + selected.model
+						+ "; configure an available model before resuming this session.");
+				return;
+			}
+			model = shell.agent.state.model;
+			println(shell.terminal, "Could not restore model " + selected.provider + "/" + selected.model
+					+ ". Using " + model + ".");
+		}
+		if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+			GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+			Model enabled = null;
+			try {
+				if (gitHubCopilotHasCredential(copilot.auth)) {
+					enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
+				}
+			} catch (IOException error) {
+				println(shell.terminal,
+						"Could not refresh GitHub Copilot model access: " + error.getMessage());
+			}
+			if (enabled != null) model = enabled;
+			else if (shell.agent == null
+					|| shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+				println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id
+						+ "; log in or configure another model first.");
+				return;
+			} else {
+				Model fallback = shell.agent.state.model;
+				println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
+				model = fallback;
+			}
+		}
+		// A session snapshot's messages are compaction-aware, so resuming cannot
+		// resurrect summarized transcript entries into the next model request.
+		List<Message> restored = resumableMessages(selected.messages);
+		configureShellAgent(
+				shell, model, selected.cwd, resumeSessionRecorder(store, selected.id), selected.name);
+		shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
+		shell.agent.state.messages.addAll(restored);
+		refreshShellStatus(shell);
+		replaceScreen(shell.terminal, renderSessionScreen(
+				model, selected.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell.terminal)));
+		try {
+			setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
+		} catch (IOException error) {
+			println(shell.terminal,
+					"Resumed model could not be saved as the default: " + error.getMessage());
+		}
+		println(shell.terminal, "Resumed session " + sessionDisplayName(selected) + " with "
+				+ restored.size() + " message(s) using " + model + ".");
 	}
 
 	/** The text to print after a turn, or null when it was already streamed. */
@@ -10988,7 +10295,10 @@ Thread.currentThread().interrupt();
 			SessionRecorder nextRecorder,
 			String nextSessionName) {
 		Provider provider = requireCoreProvider(shell.providers, model.provider);
-		Agent configured = newAgent(shell.arguments.systemPrompt, model, provider);
+		Agent configured = new Agent(
+				new AgentState(
+						shell.arguments.systemPrompt == null ? "" : shell.arguments.systemPrompt, model),
+				provider);
 		configured.apiKey = shell.arguments.apiKey;
 		configured.state.thinkingLevel =
 				initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
@@ -11282,6 +10592,72 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 		return (ChatGptProvider) requireCoreProvider(shell.providers, ChatGptAuth.PROVIDER_ID);
 	}
 
+	private static void restoreShellModel(InteractiveShell shell) throws IOException {
+		SettingsStore.Settings settings = shell.settings;
+		Model model = null;
+		if (settings.defaultProvider != null && settings.defaultModel != null) {
+			try {
+				model = findModelIn(
+						providerModels(requireCoreProvider(shell.providers, settings.defaultProvider)),
+						settings.defaultProvider,
+						settings.defaultModel);
+			} catch (IllegalArgumentException ignored) {}
+			if (model == null) {
+				println(shell.terminal, "Saved model " + settings.defaultProvider + "/" + settings.defaultModel
+						+ " is unavailable; selecting a fallback.");
+			} else if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+				GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+				try {
+					model = gitHubCopilotHasCredential(copilot.auth)
+							? findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id)
+							: null;
+					if (model == null) {
+						println(shell.terminal,
+								"Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
+					}
+				} catch (IOException error) {
+					println(shell.terminal,
+							"Could not restore the saved GitHub Copilot model: " + error.getMessage());
+					model = null;
+				}
+			} else if (model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+				try {
+					if (!chatGptHasCredential(shellChatGptProvider(shell).auth)) model = null;
+				} catch (IOException error) {
+					println(shell.terminal, "Could not restore the saved ChatGPT model: " + error.getMessage());
+					model = null;
+				}
+			}
+		}
+		if (model != null) {
+			configureShellModel(shell, model, false);
+			return;
+		}
+
+		ChatGptProvider chatGpt = shellChatGptProvider(shell);
+		try {
+			if (chatGptHasCredential(chatGpt.auth) && !chatGpt.models.isEmpty()) {
+				configureShellModel(shell, preferredChatGptModel(chatGpt.models), true);
+				return;
+			}
+		} catch (IOException error) {
+			println(shell.terminal, "ChatGPT login needs attention: " + error.getMessage());
+		}
+		GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+		try {
+			if (!gitHubCopilotHasCredential(copilot.auth)) return;
+			Model fallback = preferredCopilotModel(gitHubCopilotAvailableModels(copilot));
+			if (fallback == null) {
+				println(shell.terminal,
+						"GitHub Copilot has no enabled coding models. Run /login to refresh access.");
+			} else {
+				configureShellModel(shell, fallback, true);
+			}
+		} catch (IOException error) {
+			println(shell.terminal, "GitHub Copilot login needs attention: " + error.getMessage());
+		}
+	}
+
 	private static Model shellSavedModelIn(InteractiveShell shell, List<Model> models) {
 		if (shell.settings.defaultProvider == null || shell.settings.defaultModel == null) return null;
 		return findModelIn(models, shell.settings.defaultProvider, shell.settings.defaultModel);
@@ -11319,7 +10695,7 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 
 	private static SelectItem<Model> shellModelItem(Model model) {
 		String description = "[" + model.provider + "] " + model.name;
-		return selectItem(
+		return new SelectItem<>(
 				model, model.id, description, model.provider + " " + model.id + " " + model.name);
 	}
 
@@ -11509,7 +10885,10 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 
 	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
 		Provider provider = requireCoreProvider(server.providers, model.provider);
-		server.agent = newAgent(server.arguments.systemPrompt, model, provider);
+		server.agent = new Agent(
+				new AgentState(
+						server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model),
+				provider);
 		server.agent.apiKey = server.arguments.apiKey;
 		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
 		server.agent.state.tools.addAll(mcpTools(server.mcp));
@@ -11935,9 +11314,9 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 		for (JsonNode block : content) {
 			String type = requiredSessionText(block, "type");
 			switch (type) {
-				case "text" -> decoded.add(textContent(
+				case "text" -> decoded.add(new TextContent(
 						requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-				case "image" -> decoded.add(imageContent(
+				case "image" -> decoded.add(new ImageContent(
 						requiredSessionText(block, "data"), requiredSessionText(block, "mimeType")));
 				default -> throw new IOException("Unknown user content type: " + type);
 			}
@@ -12095,10 +11474,6 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 	// ------------------------------------------------------------ session store
 
 	/** Resolves the session directory, dropping legacy directories that duplicate it. */
-	public static SessionStore sessionStore(Path directory) {
-		return sessionStore(directory, List.of());
-	}
-
 	public static SessionStore sessionStore(Path directory, List<Path> legacyDirectories) {
 		Path resolved = directory.toAbsolutePath().normalize();
 		return new SessionStore(
@@ -12199,7 +11574,8 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 			if (entry.type.equals("compaction")) {
 				messages.clear();
 				String summary = requiredSessionPayloadText(entry.payload, "summary", sessionId);
-				messages.add(userMessage(List.of(textContent("[Conversation checkpoint]\n" + summary)), entry.timestamp));
+				messages.add(new UserMessage(
+						List.of(new TextContent("[Conversation checkpoint]\n" + summary, null)), entry.timestamp));
 				continue;
 			}
 			if (!entry.type.equals("message")) continue;
@@ -12213,7 +11589,8 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 						: System.currentTimeMillis();
 				switch (entry.payload.path("role").asText()) {
 					case "user":
-						message = userMessage(decodeSessionUserContent(entry.payload.get("content")), timestamp);
+						message = new UserMessage(
+								List.copyOf(decodeSessionUserContent(entry.payload.get("content"))), timestamp);
 						break;
 					case "assistant": {
 						AssistantMessage assistant = new AssistantMessage(
@@ -12228,19 +11605,10 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 						String stopReason = optionalSessionText(entry.payload, "stopReason");
 						if (stopReason != null) {
 							try {
-								StopReason result = null;
-								boolean finished = false;
-								for (StopReason reason : StopReason.values()) {
-									if (reason.wire.equals(stopReason)) {
-										result = reason;
-										finished = true;
-										break;
-									}
-								}
-								if (!finished) {
-									throw new IllegalArgumentException("Unknown stop reason: " + stopReason);
-								}
-								assistant.stopReason = result;
+								assistant.stopReason = Arrays.stream(StopReason.values())
+										.filter(reason -> reason.wire.equals(stopReason))
+										.findFirst()
+										.orElseThrow(() -> new IllegalArgumentException("Unknown stop reason: " + stopReason));
 							} catch (IllegalArgumentException error) {
 								try {
 									assistant.stopReason = StopReason.valueOf(stopReason.toUpperCase(Locale.ROOT));
@@ -12279,9 +11647,9 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 							for (JsonNode block : content) {
 								String type = requiredSessionText(block, "type");
 								switch (type) {
-									case "text" -> assistant.content.add(textContent(
+									case "text" -> assistant.content.add(new TextContent(
 											requiredSessionText(block, "text"), optionalSessionText(block, "textSignature")));
-									case "thinking" -> assistant.content.add(thinkingContent(
+									case "thinking" -> assistant.content.add(new ThinkingContent(
 											requiredSessionText(block, "text"),
 											optionalSessionText(block, "thinkingSignature"),
 											block.path("redacted").asBoolean(false)));
@@ -12290,7 +11658,7 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 										if (!(arguments instanceof ObjectNode object)) {
 											throw new IOException("Tool call arguments must be an object");
 										}
-										assistant.content.add(toolCall(
+										assistant.content.add(new ToolCall(
 												requiredSessionText(block, "id"),
 												requiredSessionText(block, "name"),
 												object.deepCopy(),
@@ -12304,11 +11672,13 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 						break;
 					}
 					case "toolResult":
-						message = toolResultMessage(
+					message = new ToolResultMessage(
 							requiredSessionText(entry.payload, "toolCallId"),
 							requiredSessionText(entry.payload, "toolName"),
-							decodeSessionUserContent(entry.payload.get("content")),
-							entry.payload.has("details") ? Json.MAPPER.treeToValue(entry.payload.get("details"), Object.class) : null,
+							List.copyOf(decodeSessionUserContent(entry.payload.get("content"))),
+							entry.payload.has("details")
+									? Json.MAPPER.treeToValue(entry.payload.get("details"), Object.class)
+									: null,
 							entry.payload.path("isError").asBoolean(false),
 							timestamp);
 						break;

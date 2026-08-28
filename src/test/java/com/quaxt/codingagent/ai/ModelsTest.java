@@ -37,7 +37,7 @@ class ModelsTest {
 
 	@Test
 	void calculatesBaseCost() {
-		Model m = model(CodingAgentOperations.modelCost(3, 15, 0.3, 3.75));
+		Model m = model(new ModelCost(3, 15, 0.3, 3.75, List.of()));
 		Usage usage = new Usage();
 		usage.input = 1_000_000;
 		usage.output = 2_000_000;
@@ -53,7 +53,7 @@ class ModelsTest {
 
 	@Test
 	void appliesTierPricingWhenInputExceedsThreshold() {
-		Model m = model(CodingAgentOperations.modelCost(1, 2, 0.1, 0.2,
+		Model m = model(new ModelCost(1, 2, 0.1, 0.2,
 				List.of(new ModelCost.Tier(200_000, 2, 4, 0.2, 0.4))));
 		Usage usage = new Usage();
 		usage.input = 300_000;
@@ -63,7 +63,7 @@ class ModelsTest {
 
 	@Test
 	void oneHourCacheWritesCostDoubleInputRate() {
-		Model m = model(CodingAgentOperations.modelCost(3, 15, 0.3, 3.75));
+		Model m = model(new ModelCost(3, 15, 0.3, 3.75, List.of()));
 		Usage usage = new Usage();
 		usage.cacheWrite = 1_000_000;
 		usage.cacheWrite1h = 1_000_000L;
