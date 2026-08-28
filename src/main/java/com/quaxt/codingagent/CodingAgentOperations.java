@@ -3010,7 +3010,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static AssistantMessageEventStream providerErrorStream(Model model, IOException error) {
-        return providerStream(model, null, (stream, output, options) -> {
+        return providerStream(model, null, (_, _, _) -> {
             throw error;
         });
     }
@@ -3275,7 +3275,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
                 };
             }
-            case GoogleProvider google -> {
+            case GoogleProvider _ -> {
                 if (!model.api.equals(GoogleProvider.API)) {
                     throw new IllegalArgumentException("Model " + model + " is not a Google Generative AI model");
                 }
@@ -7391,7 +7391,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
         scored.sort((left, right) -> {
             int byScore = Double.compare(left.score, right.score);
-            return byScore != 0 ? byScore : Integer.compare(left.index, right.index);
+            return byScore == 0 ? Integer.compare(left.index, right.index) : byScore;
         });
         return scored.stream().map(entry -> entry.item).toList();
     }
@@ -8058,9 +8058,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     private static void callSuspendAction(Callable<Void> action) throws IOException {
         try {
             action.call();
-        } catch (IOException error) {
-            throw error;
-        } catch (RuntimeException error) {
+        } catch (IOException | RuntimeException error) {
             throw error;
         } catch (Exception error) {
             throw new IOException(error);
@@ -8238,8 +8236,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     }
                 });
         if (supportsSuspend) {
-            Widget previousInit = interactive.reader.getWidgets().get(LineReader.CALLBACK_INIT);
-            interactive.reader.getWidgets().put(LineReader.CALLBACK_INIT, () -> {
+            interactive.reader.getWidgets().compute(LineReader.CALLBACK_INIT, (_, previousInit) -> () -> {
                 boolean initialized = previousInit == null || previousInit.apply();
                 if (interactive.restoreCursor >= 0) {
                     interactive.reader
@@ -8779,7 +8776,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             String displayedLine = line;
             if (mask != null) {
                 displayedLine =
-                        mask.charValue() == 0 ? "" : String.valueOf(mask).repeat(line.length());
+                        mask == 0 ? "" : String.valueOf(mask).repeat(line.length());
             }
             int activeLineOffset = activePromptLineOffset(prompt);
             remember(interactive, prompt.substring(0, activeLineOffset));
@@ -10184,7 +10181,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
         String nextPrompt = String.join("\n\n", promptParts);
         List<Path> immutableSources = List.copyOf(nextSources);
-        boolean changed = !directory.equals(instructions.currentDirectory)
+        boolean changed = !Objects.equals(directory, instructions.currentDirectory)
                 || !nextPrompt.equals(instructions.systemPrompt)
                 || !immutableSources.equals(instructions.sources);
         instructions.currentDirectory = directory;

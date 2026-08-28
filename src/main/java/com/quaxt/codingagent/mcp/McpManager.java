@@ -67,7 +67,7 @@ public final class McpManager {
 
 	/** Mutable state of one configured server; {@code lock} guards every field below it. */
 	public static final class Runtime {
-		public Object lock = new Object();
+		public final Object lock = new Object();
 		public String name;
 		public McpServerConfig config;
 		public long generation;
