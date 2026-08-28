@@ -53,7 +53,7 @@ public final class InteractiveShell {
 	public boolean hideThinkingBlock;
 	public StreamOutput streamOutput = StreamOutput.NONE;
 	public int streamedThinkingCharacters;
-	public Object activityLock = new Object();
+	public final Object activityLock = new Object();
 	public ScheduledExecutorService statusTicker;
 	public volatile ActivityStatus activity;
 	public volatile String statusLocation = "";

@@ -27,7 +27,7 @@ public final class FauxProvider implements Provider {
 	public String id;
 	public List<Model> models;
 	public Deque<ResponseStep> pendingResponses = new ArrayDeque<>();
-	public State state = new State();
+	public final State state = new State();
 
 	public FauxProvider(String api, String id, List<Model> models) {
 		this.api = api;
