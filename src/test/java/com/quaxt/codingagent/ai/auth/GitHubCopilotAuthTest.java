@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -91,7 +92,8 @@ class GitHubCopilotAuthTest {
 			CodingAgentOperations.modifyCredential(
 					store,
 					GitHubCopilotAuth.PROVIDER_ID,
-					ignored -> CodingAgentOperations.oauthCredential("expired-token", "github-token", 0));
+					ignored -> CodingAgentOperations.oauthCredential(
+							"expired-token", "github-token", 0, null, Map.of()));
 			GitHubCopilotAuth auth =
 					CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 

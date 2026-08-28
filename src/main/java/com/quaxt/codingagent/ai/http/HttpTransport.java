@@ -2,6 +2,9 @@ package com.quaxt.codingagent.ai.http;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.ProxySelector;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.Map;
@@ -19,11 +22,30 @@ import com.quaxt.codingagent.CodingAgentOperations;
 public final class HttpTransport {
 	public static final int DEFAULT_TIMEOUT_MS = 600_000;
 
-	public static final HttpClient CLIENT = HttpClient.newBuilder()
-			.followRedirects(HttpClient.Redirect.NORMAL)
-			.connectTimeout(Duration.ofSeconds(30))
-			.proxy(CodingAgentOperations.proxySelectorFromEnv())
-			.build();
+	public static final HttpClient CLIENT;
+
+	static {
+		String httpsProxy = CodingAgentOperations.envAnyCase("https_proxy");
+		String httpProxy = CodingAgentOperations.envAnyCase("http_proxy");
+		ProxySelector proxy;
+		if (httpsProxy.isEmpty() && httpProxy.isEmpty()) {
+			proxy = ProxySelector.getDefault();
+		} else {
+			String chosen = !httpsProxy.isEmpty() ? httpsProxy : httpProxy;
+			try {
+				URI proxyUri = URI.create(chosen);
+				int port = proxyUri.getPort() != -1 ? proxyUri.getPort() : 80;
+				proxy = ProxySelector.of(new InetSocketAddress(proxyUri.getHost(), port));
+			} catch (IllegalArgumentException error) {
+				proxy = ProxySelector.getDefault();
+			}
+		}
+		CLIENT = HttpClient.newBuilder()
+				.followRedirects(HttpClient.Redirect.NORMAL)
+				.connectTimeout(Duration.ofSeconds(30))
+				.proxy(proxy)
+				.build();
+	}
 
 	public HttpTransport() {}
 
