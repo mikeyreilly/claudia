@@ -51,7 +51,8 @@ class McpConfigLoaderTest {
 				""");
 
 		McpConfiguration config = CodingAgentOperations.mcpLoadConfiguration(
-				CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of("TOOL_TOKEN", "abc123")));
+				new McpConfigLoader(
+						settingsPath.toAbsolutePath().normalize(), Map.of("TOOL_TOKEN", "abc123")));
 
 		assertEquals(2, config.servers.size());
 		McpServerConfig.Local local = assertInstanceOf(McpServerConfig.Local.class, config.servers.get("local"));
@@ -79,7 +80,8 @@ class McpConfigLoaderTest {
 
 		Exception error = assertThrows(
 				java.io.IOException.class,
-			() -> CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of())));
+			() -> CodingAgentOperations.mcpLoadConfiguration(
+					new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of())));
 		assertTrue(error.getMessage().contains("disabledTools"));
 	}
 
@@ -94,7 +96,8 @@ class McpConfigLoaderTest {
 
 		Exception error = assertThrows(
 				java.io.IOException.class,
-			() -> CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of())));
+			() -> CodingAgentOperations.mcpLoadConfiguration(
+					new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of())));
 		assertTrue(error.getMessage().contains("HTTP loopback URL"));
 	}
 
@@ -107,8 +110,8 @@ class McpConfigLoaderTest {
 				{"mcp":{"ignored":{"type":"local","command":["ignored"]}}}
 				""");
 
-		McpConfiguration config =
-				CodingAgentOperations.mcpLoadConfiguration(CodingAgentOperations.mcpConfigLoader(settingsPath, Map.of()));
+		McpConfiguration config = CodingAgentOperations.mcpLoadConfiguration(
+				new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of()));
 
 		assertTrue(config.servers.isEmpty());
 		assertTrue(config.sources.isEmpty());

@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,9 +25,11 @@ import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
 import com.quaxt.codingagent.ai.types.StopReason;
+import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
+import com.quaxt.codingagent.ai.types.ToolResultMessage;
 
 class OpenAiResponsesProviderTest {
 	private static StreamOptions options(String apiKey) {
@@ -63,10 +66,16 @@ class OpenAiResponsesProviderTest {
 					""");
 		});
 		try {
-			FileCredentialStore credentials = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"));
-			CodingAgentOperations.modifyCredential(credentials, "openai", ignored -> CodingAgentOperations.apiKeyCredential("saved-key"));
+			FileCredentialStore credentials =
+					CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations.modifyCredential(
+					credentials,
+					"openai",
+					ignored -> new Credential.ApiKeyCredential("saved-key", Map.of()));
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model), credentials);
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), credentials,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
@@ -103,7 +112,9 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), null,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
 			Context context = new Context("system");
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
@@ -147,7 +158,9 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = reasoningModel(url(server));
-			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), null,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
@@ -181,7 +194,9 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = reasoningModel(url(server));
-			OpenAiResponsesProvider provider = CodingAgentOperations.codexResponsesProvider("chatgpt", "ChatGPT", List.of(model));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"chatgpt", "ChatGPT", List.of(model), List.of(), null,
+					OpenAiResponsesProvider.RequestProfile.CODEX);
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
@@ -217,16 +232,25 @@ class OpenAiResponsesProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			OpenAiResponsesProvider provider = CodingAgentOperations.openAiResponsesProvider(List.of(model));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), null,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
 			Context context = new Context();
 			AssistantMessage assistant = new AssistantMessage(model.api, model.provider, model.id);
-			assistant.content.add(CodingAgentOperations.thinkingContent(
+			assistant.content.add(new ThinkingContent(
 					"inspected files",
 					"{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"opaque\"}",
 					false));
-			assistant.content.add(CodingAgentOperations.toolCall("call_1", "list_files", CodingAgentOperations.jsonObject().put("path", ".")));
+			assistant.content.add(new ToolCall(
+					"call_1", "list_files", CodingAgentOperations.jsonObject().put("path", "."), null));
 			context.messages.add(assistant);
-			context.messages.add(CodingAgentOperations.toolResultMessage("call_1", "list_files", "file.txt", false));
+			context.messages.add(new ToolResultMessage(
+					"call_1",
+					"list_files",
+					List.of(new TextContent("file.txt", null)),
+					null,
+					false,
+					System.currentTimeMillis()));
 
 			CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
 

@@ -68,10 +68,17 @@ class InteractiveShellTest {
 		aborted.stopReason = StopReason.ABORTED;
 		var user = CodingAgentOperations.userMessage("hello");
 		var laterUser = CodingAgentOperations.userMessage("retry");
-		var orphanedResult = CodingAgentOperations.toolResultMessage("missing-call", "read", "result", false);
+		var orphanedResult = new ToolResultMessage(
+				"missing-call",
+				"read",
+				List.of(new TextContent("result", null)),
+				null,
+				false,
+				System.currentTimeMillis());
 		AssistantMessage toolUse = new AssistantMessage("faux", "faux", "faux-1");
 		toolUse.stopReason = StopReason.TOOL_USE;
-		toolUse.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
+		toolUse.content.add(new ToolCall(
+				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
 		var restored = CodingAgentOperations.resumableMessages(
 				List.of(user, failed, orphanedResult, toolUse, laterUser, aborted));
@@ -89,14 +96,21 @@ class InteractiveShellTest {
 	void rebuildsTheVisibleTranscriptWhenResumingASession() {
 		Model model = model("gpt-5.4", true);
 		AssistantMessage toolUse = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
-		toolUse.content.add(CodingAgentOperations.thinkingContent("Inspect the project"));
-		toolUse.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
+		toolUse.content.add(new ThinkingContent("Inspect the project", null, false));
+		toolUse.content.add(new ToolCall(
+				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 		AssistantMessage answer = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
-		answer.content.add(CodingAgentOperations.textContent("The project is ready."));
+		answer.content.add(new TextContent("The project is ready.", null));
 		List<Message> messages = List.of(
 				CodingAgentOperations.userMessage("Check the project"),
 				toolUse,
-				CodingAgentOperations.toolResultMessage("call-1", "read", "line one\nline two", false),
+				new ToolResultMessage(
+						"call-1",
+						"read",
+						List.of(new TextContent("line one\nline two", null)),
+						null,
+						false,
+						System.currentTimeMillis()),
 				answer);
 
 		String visible = CodingAgentOperations.renderSessionScreen(model, messages, false, Theme.PLAIN);
@@ -125,7 +139,7 @@ class InteractiveShellTest {
 	@Test
 	void doesNotRepeatSuccessfulFinalOutputAfterItWasStreamed() {
 		AssistantMessage response = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
-		response.content.add(CodingAgentOperations.textContent("Done."));
+		response.content.add(new TextContent("Done.", null));
 
 		assertNull(CodingAgentOperations.finalAssistantOutput(response, true));
 		assertEquals("Done.", CodingAgentOperations.finalAssistantOutput(response, false));
@@ -137,8 +151,9 @@ class InteractiveShellTest {
 		AssistantMessage failed = new AssistantMessage("openai-completions", "github-copilot", "claude-fable-5");
 		failed.stopReason = StopReason.ERROR;
 		failed.errorMessage = "OpenAI tool call arguments must be a JSON object";
-		failed.content.add(CodingAgentOperations.textContent("Checking the source."));
-		failed.content.add(CodingAgentOperations.toolCall("call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md")));
+		failed.content.add(new TextContent("Checking the source.", null));
+		failed.content.add(new ToolCall(
+				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
 		String screen = CodingAgentOperations.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false, Theme.PLAIN);
 

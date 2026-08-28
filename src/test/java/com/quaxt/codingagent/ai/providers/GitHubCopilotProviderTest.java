@@ -12,6 +12,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import com.quaxt.codingagent.CodingAgentOperations;
@@ -85,11 +86,13 @@ class GitHubCopilotProviderTest {
 					model("anthropic", "anthropic-messages", base),
 					model("completions", "openai-completions", base),
 					model("responses", "openai-responses", base));
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(Files.createTempDirectory("copilot-auth").resolve("auth.json"));
+			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(
+					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
 					GitHubCopilotAuth.PROVIDER_ID,
-					ignored -> CodingAgentOperations.oauthCredential("copilot-token", "github-token", Long.MAX_VALUE, null));
+					ignored -> new Credential.OAuthCredential(
+							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
 			GitHubCopilotProvider provider = CodingAgentOperations.newGitHubCopilotProvider(
 					models,
 					CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)));
@@ -134,11 +137,13 @@ class GitHubCopilotProviderTest {
 					CodingAgentOperations.requireCatalogModel(
 					CodingAgentOperations.loadBundledModelCatalog(), GitHubCopilotAuth.PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(Files.createTempDirectory("copilot-auth").resolve("auth.json"));
+			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(
+					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
 					GitHubCopilotAuth.PROVIDER_ID,
-					ignored -> CodingAgentOperations.oauthCredential("copilot-token", "github-token", Long.MAX_VALUE, null));
+					ignored -> new Credential.OAuthCredential(
+							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
 			GitHubCopilotProvider provider = CodingAgentOperations.newGitHubCopilotProvider(
 					List.of(opus),
 					CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)));

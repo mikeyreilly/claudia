@@ -23,7 +23,7 @@ class EventStreamTest {
 		AssistantMessage partial = new AssistantMessage("test-api", "test-provider", "test-model");
 
 		CodingAgentOperations.push(stream, new AssistantMessageEvent.Start(partial));
-		partial.content.add(CodingAgentOperations.textContent("hello"));
+		partial.content.add(new TextContent("hello", null));
 		CodingAgentOperations.push(stream, new AssistantMessageEvent.TextDelta(0, "hello", partial));
 		partial.stopReason = StopReason.STOP;
 		CodingAgentOperations.push(stream, new AssistantMessageEvent.Done(StopReason.STOP, partial));

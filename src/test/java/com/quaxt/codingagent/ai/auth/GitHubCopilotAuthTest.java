@@ -56,7 +56,7 @@ class GitHubCopilotAuthTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"));
+			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			GitHubCopilotAuth auth = CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 
 			GitHubCopilotAuth.DeviceCode device = CodingAgentOperations.gitHubCopilotBeginLogin(auth);
@@ -88,11 +88,11 @@ class GitHubCopilotAuthTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("failing-auth.json"));
+			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("failing-auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
 					GitHubCopilotAuth.PROVIDER_ID,
-					ignored -> CodingAgentOperations.oauthCredential(
+					ignored -> new Credential.OAuthCredential(
 							"expired-token", "github-token", 0, null, Map.of()));
 			GitHubCopilotAuth auth =
 					CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
