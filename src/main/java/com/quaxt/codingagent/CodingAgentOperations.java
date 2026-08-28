@@ -61,7 +61,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.io.BufferedReader;
@@ -75,7 +74,6 @@ import java.net.http.HttpClient;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
@@ -195,7 +193,6 @@ import org.jline.terminal.TerminalBuilder;
 import org.jline.terminal.impl.jni.JniTerminalProvider;
 import org.jline.terminal.impl.jni.win.ShiftAwareNativeWinSysTerminal;
 import org.jline.terminal.spi.SystemStream;
-import org.jline.terminal.spi.TerminalProvider;
 import org.jline.utils.AttributedString;
 import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
@@ -236,7 +233,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             throws IOException {
         Charset outputEncoding = systemStream == SystemStream.Error ? stderrEncoding : stdoutEncoding;
         return ShiftAwareNativeWinSysTerminal.createTerminal(
-                (TerminalProvider) this,
+                this,
                 systemStream,
                 name,
                 type,
@@ -659,7 +656,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 errorBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
             }
             int status = response.statusCode();
-            String trimmed = errorBody == null ? "" : errorBody.trim();
+            String trimmed = errorBody.trim();
             String detail = trimmed.length() <= HttpException.MAX_ERROR_BODY_CHARS
                     ? trimmed
                     : trimmed.substring(0, HttpException.MAX_ERROR_BODY_CHARS) + "... [truncated "
@@ -1433,7 +1430,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         List<String> policyEnabled = new ArrayList<>();
         for (JsonNode model : data) {
             if (!model.path("id").isTextual()
-                    || model.path("capabilities").path("supports").path("tool_calls").asBoolean(true) == false) {
+                    || !model.path("capabilities").path("supports").path("tool_calls").asBoolean(true)) {
                 continue;
             }
             String id = model.path("id").asText();
@@ -1679,12 +1676,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         if (compat != null) {
                             model1.compat = compat;
                         }
-                        Model model = model1;
-                        String modelKey = modelCatalogKey(model.provider, model.id);
-                        if (models.putIfAbsent(modelKey, model) != null) {
+                        String modelKey = modelCatalogKey(model1.provider, model1.id);
+                        if (models.putIfAbsent(modelKey, model1) != null) {
                             throw new IllegalStateException("Duplicate bundled model: " + modelKey);
                         }
-                        providers.computeIfAbsent(model.provider, ignored -> new ArrayList<>()).add(model);
+                        providers.computeIfAbsent(model1.provider, ignored -> new ArrayList<>()).add(model1);
                     }
                 }
             } catch (IOException e) {
@@ -2547,7 +2543,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 continue;
                             }
                             String rawArguments = accumulator.arguments.toString();
-                            JsonNode parsed = null;
+                            JsonNode parsed;
                             if (rawArguments.isBlank()) {
                                 // Some compatible models emit an empty argument string instead of
                                 // the JSON object "{}" for parameterless tools.
@@ -2778,10 +2774,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                         push(stream, new AssistantMessageEvent.TextDelta(item.contentIndex, delta, output));
                                     }
                                 }
-                                case "response.reasoning_text.delta", "response.reasoning_summary_text.delta" -> {
-                                    openAiResponsesAppendThinkingDelta(
-                                            stream, output, items.get(openAiResponsesItemKey(event)), event.path("delta").asText());
-                                }
+                                case "response.reasoning_text.delta", "response.reasoning_summary_text.delta" ->
+                                        openAiResponsesAppendThinkingDelta(
+                                                stream, output, items.get(openAiResponsesItemKey(event)), event.path("delta").asText());
                                 case "response.reasoning_summary_part.done" -> {
                                     OpenAiResponsesProvider.OutputItem item = items.get(openAiResponsesItemKey(event));
                                     if (item != null && item.type.equals("reasoning")) {
@@ -2805,24 +2800,27 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     String itemId = openAiResponsesItemKey(event);
                                     OpenAiResponsesProvider.OutputItem item = items.get(itemId);
                                     if (item != null) {
-                                        if (item.type.equals("message")) {
-                                            TextContent text = (TextContent) output.content.get(item.contentIndex);
-                                            push(stream, new AssistantMessageEvent.TextEnd(item.contentIndex, text.text, output));
-                                            items.remove(itemId);
-                                        } else if (item.type.equals("reasoning")) {
-                                            ThinkingContent thinking = (ThinkingContent) output.content.get(item.contentIndex);
-                                            JsonNode completedItem = event.path("item");
-                                            String completedThinking = openAiResponsesReasoningText(completedItem);
-                                            if (completedThinking.isBlank()) {
-                                                completedThinking = thinking.thinking.stripTrailing();
+                                        switch (item.type) {
+                                            case "message" -> {
+                                                TextContent text = (TextContent) output.content.get(item.contentIndex);
+                                                push(stream, new AssistantMessageEvent.TextEnd(item.contentIndex, text.text, output));
+                                                items.remove(itemId);
                                             }
-                                            String signature = completedItem.isObject() ? completedItem.toString() : thinking.thinkingSignature;
-                                            thinking = new ThinkingContent(completedThinking, signature, thinking.redacted);
-                                            output.content.set(item.contentIndex, thinking);
-                                            push(stream, new AssistantMessageEvent.ThinkingEnd(item.contentIndex, thinking.thinking, output));
-                                            items.remove(itemId);
-                                        } else if (item.type.equals("function_call")) {
-                                            openAiResponsesFinishTool(stream, output, event, items);
+                                            case "reasoning" -> {
+                                                ThinkingContent thinking = (ThinkingContent) output.content.get(item.contentIndex);
+                                                JsonNode completedItem = event.path("item");
+                                                String completedThinking = openAiResponsesReasoningText(completedItem);
+                                                if (completedThinking.isBlank()) {
+                                                    completedThinking = thinking.thinking.stripTrailing();
+                                                }
+                                                String signature = completedItem.isObject() ? completedItem.toString() : thinking.thinkingSignature;
+                                                thinking = new ThinkingContent(completedThinking, signature, thinking.redacted);
+                                                output.content.set(item.contentIndex, thinking);
+                                                push(stream, new AssistantMessageEvent.ThinkingEnd(item.contentIndex, thinking.thinking, output));
+                                                items.remove(itemId);
+                                            }
+                                            case "function_call" ->
+                                                    openAiResponsesFinishTool(stream, output, event, items);
                                         }
                                     }
                                 }
@@ -2884,22 +2882,26 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     }
                                     for (String itemId : List.copyOf(items.keySet())) {
                                         OpenAiResponsesProvider.OutputItem item = items.get(itemId);
-                                        if (item.type.equals("message")) {
-                                            TextContent text = (TextContent) output.content.get(item.contentIndex);
-                                            push(stream, new AssistantMessageEvent.TextEnd(item.contentIndex, text.text, output));
-                                            items.remove(itemId);
-                                        } else if (item.type.equals("reasoning")) {
-                                            ThinkingContent thinking = (ThinkingContent) output.content.get(item.contentIndex);
-                                            push(stream, new AssistantMessageEvent.ThinkingEnd(item.contentIndex, thinking.thinking, output));
-                                            items.remove(itemId);
-                                        } else if (item.type.equals("function_call")) {
-                                            ObjectNode synthetic = jsonObject().put("arguments", item.arguments.toString());
-                                            if (itemId.startsWith("output:")) {
-                                                synthetic.put("output_index", Integer.parseInt(itemId.substring("output:".length())));
-                                            } else {
-                                                synthetic.put("item_id", itemId.substring("item:".length()));
+                                        switch (item.type) {
+                                            case "message" -> {
+                                                TextContent text = (TextContent) output.content.get(item.contentIndex);
+                                                push(stream, new AssistantMessageEvent.TextEnd(item.contentIndex, text.text, output));
+                                                items.remove(itemId);
                                             }
-                                            openAiResponsesFinishTool(stream, output, synthetic, items);
+                                            case "reasoning" -> {
+                                                ThinkingContent thinking = (ThinkingContent) output.content.get(item.contentIndex);
+                                                push(stream, new AssistantMessageEvent.ThinkingEnd(item.contentIndex, thinking.thinking, output));
+                                                items.remove(itemId);
+                                            }
+                                            case "function_call" -> {
+                                                ObjectNode synthetic = jsonObject().put("arguments", item.arguments.toString());
+                                                if (itemId.startsWith("output:")) {
+                                                    synthetic.put("output_index", Integer.parseInt(itemId.substring("output:".length())));
+                                                } else {
+                                                    synthetic.put("item_id", itemId.substring("item:".length()));
+                                                }
+                                                openAiResponsesFinishTool(stream, output, synthetic, items);
+                                            }
                                         }
                                     }
                                     push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
@@ -3704,10 +3706,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     emit(agent, new AgentEvent.MessageStart(resultMessage));
                     emit(agent, new AgentEvent.MessageEnd(resultMessage));
                 }
-                List<ToolResultMessage> results = results1;
-                newMessages.addAll(results);
-                emit(agent, new AgentEvent.TurnEnd(response, results));
-                if (results.isEmpty()) {
+                newMessages.addAll(results1);
+                emit(agent, new AgentEvent.TurnEnd(response, results1));
+                if (results1.isEmpty()) {
                     break;
                 }
                 emit(agent, new AgentEvent.TurnStart());
@@ -3837,346 +3838,344 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return switch (tool) {
             case FunctionTool function ->
                     function.execute.apply(new ToolInvocation(toolCallId, arguments, signal, onUpdate));
-            case LocalTool local -> {
-                yield switch (local.kind) {
-                    case READ -> {
-                        AgentTool.ToolResult result;
-                        String pathText = requiredToolText(arguments, "path");
-                        BuiltInTools.ArchiveLocation location = localToolArchiveLocation(local, pathText);
-                        if (location == null) {
-                            result = readToolFile(localToolPath(local, pathText), arguments, signal);
-                        } else {
-                            if (location.entry.startsWith("/")) {
-                                throw new IllegalArgumentException("Archive entry paths must not start with '/'");
-                            }
-                            FileSystem archive;
-                            try {
-                                archive = FileSystems.newFileSystem(location.archive);
-                            } catch (IOException | ProviderNotFoundException error) {
-                                throw new IOException("Unable to open archive " + location.archive + ": " + error.getMessage(), error);
-                            }
-                            try (archive) {
-                                Path root = archive.getPath("/");
-                                Path entry = location.entry.isEmpty() ? root : root.resolve(location.entry).normalize();
-                                if (!entry.startsWith(root)) {
-                                    throw new IllegalArgumentException("Archive entry paths must stay within the archive");
-                                }
-                                requireNotAborted(signal);
-                                if (Files.isDirectory(entry)) {
-                                    List<String> entries;
-                                    try (var paths = Files.list(entry)) {
-                                        entries = paths.sorted(
-                                                        Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
-                                                .map(entry1 -> {
-                                                    if (Files.isDirectory(entry1)) return entry1.getFileName() + "/";
-                                                    try {
-                                                        return entry1.getFileName() + " (" + Files.size(entry1) + " bytes)";
-                                                    } catch (IOException ignored) {
-                                                        return entry1.getFileName().toString();
-                                                    }
-                                                })
-                                                .toList();
-                                    }
-                                    result = toolResultText(entries.isEmpty() ? "(empty directory)" : boundToolOutput(String.join("\n", entries), null));
-                                } else {
-                                    if (!Files.isRegularFile(entry)) {
-                                        String entry1 = location.entry;
-                                        String withoutTrailingSlash = entry1.endsWith("/") ? entry1.substring(0, entry1.length() - 1) : entry1;
-                                        int slash = withoutTrailingSlash.lastIndexOf('/');
-                                        String prefix = slash < 0 ? "" : withoutTrailingSlash.substring(0, slash + 1);
-                                        List<String> nearby = List.of();
-                                        if (!prefix.isEmpty()) {
-                                            try (var paths = Files.walk(root)) {
-                                                nearby = paths.filter(Files::isRegularFile)
-                                                        .map(path -> root.relativize(path).toString().replace('\\', '/'))
-                                                        .filter(name -> name.startsWith(prefix))
-                                                        .sorted(String.CASE_INSENSITIVE_ORDER)
-                                                        .limit(20)
-                                                        .toList();
-                                            }
-                                        }
-                                        if (nearby.isEmpty()) {
-                                            try (var paths = Files.list(root)) {
-                                                nearby = paths.map(path -> path.getFileName() + (Files.isDirectory(path) ? "/" : ""))
-                                                        .sorted(String.CASE_INSENSITIVE_ORDER)
-                                                        .limit(20)
-                                                        .toList();
-                                            }
-                                        }
-                                        String suggestions = nearby.isEmpty() ? "(archive is empty)" : String.join("\n", nearby);
-                                        throw new IOException("Archive entry not found: " + entry1 + " in " + location.archive
-                                                + ". Nearby entries:\n" + suggestions);
-                                    }
-                                    result = readToolFile(entry, arguments, signal);
-                                }
-                            }
+            case LocalTool local -> switch (local.kind) {
+                case READ -> {
+                    AgentTool.ToolResult result;
+                    String pathText = requiredToolText(arguments, "path");
+                    BuiltInTools.ArchiveLocation location = localToolArchiveLocation(local, pathText);
+                    if (location == null) {
+                        result = readToolFile(localToolPath(local, pathText), arguments, signal);
+                    } else {
+                        if (location.entry.startsWith("/")) {
+                            throw new IllegalArgumentException("Archive entry paths must not start with '/'");
                         }
-                        yield result;
-                    }
-                    case WRITE -> {
-                        String pathText = requiredToolText(arguments, "path");
-                        rejectArchivePath(local, pathText);
-                        Path file = localToolPath(local, pathText);
-                        String content = requiredToolText(arguments, "content");
-                        requireNotAborted(signal);
-                        Path parent = file.getParent();
-                        if (parent != null) {
-                            Files.createDirectories(parent);
-                        }
-                        requireNotAborted(signal);
-                        Files.writeString(
-                                file, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                        requireNotAborted(signal);
-                        yield toolResultText(
-                                "Successfully wrote " + content.getBytes(StandardCharsets.UTF_8).length + " bytes to " + file);
-                    }
-                    case EDIT -> {
-                        String pathText = requiredToolText(arguments, "path");
-                        rejectArchivePath(local, pathText);
-                        Path file = localToolPath(local, pathText);
-                        JsonNode editsNode = arguments.get("edits");
-                        if (!(editsNode instanceof ArrayNode edits) || edits.isEmpty()) {
-                            throw new IllegalArgumentException("edits must be a non-empty array");
-                        }
-                        requireNotAborted(signal);
-                        String content = Files.readString(file, StandardCharsets.UTF_8);
-                        List<BuiltInTools.Replacement> replacements = new ArrayList<>();
-                        for (JsonNode edit : edits) {
-                            if (!edit.isObject()) {
-                                throw new IllegalArgumentException("each edit must be an object");
-                            }
-                            String oldText = requiredToolText((ObjectNode) edit, "oldText");
-                            String newText = requiredToolText((ObjectNode) edit, "newText");
-                            int first = content.indexOf(oldText);
-                            if (first < 0) {
-                                throw new IllegalArgumentException("oldText was not found in " + file);
-                            }
-                            if (content.indexOf(oldText, first + 1) >= 0) {
-                                throw new IllegalArgumentException("oldText must match exactly one location in " + file);
-                            }
-                            replacements.add(new BuiltInTools.Replacement(first, first + oldText.length(), newText));
-                        }
-                        replacements.sort(Comparator.comparingInt(replacement -> replacement.start));
-                        for (int index = 1; index < replacements.size(); index++) {
-                            if (replacements.get(index).start < replacements.get(index - 1).end) {
-                                throw new IllegalArgumentException("edits must not overlap");
-                            }
-                        }
-                        StringBuilder changed = new StringBuilder(content);
-                        for (int index = replacements.size() - 1; index >= 0; index--) {
-                            BuiltInTools.Replacement replacement = replacements.get(index);
-                            changed.replace(replacement.start, replacement.end, replacement.newText);
-                        }
-                        requireNotAborted(signal);
-                        Files.writeString(file, changed.toString(), StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
-                        yield toolResultText("Successfully replaced " + replacements.size() + " block(s) in " + file);
-                    }
-                    case SHELL -> {
-                        String command = requiredToolText(arguments, "command");
-                        double timeoutSeconds;
-                        JsonNode value = arguments.get("timeout");
-                        if (value == null || value.isNull()) {
-                            timeoutSeconds = 0;
-                        } else {
-                            if (!value.isNumber() || value.asDouble() <= 0 || !Double.isFinite(value.asDouble())) {
-                                throw new IllegalArgumentException("timeout" + " must be a positive finite number");
-                            }
-                            timeoutSeconds = value.asDouble();
-                        }
-                        Process process = new ProcessBuilder(switch (local.shell) {
-                            case BASH -> List.of("/bin/bash", "-lc", command);
-                            case POWERSHELL ->
-                                    List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command);
-                        })
-                                .directory(local.cwd.toFile())
-                                .redirectErrorStream(true)
-                                .start();
-                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                        Thread reader = Thread.ofVirtual().start(() -> {
-                            try (var input = process.getInputStream()) {
-                                input.transferTo(bytes);
-                            } catch (IOException ignored) {
-                                // The process exit status is reported below.
-                            }
-                        });
-                        long deadline = timeoutSeconds == 0
-                                ? Long.MAX_VALUE
-                                : System.nanoTime() + Duration.ofMillis((long) (timeoutSeconds * 1_000)).toNanos();
-                        while (process.isAlive()) {
-                            if (isAborted(signal)) {
-                                process.destroyForcibly();
-                                throw new IllegalStateException("Command aborted");
-                            }
-                            if (System.nanoTime() >= deadline) {
-                                process.destroyForcibly();
-                                throw new IllegalStateException("Command timed out after " + timeoutSeconds + " seconds");
-                            }
-                            process.waitFor(50, TimeUnit.MILLISECONDS);
-                        }
-                        reader.join();
-                        String output = boundToolOutput(bytes.toString(StandardCharsets.UTF_8), null);
-                        if (process.exitValue() != 0) {
-                            throw new IllegalStateException(
-                                    (output.isBlank() ? "" : output + "\n\n") + "Command exited with code " + process.exitValue());
-                        }
-                        yield toolResultText(output.isBlank() ? "(no output)" : output);
-                    }
-                    case GREP -> {
-                        String patternText = requiredToolText(arguments, "pattern");
-                        boolean literal = optionalToolBoolean(arguments, "literal");
-                        int flags = optionalToolBoolean(arguments, "ignoreCase") ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0;
-                        Pattern pattern = Pattern.compile(literal ? Pattern.quote(patternText) : patternText, flags);
-                        String pathText = optionalToolText(arguments, "path", ".");
-                        Path root1;
+                        FileSystem archive;
                         try {
-                            root1 = localToolPath(local, pathText);
-                        } catch (InvalidPathException error1) {
-                            if (containsGlobMetacharacter(pathText)) {
-                                throw wildcardPathError(pathText);
-                            }
-                            throw error1;
+                            archive = FileSystems.newFileSystem(location.archive);
+                        } catch (IOException | ProviderNotFoundException error) {
+                            throw new IOException("Unable to open archive " + location.archive + ": " + error.getMessage(), error);
                         }
-                        if (!Files.exists(root1) && containsGlobMetacharacter(pathText)) {
+                        try (archive) {
+                            Path root = archive.getPath("/");
+                            Path entry = location.entry.isEmpty() ? root : root.resolve(location.entry).normalize();
+                            if (!entry.startsWith(root)) {
+                                throw new IllegalArgumentException("Archive entry paths must stay within the archive");
+                            }
+                            requireNotAborted(signal);
+                            if (Files.isDirectory(entry)) {
+                                List<String> entries;
+                                try (var paths = Files.list(entry)) {
+                                    entries = paths.sorted(
+                                                    Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
+                                            .map(entry1 -> {
+                                                if (Files.isDirectory(entry1)) return entry1.getFileName() + "/";
+                                                try {
+                                                    return entry1.getFileName() + " (" + Files.size(entry1) + " bytes)";
+                                                } catch (IOException ignored) {
+                                                    return entry1.getFileName().toString();
+                                                }
+                                            })
+                                            .toList();
+                                }
+                                result = toolResultText(entries.isEmpty() ? "(empty directory)" : boundToolOutput(String.join("\n", entries), null));
+                            } else {
+                                if (!Files.isRegularFile(entry)) {
+                                    String entry1 = location.entry;
+                                    String withoutTrailingSlash = entry1.endsWith("/") ? entry1.substring(0, entry1.length() - 1) : entry1;
+                                    int slash = withoutTrailingSlash.lastIndexOf('/');
+                                    String prefix = slash < 0 ? "" : withoutTrailingSlash.substring(0, slash + 1);
+                                    List<String> nearby = List.of();
+                                    if (!prefix.isEmpty()) {
+                                        try (var paths = Files.walk(root)) {
+                                            nearby = paths.filter(Files::isRegularFile)
+                                                    .map(path -> root.relativize(path).toString().replace('\\', '/'))
+                                                    .filter(name -> name.startsWith(prefix))
+                                                    .sorted(String.CASE_INSENSITIVE_ORDER)
+                                                    .limit(20)
+                                                    .toList();
+                                        }
+                                    }
+                                    if (nearby.isEmpty()) {
+                                        try (var paths = Files.list(root)) {
+                                            nearby = paths.map(path -> path.getFileName() + (Files.isDirectory(path) ? "/" : ""))
+                                                    .sorted(String.CASE_INSENSITIVE_ORDER)
+                                                    .limit(20)
+                                                    .toList();
+                                        }
+                                    }
+                                    String suggestions = nearby.isEmpty() ? "(archive is empty)" : String.join("\n", nearby);
+                                    throw new IOException("Archive entry not found: " + entry1 + " in " + location.archive
+                                            + ". Nearby entries:\n" + suggestions);
+                                }
+                                result = readToolFile(entry, arguments, signal);
+                            }
+                        }
+                    }
+                    yield result;
+                }
+                case WRITE -> {
+                    String pathText = requiredToolText(arguments, "path");
+                    rejectArchivePath(local, pathText);
+                    Path file = localToolPath(local, pathText);
+                    String content = requiredToolText(arguments, "content");
+                    requireNotAborted(signal);
+                    Path parent = file.getParent();
+                    if (parent != null) {
+                        Files.createDirectories(parent);
+                    }
+                    requireNotAborted(signal);
+                    Files.writeString(
+                            file, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                    requireNotAborted(signal);
+                    yield toolResultText(
+                            "Successfully wrote " + content.getBytes(StandardCharsets.UTF_8).length + " bytes to " + file);
+                }
+                case EDIT -> {
+                    String pathText = requiredToolText(arguments, "path");
+                    rejectArchivePath(local, pathText);
+                    Path file = localToolPath(local, pathText);
+                    JsonNode editsNode = arguments.get("edits");
+                    if (!(editsNode instanceof ArrayNode edits) || edits.isEmpty()) {
+                        throw new IllegalArgumentException("edits must be a non-empty array");
+                    }
+                    requireNotAborted(signal);
+                    String content = Files.readString(file, StandardCharsets.UTF_8);
+                    List<BuiltInTools.Replacement> replacements = new ArrayList<>();
+                    for (JsonNode edit : edits) {
+                        if (!edit.isObject()) {
+                            throw new IllegalArgumentException("each edit must be an object");
+                        }
+                        String oldText = requiredToolText((ObjectNode) edit, "oldText");
+                        String newText = requiredToolText((ObjectNode) edit, "newText");
+                        int first = content.indexOf(oldText);
+                        if (first < 0) {
+                            throw new IllegalArgumentException("oldText was not found in " + file);
+                        }
+                        if (content.indexOf(oldText, first + 1) >= 0) {
+                            throw new IllegalArgumentException("oldText must match exactly one location in " + file);
+                        }
+                        replacements.add(new BuiltInTools.Replacement(first, first + oldText.length(), newText));
+                    }
+                    replacements.sort(Comparator.comparingInt(replacement -> replacement.start));
+                    for (int index = 1; index < replacements.size(); index++) {
+                        if (replacements.get(index).start < replacements.get(index - 1).end) {
+                            throw new IllegalArgumentException("edits must not overlap");
+                        }
+                    }
+                    StringBuilder changed = new StringBuilder(content);
+                    for (int index = replacements.size() - 1; index >= 0; index--) {
+                        BuiltInTools.Replacement replacement = replacements.get(index);
+                        changed.replace(replacement.start, replacement.end, replacement.newText);
+                    }
+                    requireNotAborted(signal);
+                    Files.writeString(file, changed.toString(), StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+                    yield toolResultText("Successfully replaced " + replacements.size() + " block(s) in " + file);
+                }
+                case SHELL -> {
+                    String command = requiredToolText(arguments, "command");
+                    double timeoutSeconds;
+                    JsonNode value = arguments.get("timeout");
+                    if (value == null || value.isNull()) {
+                        timeoutSeconds = 0;
+                    } else {
+                        if (!value.isNumber() || value.asDouble() <= 0 || !Double.isFinite(value.asDouble())) {
+                            throw new IllegalArgumentException("timeout" + " must be a positive finite number");
+                        }
+                        timeoutSeconds = value.asDouble();
+                    }
+                    Process process = new ProcessBuilder(switch (local.shell) {
+                        case BASH -> List.of("/bin/bash", "-lc", command);
+                        case POWERSHELL ->
+                                List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command);
+                    })
+                            .directory(local.cwd.toFile())
+                            .redirectErrorStream(true)
+                            .start();
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    Thread reader = Thread.ofVirtual().start(() -> {
+                        try (var input = process.getInputStream()) {
+                            input.transferTo(bytes);
+                        } catch (IOException ignored) {
+                            // The process exit status is reported below.
+                        }
+                    });
+                    long deadline = timeoutSeconds == 0
+                            ? Long.MAX_VALUE
+                            : System.nanoTime() + Duration.ofMillis((long) (timeoutSeconds * 1_000)).toNanos();
+                    while (process.isAlive()) {
+                        if (isAborted(signal)) {
+                            process.destroyForcibly();
+                            throw new IllegalStateException("Command aborted");
+                        }
+                        if (System.nanoTime() >= deadline) {
+                            process.destroyForcibly();
+                            throw new IllegalStateException("Command timed out after " + timeoutSeconds + " seconds");
+                        }
+                        process.waitFor(50, TimeUnit.MILLISECONDS);
+                    }
+                    reader.join();
+                    String output = boundToolOutput(bytes.toString(StandardCharsets.UTF_8), null);
+                    if (process.exitValue() != 0) {
+                        throw new IllegalStateException(
+                                (output.isBlank() ? "" : output + "\n\n") + "Command exited with code " + process.exitValue());
+                    }
+                    yield toolResultText(output.isBlank() ? "(no output)" : output);
+                }
+                case GREP -> {
+                    String patternText = requiredToolText(arguments, "pattern");
+                    boolean literal = optionalToolBoolean(arguments, "literal");
+                    int flags = optionalToolBoolean(arguments, "ignoreCase") ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0;
+                    Pattern pattern = Pattern.compile(literal ? Pattern.quote(patternText) : patternText, flags);
+                    String pathText = optionalToolText(arguments, "path", ".");
+                    Path root1;
+                    try {
+                        root1 = localToolPath(local, pathText);
+                    } catch (InvalidPathException error1) {
+                        if (containsGlobMetacharacter(pathText)) {
                             throw wildcardPathError(pathText);
                         }
-                        Path root = root1;
-                        int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_GREP_LIMIT);
-                        String glob = optionalToolText(arguments, "glob", null);
-                        List<PathMatcher> fileMatchers;
-                        if (glob == null) {
-                            fileMatchers = List.of();
-                        } else {
-                            if (glob.isBlank()) {
-                                throw new IllegalArgumentException("glob must be a non-empty string");
-                            }
-                            try {
-                                LinkedHashSet<String> variants = new LinkedHashSet<>();
-                                List<String> pending = new ArrayList<>();
-                                variants.add(glob);
-                                pending.add(glob);
-                                for (int pendingIndex = 0; pendingIndex < pending.size(); pendingIndex++) {
-                                    String variant1 = pending.get(pendingIndex);
-                                    for (int index = variant1.indexOf("**/"); index >= 0; index = variant1.indexOf("**/", index + 3)) {
-                                        String withoutDirectoryWildcard = variant1.substring(0, index) + variant1.substring(index + 3);
-                                        if (variants.add(withoutDirectoryWildcard)) {
-                                            pending.add(withoutDirectoryWildcard);
-                                        }
+                        throw error1;
+                    }
+                    if (!Files.exists(root1) && containsGlobMetacharacter(pathText)) {
+                        throw wildcardPathError(pathText);
+                    }
+                    Path root = root1;
+                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_GREP_LIMIT);
+                    String glob = optionalToolText(arguments, "glob", null);
+                    List<PathMatcher> fileMatchers;
+                    if (glob == null) {
+                        fileMatchers = List.of();
+                    } else {
+                        if (glob.isBlank()) {
+                            throw new IllegalArgumentException("glob must be a non-empty string");
+                        }
+                        try {
+                            LinkedHashSet<String> variants = new LinkedHashSet<>();
+                            List<String> pending = new ArrayList<>();
+                            variants.add(glob);
+                            pending.add(glob);
+                            for (int pendingIndex = 0; pendingIndex < pending.size(); pendingIndex++) {
+                                String variant1 = pending.get(pendingIndex);
+                                for (int index = variant1.indexOf("**/"); index >= 0; index = variant1.indexOf("**/", index + 3)) {
+                                    String withoutDirectoryWildcard = variant1.substring(0, index) + variant1.substring(index + 3);
+                                    if (variants.add(withoutDirectoryWildcard)) {
+                                        pending.add(withoutDirectoryWildcard);
                                     }
                                 }
-                                fileMatchers = List.copyOf(variants).stream()
-                                        .map(variant -> FileSystems.getDefault().getPathMatcher("glob:" + variant))
-                                        .toList();
-                            } catch (java.util.regex.PatternSyntaxException error) {
-                                throw new IllegalArgumentException("Invalid glob '" + glob + "': " + error.getDescription(), error);
                             }
+                            fileMatchers = List.copyOf(variants).stream()
+                                    .map(variant -> FileSystems.getDefault().getPathMatcher("glob:" + variant))
+                                    .toList();
+                        } catch (java.util.regex.PatternSyntaxException error) {
+                            throw new IllegalArgumentException("Invalid glob '" + glob + "': " + error.getDescription(), error);
                         }
-                        List<Path> files = filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), local.gitIgnore, signal);
-                        boolean rootIsDirectory = Files.isDirectory(root);
-                        StringBuilder output = new StringBuilder();
-                        int filesConsidered = files.size();
-                        int filesSearched = 0;
-                        int matches = 0;
-                        search:
-                        for (Path file : files) {
-                            requireNotAborted(signal);
-                            Path relative = rootIsDirectory ? root.relativize(file) : file.getFileName();
-                            if (!fileMatchers.isEmpty()) {
-                                Path fileName = relative.getFileName();
-                                boolean selected = fileMatchers.stream().anyMatch(matcher -> matcher.matches(relative)
-                                        || fileName != null && !fileName.equals(relative) && matcher.matches(fileName));
-                                if (!selected) continue;
-                            }
-                            filesSearched++;
-                            List<String> lines;
-                            try {
-                                lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-                            } catch (IOException ignored) {
+                    }
+                    List<Path> files = filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), local.gitIgnore, signal);
+                    boolean rootIsDirectory = Files.isDirectory(root);
+                    StringBuilder output = new StringBuilder();
+                    int filesConsidered = files.size();
+                    int filesSearched = 0;
+                    int matches = 0;
+                    search:
+                    for (Path file : files) {
+                        requireNotAborted(signal);
+                        Path relative = rootIsDirectory ? root.relativize(file) : file.getFileName();
+                        if (!fileMatchers.isEmpty()) {
+                            Path fileName = relative.getFileName();
+                            boolean selected = fileMatchers.stream().anyMatch(matcher -> matcher.matches(relative)
+                                    || fileName != null && !fileName.equals(relative) && matcher.matches(fileName));
+                            if (!selected) continue;
+                        }
+                        filesSearched++;
+                        List<String> lines;
+                        try {
+                            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+                        } catch (IOException ignored) {
+                            continue;
+                        }
+                        for (int line = 0; line < lines.size(); line++) {
+                            if (!pattern.matcher(lines.get(line)).find()) {
                                 continue;
                             }
-                            for (int line = 0; line < lines.size(); line++) {
-                                if (!pattern.matcher(lines.get(line)).find()) {
-                                    continue;
-                                }
-                                matches++;
-                                String line1 = lines.get(line);
-                                output.append(Files.isDirectory(root)
-                                                ? root.relativize(file).toString().replace('\\', '/')
-                                                : file.getFileName().toString())
-                                        .append(':')
-                                        .append(line + 1)
-                                        .append(": ")
-                                        .append(line1.length() <= 500 ? line1 : line1.substring(0, 500) + "... [truncated]")
-                                        .append('\n');
-                                if (matches >= limit) {
-                                    break search;
-                                }
+                            matches++;
+                            String line1 = lines.get(line);
+                            output.append(Files.isDirectory(root)
+                                            ? root.relativize(file).toString().replace('\\', '/')
+                                            : file.getFileName().toString())
+                                    .append(':')
+                                    .append(line + 1)
+                                    .append(": ")
+                                    .append(line1.length() <= 500 ? line1 : line1.substring(0, 500) + "... [truncated]")
+                                    .append('\n');
+                            if (matches >= limit) {
+                                break search;
                             }
                         }
-                        if (matches > 0) {
-                            yield toolResultText(boundToolOutput(
-                                    output.toString(), matches >= limit ? "[" + limit + " matches limit reached]" : null));
-                        } else if (glob != null && filesSearched == 0 && filesConsidered > 0) {
-                            yield toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
-                                    + root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
-                        } else if (glob != null) {
-                            yield toolResultText("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
-                        } else {
-                            yield toolResultText("No matches found in " + filesSearched + " files");
+                    }
+                    if (matches > 0) {
+                        yield toolResultText(boundToolOutput(
+                                output.toString(), matches >= limit ? "[" + limit + " matches limit reached]" : null));
+                    } else if (glob != null && filesSearched == 0 && filesConsidered > 0) {
+                        yield toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
+                                + root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
+                    } else if (glob != null) {
+                        yield toolResultText("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
+                    } else {
+                        yield toolResultText("No matches found in " + filesSearched + " files");
+                    }
+                }
+                case FIND -> {
+                    AgentTool.ToolResult result;
+                    String pattern = requiredToolText(arguments, "pattern");
+                    Path root = localToolPath(local, optionalToolText(arguments, "path", "."));
+                    if (!Files.isDirectory(root)) {
+                        throw new IllegalArgumentException("Not a directory: " + root);
+                    }
+                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_FIND_LIMIT);
+                    var matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+                    List<Path> candidates =
+                            filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), local.gitIgnore, signal);
+                    List<String> matches = new ArrayList<>();
+                    for (Path candidate : candidates) {
+                        requireNotAborted(signal);
+                        Path relative = root.relativize(candidate);
+                        if (matcher.matches(relative) || matcher.matches(relative.getFileName())) {
+                            matches.add(relative.toString().replace('\\', '/'));
                         }
                     }
-                    case FIND -> {
-                        AgentTool.ToolResult result;
-                        String pattern = requiredToolText(arguments, "pattern");
-                        Path root = localToolPath(local, optionalToolText(arguments, "path", "."));
-                        if (!Files.isDirectory(root)) {
-                            throw new IllegalArgumentException("Not a directory: " + root);
-                        }
-                        int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_FIND_LIMIT);
-                        var matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
-                        List<Path> candidates =
-                                filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), local.gitIgnore, signal);
-                        List<String> matches = new ArrayList<>();
-                        for (Path candidate : candidates) {
-                            requireNotAborted(signal);
-                            Path relative = root.relativize(candidate);
-                            if (matcher.matches(relative) || matcher.matches(relative.getFileName())) {
-                                matches.add(relative.toString().replace('\\', '/'));
-                            }
-                        }
-                        matches.sort(String::compareToIgnoreCase);
-                        if (matches.isEmpty()) {
-                            result = toolResultText("No files found matching pattern");
-                        } else {
-                            boolean limitReached = matches.size() > limit;
-                            if (limitReached) matches = new ArrayList<>(matches.subList(0, limit));
-                            String suffix = limitReached ? "\n\n[" + limit + " results limit reached]" : "";
-                            result = toolResultText(boundToolOutput(String.join("\n", matches) + suffix, null));
-                        }
-                        yield result;
+                    matches.sort(String::compareToIgnoreCase);
+                    if (matches.isEmpty()) {
+                        result = toolResultText("No files found matching pattern");
+                    } else {
+                        boolean limitReached = matches.size() > limit;
+                        if (limitReached) matches = new ArrayList<>(matches.subList(0, limit));
+                        String suffix = limitReached ? "\n\n[" + limit + " results limit reached]" : "";
+                        result = toolResultText(boundToolOutput(String.join("\n", matches) + suffix, null));
                     }
-                    case LS -> {
-                        AgentTool.ToolResult result;
-                        Path directory = localToolPath(local, optionalToolText(arguments, "path", "."));
-                        if (!Files.isDirectory(directory)) {
-                            throw new IllegalArgumentException("Not a directory: " + directory);
-                        }
-                        int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_LS_LIMIT);
-                        List<String> entries;
-                        try (var paths = Files.list(directory)) {
-                            entries = paths.map(entry -> entry.getFileName() + (Files.isDirectory(entry) ? "/" : ""))
-                                    .sorted(String.CASE_INSENSITIVE_ORDER)
-                                    .limit(limit)
-                                    .toList();
-                        }
-                        if (entries.isEmpty()) {
-                            result = toolResultText("(empty directory)");
-                        } else {
-                            result = toolResultText(boundToolOutput(String.join("\n", entries), null));
-                        }
-                        yield result;
+                    yield result;
+                }
+                case LS -> {
+                    AgentTool.ToolResult result;
+                    Path directory = localToolPath(local, optionalToolText(arguments, "path", "."));
+                    if (!Files.isDirectory(directory)) {
+                        throw new IllegalArgumentException("Not a directory: " + directory);
                     }
-                };
-            }
+                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_LS_LIMIT);
+                    List<String> entries;
+                    try (var paths = Files.list(directory)) {
+                        entries = paths.map(entry -> entry.getFileName() + (Files.isDirectory(entry) ? "/" : ""))
+                                .sorted(String.CASE_INSENSITIVE_ORDER)
+                                .limit(limit)
+                                .toList();
+                    }
+                    if (entries.isEmpty()) {
+                        result = toolResultText("(empty directory)");
+                    } else {
+                        result = toolResultText(boundToolOutput(String.join("\n", entries), null));
+                    }
+                    yield result;
+                }
+            };
             case McpAgentTool mcp -> {
                 ObjectNode params = jsonObject().put("name", mcp.definition.name);
                 params.set("arguments", arguments == null ? jsonObject() : arguments);
@@ -4497,7 +4496,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     break;
                 }
             }
-            if (workingDirectory == null || result == null) return files;
+            if (result == null) return files;
 
             List<String> relativeNames = new ArrayList<>(files.size());
             for (Path candidate : files) {
@@ -4570,11 +4569,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             if (start < bytes.length) {
                 values.add(new String(bytes, start, bytes.length - start, StandardCharsets.UTF_8));
             }
-            Set<String> ignored = values;
-            if (ignored.isEmpty()) return files;
+            if (values.isEmpty()) return files;
             List<Path> filtered = new ArrayList<>(files.size());
             for (int index = 0; index < files.size(); index++) {
-                if (!ignored.contains(relativeNames.get(index))) filtered.add(files.get(index));
+                if (!values.contains(relativeNames.get(index))) filtered.add(files.get(index));
             }
             return List.copyOf(filtered);
         }
@@ -4681,7 +4679,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
             byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
             int separator = output.isEmpty() ? 0 : 1;
-            if (output.length() > 0
+            if (!output.isEmpty()
                     && output.toString().getBytes(StandardCharsets.UTF_8).length + separator + bytes.length
                     > BuiltInTools.MAX_BYTES) {
                 return appendToolNotice(output, notice == null ? "[Output truncated at 50KB]" : notice);
@@ -4783,7 +4781,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         JsonNode root;
         try {
             Matcher envMatcher = McpConfigLoader.ENVIRONMENT.matcher(text);
-            StringBuffer environmentExpanded = new StringBuffer();
+            StringBuilder environmentExpanded = new StringBuilder();
             while (envMatcher.find()) {
                 envMatcher.appendReplacement(
                         environmentExpanded,
@@ -5933,7 +5931,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         McpOAuthClient oauth = new McpOAuthClient(
                 Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(http, "http"),
-                Objects.requireNonNull((Predicate<URI>) uri -> {
+                Objects.requireNonNull(uri -> {
                     String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
                     List<String> command;
                     if (os.contains("mac")) command = List.of("open", uri.toString());
@@ -6034,30 +6032,23 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     public static void mcpCloseManager(McpManager manager) {
         if (manager.closed) return;
         manager.closed = true;
-        manager.servers.values().forEach(runtime -> mcpDisconnectRuntime(runtime, false));
-    }
-
-    private static McpManager.ServerStatus mcpDisconnectRuntime(
-            McpManager.Runtime runtime, boolean disable) {
-        McpClient client;
-        Thread connector;
-        synchronized (runtime.lock) {
-            runtime.generation++;
-            connector = runtime.connector;
-            runtime.connector = null;
-            client = runtime.client;
-            runtime.client = null;
-            runtime.tools = List.of();
-            runtime.state = McpManager.State.DISABLED;
-            if (disable) {
-                runtime.enabled = false;
-                runtime.message = null;
+        manager.servers.values().forEach(runtime -> {
+            McpClient client;
+            Thread connector;
+            synchronized (runtime.lock) {
+                runtime.generation++;
+                connector = runtime.connector;
+                runtime.connector = null;
+                client = runtime.client;
+                runtime.client = null;
+                runtime.tools = List.of();
+                runtime.state = McpManager.State.DISABLED;
+                runtime.authorizationUrl = null;
             }
-            runtime.authorizationUrl = null;
-        }
-        if (connector != null) connector.interrupt();
-        if (client != null) mcpCloseClient(client);
-        return mcpSnapshot(runtime);
+            if (connector != null) connector.interrupt();
+            if (client != null) mcpCloseClient(client);
+            mcpSnapshot(runtime);
+        });
     }
 
     private static void mcpFailConnect(
@@ -6076,16 +6067,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static Thread mcpStartConnect(
+    private static void mcpStartConnect(
             McpManager manager, McpManager.Runtime runtime, boolean interactiveOAuth) {
         McpClient previous;
         Thread previousConnector;
         long generation;
         Thread connector;
         synchronized (runtime.lock) {
-            if (manager.closed) return null;
+            if (manager.closed) return;
             runtime.enabled = true;
-            if (runtime.state == McpManager.State.CONNECTED && runtime.client != null) return null;
+            if (runtime.state == McpManager.State.CONNECTED && runtime.client != null) return;
             previous = runtime.client;
             previousConnector = runtime.connector;
             runtime.client = null;
@@ -6185,7 +6176,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 } catch (Exception error) {
                                     if (oauthSession == null || !mcpIsOAuthChallenge(error)) throw error;
                                     if (!interactiveOAuth) {
-                                        McpHttpException http = mcpFindHttpException((Throwable) error);
+                                        McpHttpException http = mcpFindHttpException(error);
                                         McpOAuthClient.Challenge challenge = http == null ? null : mcpOAuthChallenge(http);
                                         throw new McpOAuthRequiredException(
                                                 challenge != null && mcpOAuthInsufficientScope(challenge)
@@ -6405,7 +6396,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             List<McpClient.ToolDefinition> tools = mcpListTools(candidate);
                             McpClient connected = candidate;
                             // Keep the last usable catalog when a list-changed refresh fails.
-                            BiConsumer<String, JsonNode> listener = (method, params) -> {
+                            BiConsumer<String, JsonNode> listener = (method, _) -> {
                                 if (method.equals("notifications/tools/list_changed")) {
                                     Thread.ofVirtual().name("mcp-tools-refresh").start(() -> {
                                         try {
@@ -6459,7 +6450,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         if (previousConnector != null && previousConnector != connector) previousConnector.interrupt();
         if (previous != null) mcpCloseClient(previous);
         connector.start();
-        return connector;
     }
 
     private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
@@ -6812,24 +6802,24 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     throw new IOException("OAuth client_secret_basic requires a client secret");
                 }
                 String value = clientInfo.clientId + ":" + clientInfo.clientSecret;
-                ((Map<String, String>) headers).put(
+                headers.put(
                         "Authorization",
                         "Basic " + Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8)));
             }
             case "client_secret_post" -> {
-                ((Map<String, String>) parameters).put("client_id", clientInfo.clientId);
+                parameters.put("client_id", clientInfo.clientId);
                 if (clientInfo.clientSecret != null)
-                    ((Map<String, String>) parameters).put("client_secret", clientInfo.clientSecret);
+                    parameters.put("client_secret", clientInfo.clientSecret);
             }
-            case "none" -> ((Map<String, String>) parameters).put("client_id", clientInfo.clientId);
+            case "none" -> parameters.put("client_id", clientInfo.clientId);
             default -> throw new IOException("Unsupported OAuth token endpoint authentication method: " + method);
         }
         HttpRequest.Builder builder = HttpRequest.newBuilder(discovery.metadata.tokenEndpoint)
                 .timeout(McpOAuthClient.HTTP_TIMEOUT)
                 .setHeader("Accept", "application/json")
                 .setHeader("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(mcpFormEncode((Map<String, String>) parameters), StandardCharsets.UTF_8));
-        mcpApplyOAuthHeaders(builder, (Map<String, String>) headers);
+                .POST(HttpRequest.BodyPublishers.ofString(mcpFormEncode(parameters), StandardCharsets.UTF_8));
+        mcpApplyOAuthHeaders(builder, headers);
         HttpRequest request = builder.build();
         McpOAuthClient.Response response = mcpOAuthSend(client, request);
         if (!mcpOAuthSuccess(response)) throw mcpOAuthFailure(response, "OAuth token request failed");
@@ -6895,7 +6885,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         } catch (IOException ignored) {
         }
         String message = description != null ? description : code != null ? code : mcpAbbreviate(response.body);
-        if (message == null || message.isBlank()) message = fallback;
+        if (message.isBlank()) message = fallback;
         return new McpOAuthClient.OAuthFailure(response.status, code, fallback + ": " + message);
     }
 
@@ -7788,12 +7778,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
         selector.optionStartRow = lines.size();
         int reservedLines = lines.size() + 3;
-        selector.visibleCount = Math.max(1, Math.min(10, height - reservedLines));
+        selector.visibleCount = Math.clamp(height - reservedLines, 1, 10);
         selector.visibleStart = Math.max(
                 0,
-                Math.min(
-                        selector.selectedIndex - (selector.visibleCount / 2),
-                        Math.max(0, selector.filteredItems.size() - selector.visibleCount)));
+                Math.clamp(selector.filteredItems.size() - selector.visibleCount, 0,
+                        selector.selectedIndex - (selector.visibleCount / 2)));
         int visibleEnd =
                 Math.min(selector.filteredItems.size(), selector.visibleStart + selector.visibleCount);
 
@@ -7953,7 +7942,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 fuzzyFilter(selector.items, selector.query.toString(), item -> item.searchText);
         if (selector.query.isEmpty()) {
             int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
-            selector.selectedIndex = currentIndex < 0 ? 0 : currentIndex;
+            selector.selectedIndex = Math.max(currentIndex, 0);
         } else {
             selector.selectedIndex = 0;
         }
@@ -8104,7 +8093,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
                 }
                 AttributedString rendered = interactive.dynamicPost.get();
-                if (rendered == null || rendered.length() == 0) {
+                if (rendered == null || rendered.isEmpty()) {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
                 }
                 Supplier<AttributedString> previousPost = post;
@@ -8303,9 +8292,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     interactive.activeCommandSuggestions.visibleStart =
                             interactive.activeCommandSuggestions.selectedIndex - CommandSuggestions.VISIBLE_COMMANDS + 1;
                 }
-                interactive.activeCommandSuggestions.visibleStart = Math.min(
-                        interactive.activeCommandSuggestions.visibleStart,
-                        Math.max(0, interactive.activeCommandSuggestions.matches.size() - CommandSuggestions.VISIBLE_COMMANDS));
+                interactive.activeCommandSuggestions.visibleStart = Math.clamp(interactive.activeCommandSuggestions.matches.size() - CommandSuggestions.VISIBLE_COMMANDS, 0,
+                        interactive.activeCommandSuggestions.visibleStart);
             }
             if (result) {
                 return true;
@@ -8395,7 +8383,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                         .mapToInt(CodingAgentOperations::visibleWidth)
                                         .max()
                                         .orElse(1);
-                                int innerWidth = Math.max(1, Math.min(longestCommand + 2, Math.max(1, columns - 2)));
+                                int innerWidth = Math.max(1, Math.clamp(columns - 2, 1, longestCommand + 2));
                                 String border = "─".repeat(innerWidth);
                                 List<String> lines1 = new ArrayList<>(visible.size() + 2);
                                 lines1.add(styleMuted("╭" + border + "╮", promptTheme));
@@ -8502,7 +8490,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 startTuiRuntime(runtime);
                 handleComponentInput(component, new TuiInput.Resize(width, height));
                 renderTuiFrame(runtime, component, width, height);
-                while (!((TuiComponent<?>) component).complete.getAsBoolean()) {
+                while (!component.complete.getAsBoolean()) {
                     TuiInput input = readTuiInput(runtime.terminal.reader(), 100);
                     int nextWidth = tuiWidth(runtime);
                     int nextHeight = tuiHeight(runtime);
@@ -8732,7 +8720,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 interactive.theme))));
     }
 
-    /** Left- and right-aligns status content on one full-width row. */
     /**
      * Keeps activity ahead of workspace/model metadata. When the terminal is
      * narrow, metadata is discarded before the activity text is truncated.
@@ -8763,9 +8750,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             case NONE -> theme.muted;
             case READY -> readyStatus(theme);
             case ACTIVE -> activeStatus(theme);
-            case TOOL -> {
-                yield theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
-            }
+            case TOOL -> theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
             case WARNING -> warningStatus(theme);
         };
         String styledActivity =
@@ -8963,7 +8948,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             List.of("OPENAI_API_KEY"),
                             credentials,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
-            ChatGptAuth auth = chatGptAuth((CredentialStore) credentials, URI.create("https://auth.openai.com"), ChatGptAuth.CLIENT_ID);
+            ChatGptAuth auth = chatGptAuth(credentials, URI.create("https://auth.openai.com"), ChatGptAuth.CLIENT_ID);
             List<Model> models = catalogModelsForProvider(catalog, "openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
                     .filter(model1 -> ChatGptProvider.CODEX_MODEL_IDS.contains(model1.id))
@@ -8996,7 +8981,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     "github-copilot",
                     newGitHubCopilotProvider(
                             catalogModelsForProvider(catalog, "github-copilot"), gitHubCopilotAuth(
-                                    (CredentialStore) credentials,
+                                    credentials,
                                     URI.create("https://github.com"),
                                     URI.create("https://api.github.com/copilot_internal/v2/token"),
                                     URI.create(GitHubCopilotAuth.DEFAULT_COPILOT_BASE_URL))));
@@ -9263,9 +9248,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             configureShellModel(
                                     shell, resolveCliModel(providers, parsed.provider, parsed.model), false);
                         } else if (parsed.provider != null) {
-                            List<Model> models1 = parsed.provider == null
-                                    ? allCatalogModels(providers.catalog)
-                                    : providerModels(requireCoreProvider(providers, parsed.provider));
+                            List<Model> models1 = providerModels(requireCoreProvider(providers, parsed.provider));
                             if (models1.isEmpty()) {
                                 throw new IllegalArgumentException("No bundled models for provider: " + parsed.provider);
                             }
@@ -9499,31 +9482,31 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             } else {
                                                 McpSelector selector1 = new McpSelector();
                                                 selector1.manager = shell.mcp;
-                                                selector1.onChange = (Consumer<McpSelector.Change>) change -> {
+                                                selector1.onChange = change -> {
                                                     try {
-                                                        if (((McpSelector.Change) change).toolName != null) {
-                                                            requireSettingsValue(((McpSelector.Change) change).serverName, "serverName");
-                                                            requireSettingsValue(((McpSelector.Change) change).toolName, "toolName");
+                                                        if (change.toolName != null) {
+                                                            requireSettingsValue(change.serverName, "serverName");
+                                                            requireSettingsValue(change.toolName, "toolName");
                                                             modifySettings(shell.settingsStore, root1 -> {
-                                                                ObjectNode server = settingsMcpServer(root1, ((McpSelector.Change) change).serverName);
+                                                                ObjectNode server = settingsMcpServer(root1, change.serverName);
                                                                 ArrayNode disabledTools = null;
                                                                 JsonNode value1 = server.get("disabledTools");
                                                                 if (value1 != null && !value1.isNull()) {
                                                                     if (!(value1 instanceof ArrayNode tools)) {
                                                                         throw new UncheckedIOException(new IOException(
-                                                                                "Invalid MCP server \"" + ((McpSelector.Change) change).serverName + "\": disabledTools must be an array"));
+                                                                                "Invalid MCP server \"" + change.serverName + "\": disabledTools must be an array"));
                                                                     }
                                                                     for (JsonNode tool1 : tools) {
-                                                                        settingsDisabledToolName(((McpSelector.Change) change).serverName, tool1);
+                                                                        settingsDisabledToolName(change.serverName, tool1);
                                                                     }
                                                                     disabledTools = tools;
                                                                 }
-                                                                if (((McpSelector.Change) change).enabled) {
+                                                                if (change.enabled) {
                                                                     if (disabledTools == null) return;
                                                                     ArrayNode retained = Json.MAPPER.createArrayNode();
                                                                     for (JsonNode tool : disabledTools) {
-                                                                        String name = settingsDisabledToolName(((McpSelector.Change) change).serverName, tool);
-                                                                        if (!name.equals(((McpSelector.Change) change).toolName))
+                                                                        String name = settingsDisabledToolName(change.serverName, tool);
+                                                                        if (!name.equals(change.toolName))
                                                                             retained.add(name);
                                                                     }
                                                                     if (retained.isEmpty())
@@ -9534,14 +9517,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 if (disabledTools == null)
                                                                     disabledTools = server.putArray("disabledTools");
                                                                 for (JsonNode tool : disabledTools) {
-                                                                    if (settingsDisabledToolName(((McpSelector.Change) change).serverName, tool).equals(((McpSelector.Change) change).toolName))
+                                                                    if (settingsDisabledToolName(change.serverName, tool).equals(change.toolName))
                                                                         return;
                                                                 }
-                                                                disabledTools.add(((McpSelector.Change) change).toolName);
+                                                                disabledTools.add(change.toolName);
                                                             });
                                                         } else {
-                                                            requireSettingsValue(((McpSelector.Change) change).serverName, "serverName");
-                                                            modifySettings(shell.settingsStore, root1 -> settingsMcpServer(root1, ((McpSelector.Change) change).serverName).put("enabled", ((McpSelector.Change) change).enabled));
+                                                            requireSettingsValue(change.serverName, "serverName");
+                                                            modifySettings(shell.settingsStore, root1 -> settingsMcpServer(root1, change.serverName).put("enabled", change.enabled));
                                                         }
                                                     } catch (IOException error) {
                                                         throw new UncheckedIOException(error);
@@ -9554,41 +9537,38 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                         .map(CodingAgentOperations::mcpSnapshot)
                                                         .toList().stream().map(status -> status.name).toList();
                                                 selector1.filtered = selector1.names;
-                                                McpSelector selector =
-                                                        selector1;
                                                 runComponent(shell.terminal, new TuiComponent<>(
                                                         frame -> {
-                                                            if (selector.view == McpSelector.View.TOOLS)
-                                                                refreshMcpSelectorTools(selector);
+                                                            if (selector1.view == McpSelector.View.TOOLS)
+                                                                refreshMcpSelectorTools(selector1);
 
                                                             List<String> lines = new ArrayList<>();
-                                                            String title = selector.view == McpSelector.View.SERVERS
+                                                            String title = selector1.view == McpSelector.View.SERVERS
                                                                     ? "MCP Servers"
-                                                                    : "MCP Tools: " + selector.toolServer;
+                                                                    : "MCP Tools: " + selector1.toolServer;
                                                             lines.add(frame.theme.heading + truncatePlain(title, frame.width) + frame.theme.reset);
                                                             lines.add("");
-                                                            String before = selector.query.substring(0, selector.queryCursor);
-                                                            String after = selector.query.substring(selector.queryCursor);
+                                                            String before = selector1.query.substring(0, selector1.queryCursor);
+                                                            String after = selector1.query.substring(selector1.queryCursor);
                                                             lines.add(truncatePlain("Search: " + before + "|" + after, frame.width));
                                                             lines.add("");
-                                                            selector.optionStartRow = lines.size();
-                                                            selector.visibleCount = Math.max(1, Math.min(10, frame.height - 9));
-                                                            int itemCount = mcpSelectorItemCount(selector);
-                                                            selector.visibleStart = Math.max(0, Math.min(
-                                                                    selector.selectedIndex - selector.visibleCount / 2,
-                                                                    Math.max(0, itemCount - selector.visibleCount)));
-                                                            int end = Math.min(itemCount, selector.visibleStart + selector.visibleCount);
+                                                            selector1.optionStartRow = lines.size();
+                                                            selector1.visibleCount = Math.clamp(frame.height - 9, 1, 10);
+                                                            int itemCount = mcpSelectorItemCount(selector1);
+                                                            selector1.visibleStart = Math.max(0, Math.clamp(itemCount - selector1.visibleCount, 0,
+                                                                    selector1.selectedIndex - selector1.visibleCount / 2));
+                                                            int end = Math.min(itemCount, selector1.visibleStart + selector1.visibleCount);
                                                             if (itemCount == 0) {
-                                                                String empty = selector.view == McpSelector.View.SERVERS
+                                                                String empty = selector1.view == McpSelector.View.SERVERS
                                                                         ? "  No matching servers"
                                                                         : "  No tools available";
                                                                 lines.add(frame.theme.muted + empty + frame.theme.reset);
                                                             } else {
-                                                                for (int index = selector.visibleStart; index < end; index++) {
-                                                                    McpManager.ServerStatus status = mcpStatus(selector.manager, selector.filtered.get(index));
-                                                                    McpManager.ToolStatus status1 = selector.filteredTools.get(index);
-                                                                    String row = (index == selector.selectedIndex ? "> " : "  ")
-                                                                            + (selector.view == McpSelector.View.SERVERS
+                                                                for (int index = selector1.visibleStart; index < end; index++) {
+                                                                    McpManager.ServerStatus status = mcpStatus(selector1.manager, selector1.filtered.get(index));
+                                                                    McpManager.ToolStatus status1 = selector1.filteredTools.get(index);
+                                                                    String row = (index == selector1.selectedIndex ? "> " : "  ")
+                                                                            + (selector1.view == McpSelector.View.SERVERS
                                                                             ? switch (status.state) {
                                                                         case CONNECTING ->
                                                                                 "⋯ " + status.name + "  Connecting";
@@ -9611,37 +9591,37 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                     }
                                                                             : (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled"));
                                                                     row = truncatePlain(row, frame.width);
-                                                                    lines.add(index == selector.selectedIndex ? frame.theme.heading + row + frame.theme.reset : row);
+                                                                    lines.add(index == selector1.selectedIndex ? frame.theme.heading + row + frame.theme.reset : row);
                                                                 }
-                                                                if (selector.visibleStart > 0 || end < itemCount) {
-                                                                    lines.add(frame.theme.muted + "  " + (selector.selectedIndex + 1) + "/" + itemCount + frame.theme.reset);
+                                                                if (selector1.visibleStart > 0 || end < itemCount) {
+                                                                    lines.add(frame.theme.muted + "  " + (selector1.selectedIndex + 1) + "/" + itemCount + frame.theme.reset);
                                                                 }
                                                             }
                                                             lines.add("");
                                                             String detail;
-                                                            if (selector.changeError == null) {
+                                                            if (selector1.changeError == null) {
                                                                 String result1 = null;
-                                                                if (selector.view == McpSelector.View.SERVERS) {
-                                                                    if (!selector.filtered.isEmpty()) {
+                                                                if (selector1.view == McpSelector.View.SERVERS) {
+                                                                    if (!selector1.filtered.isEmpty()) {
                                                                         McpManager.ServerStatus selected =
-                                                                                mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+                                                                                mcpStatus(selector1.manager, selector1.filtered.get(selector1.selectedIndex));
                                                                         result1 = selected.message == null ? selected.target : selected.message;
                                                                     }
-                                                                } else if (!selector.filteredTools.isEmpty()) {
-                                                                    String description = selector.filteredTools.get(selector.selectedIndex).description;
+                                                                } else if (!selector1.filteredTools.isEmpty()) {
+                                                                    String description = selector1.filteredTools.get(selector1.selectedIndex).description;
                                                                     result1 = description.isBlank() ? "No description" : description;
                                                                 }
                                                                 detail = result1;
                                                             } else {
-                                                                detail = selector.changeError;
+                                                                detail = selector1.changeError;
                                                             }
                                                             if (detail != null) {
-                                                                String style = selector.changeError == null ? frame.theme.muted : warningStatus(frame.theme);
+                                                                String style = selector1.changeError == null ? frame.theme.muted : warningStatus(frame.theme);
                                                                 lines.add(style + truncatePlain("  " + detail, frame.width) + frame.theme.reset);
                                                             }
-                                                            if (selector.view == McpSelector.View.SERVERS && !selector.filtered.isEmpty()) {
+                                                            if (selector1.view == McpSelector.View.SERVERS && !selector1.filtered.isEmpty()) {
                                                                 McpManager.ServerStatus selected =
-                                                                        mcpStatus(selector.manager, selector.filtered.get(selector.selectedIndex));
+                                                                        mcpStatus(selector1.manager, selector1.filtered.get(selector1.selectedIndex));
                                                                 if (selected.authorizationUrl != null) {
                                                                     String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, frame.width - 2));
                                                                     String safeUrl = selected.authorizationUrl.replace("\u001b", "").replace("\u0007", "");
@@ -9649,7 +9629,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                     lines.add(frame.theme.muted + "  " + link + frame.theme.reset);
                                                                 }
                                                             }
-                                                            String hint = selector.view == McpSelector.View.SERVERS
+                                                            String hint = selector1.view == McpSelector.View.SERVERS
                                                                     ? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
                                                                     : "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
                                                             lines.add(frame.theme.muted + truncatePlain(hint, frame.width) + frame.theme.reset);
@@ -9659,18 +9639,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                             switch ((TuiInput) input1) {
                                                                 case TuiInput.Key key -> {
                                                                     switch (key.type) {
-                                                                        case UP -> moveMcpSelector(selector, -1);
-                                                                        case DOWN -> moveMcpSelector(selector, 1);
+                                                                        case UP -> moveMcpSelector(selector1, -1);
+                                                                        case DOWN -> moveMcpSelector(selector1, 1);
                                                                         case PAGE_UP ->
-                                                                                moveMcpSelector(selector, -Math.max(1, selector.visibleCount));
+                                                                                moveMcpSelector(selector1, -Math.max(1, selector1.visibleCount));
                                                                         case PAGE_DOWN ->
-                                                                                moveMcpSelector(selector, Math.max(1, selector.visibleCount));
+                                                                                moveMcpSelector(selector1, Math.max(1, selector1.visibleCount));
                                                                         case ENTER -> {
-                                                                            if (selector.view == McpSelector.View.SERVERS) {
-                                                                                if (!selector.filtered.isEmpty()) {
+                                                                            if (selector1.view == McpSelector.View.SERVERS) {
+                                                                                if (!selector1.filtered.isEmpty()) {
                                                                                     McpManager.ServerStatus status;
-                                                                                    String name = selector.filtered.get(selector.selectedIndex);
-                                                                                    McpManager.Runtime runtime2 = mcpRequireRuntime(selector.manager, name);
+                                                                                    String name = selector1.filtered.get(selector1.selectedIndex);
+                                                                                    McpManager.Runtime runtime2 = mcpRequireRuntime(selector1.manager, name);
                                                                                     McpManager.State state;
                                                                                     synchronized (runtime2.lock) {
                                                                                         state = runtime2.state;
@@ -9678,7 +9658,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                     if (state == McpManager.State.CONNECTED
                                                                                             || state == McpManager.State.CONNECTING
                                                                                             || state == McpManager.State.AUTHENTICATING) {
-                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector.manager, name);
+                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector1.manager, name);
                                                                                         McpClient client;
                                                                                         Thread connector;
                                                                                         synchronized (runtime1.lock) {
@@ -9699,81 +9679,81 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                             mcpCloseClient(client);
                                                                                         status = mcpSnapshot(runtime1);
                                                                                     } else {
-                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector.manager, name);
-                                                                                        mcpStartConnect(selector.manager, runtime1, true);
+                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector1.manager, name);
+                                                                                        mcpStartConnect(selector1.manager, runtime1, true);
                                                                                         status = mcpSnapshot(runtime1);
                                                                                     }
                                                                                     boolean result1;
-                                                                                    McpManager.Runtime runtime = mcpRequireRuntime(selector.manager, status.name);
+                                                                                    McpManager.Runtime runtime = mcpRequireRuntime(selector1.manager, status.name);
                                                                                     synchronized (runtime.lock) {
                                                                                         result1 = runtime.enabled;
                                                                                     }
-                                                                                    notifyMcpSelectorChange(selector, new McpSelector.Change(
+                                                                                    notifyMcpSelectorChange(selector1, new McpSelector.Change(
                                                                                             status.name, null, result1));
                                                                                 }
                                                                             } else {
-                                                                                refreshMcpSelectorTools(selector);
-                                                                                if (!selector.filteredTools.isEmpty()) {
+                                                                                refreshMcpSelectorTools(selector1);
+                                                                                if (!selector1.filteredTools.isEmpty()) {
                                                                                     try {
                                                                                         McpManager.ToolStatus result1;
-                                                                                        McpManager.Runtime runtime = mcpRequireRuntime(selector.manager, selector.toolServer);
+                                                                                        McpManager.Runtime runtime = mcpRequireRuntime(selector1.manager, selector1.toolServer);
                                                                                         synchronized (runtime.lock) {
                                                                                             if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
-                                                                                                throw new IllegalStateException("MCP server is not connected: " + selector.toolServer);
+                                                                                                throw new IllegalStateException("MCP server is not connected: " + selector1.toolServer);
                                                                                             }
                                                                                             McpClient.ToolDefinition definition = runtime.tools.stream()
-                                                                                                    .filter(tool -> tool.name.equals(selector.filteredTools.get(selector.selectedIndex).name))
+                                                                                                    .filter(tool -> tool.name.equals(selector1.filteredTools.get(selector1.selectedIndex).name))
                                                                                                     .findFirst()
                                                                                                     .orElseThrow(() -> new IllegalArgumentException(
-                                                                                                            "MCP tool is not available from " + selector.toolServer + ": " + selector.filteredTools.get(selector.selectedIndex).name));
+                                                                                                            "MCP tool is not available from " + selector1.toolServer + ": " + selector1.filteredTools.get(selector1.selectedIndex).name));
                                                                                             boolean enabled;
-                                                                                            if (runtime.disabledTools.remove(selector.filteredTools.get(selector.selectedIndex).name)) {
+                                                                                            if (runtime.disabledTools.remove(selector1.filteredTools.get(selector1.selectedIndex).name)) {
                                                                                                 enabled = true;
                                                                                             } else {
-                                                                                                runtime.disabledTools.add(selector.filteredTools.get(selector.selectedIndex).name);
+                                                                                                runtime.disabledTools.add(selector1.filteredTools.get(selector1.selectedIndex).name);
                                                                                                 enabled = false;
                                                                                             }
                                                                                             result1 = new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
                                                                                         }
                                                                                         McpManager.ToolStatus status = result1;
                                                                                         notifyMcpSelectorChange(
-                                                                                                selector, new McpSelector.Change(status.serverName, status.name, status.enabled));
-                                                                                        refreshMcpSelectorTools(selector);
+                                                                                                selector1, new McpSelector.Change(status.serverName, status.name, status.enabled));
+                                                                                        refreshMcpSelectorTools(selector1);
                                                                                     } catch (IllegalStateException |
                                                                                              IllegalArgumentException ignored) {
                                                                                         // The server or its catalog may have changed while this selector was open.
-                                                                                        refreshMcpSelectorTools(selector);
+                                                                                        refreshMcpSelectorTools(selector1);
                                                                                     }
                                                                                 }
                                                                             }
                                                                         }
                                                                         case TAB -> {
-                                                                            if (selector.view == McpSelector.View.SERVERS) {
-                                                                                if (selector.view != McpSelector.View.TOOLS && !selector.filtered.isEmpty()) {
-                                                                                    String server = selector.filtered.get(selector.selectedIndex);
-                                                                                    if (mcpStatus(selector.manager, server).state == McpManager.State.CONNECTED) {
-                                                                                        selector.view = McpSelector.View.TOOLS;
-                                                                                        selector.toolServer = server;
-                                                                                        clearMcpSelectorQuery(selector);
-                                                                                        refreshMcpSelectorTools(selector);
+                                                                            if (selector1.view == McpSelector.View.SERVERS) {
+                                                                                if (!selector1.filtered.isEmpty()) {
+                                                                                    String server = selector1.filtered.get(selector1.selectedIndex);
+                                                                                    if (mcpStatus(selector1.manager, server).state == McpManager.State.CONNECTED) {
+                                                                                        selector1.view = McpSelector.View.TOOLS;
+                                                                                        selector1.toolServer = server;
+                                                                                        clearMcpSelectorQuery(selector1);
+                                                                                        refreshMcpSelectorTools(selector1);
                                                                                     }
                                                                                 }
-                                                                            } else closeMcpSelectorTools(selector);
+                                                                            } else closeMcpSelectorTools(selector1);
                                                                         }
                                                                         case ESCAPE, CANCEL -> {
-                                                                            if (selector.view == McpSelector.View.TOOLS)
-                                                                                closeMcpSelectorTools(selector);
-                                                                            else selector.complete = true;
+                                                                            if (selector1.view == McpSelector.View.TOOLS)
+                                                                                closeMcpSelectorTools(selector1);
+                                                                            else selector1.complete = true;
                                                                         }
                                                                         case CHARACTER, PASTE, BACKSPACE, DELETE, LEFT,
                                                                              RIGHT, HOME, END, CLEAR -> {
                                                                             int cursor = editQuery(
-                                                                                    selector.query,
-                                                                                    selector.queryCursor,
+                                                                                    selector1.query,
+                                                                                    selector1.queryCursor,
                                                                                     key,
-                                                                                    () -> filterMcpSelector(selector));
+                                                                                    () -> filterMcpSelector(selector1));
                                                                             if (cursor >= 0)
-                                                                                selector.queryCursor = cursor;
+                                                                                selector1.queryCursor = cursor;
                                                                         }
                                                                         default -> {
                                                                         }
@@ -9781,17 +9761,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 }
                                                                 case TuiInput.Mouse mouse -> {
                                                                     switch (mouse.action) {
-                                                                        case SCROLL_UP -> moveMcpSelector(selector, -1);
+                                                                        case SCROLL_UP -> moveMcpSelector(selector1, -1);
                                                                         case SCROLL_DOWN ->
-                                                                                moveMcpSelector(selector, 1);
+                                                                                moveMcpSelector(selector1, 1);
                                                                         case PRESS -> {
-                                                                            int offset = mouse.y - 1 - selector.optionStartRow;
-                                                                            int index = selector.visibleStart + offset;
+                                                                            int offset = mouse.y - 1 - selector1.optionStartRow;
+                                                                            int index = selector1.visibleStart + offset;
                                                                             if (mouse.button == 0
                                                                                     && offset >= 0
-                                                                                    && offset < selector.visibleCount
-                                                                                    && index < mcpSelectorItemCount(selector)) {
-                                                                                selector.selectedIndex = index;
+                                                                                    && offset < selector1.visibleCount
+                                                                                    && index < mcpSelectorItemCount(selector1)) {
+                                                                                selector1.selectedIndex = index;
                                                                             }
                                                                         }
                                                                         default -> {
@@ -9802,7 +9782,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 }
                                                             }
                                                         },
-                                                        () -> selector.complete,
+                                                        () -> selector1.complete,
                                                         () -> null));// An OAuth connection may finish asynchronously while the selector is open.
                                                 syncShellMcpTools(shell);
                                             }
@@ -9811,7 +9791,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             if (shell.agent == null) {
                                                 println(shell.terminal, "No model is configured.");
                                             } else {
-                                                String selected = select(
+                                                select(
                                                         shell.terminal,
                                                         "Settings",
                                                         List.of(new SelectItem<>(
@@ -9821,38 +9801,34 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 "Thinking level " + shell.agent.state.thinkingLevel.wire)),
                                                         0,
                                                         false);
-                                                if (selected != null) {
-                                                    List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.model);
-                                                    List<SelectItem<ThinkingLevel>> items = levels.stream()
-                                                            .map(level -> {
-                                                                String description = switch (level) {
-                                                                    case OFF -> "No reasoning";
-                                                                    case MINIMAL -> "Very brief reasoning";
-                                                                    case LOW -> "Light reasoning";
-                                                                    case MEDIUM -> "Moderate reasoning";
-                                                                    case HIGH -> "Deep reasoning";
-                                                                    case XHIGH -> "Extra-high reasoning";
-                                                                    case MAX -> "Maximum reasoning";
-                                                                };
-                                                                return new SelectItem<>(
-                                                                        level, level.wire, description, level.wire + " " + description);
-                                                            })
-                                                            .toList();
-                                                    int currentIndex = Math.max(0, levels.indexOf(shell.agent.state.thinkingLevel));
-                                                    ThinkingLevel level = select(shell.terminal, "Thinking level", items, currentIndex, false);
-                                                    if (level != null) {
-                                                        shell.agent.state.thinkingLevel = level;
-                                                        refreshShellStatus(shell);
-                                                        shell.settings = new SettingsStore.Settings(
-                                                                shell.settings.defaultProvider, shell.settings.defaultModel, level, shell.settings.theme, shell.settings.hideThinkingBlock);
-                                                        try {
-                                                            if (level == null)
-                                                                throw new IllegalArgumentException("level must not be null");
-                                                            modifySettings(shell.settingsStore, root1 -> root1.put("defaultThinkingLevel", level.wire));
-                                                            println(shell.terminal, "Thinking level: " + level.wire);
-                                                        } catch (IOException error) {
-                                                            println(shell.terminal, "Thinking level changed for this session, but could not be saved: " + error.getMessage());
-                                                        }
+                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.model);
+                                                List<SelectItem<ThinkingLevel>> items = levels.stream()
+                                                        .map(level -> {
+                                                            String description = switch (level) {
+                                                                case OFF -> "No reasoning";
+                                                                case MINIMAL -> "Very brief reasoning";
+                                                                case LOW -> "Light reasoning";
+                                                                case MEDIUM -> "Moderate reasoning";
+                                                                case HIGH -> "Deep reasoning";
+                                                                case XHIGH -> "Extra-high reasoning";
+                                                                case MAX -> "Maximum reasoning";
+                                                            };
+                                                            return new SelectItem<>(
+                                                                    level, level.wire, description, level.wire + " " + description);
+                                                        })
+                                                        .toList();
+                                                int currentIndex = Math.max(0, levels.indexOf(shell.agent.state.thinkingLevel));
+                                                ThinkingLevel level = select(shell.terminal, "Thinking level", items, currentIndex, false);
+                                                if (level != null) {
+                                                    shell.agent.state.thinkingLevel = level;
+                                                    refreshShellStatus(shell);
+                                                    shell.settings = new SettingsStore.Settings(
+                                                            shell.settings.defaultProvider, shell.settings.defaultModel, level, shell.settings.theme, shell.settings.hideThinkingBlock);
+                                                    try {
+                                                        modifySettings(shell.settingsStore, root1 -> root1.put("defaultThinkingLevel", level.wire));
+                                                        println(shell.terminal, "Thinking level: " + level.wire);
+                                                    } catch (IOException error) {
+                                                        println(shell.terminal, "Thinking level changed for this session, but could not be saved: " + error.getMessage());
                                                     }
                                                 }
                                             }
@@ -10002,7 +9978,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         agent.state.tools.addAll(builtInTools(cwd, new GitIgnore("git"), path -> {
             boolean result;
             synchronized (instructions) {
-                Path directory1 = instructionDirectory((Path) path);
+                Path directory1 = instructionDirectory(path);
                 if (directory1 == null
                         || !directory1.startsWith(instructions.repositoryRoot)
                         || !directory1.startsWith(instructions.currentDirectory)) {
@@ -10392,7 +10368,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             try (Stream<Path> files = Files.list(directory)) {
                 files.filter(Files::isRegularFile)
                         .filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-                        .map(path -> sessionIdFor(path.getFileName()))
+                        .map(path -> path.getFileName().toString().replaceFirst("\\.jsonl$", ""))
                         .forEach(ids::add);
             }
         }
@@ -11174,7 +11150,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     }
                 }
             }
-            ObjectNode node = encodeAgentEvent((AgentEvent) event, true);
+            ObjectNode node = encodeAgentEvent(event, true);
             if (node != null) outputRpc(node);
         });
         server.recorder = server.arguments.noSession
@@ -11321,7 +11297,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     thinkingNumber++;
                     String body = turnDetailsSafePlain(thinking.thinking.strip());
                     String result = "";
-                    if (body != null && !body.isBlank()) {
+                    if (!body.isBlank()) {
                         String line = body.lines().filter(value -> !value.isBlank()).findFirst().orElse("").strip();
                         result = line.length() <= 100 ? line : line.substring(0, 100) + "...";
                     }
@@ -11346,7 +11322,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         } else {
                             String result1 = "done";
                             String text = text(result);
-                            if (text != null && !text.isBlank()) {
+                            if (!text.isBlank()) {
                                 long lines = text.lines().count();
                                 result1 = lines == 1 ? "done" : lines + " lines";
                             }
@@ -11389,36 +11365,32 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             if (section.expanded) {
                 List<String> result;
                 int maximumWidth = Math.max(1, safeWidth - 3);
-                if (maximumWidth <= 0) {
-                    result = List.of("");
-                } else {
-                    String normalized = section.body.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
-                    List<String> lines = new ArrayList<>();
-                    for (String sourceLine : normalized.split("\n", -1)) {
-                        if (sourceLine.isEmpty()) {
-                            lines.add("");
-                            continue;
-                        }
-                        StringBuilder line = new StringBuilder();
-                        int width1 = 0;
-                        for (int index = 0; index < sourceLine.length(); ) {
-                            int codePoint = sourceLine.codePointAt(index);
-                            int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
-                            if (!line.isEmpty() && width1 + codePointWidth > maximumWidth) {
-                                lines.add(line.toString());
-                                line.setLength(0);
-                                width1 = 0;
-                            }
-                            line.appendCodePoint(codePoint);
-                            width1 += codePointWidth;
-                            index += Character.charCount(codePoint);
-                        }
-                        if (!line.isEmpty()) {
-                            lines.add(line.toString());
-                        }
+                String normalized = section.body.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
+                List<String> lines = new ArrayList<>();
+                for (String sourceLine : normalized.split("\n", -1)) {
+                    if (sourceLine.isEmpty()) {
+                        lines.add("");
+                        continue;
                     }
-                    result = List.copyOf(lines);
+                    StringBuilder line = new StringBuilder();
+                    int width1 = 0;
+                    for (int index = 0; index < sourceLine.length(); ) {
+                        int codePoint = sourceLine.codePointAt(index);
+                        int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+                        if (!line.isEmpty() && width1 + codePointWidth > maximumWidth) {
+                            lines.add(line.toString());
+                            line.setLength(0);
+                            width1 = 0;
+                        }
+                        line.appendCodePoint(codePoint);
+                        width1 += codePointWidth;
+                        index += Character.charCount(codePoint);
+                    }
+                    if (!line.isEmpty()) {
+                        lines.add(line.toString());
+                    }
                 }
+                result = List.copyOf(lines);
                 for (String bodyLine : result) {
                     String rendered = "   " + bodyLine;
                     if (section.kind == TurnDetailsComponent.Kind.THINKING) {
@@ -11431,10 +11403,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 lines1.add(new TurnDetailsComponent.RenderedLine("", index1, false));
             }
         }
-        List<TurnDetailsComponent.RenderedLine> content = lines1;
         int selectedRow = 0;
-        for (int index1 = 0; index1 < content.size(); index1++) {
-            TurnDetailsComponent.RenderedLine line1 = content.get(index1);
+        for (int index1 = 0; index1 < lines1.size(); index1++) {
+            TurnDetailsComponent.RenderedLine line1 = lines1.get(index1);
             if (line1.heading && line1.sectionIndex == details.selectedIndex) {
                 selectedRow = index1;
                 break;
@@ -11448,15 +11419,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
         }
         details.scrollTop = Math.max(
-                0, Math.min(details.scrollTop, Math.max(0, content.size() - details.viewportHeight)));
+                0, Math.clamp(lines1.size() - details.viewportHeight, 0, details.scrollTop));
 
         List<String> lines = new ArrayList<>();
         lines.add(theme.heading + "Turn details" + theme.reset);
         lines.add("");
         details.visibleSectionsByRow.clear();
-        int visibleEnd = Math.min(content.size(), details.scrollTop + details.viewportHeight);
+        int visibleEnd = Math.min(lines1.size(), details.scrollTop + details.viewportHeight);
         for (int index = details.scrollTop; index < visibleEnd; index++) {
-            TurnDetailsComponent.RenderedLine line = content.get(index);
+            TurnDetailsComponent.RenderedLine line = lines1.get(index);
             if (line.heading) details.visibleSectionsByRow.put(lines.size(), line.sectionIndex);
             lines.add(line.text);
         }
@@ -11629,15 +11600,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         Path file = store.directory.resolve(id1 + ".jsonl");
         Files.createFile(file);
         setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
-        String id = id1;
         ObjectNode start = jsonObject();
         start.put("cwd", cwd.toAbsolutePath().normalize().toString());
         start.put("provider", provider);
         start.put("model", model);
         String normalizedName = sessionName == null ? null : sessionName.strip();
         if (normalizedName != null && !normalizedName.isEmpty()) start.put("name", normalizedName);
-        appendSessionEntry(store, id, "session_start", start);
-        return new SessionRecorder(store, id);
+        appendSessionEntry(store, id1, "session_start", start);
+        return new SessionRecorder(store, id1);
     }
 
     /**
@@ -12021,10 +11991,6 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             if (Files.isRegularFile(legacy)) return legacy;
         }
         return null;
-    }
-
-    private static String sessionIdFor(Path fileName) {
-        return fileName.toString().replaceFirst("\\.jsonl$", "");
     }
 
     private static String requiredSessionPayloadText(JsonNode payload, String field, String sessionId)
