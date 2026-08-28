@@ -533,7 +533,7 @@ class InteractiveTerminalTest {
 		InteractiveTerminal interactive = CodingAgentOperations.newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
-			CodingAgentOperations.setStatus(interactive, "~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
+			CodingAgentOperations.setStatus(interactive, "", InteractiveTerminal.StatusAccent.NONE, "~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
 			CodingAgentOperations.println(interactive, "conversation output");
 
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("conversation output"));
