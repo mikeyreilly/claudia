@@ -3306,16 +3306,6 @@ push(stream, new AssistantMessageEvent.Done(output.stopReason, output));
 		};
 	}
 
-
-	/** Removes a credential-routed provider's saved login. */
-	public static void providerLogout(Provider provider) throws IOException {
-		switch (provider) {
-			case ChatGptProvider chatGpt -> chatGptLogout(chatGpt.auth);
-			case GitHubCopilotProvider copilot -> gitHubCopilotLogout(copilot.auth);
-			default -> throw unknownProvider(provider);
-		}
-	}
-
 	/**
 	 * Starts a streaming request. Once invoked, failures are encoded in the
 	 * returned stream (Error event with stopReason ERROR/ABORTED) rather than
@@ -9483,78 +9473,8 @@ respondRpc(id, type, false, null, e.getMessage() == null ? e.toString() : e.getM
 					agent.state.tools.addAll(mcpTools(mcp));
 					if (parsed.mode.equals("json")) {
 						subscribe(agent, event -> {
-ObjectNode node = jsonObject();
-switch (event) {
-case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
-case AgentEvent.AgentEnd end -> {
-node.put("type", "agent_end");
-node.put("messageCount", end.newMessages.size());
-}
-case AgentEvent.InstructionLoaded loaded -> {
-node.put("type", "instruction_loaded");
-node.put("path", loaded.path.toString());
-}
-case AgentEvent.CompactionStart start -> {
-node.put("type", "compaction_start");
-node.put("tokensBefore", start.tokensBefore);
-}
-case AgentEvent.CompactionEnd end -> {
-node.put("type", "compaction_end");
-node.put("tokensBefore", end.result.tokensBefore);
-node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
-}
-case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
-case AgentEvent.TurnEnd end -> {
-node.put("type", "turn_end");
-node.put("toolResultCount", end.toolResults.size());
-}
-case AgentEvent.AutoRetryStart retry -> {
-node.put("type", "auto_retry_start");
-node.put("attempt", retry.attempt);
-node.put("maxAttempts", retry.maxAttempts);
-node.put("delayMs", retry.delayMs);
-node.put("error", retry.errorMessage);
-}
-case AgentEvent.AutoRetryEnd retry -> {
-node.put("type", "auto_retry_end");
-node.put("success", retry.success);
-node.put("attempt", retry.attempt);
-if (retry.finalError != null) node.put("error", retry.finalError);
-}
-case AgentEvent.MessageStart start -> {
-node.put("type", "message_start");
-node.put("role", role(start.message));
-}
-case AgentEvent.MessageEnd end -> {
-node.put("type", "message_end");
-node.put("role", role(end.message));
-if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
-}
-case AgentEvent.MessageUpdate update -> {
-if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
-node.put("type", "text_delta");
-node.put("delta", delta.delta);
-} else {
-return;
-}
-}
-case AgentEvent.ToolExecutionStart start -> {
-node.put("type", "tool_start");
-node.put("toolCallId", start.toolCallId);
-node.put("tool", start.toolName);
-node.set("arguments", start.arguments);
-}
-case AgentEvent.ToolExecutionUpdate ignored -> {
-return;
-}
-case AgentEvent.ToolExecutionEnd end -> {
-node.put("type", "tool_end");
-node.put("toolCallId", end.toolCallId);
-node.put("tool", end.toolName);
-node.put("isError", end.result.isError);
-}
-}
-System.out.println(node);
+							ObjectNode node = encodeAgentEvent(event, false);
+							if (node != null) System.out.println(node);
 });
 					} else {
 						subscribe(agent, event -> {
@@ -11514,6 +11434,77 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 		return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
 	}
 
+	private static ObjectNode encodeAgentEvent(AgentEvent event, boolean rpc) {
+		ObjectNode node = jsonObject();
+		switch (event) {
+			case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
+			case AgentEvent.AgentEnd end -> {
+				node.put("type", rpc ? "agent_settled" : "agent_end");
+				node.put("messageCount", end.newMessages.size());
+			}
+			case AgentEvent.InstructionLoaded loaded -> {
+				node.put("type", "instruction_loaded");
+				node.put("path", loaded.path.toString());
+			}
+			case AgentEvent.CompactionStart start -> {
+				node.put("type", "compaction_start");
+				node.put("tokensBefore", start.tokensBefore);
+			}
+			case AgentEvent.CompactionEnd end -> {
+				node.put("type", "compaction_end");
+				node.put("tokensBefore", end.result.tokensBefore);
+				node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
+			}
+			case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
+			case AgentEvent.TurnEnd end -> {
+				node.put("type", "turn_end");
+				node.put("toolResultCount", end.toolResults.size());
+			}
+			case AgentEvent.AutoRetryStart retry -> {
+				node.put("type", "auto_retry_start");
+				node.put("attempt", retry.attempt);
+				node.put("maxAttempts", retry.maxAttempts);
+				node.put("delayMs", retry.delayMs);
+				node.put("error", retry.errorMessage);
+			}
+			case AgentEvent.AutoRetryEnd retry -> {
+				node.put("type", "auto_retry_end");
+				node.put("success", retry.success);
+				node.put("attempt", retry.attempt);
+				if (retry.finalError != null) node.put("error", retry.finalError);
+			}
+			case AgentEvent.MessageStart start -> {
+				node.put("type", "message_start");
+				node.put("role", role(start.message));
+			}
+			case AgentEvent.MessageEnd end -> {
+				node.put("type", "message_end");
+				node.put("role", role(end.message));
+				if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
+			}
+			case AgentEvent.MessageUpdate update -> {
+				if (!(update.providerEvent instanceof AssistantMessageEvent.TextDelta delta)) return null;
+				node.put("type", rpc ? "message_update" : "text_delta");
+				if (rpc) node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
+				else node.put("delta", delta.delta);
+			}
+			case AgentEvent.ToolExecutionStart start -> {
+				node.put("type", rpc ? "tool_execution_start" : "tool_start");
+				node.put("toolCallId", start.toolCallId);
+				node.put(rpc ? "toolName" : "tool", start.toolName);
+				node.set("arguments", start.arguments);
+			}
+			case AgentEvent.ToolExecutionUpdate ignored -> { return null; }
+			case AgentEvent.ToolExecutionEnd end -> {
+				node.put("type", rpc ? "tool_execution_end" : "tool_end");
+				node.put("toolCallId", end.toolCallId);
+				node.put(rpc ? "toolName" : "tool", end.toolName);
+				node.put("isError", end.result.isError);
+			}
+		}
+		return node;
+	}
+
 	// ------------------------------------------------------------- rpc server
 
 	private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
@@ -11523,22 +11514,7 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 		configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
 		server.agent.state.tools.addAll(mcpTools(server.mcp));
 		subscribe(server.agent, event -> {
-			ObjectNode node = jsonObject();
-			switch ((AgentEvent) event) {
-				case AgentEvent.AgentStart ignored -> node.put("type", "agent_start");
-				case AgentEvent.AgentEnd end -> {
-					node.put("type", "agent_settled");
-					node.put("messageCount", end.newMessages.size());
-				}
-				case AgentEvent.InstructionLoaded loaded -> {
-					node.put("type", "instruction_loaded");
-					node.put("path", loaded.path.toString());
-				}
-				case AgentEvent.CompactionStart start -> {
-					node.put("type", "compaction_start");
-					node.put("tokensBefore", start.tokensBefore);
-				}
-				case AgentEvent.CompactionEnd end -> {
+			if (event instanceof AgentEvent.CompactionEnd end) {
 					if (server.recorder != null) {
 						try {
 							appendSessionCompaction(server.recorder, end.result);
@@ -11548,60 +11524,9 @@ println(shell.terminal, "\nTransient provider error; retrying in "
 							System.err.println("Warning: compacted context could not be saved for resume: " + error.getMessage());
 						}
 					}
-					node.put("type", "compaction_end");
-					node.put("tokensBefore", end.result.tokensBefore);
-					node.put("estimatedTokensAfter", end.result.estimatedTokensAfter);
-				}
-				case AgentEvent.TurnStart ignored -> node.put("type", "turn_start");
-				case AgentEvent.TurnEnd end -> {
-					node.put("type", "turn_end");
-					node.put("toolResultCount", end.toolResults.size());
-				}
-				case AgentEvent.AutoRetryStart retry -> {
-					node.put("type", "auto_retry_start");
-					node.put("attempt", retry.attempt);
-					node.put("maxAttempts", retry.maxAttempts);
-					node.put("delayMs", retry.delayMs);
-					node.put("error", retry.errorMessage);
-				}
-				case AgentEvent.AutoRetryEnd retry -> {
-					node.put("type", "auto_retry_end");
-					node.put("success", retry.success);
-					node.put("attempt", retry.attempt);
-					if (retry.finalError != null) node.put("error", retry.finalError);
-				}
-				case AgentEvent.MessageStart start -> {
-					node.put("type", "message_start");
-					node.put("role", role(start.message));
-				}
-				case AgentEvent.MessageEnd end -> {
-					node.put("type", "message_end");
-					node.put("role", role(end.message));
-					if (end.message instanceof AssistantMessage assistant) node.put("text", text(assistant));
-				}
-				case AgentEvent.MessageUpdate update -> {
-					if (update.providerEvent instanceof AssistantMessageEvent.TextDelta delta) {
-						node.put("type", "message_update");
-						node.putObject("assistantMessageEvent").put("type", "text_delta").put("delta", delta.delta);
-					} else return;
-				}
-				case AgentEvent.ToolExecutionStart start -> {
-					node.put("type", "tool_execution_start");
-					node.put("toolCallId", start.toolCallId);
-					node.put("toolName", start.toolName);
-					node.set("arguments", start.arguments);
-				}
-				case AgentEvent.ToolExecutionUpdate ignored -> {
-					return;
-				}
-				case AgentEvent.ToolExecutionEnd end -> {
-					node.put("type", "tool_execution_end");
-					node.put("toolCallId", end.toolCallId);
-					node.put("toolName", end.toolName);
-					node.put("isError", end.result.isError);
-				}
 			}
-			outputRpc(node);
+			ObjectNode node = encodeAgentEvent((AgentEvent) event, true);
+			if (node != null) outputRpc(node);
 		});
 		server.recorder = server.arguments.noSession
 				? null
