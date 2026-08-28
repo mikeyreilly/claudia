@@ -436,13 +436,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
 	/** Concatenated text of all text blocks. */
 	public static String text(AssistantMessage message) {
-		StringBuilder sb = new StringBuilder();
-		for (AssistantContent block : message.content) {
-			if (block instanceof TextContent textContent) {
-				sb.append(textContent.text);
-			}
-		}
-		return sb.toString();
+		return contentText(message.content);
 	}
 
 	/** Concatenated text of all thinking blocks. */
@@ -506,9 +500,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 		return new ToolResultMessage(toolCallId, toolName, List.copyOf(content), details, isError, timestamp);
 	}
 
-	private static String contentText(List<UserContent> content) {
+	private static String contentText(List<?> content) {
 		StringBuilder sb = new StringBuilder();
-		for (UserContent block : content) {
+		for (Object block : content) {
 			if (block instanceof TextContent textContent) {
 				sb.append(textContent.text);
 			}
@@ -3798,34 +3792,42 @@ push(stream, new AssistantMessageEvent.Error(output.stopReason, output));
 			throw new IllegalStateException("Cannot compact an empty conversation");
 		}
 		state.isCompacting = true;
-		AbortSignal signal = new AbortSignal();
 		try {
-			long tokensBefore = estimateMessageTokens(state.messages);
-			emit(agent, new AgentEvent.CompactionStart(tokensBefore));
-			Context context = new Context(COMPACTION_SYSTEM_PROMPT);
-			String prompt = "<conversation>\n" + serializeMessages(state.messages) + "\n</conversation>\n\n"
-					+ (customInstructions == null || customInstructions.isBlank()
-							? "Summarize this conversation for a future coding-agent turn."
-							: "Summarize this conversation with this focus: " + customInstructions);
-			context.messages.add(userMessage(prompt));
-			AssistantMessage response = agentComplete(agent, context, signal);
-			if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
-				throw new IllegalStateException("Compaction failed: " + response.errorMessage);
-			}
-			String summary = text(response);
-			if (summary.isBlank()) {
-				throw new IllegalStateException("Compaction failed: provider returned an empty summary");
-			}
-			state.messages.clear();
-			state.compactionSummary = summary;
-			state.messages.add(userMessage("[Conversation checkpoint]\n" + summary));
-			CompactionResult result =
-					new CompactionResult(summary, tokensBefore, estimateMessageTokens(state.messages));
-			emit(agent, new AgentEvent.CompactionEnd(result));
-			return result;
+			return performCompaction(agent, compactionPrompt(state.messages, customInstructions), false);
 		} finally {
 			state.isCompacting = false;
 		}
+	}
+
+	private static String compactionPrompt(List<Message> messages, String instructions) {
+		return "<conversation>\n" + serializeMessages(messages) + "\n</conversation>\n\n"
+				+ (instructions == null || instructions.isBlank()
+						? "Summarize this conversation for a future coding-agent turn."
+						: "Summarize this conversation with this focus: " + instructions);
+	}
+
+	private static CompactionResult performCompaction(Agent agent, String prompt, boolean automatic)
+			throws InterruptedException {
+		AgentState state = agent.state;
+		long tokensBefore = estimateMessageTokens(state.messages);
+		emit(agent, new AgentEvent.CompactionStart(tokensBefore));
+		Context context = new Context(COMPACTION_SYSTEM_PROMPT);
+		context.messages.add(userMessage(prompt));
+		AssistantMessage response = agentComplete(agent, context, new AbortSignal());
+		String summary = text(response);
+		if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED || summary.isBlank()) {
+			String detail = summary.isBlank() && !automatic
+					&& response.stopReason != StopReason.ERROR && response.stopReason != StopReason.ABORTED
+					? "provider returned an empty summary"
+					: response.errorMessage;
+			throw new IllegalStateException((automatic ? "Automatic compaction failed: " : "Compaction failed: ") + detail);
+		}
+		state.messages.clear();
+		state.compactionSummary = summary;
+		state.messages.add(userMessage("[Conversation checkpoint]\n" + summary));
+		CompactionResult result = new CompactionResult(summary, tokensBefore, estimateMessageTokens(state.messages));
+		emit(agent, new AgentEvent.CompactionEnd(result));
+		return result;
 	}
 
 	/** Runs a prompt to completion, returning only messages created during this invocation. */
@@ -3845,26 +3847,9 @@ if (state.autoCompactionEnabled
 && state.model.contextWindow > state.compactionReserveTokens
 && estimateMessageTokens(state.messages) > state.model.contextWindow - state.compactionReserveTokens) {
 AgentState state1 = agent.state;
-long tokensBefore = estimateMessageTokens(state1.messages);
 state1.isCompacting = true;
-AbortSignal signal = new AbortSignal();
 try {
-emit(agent, new AgentEvent.CompactionStart(tokensBefore));
-Context context = new Context(COMPACTION_SYSTEM_PROMPT);
-context.messages.add(userMessage("<conversation>\n" + serializeMessages(state1.messages)
-+ "\n</conversation>\n\nSummarize this conversation for a future coding-agent turn."));
-AssistantMessage response = agentComplete(agent, context, signal);
-String summary = text(response);
-if (response.stopReason == StopReason.ERROR
-|| response.stopReason == StopReason.ABORTED
-|| summary.isBlank()) {
-throw new IllegalStateException("Automatic compaction failed: " + response.errorMessage);
-}
-state1.messages.clear();
-state1.compactionSummary = summary;
-state1.messages.add(userMessage("[Conversation checkpoint]\n" + summary));
-emit(agent, new AgentEvent.CompactionEnd(
-new CompactionResult(summary, tokensBefore, estimateMessageTokens(state1.messages))));
+performCompaction(agent, compactionPrompt(state1.messages, null), true);
 } finally {
 state1.isCompacting = false;
 }
