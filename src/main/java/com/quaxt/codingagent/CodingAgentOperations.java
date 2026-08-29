@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -134,7 +135,6 @@ import com.quaxt.codingagent.ai.types.Usage;
 import com.quaxt.codingagent.ai.types.UserContent;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.AbortSignal;
-import com.quaxt.codingagent.ai.util.Uuid;
 import com.quaxt.codingagent.cli.ActivityStatus;
 import com.quaxt.codingagent.cli.AgentInstructions;
 import com.quaxt.codingagent.cli.Cli;
@@ -183,7 +183,6 @@ import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.Reference;
 import org.jline.reader.UserInterruptException;
-import org.jline.reader.Widget;
 import org.jline.reader.impl.LineReaderImpl;
 import org.jline.reader.impl.history.DefaultHistory;
 import org.jline.terminal.Attributes;
@@ -198,6 +197,8 @@ import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
 import org.jline.utils.Status;
 import org.jline.utils.WCWidth;
+
+import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 /**
  * Single home for project-owned behavior. Every operation is static and takes
@@ -256,31 +257,40 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     // ---------------------------------------------------------------- uuid
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static long lastTimestamp = Long.MIN_VALUE;
+    private static long sequence;
 
+    private static Object uuidv7Lock = new Object();
+    private static final byte[] hexdigits = {
+            '0', '1', '2', '3', '4', '5',
+            '6', '7', '8', '9', 'a', 'b',
+            'c', 'd', 'e', 'f'
+    };
     /**
      * Generates a time-ordered UUIDv7 string.
      */
     public static String uuidv7() {
         byte[] random = new byte[16];
-        Uuid.RANDOM.nextBytes(random);
+        RANDOM.nextBytes(random);
         long timestampMs;
         long seq;
-        synchronized (Uuid.class) {
+        synchronized (uuidv7Lock) {
             long now = System.currentTimeMillis();
-            if (now > Uuid.lastTimestamp) {
-                Uuid.sequence = ((random[6] & 0xFFL) << 24)
+            if (now > lastTimestamp) {
+                sequence = (((random[6] & 0x7FL) << 24) // initialize sequence msb to zero as a rollover guard
                         | ((random[7] & 0xFFL) << 16)
                         | ((random[8] & 0xFFL) << 8)
-                        | (random[9] & 0xFFL);
-                Uuid.lastTimestamp = now;
+                        | (random[9] & 0xFFL));
+                lastTimestamp = now;
             } else {
-                Uuid.sequence = (Uuid.sequence + 1) & 0xFFFFFFFFL;
-                if (Uuid.sequence == 0) {
-                    Uuid.lastTimestamp++;
+                sequence = (sequence + 1) & 0xFFFFFFFFL;
+                if (sequence == 0) {
+                    lastTimestamp++;
                 }
             }
-            timestampMs = Uuid.lastTimestamp;
-            seq = Uuid.sequence;
+            timestampMs = lastTimestamp;
+            seq = sequence;
         }
 
         byte[] bytes = new byte[16];
@@ -301,15 +311,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         bytes[14] = random[14];
         bytes[15] = random[15];
 
-        StringBuilder sb = new StringBuilder(36);
+        byte[] sb = new byte[36];
+        int ci = 0;
         for (int i = 0; i < 16; i++) {
-            if (i == 4 || i == 6 || i == 8 || i == 10) {
-                sb.append('-');
-            }
-            sb.append(Character.forDigit((bytes[i] >> 4) & 0xF, 16));
-            sb.append(Character.forDigit(bytes[i] & 0xF, 16));
+            if (i == 4 || i == 6 || i == 8 || i == 10) sb[ci++] = '-';
+            sb[ci++] = hexdigits[bytes[i] >> 4 & 0xF];
+            sb[ci++] = hexdigits[bytes[i] & 0xF];
         }
-        return sb.toString();
+        return new String(sb, 0,36, ISO_8859_1);
     }
 
     // --------------------------------------------------------- abort signal
@@ -7779,10 +7788,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         selector.optionStartRow = lines.size();
         int reservedLines = lines.size() + 3;
         selector.visibleCount = Math.clamp(height - reservedLines, 1, 10);
+
         selector.visibleStart = Math.max(
                 0,
-                Math.clamp(selector.filteredItems.size() - selector.visibleCount, 0,
-                        selector.selectedIndex - (selector.visibleCount / 2)));
+                Math.min(
+                        selector.selectedIndex - (selector.visibleCount / 2),
+                        Math.max(0, selector.filteredItems.size() - selector.visibleCount)));
         int visibleEnd =
                 Math.min(selector.filteredItems.size(), selector.visibleStart + selector.visibleCount);
 
@@ -8849,27 +8860,27 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      */
     public static int cliRun(String[] args) {
         try {
-            Cli parsed = new Cli();
+            Cli cli = new Cli();
             List<String> messageParts = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
                 switch (arg) {
-                    case "-h", "--help" -> parsed.help = true;
-                    case "-v", "--version" -> parsed.version = true;
+                    case "-h", "--help" -> cli.help = true;
+                    case "-v", "--version" -> cli.version = true;
                     case "--list-models" -> {
-                        parsed.listModels = true;
+                        cli.listModels = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
-                            parsed.modelSearch = args[++i];
+                            cli.modelSearch = args[++i];
                         }
                     }
-                    case "--provider" -> parsed.provider = cliArgumentValue(args, ++i, arg);
-                    case "--model" -> parsed.model = cliArgumentValue(args, ++i, arg);
-                    case "--api-key" -> parsed.apiKey = cliArgumentValue(args, ++i, arg);
-                    case "--system-prompt" -> parsed.systemPrompt = cliArgumentValue(args, ++i, arg);
-                    case "--no-session" -> parsed.noSession = true;
-                    case "--mode" -> parsed.mode = cliArgumentValue(args, ++i, arg);
+                    case "--provider" -> cli.provider = cliArgumentValue(args, ++i, arg);
+                    case "--model" -> cli.model = cliArgumentValue(args, ++i, arg);
+                    case "--api-key" -> cli.apiKey = cliArgumentValue(args, ++i, arg);
+                    case "--system-prompt" -> cli.systemPrompt = cliArgumentValue(args, ++i, arg);
+                    case "--no-session" -> cli.noSession = true;
+                    case "--mode" -> cli.mode = cliArgumentValue(args, ++i, arg);
                     case "-p", "--print" -> {
-                        parsed.print = true;
+                        cli.print = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
                             messageParts.add(args[++i]);
                         }
@@ -8882,15 +8893,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     }
                 }
             }
-            parsed.message = String.join(" ", messageParts);
-            if (!parsed.mode.equals("print") && !parsed.mode.equals("json") && !parsed.mode.equals("rpc")) {
+            cli.message = String.join(" ", messageParts);
+            if (!cli.mode.equals("print") && !cli.mode.equals("json") && !cli.mode.equals("rpc")) {
                 throw new IllegalArgumentException("--mode must be print, json, or rpc");
             }
-            if (parsed.version) {
+            if (cli.version) {
                 System.out.println(Cli.VERSION);
                 return 0;
             }
-            if (parsed.help) {
+            if (cli.help) {
                 System.out.println("""
                         %s - coding agent (Java port)
                         
@@ -8983,8 +8994,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     URI.create("https://api.github.com/copilot_internal/v2/token"),
                                     URI.create(GitHubCopilotAuth.DEFAULT_COPILOT_BASE_URL))));
             CoreProviders providers = new CoreProviders(catalog, Map.copyOf(providers1));
-            if (parsed.listModels) {
-                String needle = parsed.modelSearch == null ? "" : parsed.modelSearch.toLowerCase();
+            if (cli.listModels) {
+                String needle = cli.modelSearch == null ? "" : cli.modelSearch.toLowerCase();
                 for (Provider provider : List.copyOf(providers.providers.values())) {
                     for (Model model : providerModels(provider)) {
                         String id = model.provider + "/" + model.id;
@@ -8995,25 +9006,25 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 }
                 return 0;
             }
-            if (parsed.mode.equals("rpc")) {
+            if (cli.mode.equals("rpc")) {
                 RpcServer server = new RpcServer();
                 server.providers = providers;
-                server.arguments = parsed;
+                server.arguments = cli;
                 Model initialModel;
-                if (parsed.model == null) {
+                if (cli.model == null) {
                     throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                 }
-                if (parsed.model.contains("/")) {
-                    String[] parts = parsed.model.split("/", 2);
-                    if (parsed.provider != null && !parsed.provider.equals(parts[0])) {
+                if (cli.model.contains("/")) {
+                    String[] parts = cli.model.split("/", 2);
+                    if (cli.provider != null && !cli.provider.equals(parts[0])) {
                         throw new IllegalArgumentException("--provider conflicts with the provider in --model");
                     }
                     initialModel = requireCatalogModel(providers.catalog, parts[0], parts[1]);
                 } else {
-                    if (parsed.provider == null) {
+                    if (cli.provider == null) {
                         throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                     }
-                    initialModel = requireCatalogModel(providers.catalog, parsed.provider, parsed.model);
+                    initialModel = requireCatalogModel(providers.catalog, cli.provider, cli.model);
                 }
                 server.mcp = mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
                 try {
@@ -9125,22 +9136,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 }
                 return 0;
             }
-            if (parsed.print) {
-                if (parsed.message.isBlank()) {
+            if (cli.print) {
+                if (cli.message.isBlank()) {
                     throw new IllegalArgumentException("--print requires a prompt");
                 }
-                Model model = resolveCliModel(providers, parsed.provider, parsed.model);
+                Model model = resolveCliModel(providers, cli.provider, cli.model);
                 Provider provider = requireCoreProvider(providers, model.provider);
                 Path cwd = Path.of(".").toAbsolutePath().normalize();
                 McpManager mcp = mcpLoadDefaultManager(cwd);
                 try {
                     mcpAwaitReady(mcp);
                     Agent agent = new Agent(
-                            new AgentState(parsed.systemPrompt == null ? "" : parsed.systemPrompt, model), provider);
-                    agent.apiKey = parsed.apiKey;
-                    configureBuiltInTools(agent, cwd, parsed.systemPrompt);
+                            new AgentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model), provider);
+                    agent.apiKey = cli.apiKey;
+                    configureBuiltInTools(agent, cwd, cli.systemPrompt);
                     agent.state.tools.addAll(mcpTools(mcp));
-                    if (parsed.mode.equals("json")) {
+                    if (cli.mode.equals("json")) {
                         subscribe(agent, event -> {
                             ObjectNode node = encodeAgentEvent(event, false);
                             if (node != null) System.out.println(node);
@@ -9152,10 +9163,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             }
                         });
                     }
-                    SessionRecorder recorder = parsed.noSession
+                    SessionRecorder recorder = cli.noSession
                             ? null
                             : createSessionRecorder(defaultSessionStore(), cwd, model.provider, model.id);
-                    List<Message> messages = prompt(agent, parsed.message);
+                    List<Message> messages = prompt(agent, cli.message);
                     if (recorder != null) {
                         appendSessionMessages(recorder, messages);
                     }
@@ -9164,7 +9175,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             System.err.println("Error: " + response.errorMessage);
                             return 1;
                         }
-                        if (!parsed.mode.equals("json")) {
+                        if (!cli.mode.equals("json")) {
                             System.out.println(text(response));
                         }
                         return 0;
@@ -9222,7 +9233,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 try {
                     InteractiveShell shell = new InteractiveShell();
                     shell.providers = providers;
-                    shell.arguments = parsed;
+                    shell.cli = cli;
                     shell.terminal = terminal;
                     shell.settingsStore = settingsStore;
                     shell.mcp = mcp;
@@ -9240,14 +9251,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         if (shell.settings.theme != null) {
                             setTheme(shell.terminal, namedTheme(shell.settings.theme));
                         }
-                        if (parsed.model != null) {
+                        if (cli.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
                             configureShellModel(
-                                    shell, resolveCliModel(providers, parsed.provider, parsed.model), false);
-                        } else if (parsed.provider != null) {
-                            List<Model> models1 = providerModels(requireCoreProvider(providers, parsed.provider));
+                                    shell, resolveCliModel(providers, cli.provider, cli.model), false);
+                        } else if (cli.provider != null) {
+                            List<Model> models1 = providerModels(requireCoreProvider(providers, cli.provider));
                             if (models1.isEmpty()) {
-                                throw new IllegalArgumentException("No bundled models for provider: " + parsed.provider);
+                                throw new IllegalArgumentException("No bundled models for provider: " + cli.provider);
                             }
                             List<SelectItem<Model>> items =
                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
@@ -9299,7 +9310,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             Model model = state.model;
                                             List<Message> forkMessages = resumableMessages(state.messages);
                                             SessionRecorder forkRecorder = null;
-                                            if (!shell.arguments.noSession) {
+                                            if (!shell.cli.noSession) {
                                                 try {
                                                     forkRecorder = forkSessionRecorder(
                                                             defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
@@ -10322,7 +10333,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void resumeShellSession(InteractiveShell shell) throws IOException {
-        if (shell.arguments.noSession) {
+        if (shell.cli.noSession) {
             println(shell.terminal, "Session persistence is disabled by --no-session.");
             return;
         }
@@ -10489,7 +10500,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             throws IOException {
         Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
         SessionRecorder nextRecorder = null;
-        if (!shell.arguments.noSession) {
+        if (!shell.cli.noSession) {
             try {
                 nextRecorder = createSessionRecorder(
                         defaultSessionStore(), configuredCwd, model.provider, model.id);
@@ -10517,12 +10528,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         Provider provider = requireCoreProvider(shell.providers, model.provider);
         Agent configured = new Agent(
                 new AgentState(
-                        shell.arguments.systemPrompt == null ? "" : shell.arguments.systemPrompt, model),
+                        shell.cli.systemPrompt == null ? "" : shell.cli.systemPrompt, model),
                 provider);
-        configured.apiKey = shell.arguments.apiKey;
+        configured.apiKey = shell.cli.apiKey;
         configured.state.thinkingLevel =
                 initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
-        configureBuiltInTools(configured, configuredCwd, shell.arguments.systemPrompt);
+        configureBuiltInTools(configured, configuredCwd, shell.cli.systemPrompt);
         configured.state.tools.addAll(mcpTools(shell.mcp));
         subscribe(configured, event -> {
             switch ((AgentEvent) event) {

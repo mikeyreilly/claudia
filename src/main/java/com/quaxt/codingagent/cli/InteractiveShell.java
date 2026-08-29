@@ -40,7 +40,7 @@ public final class InteractiveShell {
 	}
 
 	public CoreProviders providers;
-	public Cli arguments;
+	public Cli cli;
 	public InteractiveTerminal terminal;
 	public SettingsStore settingsStore;
 	public McpManager mcp;
@@ -53,7 +53,7 @@ public final class InteractiveShell {
 	public boolean hideThinkingBlock;
 	public StreamOutput streamOutput = StreamOutput.NONE;
 	public int streamedThinkingCharacters;
-	public final Object activityLock = new Object();
+	public Object activityLock = new Object();
 	public ScheduledExecutorService statusTicker;
 	public volatile ActivityStatus activity;
 	public volatile String statusLocation = "";

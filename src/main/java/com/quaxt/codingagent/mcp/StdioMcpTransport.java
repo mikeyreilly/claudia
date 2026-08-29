@@ -20,11 +20,11 @@ public final class StdioMcpTransport implements McpTransport {
 
 	public Process process;
 	public BufferedWriter writer;
-	public final Object writeLock = new Object();
+	public Object writeLock = new Object();
 	public AtomicLong nextId = new AtomicLong(1);
 	public Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 	public Path workspace;
-	public final StringBuilder stderr = new StringBuilder();
+	public StringBuilder stderr = new StringBuilder();
 	public volatile BiConsumer<String, JsonNode> notificationListener = (method, params) -> {};
 	public volatile boolean closed;
 
