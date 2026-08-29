@@ -205,47 +205,28 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
  * the data carrier it acts on; the class holds no state of its own.
  */
 public final class CodingAgentOperations extends JniTerminalProvider {
-    /**
-     * Required by JLine's reflective JNI provider loading.
-     */
+    public static final String APP_NAME = "codingagent";
+    public static final String VERSION = "0.1.0-java";
+
+    public boolean help;
+    public boolean version;
+    public boolean listModels;
+    public boolean print;
+    public String modelSearch;
+    public String provider;
+    public String model;
+    public String apiKey;
+    public String systemPrompt = "";
+    public String message = "";
+    public boolean noSession;
+    public String mode = "print";
     public CodingAgentOperations() {
     }
 
     private static final CancellationException SUSPEND_REQUESTED =
             new CancellationException("Interactive terminal suspend requested");
 
-    /**
-     * JLine's named provider SPI requires an instance override. The terminal
-     * construction remains in the static operation below.
-     */
-    @Override
-    public Terminal winSysTerminal(
-            String name,
-            String type,
-            boolean ansiPassThrough,
-            Charset encoding,
-            Charset stdinEncoding,
-            Charset stdoutEncoding,
-            Charset stderrEncoding,
-            boolean nativeSignals,
-            Terminal.SignalHandler signalHandler,
-            boolean paused,
-            SystemStream systemStream)
-            throws IOException {
-        Charset outputEncoding = systemStream == SystemStream.Error ? stderrEncoding : stdoutEncoding;
-        return ShiftAwareNativeWinSysTerminal.createTerminal(
-                this,
-                systemStream,
-                name,
-                type,
-                ansiPassThrough,
-                encoding,
-                stdinEncoding,
-                outputEncoding,
-                nativeSignals,
-                signalHandler,
-                paused);
-    }
+
 
     // ---------------------------------------------------------------- json
 
@@ -8861,7 +8842,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      */
     public static int cliRun(String[] args) {
         try {
-            Cli cli = new Cli();
+            CodingAgentOperations cli = new CodingAgentOperations();
             List<String> messageParts = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
@@ -8899,7 +8880,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 throw new IllegalArgumentException("--mode must be print, json, or rpc");
             }
             if (cli.version) {
-                System.out.println(Cli.VERSION);
+                System.out.println(VERSION);
                 return 0;
             }
             if (cli.help) {
@@ -8927,7 +8908,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         
                         Interactive mode restores the model and settings selected previously.
                         Run /login to authenticate with GitHub Copilot, an OpenAI API key, or ChatGPT Plus/Pro.
-                        """.formatted(Cli.APP_NAME, Cli.APP_NAME));
+                        """.formatted(APP_NAME, APP_NAME));
                 return 0;
             }
             ModelCatalog catalog = loadBundledModelCatalog();
@@ -9213,13 +9194,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             McpManager mcp = mcpLoadDefaultManager(workspace);
             try {
                 InteractiveTerminal terminal = newInteractiveTerminal(
-                        TerminalBuilder.builder().system(true).name(Cli.APP_NAME).build(),
+                        TerminalBuilder.builder().system(true).name(APP_NAME).build(),
                         () -> {
                             Process process =
                                     new ProcessBuilder("/bin/kill", "-TSTP", "0").redirectErrorStream(true).start();
                             try {
                                 int exitCode = process.waitFor();
-                                if (exitCode != 0) {
+                      if (exitCode != 0) {
                                     String output =
                                             new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
                                     throw new IOException(output.isEmpty() ? "kill exited with code " + exitCode : output);
@@ -10274,7 +10255,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static String sessionScreenHeader(Model model) {
-        StringBuilder header = new StringBuilder("codingagent ").append(Cli.VERSION);
+        StringBuilder header = new StringBuilder("codingagent ").append(VERSION);
         if (model != null) header.append("  ").append(model);
         header.append('\n');
         header.append(model == null
