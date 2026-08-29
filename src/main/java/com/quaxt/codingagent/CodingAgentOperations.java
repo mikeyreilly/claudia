@@ -6167,7 +6167,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             } else {
                                 McpServerConfig.Remote remote = (McpServerConfig.Remote) runtime.config;
                                 McpOAuthClient.Session oauthSession = null;
-                                if ((remote.oauth == null || !remote.oauth.isBoolean() || remote.oauth.asBoolean()) && !remote.headers.keySet().stream().anyMatch(name1 -> name1.equalsIgnoreCase("Authorization"))) {
+                                if ((remote.oauth == null || !remote.oauth.isBoolean() || remote.oauth.asBoolean()) &&
+                                        !remote.headers.keySet().stream().anyMatch(name1 -> name1.equalsIgnoreCase("Authorization"))) {
                                     McpOAuthClient.OAuthSettings settings = remote.oauth instanceof ObjectNode oauth
                                             ? new McpOAuthClient.OAuthSettings(
                                             mcpOAuthOptionalText(oauth, "clientId"),
@@ -7296,16 +7297,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Bold green is reserved for the Ready activity so idle is recognizable at a glance.
      */
     public static String readyStatus(Theme theme) {
-        return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;92m";
+        return theme==Theme.PLAIN ? "" : "\u001b[1;92m";
     }
 
     /**
      * Active model and shell work; deliberately never green.
      */
     public static String activeStatus(Theme theme) {
-        return switch (theme.name.toLowerCase(Locale.ROOT)) {
-            case "dark" -> "\u001b[1;96m";
-            case "light" -> "\u001b[1;34m";
+        return switch (theme) {
+            case DARK -> "\u001b[1;96m";
+            case LIGHT -> "\u001b[1;34m";
             default -> "";
         };
     }
@@ -7314,16 +7315,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Retry, cancellation, and configuration attention; deliberately never green.
      */
     public static String warningStatus(Theme theme) {
-        return theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;93m";
+        return theme==Theme.PLAIN ? "" : "\u001b[1;93m";
     }
 
     /**
      * Background used to visually separate the editable prompt from chat output.
      */
     public static String promptBackground(Theme theme) {
-        return switch (theme.name.toLowerCase(Locale.ROOT)) {
-            case "dark" -> Theme.DARK_PROMPT_BACKGROUND;
-            case "light" -> Theme.LIGHT_PROMPT_BACKGROUND;
+        return switch (theme) {
+            case DARK -> Theme.DARK_PROMPT_BACKGROUND;
+            case LIGHT -> Theme.LIGHT_PROMPT_BACKGROUND;
             default -> "";
         };
     }
@@ -8758,7 +8759,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             case NONE -> theme.muted;
             case READY -> readyStatus(theme);
             case ACTIVE -> activeStatus(theme);
-            case TOOL -> theme.name.equalsIgnoreCase("plain") ? "" : "\u001b[1;95m";
+            case TOOL -> theme == Theme.PLAIN ? "" : "\u001b[1;95m";
             case WARNING -> warningStatus(theme);
         };
         String styledActivity =
@@ -9863,12 +9864,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                         shell.settings.defaultProvider,
                                                         shell.settings.defaultModel,
                                                         shell.settings.defaultThinkingLevel,
-                                                        theme1.name,
+                                                        theme1.name1,
                                                         shell.settings.hideThinkingBlock);
                                                 try {
-                                                    requireSettingsValue(theme1.name, "theme");
-                                                    modifySettings(shell.settingsStore, root1 -> root1.put("theme", theme1.name));
-                                                    println(shell.terminal, "Theme: " + terminalTheme(shell.terminal).name);
+                                                    requireSettingsValue(theme1.name1, "theme");
+                                                    modifySettings(shell.settingsStore, root1 -> root1.put("theme", theme1.name1));
+                                                    println(shell.terminal, "Theme: " + terminalTheme(shell.terminal).name1);
                                                 } catch (IOException error) {
                                                     println(shell.terminal, "Theme changed for this session, but could not be saved: " + error.getMessage());
                                                 }
