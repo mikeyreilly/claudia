@@ -3,6 +3,8 @@ package com.quaxt.codingagent.cli;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
+
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.ai.CoreProviders;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
@@ -40,7 +42,7 @@ public final class InteractiveShell {
 	}
 
 	public CoreProviders providers;
-	public Cli cli;
+	public CodingAgentOperations cli;
 	public InteractiveTerminal terminal;
 	public SettingsStore settingsStore;
 	public McpManager mcp;

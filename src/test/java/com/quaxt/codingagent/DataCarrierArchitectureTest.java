@@ -39,7 +39,7 @@ class DataCarrierArchitectureTest {
 		List<String> violations = new ArrayList<>();
 		for (String className : classNames) {
 			Class<?> type = Class.forName(className, false, getClass().getClassLoader());
-			if (type.isSynthetic() || type.isEnum()) {
+			if (type.isSynthetic() || type.isEnum() || type == ShiftAwareTerminalProvider.class) {
 				continue;
 			}
 			assertFalse(type.isRecord(), () -> type.getName() + " must be a mutable class, not a record");

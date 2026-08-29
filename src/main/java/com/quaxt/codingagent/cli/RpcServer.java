@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.cli;
 
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.ai.CoreProviders;
 import com.quaxt.codingagent.cli.session.SessionRecorder;
@@ -13,7 +14,7 @@ import com.quaxt.codingagent.mcp.McpManager;
  */
 public final class RpcServer {
 	public CoreProviders providers;
-	public Cli arguments;
+	public CodingAgentOperations arguments;
 	public McpManager mcp;
 	public Agent agent;
 	public SessionRecorder recorder;
