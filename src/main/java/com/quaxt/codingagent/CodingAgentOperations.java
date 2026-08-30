@@ -1891,13 +1891,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Validates every endpoint before binding it to the carrier. Visible for deterministic HTTP tests.
      */
-    public static CodingAgentOperations gitHubCopilotAuth(
+    public static void gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
         INSTANCE.credentials = credentials;
         INSTANCE.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
         INSTANCE.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
         INSTANCE.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
-        return INSTANCE;
     }
 
     /**
@@ -2265,7 +2264,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Loads the bundled provider model snapshots.
      */
-    public static CodingAgentOperations loadBundledModelCatalog() {
+    public static void loadBundledModelCatalog() {
         Map<String, Model> models = new LinkedHashMap<>();
         Map<String, List<Model>> providers = new LinkedHashMap<>();
         for (String resourceName : MODEL_CATALOG_RESOURCE_NAMES) {
@@ -2363,7 +2362,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         INSTANCE.byProviderAndId = Map.copyOf(models);
         INSTANCE.byProvider = Map.copyOf(immutableByProvider);
-        return INSTANCE;
     }
 
     /**
@@ -2413,9 +2411,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // -------------------------------------------------------- core providers
 
-    public static CodingAgentOperations coreProviders(Map<String, Provider> providers) {
+    public static void coreProviders(Map<String, Provider> providers) {
         INSTANCE.coreProviders = providers;
-        return INSTANCE;
     }
 
     public CodingAgentOperations chatGptProvider(List<Model> models, OpenAiResponsesProvider responses) {
@@ -2425,10 +2422,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return this;
     }
 
-    public static CodingAgentOperations googleProvider(List<Model> models) {
+    public static void googleProvider(List<Model> models) {
         INSTANCE.providerKind = ProviderKind.GOOGLE;
         INSTANCE.models = models;
-        return INSTANCE;
     }
 
     public Provider requireCoreProvider(String id) {
@@ -2989,14 +2985,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Validates the identity and endpoint of a Chat Completions-compatible service.
      */
-    public static CodingAgentOperations openAiCompatibleProvider(
+    public static void openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
         INSTANCE.providerKind = ProviderKind.OPENAI_COMPATIBLE;
         INSTANCE.id = requireNonBlank(id, "id");
         INSTANCE.name = requireNonBlank(name, "name");
         INSTANCE.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
         INSTANCE.models = List.copyOf(models);
-        return INSTANCE;
     }
 
     public AssistantMessageEventStream openAiCompatibleStream(Model model, Context context, StreamOptions options) {
@@ -4174,16 +4169,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     + "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps.";
 
     /** Creates the folded mutable state for one agent. */
-    public static CodingAgentOperations agentState(String systemPrompt, Model model) {
+    public static void agentState(String systemPrompt, Model model) {
         INSTANCE.systemPrompt = systemPrompt;
         INSTANCE.selectedModel = model;
-        return INSTANCE;
     }
 
     /** Configures the singleton as the active agent. */
-    public static CodingAgentOperations agent(Provider provider) {
+    public static void agent(Provider provider) {
         INSTANCE.agentProvider = provider;
-        return INSTANCE;
     }
 
     /**
@@ -6595,9 +6588,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Builds a manager for the MCP servers in {@code ~/.codingagent/settings.json}.
      */
-    public static CodingAgentOperations mcpLoadDefaultManager(Path workspace) throws IOException {
+    public static void mcpLoadDefaultManager(Path workspace) throws IOException {
         Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
-        return mcpCreateManager(
+        INSTANCE.mcpCreateManager(
                 mcpLoadConfiguration(new McpConfigLoader(
                         settingsPath.toAbsolutePath().normalize(), Map.copyOf(System.getenv()))),
                 workspace);
@@ -6606,22 +6599,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Builds a manager and starts connecting every enabled server.
      */
-    public static CodingAgentOperations mcpOAuthStore(
+    public static void mcpOAuthStore(
             Path path, Path lockPath, List<Path> importPaths) {
         INSTANCE.path = path;
         INSTANCE.lockPath = lockPath;
         INSTANCE.importPaths = importPaths;
-        return INSTANCE;
     }
 
-    public CodingAgentOperations mcpOAuthClient(HttpClient http, Predicate<URI> browser, Duration callbackTimeout) {
+    public void mcpOAuthClient(HttpClient http, Predicate<URI> browser, Duration callbackTimeout) {
         this.http = http;
         this.browser = browser;
         this.callbackTimeout = callbackTimeout;
-        return this;
     }
 
-    public static CodingAgentOperations mcpCreateManager(McpConfiguration configuration, Path workspace) {
+    public static void mcpCreateManager(McpConfiguration configuration, Path workspace) {
         if (!INSTANCE.closed && !INSTANCE.servers.isEmpty()) {
             INSTANCE.mcpCloseManager();
         }
@@ -6676,7 +6667,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             // Startup may refresh an existing token, but never opens a browser unexpectedly.
             if (mcpConfigEnabled(runtime.config)) INSTANCE.mcpStartConnect(runtime, false);
         }
-        return INSTANCE;
     }
 
     /**
@@ -8759,7 +8749,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Wires the line editor, signal handlers, and keybindings onto an existing terminal.
      */
-    public static CodingAgentOperations newInteractiveTerminal(
+    public static void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
         INSTANCE.screenDocument = new StringBuilder();
         INSTANCE.statusBar = null;
@@ -8958,7 +8948,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             }
         }
         INSTANCE.theme = Theme.DARK;
-        return INSTANCE;
     }
 
     private static void bindNavigationKey(
@@ -9003,14 +8992,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return readLineInternal(prompt, null, null, false);
     }
 
-    public static CodingAgentOperations commandSuggestions(List<String> commands) {
+    public static void commandSuggestions(List<String> commands) {
         INSTANCE.commands = commands;
         INSTANCE.query = null;
         INSTANCE.dismissedBuffer = null;
         INSTANCE.matches = List.of();
         INSTANCE.selectedIndex = 0;
         INSTANCE.visibleStart = 0;
-        return INSTANCE;
     }
 
     /**
@@ -9607,8 +9595,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         """.formatted(APP_NAME, APP_NAME));
                 return 0;
             }
-            CodingAgentOperations catalog = loadBundledModelCatalog();
-            CodingAgentOperations credentials = defaultCredentialStore();
+            loadBundledModelCatalog();
+            CodingAgentOperations catalog = INSTANCE;
+                    CodingAgentOperations credentials = defaultCredentialStore();
             Map<String, Provider> providers1 = new LinkedHashMap<>();
             providers1.put(
                     "anthropic",
@@ -9655,19 +9644,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     List.of(),
                                     null,
                                     OpenAiResponsesProvider.RequestProfile.CODEX)));
-            providers1.put(
-                    "google",
-                    googleProvider(List.copyOf(catalog.catalogModelsForProvider("google").stream()
-                            .filter(model -> model.api.equals(GOOGLE_API))
-                            .toList())));
+            googleProvider(List.copyOf(catalog.catalogModelsForProvider("google").stream()
+                    .filter(model -> model.api.equals(GOOGLE_API))
+                    .toList()));
+            providers1.put("google",INSTANCE);
+            gitHubCopilotAuth(
+                    credentials,
+                    URI.create("https://github.com"),
+                    URI.create("https://api.github.com/copilot_internal/v2/token"),
+                    URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
             providers1.put(
                     "github-copilot",
-                    gitHubCopilotAuth(
-                                    credentials,
-                                    URI.create("https://github.com"),
-                                    URI.create("https://api.github.com/copilot_internal/v2/token"),
-                                    URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL)).newGitHubCopilotProvider(catalog.catalogModelsForProvider("github-copilot")));
-            CodingAgentOperations providers = coreProviders(Map.copyOf(providers1));
+                    INSTANCE.newGitHubCopilotProvider(catalog.catalogModelsForProvider("github-copilot")));
+             coreProviders(Map.copyOf(providers1));
+            CodingAgentOperations providers = INSTANCE;
             if (cli.listModels) {
                 String needle = cli.modelSearch == null ? "" : cli.modelSearch.toLowerCase();
                 for (Provider provider : List.copyOf(providers.coreProviders.values())) {
@@ -9700,7 +9690,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     }
                     initialModel = providers.requireCatalogModel(cli.provider, cli.model);
                 }
-                server.mcp = mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
+                server.mcp =INSTANCE;
+                mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
                 try {
                     resetRpcAgent(server, initialModel);
                 } catch (IOException | RuntimeException error) {
@@ -9817,11 +9808,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 Model model = providers.resolveCliModel(cli.provider, cli.model);
                 Provider provider = providers.requireCoreProvider(model.provider);
                 Path cwd = Path.of(".").toAbsolutePath().normalize();
-                CodingAgentOperations mcp = mcpLoadDefaultManager(cwd);
+                CodingAgentOperations mcp = INSTANCE;
+                mcpLoadDefaultManager(cwd);
                 try {
                     mcp.mcpAwaitReady();
                     agentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model);
-                    CodingAgentOperations agent = agent(provider);
+                    agent(provider);
+                    CodingAgentOperations agent = INSTANCE;
                     agent.apiKey = cli.apiKey;
                     agent.configureBuiltInTools(cwd, cli.systemPrompt);
                     agent.tools.addAll(mcp.mcpTools());
@@ -9837,9 +9830,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             }
                         });
                     }
-                    CodingAgentOperations recorder = cli.noSession
-                            ? null
-                            : defaultSessionStore().createSessionRecorder(cwd, model.provider, model.id);
+                    CodingAgentOperations recorder;
+                    if (cli.noSession) recorder = null;
+                    else {
+                        recorder = INSTANCE;
+                        defaultSessionStore();
+                        createSessionRecorder(cwd, model.provider, model.id);
+                    }
                     List<Message> messages = agent.prompt(cli.message);
                     if (recorder != null) {
                         recorder.appendSessionMessages(messages);
@@ -9861,8 +9858,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
             }
             Path resolved = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json").toAbsolutePath().normalize();
-            CodingAgentOperations settingsStore = settingsStore(
+            settingsStore(
                     resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
+            CodingAgentOperations settingsStore = INSTANCE;
             ObjectNode root = settingsStore.readSettingsObject();
             String provider = optionalSettingsText(root, "defaultProvider");
             String model2 = optionalSettingsText(root, "defaultModel");
@@ -9884,9 +9882,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             Settings settings = new Settings(
                     provider, model2, thinkingLevel, theme, value != null && value.asBoolean(false));
             Path workspace = Path.of(".").toAbsolutePath().normalize();
-            CodingAgentOperations mcp = mcpLoadDefaultManager(workspace);
+            CodingAgentOperations mcp = INSTANCE;
+            mcpLoadDefaultManager(workspace);
             try {
-                CodingAgentOperations terminal = newInteractiveTerminal(
+                CodingAgentOperations terminal =INSTANCE;
+                        newInteractiveTerminal(
                         TerminalBuilder.builder().system(true).name(APP_NAME).build(),
                         () -> {
                             Process process =
@@ -9978,7 +9978,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             boolean recordingEnabled = false;
                                             if (!INSTANCE.noSession) {
                                                 try {
-                                                    defaultSessionStore().forkSessionRecorder(
+                                                    defaultSessionStore();
+                                                    forkSessionRecorder(
                                                             INSTANCE.cwd, model.provider, model.id, name, forkMessages);
                                                     recordingEnabled = true;
                                                 } catch (IOException error) {
@@ -10602,17 +10603,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * agent's system prompt. Path-based tools refresh the prompt when they move
      * into a deeper descendant scope.
      */
-    public static CodingAgentOperations agentInstructions(
+    public static void agentInstructions(
             Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
         INSTANCE.repositoryRoot = repositoryRoot;
         INSTANCE.currentDirectory = currentDirectory;
         INSTANCE.baseSystemPrompt = baseSystemPrompt;
-        return INSTANCE;
     }
 
-    public static CodingAgentOperations gitIgnore(String executable) {
+    public static void gitIgnore(String executable) {
         INSTANCE.executable = executable;
-        return INSTANCE;
     }
 
     public void configureBuiltInTools(Path cwd, String baseSystemPrompt) {
@@ -10627,7 +10626,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 break;
             }
         }
-        CodingAgentOperations instructions = agentInstructions(
+        CodingAgentOperations instructions = INSTANCE;
+        agentInstructions(
                 repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
         instructions.refreshAgentInstructionsIn(directory);
         Set<Path> announcedSources = new LinkedHashSet<>();
@@ -10640,7 +10640,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 applyAgentInstructions(announcedSources);
             }
         });
-        this.tools.addAll(gitIgnore("git").builtInTools(cwd, path -> {
+        gitIgnore("git");
+        this.tools.addAll(INSTANCE.builtInTools(cwd, path -> {
             boolean result;
             synchronized (instructions) {
                 Path directory1 = instructionDirectory(path);
@@ -10992,7 +10993,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             println("Session persistence is disabled by --no-session.");
             return;
         }
-        CodingAgentOperations store = defaultSessionStore();
+        CodingAgentOperations store =this;
+        defaultSessionStore();
         List<SessionSnapshot> sessions;
         try {
             sessions = store.shellSessionSnapshots(this.cwd);
@@ -11153,7 +11155,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         boolean recordingEnabled = false;
         if (!this.noSession) {
             try {
-                defaultSessionStore().createSessionRecorder(configuredCwd, model.provider, model.id);
+                defaultSessionStore();
+                createSessionRecorder(configuredCwd, model.provider, model.id);
                 recordingEnabled = true;
             } catch (IOException error) {
                 println("Model configured, but session persistence is unavailable: " + error.getMessage());
@@ -11763,9 +11766,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     // ------------------------------------------------------------- rpc server
 
     private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
-        Provider provider = server.providers.requireCoreProvider(model.provider);
+        server.providers.requireCoreProvider(model.provider);
+        Provider provider = INSTANCE;
         agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model);
-        server.agent = agent(provider);
+        agent(provider);
+        server.agent = INSTANCE;
         server.agent.apiKey = server.arguments.apiKey;
         server.agent.configureBuiltInTools(Path.of("."), server.arguments.systemPrompt);
         server.agent.tools.addAll(server.mcp.mcpTools());
@@ -11784,9 +11789,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             ObjectNode node = encodeAgentEvent(event, true);
             if (node != null) outputRpc(node);
         });
-        server.recorder = server.arguments.noSession
-                ? null
-                : defaultSessionStore().createSessionRecorder(Path.of("."), model.provider, model.id);
+        if (server.arguments.noSession) server.recorder = null;
+        else {
+            defaultSessionStore();
+            INSTANCE.createSessionRecorder(Path.of("."), model.provider, model.id);
+            server.recorder = INSTANCE;
+        }
     }
 
     private static void respondRpc(
@@ -12220,10 +12228,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return this;
     }
 
-    public static CodingAgentOperations settingsStore(Path settingsPath, Path lockPath) {
+    public static void settingsStore(Path settingsPath, Path lockPath) {
         INSTANCE.settingsPath = settingsPath;
         INSTANCE.lockPath = lockPath;
-        return INSTANCE;
     }
 
     public CodingAgentOperations createSessionRecorder(Path cwd, String provider, String model) throws IOException {
@@ -12358,19 +12365,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Resolves the session directory, dropping legacy directories that duplicate it.
      */
-    public static CodingAgentOperations sessionStore(Path directory, List<Path> legacyDirectories) {
+    public static void sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
         INSTANCE.directory = resolved;
         INSTANCE.legacyDirectories = legacyDirectories.stream()
                 .map(path -> path.toAbsolutePath().normalize())
                 .filter(path -> !path.equals(resolved))
                 .toList();
-        return INSTANCE;
     }
 
-    public static CodingAgentOperations defaultSessionStore() {
+    public static void defaultSessionStore() {
         Path home = Path.of(System.getProperty("user.home"));
-        return sessionStore(
+        sessionStore(
                 home.resolve(".codingagent").resolve("sessions"),
                 List.of(home.resolve(".pi-java").resolve("sessions")));
     }
