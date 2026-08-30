@@ -44,14 +44,14 @@ class McpRemoteTest {
 			CodingAgentOperations manager = CodingAgentOperations.mcpCreateManager(
 					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
 			try {
-				CodingAgentOperations.mcpAwaitReady(manager);
-				assertEquals(CodingAgentOperations.McpState.CONNECTED, CodingAgentOperations.mcpStatus(manager, "remote").state);
-				AgentTool tool = CodingAgentOperations.mcpTools(manager).getFirst();
+				manager.mcpAwaitReady();
+				assertEquals(CodingAgentOperations.McpState.CONNECTED, manager.mcpStatus("remote").state);
+				AgentTool tool = manager.mcpTools().getFirst();
 				AgentTool.ToolResult result = CodingAgentOperations.executeTool(
 						tool, "id", CodingAgentOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});
 				assertEquals("over http", ((TextContent) result.content.getFirst()).text);
 			} finally {
-				CodingAgentOperations.mcpCloseManager(manager);
+				manager.mcpCloseManager();
 			}
 			assertTrue(sawSession.get());
 			assertTrue(sawProtocol.get());

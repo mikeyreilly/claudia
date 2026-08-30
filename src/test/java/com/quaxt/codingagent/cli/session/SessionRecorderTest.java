@@ -27,11 +27,11 @@ class SessionRecorderTest {
 	@Test
 	void recordsACompleteAgentTranscript() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations recorder = store.createSessionRecorder(tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
 		assistant.content.add(new TextContent("I will use a tool.", null));
 		assistant.stopReason = StopReason.TOOL_USE;
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(
+		recorder.appendSessionMessages(List.of(
 				CodingAgentOperations.userMessage("read file"),
 				assistant,
 				new ToolResultMessage(
@@ -42,7 +42,7 @@ class SessionRecorderTest {
 						false,
 						System.currentTimeMillis())));
 
-		var entries = CodingAgentOperations.readSession(store, recorder.sessionId);
+		var entries = store.readSession(recorder.sessionId);
 		assertEquals(4, entries.size());
 		assertEquals("session_start", entries.getFirst().type);
 		assertEquals("user", entries.get(1).payload.path("role").asText());
@@ -54,39 +54,38 @@ class SessionRecorderTest {
 	@Test
 	void forksTheTranscriptIntoANamedSession() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		CodingAgentOperations source = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations source = store.createSessionRecorder(tempDir, "faux", "faux-1");
 		String sourceSessionId = source.sessionId;
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("first prompt"), CodingAgentOperations.userMessage("second prompt"));
-		CodingAgentOperations.appendSessionMessages(source, messages);
+		source.appendSessionMessages(messages);
 
-		CodingAgentOperations fork = CodingAgentOperations.forkSessionRecorder(
-				store, tempDir, "faux", "faux-1", "  investigation fork  ", messages);
-		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, fork.sessionId);
+		CodingAgentOperations fork = store.forkSessionRecorder(tempDir, "faux", "faux-1", "  investigation fork  ", messages);
+		SessionSnapshot snapshot = store.sessionSnapshot(fork.sessionId);
 
 		assertNotEquals(sourceSessionId, fork.sessionId);
 		assertEquals("investigation fork", snapshot.name);
 		assertEquals(2, snapshot.messageCount);
 		assertEquals("first prompt", snapshot.firstMessage);
-		assertEquals(2, CodingAgentOperations.sessionSnapshot(store, sourceSessionId).messageCount);
+		assertEquals(2, store.sessionSnapshot(sourceSessionId).messageCount);
 	}
 
 	@Test
 	void restoresCompactedSessionsUsingOnlyTheCheckpointAndLaterMessagesAsContext() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(
+		CodingAgentOperations recorder = store.createSessionRecorder(tempDir, "faux", "faux-1");
+		recorder.appendSessionMessages(List.of(
 				CodingAgentOperations.userMessage("PRE-COMPACTION-SENTINEL"),
 				CodingAgentOperations.userMessage("another message to compact")));
-		CodingAgentOperations.appendSessionCompaction(recorder, new CompactionResult("Saved checkpoint.", 123, 12));
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("POST-COMPACTION-SENTINEL")));
+		recorder.appendSessionCompaction(new CompactionResult("Saved checkpoint.", 123, 12));
+		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("POST-COMPACTION-SENTINEL")));
 
-		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
 
 		// The append-only transcript remains available to render or inspect.
 		assertEquals(3, snapshot.messageCount);
 		assertEquals(3, snapshot.transcriptMessages.size());
 		assertEquals("PRE-COMPACTION-SENTINEL", CodingAgentOperations.text(((UserMessage) snapshot.transcriptMessages.getFirst())));
-		assertEquals("compaction", CodingAgentOperations.readSession(store, recorder.sessionId).get(3).type);
+		assertEquals("compaction", store.readSession(recorder.sessionId).get(3).type);
 
 		// Resuming must use the compaction-aware projection, not the old transcript.
 		assertEquals(2, snapshot.messages.size());
@@ -102,14 +101,14 @@ class SessionRecorderTest {
 	@Test
 	void usesTheLatestCompactionBoundaryWhenASessionIsCompactedAgain() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("first history")));
-		CodingAgentOperations.appendSessionCompaction(recorder, new CompactionResult("first checkpoint", 100, 10));
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("between compactions")));
-		CodingAgentOperations.appendSessionCompaction(recorder, new CompactionResult("second checkpoint", 100, 10));
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("after latest compaction")));
+		CodingAgentOperations recorder = store.createSessionRecorder(tempDir, "faux", "faux-1");
+		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("first history")));
+		recorder.appendSessionCompaction(new CompactionResult("first checkpoint", 100, 10));
+		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("between compactions")));
+		recorder.appendSessionCompaction(new CompactionResult("second checkpoint", 100, 10));
+		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("after latest compaction")));
 
-		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
 
 		assertEquals(2, snapshot.messages.size());
 		assertEquals("[Conversation checkpoint]\nsecond checkpoint", CodingAgentOperations.text(((UserMessage) snapshot.messages.getFirst())));
@@ -119,7 +118,7 @@ class SessionRecorderTest {
 	@Test
 	void restoresTypedMessagesAndContinuesTheSameSession() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations recorder = store.createSessionRecorder(tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux-api", "faux", "faux-1");
 		assistant.content.add(new ThinkingContent("reasoning", "opaque", false));
 		assistant.content.add(new TextContent("answer", "text-signature"));
@@ -137,9 +136,9 @@ class SessionRecorderTest {
 				Map.of("path", "README.md"),
 				false,
 				5678);
-		CodingAgentOperations.appendSessionMessages(recorder, List.of(user, assistant, result));
+		recorder.appendSessionMessages(List.of(user, assistant, result));
 
-		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
 		assertEquals(tempDir.toAbsolutePath().normalize(), snapshot.cwd);
 		assertEquals("faux", snapshot.provider);
 		assertEquals("faux-1", snapshot.model);
@@ -154,9 +153,7 @@ class SessionRecorderTest {
 		ToolResultMessage restoredResult = (ToolResultMessage) snapshot.messages.getLast();
 		assertEquals("README.md", ((Map<?, ?>) restoredResult.details).get("path"));
 
-		CodingAgentOperations.appendSessionMessages(
-				CodingAgentOperations.resumeSessionRecorder(store, recorder.sessionId),
-				List.of(CodingAgentOperations.userMessage("continue")));
-		assertEquals(4, CodingAgentOperations.sessionSnapshot(store, recorder.sessionId).messageCount);
+		store.resumeSessionRecorder(recorder.sessionId).appendSessionMessages(List.of(CodingAgentOperations.userMessage("continue")));
+		assertEquals(4, store.sessionSnapshot(recorder.sessionId).messageCount);
 	}
 }

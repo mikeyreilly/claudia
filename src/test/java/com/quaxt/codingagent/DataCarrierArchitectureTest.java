@@ -67,6 +67,24 @@ class DataCarrierArchitectureTest {
 		assertTrue(violations.isEmpty(), () -> String.join("\n", violations));
 	}
 
+	@Test
+	void operationsMethodsUseTheSingletonAsTheirReceiver() {
+		List<String> violations = new ArrayList<>();
+		for (Method method : CodingAgentOperations.class.getDeclaredMethods()) {
+			if (method.isSynthetic()) {
+				continue;
+			}
+			for (Class<?> parameterType : method.getParameterTypes()) {
+				if (parameterType == CodingAgentOperations.class) {
+					violations.add(method.toGenericString());
+				}
+			}
+		}
+
+		assertTrue(violations.isEmpty(), () -> "Operations methods must not accept their own singleton type:\n"
+				+ String.join("\n", violations));
+	}
+
 	/**
 	 * Every constructor parameter must flow straight into a field of the
 	 * declaring class (or into a superclass constructor for exception types).
