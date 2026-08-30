@@ -1,9 +1,9 @@
 package com.quaxt.codingagent.cli;
 
+import com.quaxt.codingagent.CodingAgentOperations;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import com.quaxt.codingagent.mcp.McpManager;
 
 /**
  * State of the full-screen MCP server list and its drill-down for toggling
@@ -47,12 +47,12 @@ public final class McpSelector {
 		TOOLS
 	}
 
-	public McpManager manager;
+	public CodingAgentOperations manager;
 	/** Receives every applied change; may report a failed save with UncheckedIOException. */
 	public Consumer<Change> onChange;
 	public List<String> names = List.of();
 	public List<String> filtered = List.of();
-	public List<McpManager.ToolStatus> filteredTools = List.of();
+	public List<CodingAgentOperations.McpToolStatus> filteredTools = List.of();
 	public StringBuilder query = new StringBuilder();
 	public int queryCursor;
 	public int selectedIndex;

@@ -1,5 +1,7 @@
 package com.quaxt.codingagent.cli;
 
+import com.quaxt.codingagent.CodingAgentOperations;
+
 import static com.quaxt.codingagent.CodingAgentOperations.activeActivity;
 import static com.quaxt.codingagent.CodingAgentOperations.activityAccent;
 import static com.quaxt.codingagent.CodingAgentOperations.activityLabel;
@@ -12,7 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
-import com.quaxt.codingagent.tui.InteractiveTerminal;
 
 class ActivityStatusTest {
 	private static final long SECOND = 1_000_000_000L;
@@ -22,7 +23,7 @@ class ActivityStatusTest {
 		ActivityStatus ready = readyActivity(0);
 
 		assertEquals("● Ready", activityLabel(ready, 20 * SECOND));
-		assertEquals(InteractiveTerminal.StatusAccent.READY, activityAccent(ready));
+		assertEquals(CodingAgentOperations.StatusAccent.READY, activityAccent(ready));
 		assertFalse(isDynamicActivity(ready));
 
 		for (ActivityStatus.Phase phase : ActivityStatus.Phase.values()) {
@@ -30,7 +31,7 @@ class ActivityStatusTest {
 			ActivityStatus status = phase == ActivityStatus.Phase.RETRYING
 					? retryingActivity(1, 3, 2_000, 0)
 					: activeActivity(phase, 0);
-			assertFalse(activityAccent(status) == InteractiveTerminal.StatusAccent.READY, phase.toString());
+			assertFalse(activityAccent(status) == CodingAgentOperations.StatusAccent.READY, phase.toString());
 		}
 	}
 
@@ -60,7 +61,7 @@ class ActivityStatusTest {
 		assertEquals("↻ Retry 2/3 in 3s", activityLabel(retry, 10 * SECOND));
 		assertEquals("↻ Retry 2/3 in 1s", activityLabel(retry, 12 * SECOND));
 		assertEquals("↻ Retry 2/3 · waiting for model", activityLabel(retry, 13 * SECOND));
-		assertEquals(InteractiveTerminal.StatusAccent.WARNING, activityAccent(retry));
+		assertEquals(CodingAgentOperations.StatusAccent.WARNING, activityAccent(retry));
 	}
 
 	@Test

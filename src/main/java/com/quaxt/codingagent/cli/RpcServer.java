@@ -1,10 +1,6 @@
 package com.quaxt.codingagent.cli;
 
 import com.quaxt.codingagent.CodingAgentOperations;
-import com.quaxt.codingagent.agent.Agent;
-import com.quaxt.codingagent.ai.CoreProviders;
-import com.quaxt.codingagent.cli.session.SessionRecorder;
-import com.quaxt.codingagent.mcp.McpManager;
 
 /**
  * State of the JSONL stdin/stdout automation protocol: the configured
@@ -13,11 +9,11 @@ import com.quaxt.codingagent.mcp.McpManager;
  * CodingAgentOperations.
  */
 public final class RpcServer {
-	public CoreProviders providers;
+	public CodingAgentOperations providers;
 	public CodingAgentOperations arguments;
-	public McpManager mcp;
-	public Agent agent;
-	public SessionRecorder recorder;
+	public CodingAgentOperations mcp;
+	public CodingAgentOperations agent;
+	public CodingAgentOperations recorder;
 
 	public RpcServer() {}
 }

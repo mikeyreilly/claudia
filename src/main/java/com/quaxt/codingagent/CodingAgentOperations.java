@@ -41,6 +41,7 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.function.UnaryOperator;
@@ -62,6 +63,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -75,42 +77,33 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.quaxt.codingagent.agent.Agent;
 import com.quaxt.codingagent.agent.AgentEvent;
-import com.quaxt.codingagent.agent.AgentState;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.agent.FunctionTool;
 import com.quaxt.codingagent.agent.ToolInvocation;
-import com.quaxt.codingagent.ai.CoreProviders;
-import com.quaxt.codingagent.ai.ModelCatalog;
 import com.quaxt.codingagent.ai.Models;
 import com.quaxt.codingagent.ai.Provider;
 import com.quaxt.codingagent.ai.Retry;
 import com.quaxt.codingagent.ai.StreamOptions;
-import com.quaxt.codingagent.ai.auth.ChatGptAuth;
 import com.quaxt.codingagent.ai.auth.Credential;
 import com.quaxt.codingagent.ai.auth.CredentialStore;
 import com.quaxt.codingagent.ai.auth.EnvApiKeys;
-import com.quaxt.codingagent.ai.auth.FileCredentialStore;
-import com.quaxt.codingagent.ai.auth.GitHubCopilotAuth;
 import com.quaxt.codingagent.ai.http.HttpException;
 import com.quaxt.codingagent.ai.http.HttpTransport;
 import com.quaxt.codingagent.ai.http.SseReader;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.AnthropicProvider;
-import com.quaxt.codingagent.ai.providers.ChatGptProvider;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
-import com.quaxt.codingagent.ai.providers.GitHubCopilotProvider;
-import com.quaxt.codingagent.ai.providers.GoogleProvider;
-import com.quaxt.codingagent.ai.providers.OpenAiCompatibleProvider;
 import com.quaxt.codingagent.ai.providers.OpenAiResponsesProvider;
 import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
 import com.quaxt.codingagent.ai.stream.EventStream;
@@ -135,17 +128,11 @@ import com.quaxt.codingagent.ai.types.UserContent;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.cli.ActivityStatus;
-import com.quaxt.codingagent.cli.AgentInstructions;
-import com.quaxt.codingagent.cli.InteractiveShell;
 import com.quaxt.codingagent.cli.McpSelector;
 import com.quaxt.codingagent.cli.RpcServer;
 import com.quaxt.codingagent.cli.TurnDetailsComponent;
-import com.quaxt.codingagent.cli.session.SessionRecorder;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
-import com.quaxt.codingagent.cli.session.SessionStore;
-import com.quaxt.codingagent.cli.settings.SettingsStore;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
-import com.quaxt.codingagent.cli.tools.GitIgnore;
 import com.quaxt.codingagent.cli.tools.LocalTool;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpClient;
@@ -153,21 +140,16 @@ import com.quaxt.codingagent.mcp.McpResultFilter;
 import com.quaxt.codingagent.mcp.McpConfigLoader;
 import com.quaxt.codingagent.mcp.McpConfiguration;
 import com.quaxt.codingagent.mcp.McpHttpException;
-import com.quaxt.codingagent.mcp.McpManager;
 import com.quaxt.codingagent.mcp.McpOAuthCallback;
-import com.quaxt.codingagent.mcp.McpOAuthClient;
 import com.quaxt.codingagent.mcp.McpOAuthRequiredException;
-import com.quaxt.codingagent.mcp.McpOAuthStore;
 import com.quaxt.codingagent.mcp.McpServerConfig;
 import com.quaxt.codingagent.mcp.McpTransport;
 import com.quaxt.codingagent.mcp.SseHttpMcpTransport;
 import com.quaxt.codingagent.mcp.StdioMcpTransport;
 import com.quaxt.codingagent.mcp.StreamableHttpMcpTransport;
 import com.quaxt.codingagent.tui.AnsiRenderer;
-import com.quaxt.codingagent.tui.CommandSuggestions;
 import com.quaxt.codingagent.tui.FuzzyMatcher;
 import com.quaxt.codingagent.tui.FuzzySelector;
-import com.quaxt.codingagent.tui.InteractiveTerminal;
 import com.quaxt.codingagent.tui.Keybindings;
 import com.quaxt.codingagent.tui.SelectItem;
 import com.quaxt.codingagent.tui.Theme;
@@ -197,13 +179,727 @@ import org.jline.utils.WCWidth;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 /**
- * Single home for project-owned behavior. Every operation is static and takes
- * the data carrier it acts on; the class holds no state of its own.
+ * Single home for project-owned behavior and for state whose former carrier
+ * has at most one live instance of its role in a normal application run.
+ * Operations remain static; folded roles use separate instances of this class.
  */
-public final class CodingAgentOperations extends JniTerminalProvider {
+public final class CodingAgentOperations extends JniTerminalProvider implements Provider, CredentialStore {
     public static final String APP_NAME = "codingagent";
     public static final String VERSION = "0.1.0-java";
 
+    // Model catalog
+    public static final String MODEL_CATALOG_RESOURCE_ROOT = "/quaxt/codingagent/ai/models/";
+    public static final List<String> MODEL_CATALOG_RESOURCE_NAMES =
+            List.of("anthropic.json", "openai.json", "google.json", "github-copilot.json");
+
+    // File-backed stores
+    public static final Set<PosixFilePermission> DIRECTORY_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.OWNER_EXECUTE);
+    public static final Set<PosixFilePermission> FILE_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE);
+
+    // ChatGPT authentication and provider
+    public static final String CHATGPT_PROVIDER_ID = "chatgpt";
+    public static final URI CHATGPT_CODEX_API_BASE_URL = URI.create("https://chatgpt.com/backend-api/codex");
+    public static final String CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+    public static final String CHATGPT_ACCOUNT_ID = "accountId";
+    public static final long CHATGPT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
+    public static final long CHATGPT_DEVICE_CODE_LIFETIME_MS = 15 * 60 * 1000L;
+    public static final String CHATGPT_PROVIDER_NAME = "ChatGPT Plus/Pro";
+    public static final String CHATGPT_API = "openai-responses";
+    public static final Set<String> CHATGPT_CODEX_MODEL_IDS = Set.of(
+            "gpt-5.3-codex",
+            "gpt-5.3-codex-spark",
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra");
+
+    // GitHub Copilot authentication and provider
+    public static final String GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+    public static final String GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
+    public static final String GITHUB_COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
+    public static final String GITHUB_COPILOT_DEFAULT_BASE_URL = "https://api.individual.githubcopilot.com";
+    public static final Pattern GITHUB_COPILOT_PROXY_ENDPOINT = Pattern.compile("(?:^|;)proxy-ep=([^;]+)");
+    public static final long GITHUB_COPILOT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
+    public static final String GITHUB_COPILOT_PROVIDER_NAME = "GitHub Copilot";
+    public static final String GITHUB_COPILOT_API = "github-copilot";
+    public static final String GITHUB_COPILOT_COMPLETIONS_BASE_URL =
+            "https://api.individual.githubcopilot.com";
+
+    public static final String GOOGLE_API = "google-generative-ai";
+    public static final String OPENAI_COMPATIBLE_API = "openai-completions";
+
+    /** Identifies which folded provider role an operations carrier represents. */
+    public enum ProviderKind {
+        CHATGPT,
+        GITHUB_COPILOT,
+        GOOGLE,
+        OPENAI_COMPATIBLE
+    }
+
+    /** Pending ChatGPT device authorization presented to the user. */
+    public static final class ChatGptDeviceCode {
+        public String deviceAuthId;
+        public String userCode;
+        public URI verificationUri;
+        public int intervalSeconds;
+        public long expiresAtMs;
+
+        public ChatGptDeviceCode(
+                String deviceAuthId, String userCode, URI verificationUri, int intervalSeconds, long expiresAtMs) {
+            this.deviceAuthId = deviceAuthId;
+            this.userCode = userCode;
+            this.verificationUri = verificationUri;
+            this.intervalSeconds = intervalSeconds;
+            this.expiresAtMs = expiresAtMs;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof ChatGptDeviceCode that
+                    && Objects.equals(deviceAuthId, that.deviceAuthId)
+                    && Objects.equals(userCode, that.userCode)
+                    && Objects.equals(verificationUri, that.verificationUri)
+                    && intervalSeconds == that.intervalSeconds
+                    && expiresAtMs == that.expiresAtMs;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(deviceAuthId, userCode, verificationUri, intervalSeconds, expiresAtMs);
+        }
+
+        @Override
+        public String toString() {
+            return "DeviceCode[deviceAuthId=" + deviceAuthId + ", userCode=" + userCode
+                    + ", verificationUri=" + verificationUri + ", intervalSeconds=" + intervalSeconds
+                    + ", expiresAtMs=" + expiresAtMs + "]";
+        }
+    }
+
+    /** A current ChatGPT bearer token plus the subscription account id. */
+    public static final class ChatGptToken {
+        public String accessToken;
+        public String accountId;
+
+        public ChatGptToken(String accessToken, String accountId) {
+            this.accessToken = accessToken;
+            this.accountId = accountId;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof ChatGptToken that
+                    && Objects.equals(accessToken, that.accessToken)
+                    && Objects.equals(accountId, that.accountId);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(accessToken, accountId);
+        }
+
+        @Override
+        public String toString() {
+            return "ChatGptToken[accessToken=" + accessToken + ", accountId=" + accountId + "]";
+        }
+    }
+
+    /** Pending GitHub device authorization presented to the user. */
+    public static final class GitHubCopilotDeviceCode {
+        public String deviceCode;
+        public String userCode;
+        public URI verificationUri;
+        public int intervalSeconds;
+        public long expiresAtMs;
+
+        public GitHubCopilotDeviceCode(
+                String deviceCode, String userCode, URI verificationUri, int intervalSeconds, long expiresAtMs) {
+            this.deviceCode = deviceCode;
+            this.userCode = userCode;
+            this.verificationUri = verificationUri;
+            this.intervalSeconds = intervalSeconds;
+            this.expiresAtMs = expiresAtMs;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof GitHubCopilotDeviceCode that
+                    && Objects.equals(deviceCode, that.deviceCode)
+                    && Objects.equals(userCode, that.userCode)
+                    && Objects.equals(verificationUri, that.verificationUri)
+                    && intervalSeconds == that.intervalSeconds
+                    && expiresAtMs == that.expiresAtMs;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(deviceCode, userCode, verificationUri, intervalSeconds, expiresAtMs);
+        }
+
+        @Override
+        public String toString() {
+            return "DeviceCode[deviceCode=" + deviceCode + ", userCode=" + userCode
+                    + ", verificationUri=" + verificationUri + ", intervalSeconds=" + intervalSeconds
+                    + ", expiresAtMs=" + expiresAtMs + "]";
+        }
+    }
+
+    /** A current derived Copilot bearer token plus its API endpoint. */
+    public static final class CopilotToken {
+        public String accessToken;
+        public URI baseUrl;
+        public List<String> availableModelIds;
+
+        public CopilotToken(String accessToken, URI baseUrl, List<String> availableModelIds) {
+            this.accessToken = accessToken;
+            this.baseUrl = baseUrl;
+            this.availableModelIds = availableModelIds;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof CopilotToken that
+                    && Objects.equals(accessToken, that.accessToken)
+                    && Objects.equals(baseUrl, that.baseUrl)
+                    && Objects.equals(availableModelIds, that.availableModelIds);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(accessToken, baseUrl, availableModelIds);
+        }
+
+        @Override
+        public String toString() {
+            return "CopilotToken[accessToken=" + accessToken + ", baseUrl=" + baseUrl
+                    + ", availableModelIds=" + availableModelIds + "]";
+        }
+    }
+
+    /** Result of enabling model policies and refreshing the enabled-model list. */
+    public static final class CopilotModelAccess {
+        public int policiesEnabled;
+        public List<Model> models;
+
+        public CopilotModelAccess(int policiesEnabled, List<Model> models) {
+            this.policiesEnabled = policiesEnabled;
+            this.models = models;
+        }
+    }
+
+    /** Streaming accumulator for one Chat Completions tool-call index. */
+    public static final class OpenAiToolCallAccumulator {
+        public int wireIndex;
+        public List<JsonNode> rawDeltas = new ArrayList<>();
+        public int contentIndex = -1;
+        public String id = "";
+        public String name = "";
+        public StringBuilder arguments = new StringBuilder();
+        public boolean hasMeaningfulData;
+
+        public OpenAiToolCallAccumulator(int wireIndex) {
+            this.wireIndex = wireIndex;
+        }
+    }
+
+    // Folded model catalog and core-provider registry state
+    public Map<String, Model> byProviderAndId;
+    public Map<String, List<Model>> byProvider;
+    public CodingAgentOperations catalog;
+    public Map<String, Provider> coreProviders;
+
+    // Folded file credential store and provider-authentication state
+    public Path authPath;
+    public Path lockPath;
+    public Path fallbackAuthPath;
+    public CredentialStore credentials;
+    public URI authBaseUrl;
+    public String clientId;
+    public URI githubBaseUrl;
+    public URI copilotTokenUrl;
+    public URI defaultCopilotBaseUrl;
+
+    // Folded provider state. Each provider remains a distinct operations carrier.
+    public ProviderKind providerKind;
+    public String id;
+    public String name;
+    public String baseUrl;
+    public List<Model> models;
+    public CodingAgentOperations auth;
+    public AnthropicProvider anthropic;
+    public CodingAgentOperations completions;
+    public OpenAiResponsesProvider responses;
+
+    // Folded Agent and AgentState state
+    public CodingAgentOperations state;
+    public Provider agentProvider;
+    public List<Consumer<AgentEvent>> listeners = new CopyOnWriteArrayList<>();
+    public volatile AbortSignal activeSignal;
+    public Retry.Policy retryPolicy = Retry.Policy.DEFAULT;
+    public Model selectedModel;
+    public ThinkingLevel thinkingLevel = ThinkingLevel.OFF;
+    public List<AgentTool> tools = new ArrayList<>();
+    public List<Message> messages = new ArrayList<>();
+    public boolean isStreaming;
+    public AssistantMessage streamingMessage;
+    public Set<String> pendingToolCalls = new LinkedHashSet<>();
+    public String errorMessage;
+    public boolean isCompacting;
+    public boolean autoCompactionEnabled = true;
+    public int compactionReserveTokens = 16_384;
+    public String compactionSummary;
+
+    // Repository instructions, sessions, settings, and git-ignore filtering
+    public static final String AGENTS_FILE = "AGENTS.md";
+    public static final String AGENTS_OVERRIDE_FILE = "AGENTS.override.md";
+    public static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
+
+    /** One complete append-only JSONL session record. */
+    public static final class SessionEntry {
+        public long timestamp;
+        public String type;
+        public JsonNode payload;
+
+        public SessionEntry(long timestamp, String type, JsonNode payload) {
+            this.timestamp = timestamp;
+            this.type = type;
+            this.payload = payload;
+        }
+    }
+
+    /** The settings currently understood by the Java CLI. */
+    public static final class Settings {
+        public String defaultProvider;
+        public String defaultModel;
+        public ThinkingLevel defaultThinkingLevel;
+        public String theme;
+        public boolean hideThinkingBlock;
+
+        public Settings(
+                String defaultProvider,
+                String defaultModel,
+                ThinkingLevel defaultThinkingLevel,
+                String theme,
+                boolean hideThinkingBlock) {
+            this.defaultProvider = defaultProvider;
+            this.defaultModel = defaultModel;
+            this.defaultThinkingLevel = defaultThinkingLevel;
+            this.theme = theme;
+            this.hideThinkingBlock = hideThinkingBlock;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Settings that
+                    && Objects.equals(defaultProvider, that.defaultProvider)
+                    && Objects.equals(defaultModel, that.defaultModel)
+                    && defaultThinkingLevel == that.defaultThinkingLevel
+                    && Objects.equals(theme, that.theme)
+                    && hideThinkingBlock == that.hideThinkingBlock;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(defaultProvider, defaultModel, defaultThinkingLevel, theme, hideThinkingBlock);
+        }
+
+        @Override
+        public String toString() {
+            return "Settings[defaultProvider=" + defaultProvider
+                    + ", defaultModel=" + defaultModel
+                    + ", defaultThinkingLevel=" + defaultThinkingLevel
+                    + ", theme=" + theme
+                    + ", hideThinkingBlock=" + hideThinkingBlock + "]";
+        }
+    }
+
+    public Path repositoryRoot;
+    public String baseSystemPrompt;
+    public Path currentDirectory;
+    public List<Path> sources = List.of();
+    public CodingAgentOperations sessionStore;
+    public String sessionId;
+    public Path directory;
+    public List<Path> legacyDirectories;
+    public Path settingsPath;
+    public String executable;
+
+    // MCP manager and OAuth
+    public static final int MCP_OAUTH_DEFAULT_CALLBACK_PORT = 19_876;
+    public static final String MCP_OAUTH_DEFAULT_CALLBACK_PATH = "/mcp/oauth/callback";
+    public static final Duration MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT = Duration.ofMinutes(5);
+    public static final Duration MCP_OAUTH_HTTP_TIMEOUT = Duration.ofSeconds(30);
+    public static final long MCP_OAUTH_REFRESH_SKEW_SECONDS = 30;
+    public static final String MCP_OAUTH_PROTOCOL_VERSION = "2025-11-25";
+    public static final Pattern MCP_OAUTH_AUTH_PARAMETER = Pattern.compile(
+            "(?i)(?:^|[,\\s])([a-z][a-z0-9_-]*)\\s*=\\s*(?:\"([^\"]*)\"|([^,\\s]+))");
+
+    public enum McpState {
+        CONNECTING,
+        AUTHENTICATING,
+        AUTH_REQUIRED,
+        CONNECTED,
+        DISABLED,
+        FAILED
+    }
+
+    /** Snapshot of one configured MCP server. */
+    public static final class McpServerStatus {
+        public String name;
+        public McpState state;
+        public String message;
+        public int toolCount;
+        public int enabledToolCount;
+        public String target;
+        public String authorizationUrl;
+
+        public McpServerStatus(
+                String name,
+                McpState state,
+                String message,
+                int toolCount,
+                int enabledToolCount,
+                String target,
+                String authorizationUrl) {
+            this.name = name;
+            this.state = state;
+            this.message = message;
+            this.toolCount = toolCount;
+            this.enabledToolCount = enabledToolCount;
+            this.target = target;
+            this.authorizationUrl = authorizationUrl;
+        }
+    }
+
+    /** One cached MCP tool and whether it is exposed to the model. */
+    public static final class McpToolStatus {
+        public String serverName;
+        public String name;
+        public String description;
+        public boolean enabled;
+
+        public McpToolStatus(String serverName, String name, String description, boolean enabled) {
+            this.serverName = serverName;
+            this.name = name;
+            this.description = description;
+            this.enabled = enabled;
+        }
+    }
+
+    /**
+     * Mutable state of one configured MCP server. This remains a separate
+     * carrier because a manager owns one instance per configured server.
+     */
+    public static final class McpRuntime {
+        public Object lock = new Object();
+        public String name;
+        public McpServerConfig config;
+        public long generation;
+        public boolean enabled;
+        public McpState state;
+        public String message;
+        public McpClient client;
+        public List<McpClient.ToolDefinition> tools = List.of();
+        public Set<String> disabledTools = new HashSet<>();
+        public Thread connector;
+        public String authorizationUrl;
+
+        public McpRuntime(String name, McpServerConfig config) {
+            this.name = name;
+            this.config = config;
+        }
+    }
+
+    /** Per-server OAuth state; the session instance is its own monitor. */
+    public static final class McpOAuthSession {
+        public CodingAgentOperations client;
+        public String name;
+        public McpServerConfig.Remote config;
+        public McpOAuthSettings settings;
+        public McpOAuthEntry entry;
+        public boolean loaded;
+
+        public McpOAuthSession(
+                CodingAgentOperations client,
+                String name,
+                McpServerConfig.Remote config,
+                McpOAuthSettings settings) {
+            this.client = client;
+            this.name = name;
+            this.config = config;
+            this.settings = settings;
+        }
+    }
+
+    /** One completed OAuth HTTP exchange. */
+    public static final class McpOAuthResponse {
+        public int status;
+        public URI uri;
+        public Map<String, List<String>> headers;
+        public String body;
+
+        public McpOAuthResponse(int status, URI uri, Map<String, List<String>> headers, String body) {
+            this.status = status;
+            this.uri = uri;
+            this.headers = headers;
+            this.body = body;
+        }
+    }
+
+    public static final class McpResourceMetadata {
+        public URI resource;
+        public List<URI> authorizationServers;
+        public List<String> scopes;
+
+        public McpResourceMetadata(URI resource, List<URI> authorizationServers, List<String> scopes) {
+            this.resource = resource;
+            this.authorizationServers = authorizationServers;
+            this.scopes = scopes;
+        }
+    }
+
+    public static final class McpAuthorizationMetadata {
+        public URI authorizationEndpoint;
+        public URI tokenEndpoint;
+        public URI registrationEndpoint;
+        public List<String> responseTypes;
+        public List<String> challengeMethods;
+        public List<String> tokenAuthMethods;
+        public List<String> scopes;
+
+        public McpAuthorizationMetadata(
+                URI authorizationEndpoint,
+                URI tokenEndpoint,
+                URI registrationEndpoint,
+                List<String> responseTypes,
+                List<String> challengeMethods,
+                List<String> tokenAuthMethods,
+                List<String> scopes) {
+            this.authorizationEndpoint = authorizationEndpoint;
+            this.tokenEndpoint = tokenEndpoint;
+            this.registrationEndpoint = registrationEndpoint;
+            this.responseTypes = responseTypes;
+            this.challengeMethods = challengeMethods;
+            this.tokenAuthMethods = tokenAuthMethods;
+            this.scopes = scopes;
+        }
+    }
+
+    public static final class McpOAuthDiscovery {
+        public URI authorizationServer;
+        public McpAuthorizationMetadata metadata;
+        public McpResourceMetadata resourceMetadata;
+        public URI resource;
+
+        public McpOAuthDiscovery(
+                URI authorizationServer,
+                McpAuthorizationMetadata metadata,
+                McpResourceMetadata resourceMetadata,
+                URI resource) {
+            this.authorizationServer = authorizationServer;
+            this.metadata = metadata;
+            this.resourceMetadata = resourceMetadata;
+            this.resource = resource;
+        }
+    }
+
+    public static final class McpOAuthChallenge {
+        public URI resourceMetadataUrl;
+        public String scope;
+        public String error;
+
+        public McpOAuthChallenge(URI resourceMetadataUrl, String scope, String error) {
+            this.resourceMetadataUrl = resourceMetadataUrl;
+            this.scope = scope;
+            this.error = error;
+        }
+    }
+
+    public static final class McpOAuthSettings {
+        public String clientId;
+        public String clientSecret;
+        public String scope;
+        public Integer callbackPort;
+        public URI configuredRedirectUri;
+
+        public McpOAuthSettings(
+                String clientId,
+                String clientSecret,
+                String scope,
+                Integer callbackPort,
+                URI configuredRedirectUri) {
+            this.clientId = clientId;
+            this.clientSecret = clientSecret;
+            this.scope = scope;
+            this.callbackPort = callbackPort;
+            this.configuredRedirectUri = configuredRedirectUri;
+        }
+    }
+
+    public static final class McpOAuthFailure extends IOException {
+        public int status;
+        public String code;
+
+        public McpOAuthFailure(int status, String code, String message) {
+            super(message);
+            this.status = status;
+            this.code = code;
+        }
+    }
+
+    public static final class McpOAuthEntry {
+        public McpOAuthTokens tokens;
+        public McpOAuthClientInfo clientInfo;
+
+        public McpOAuthEntry(McpOAuthTokens tokens, McpOAuthClientInfo clientInfo) {
+            this.tokens = tokens;
+            this.clientInfo = clientInfo;
+        }
+    }
+
+    public static final class McpOAuthTokens {
+        public String accessToken;
+        public String refreshToken;
+        public Long expiresAt;
+        public String scope;
+
+        public McpOAuthTokens(String accessToken, String refreshToken, Long expiresAt, String scope) {
+            this.accessToken = accessToken;
+            this.refreshToken = refreshToken;
+            this.expiresAt = expiresAt;
+            this.scope = scope;
+        }
+    }
+
+    public static final class McpOAuthClientInfo {
+        public String clientId;
+        public String clientSecret;
+        public Long clientIdIssuedAt;
+        public Long clientSecretExpiresAt;
+        public String tokenEndpointAuthMethod;
+        public String redirectUri;
+
+        public McpOAuthClientInfo(
+                String clientId,
+                String clientSecret,
+                Long clientIdIssuedAt,
+                Long clientSecretExpiresAt,
+                String tokenEndpointAuthMethod,
+                String redirectUri) {
+            this.clientId = clientId;
+            this.clientSecret = clientSecret;
+            this.clientIdIssuedAt = clientIdIssuedAt;
+            this.clientSecretExpiresAt = clientSecretExpiresAt;
+            this.tokenEndpointAuthMethod = tokenEndpointAuthMethod;
+            this.redirectUri = redirectUri;
+        }
+    }
+
+    // McpManager fields
+    public Path workspace;
+    public CodingAgentOperations oauth;
+    public LinkedHashMap<String, McpRuntime> servers = new LinkedHashMap<>();
+    public volatile boolean closed;
+
+    // McpOAuthClient fields
+    public CodingAgentOperations store;
+    public HttpClient http;
+    public Predicate<URI> browser;
+    public Duration callbackTimeout;
+    public SecureRandom random = new SecureRandom();
+    public ReentrantLock interactiveLock = new ReentrantLock();
+
+    // McpOAuthStore fields
+    public Path path;
+    public List<Path> importPaths;
+
+    // Interactive shell and terminal
+    public static final List<String> SLASH_COMMANDS = List.of(
+            "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
+            "/mcp", "/models", "/quit", "/resume", "/settings", "/theme");
+    public static final int VISIBLE_COMMANDS = 4;
+    public static final int DEFAULT_COLUMNS = 80;
+    public static final int DEFAULT_ROWS = 24;
+    public static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
+    public static final String END_SYNCHRONIZED_OUTPUT = "\u001b[?2026l";
+    public static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
+    public static final String SECONDARY_PROMPT = "%M> ";
+    public static final String BRACKETED_PASTE_END = "\u001b[201~";
+    public static final long PASTE_LOOKAHEAD_MILLIS = 10;
+
+    public enum StreamOutput {
+        NONE,
+        THINKING,
+        TEXT
+    }
+
+    public enum StatusAccent {
+        NONE,
+        READY,
+        ACTIVE,
+        TOOL,
+        WARNING
+    }
+
+    // InteractiveShell fields
+    public CodingAgentOperations providers;
+    public CodingAgentOperations cli;
+    public CodingAgentOperations terminal;
+    public CodingAgentOperations settingsStore;
+    public CodingAgentOperations mcp;
+    public Settings settings;
+    public CodingAgentOperations agent;
+    public CodingAgentOperations recorder;
+    public String sessionName;
+    public Path cwd = Path.of(".").toAbsolutePath().normalize();
+    public boolean emittedText;
+    public boolean hideThinkingBlock;
+    public StreamOutput streamOutput = StreamOutput.NONE;
+    public int streamedThinkingCharacters;
+    public Object activityLock = new Object();
+    public ScheduledExecutorService statusTicker;
+    public volatile ActivityStatus activity;
+    public volatile String statusLocation = "";
+    public volatile String statusModel = "";
+
+    // InteractiveTerminal fields
+    public Terminal jlineTerminal;
+    public LineReaderImpl reader;
+    public Callable<Void> suspendAction;
+    public boolean supportsSuspend;
+    public Attributes shellAttributes;
+    public Terminal.SignalHandler previousContinueHandler;
+    public Terminal.SignalHandler previousResizeHandler;
+    public StringBuilder screenDocument = new StringBuilder();
+    public Status statusBar;
+    public String statusActivity;
+    public StatusAccent statusAccent = StatusAccent.NONE;
+    public String statusLeft;
+    public String statusRight;
+    public Attributes fullScreenResumeAttributes;
+    public volatile boolean managedSuspend;
+    public volatile Theme theme = Theme.DARK;
+    public String suspendedBuffer;
+    public int suspendedCursor = -1;
+    public int restoreCursor = -1;
+    public CodingAgentOperations activeCommandSuggestions;
+    public Supplier<AttributedString> dynamicPost;
+
+    // CommandSuggestions fields
+    public List<String> commands;
+    public String query;
+    public String dismissedBuffer;
+    public List<String> matches = List.of();
+    public int selectedIndex;
+    public int visibleStart;
+
+    // CLI arguments
     public boolean help;
     public boolean version;
     public boolean listModels;
@@ -787,12 +1483,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Resolves the credential file, its sibling lock file, and the optional legacy file.
      */
-    public static FileCredentialStore fileCredentialStore(Path authPath, Path fallbackAuthPath) {
+    public static CodingAgentOperations fileCredentialStore(Path authPath, Path fallbackAuthPath) {
         Path resolved = authPath.toAbsolutePath().normalize();
-        return new FileCredentialStore(
-                resolved,
-                resolved.resolveSibling(resolved.getFileName() + ".lock"),
-                fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize());
+        CodingAgentOperations store = new CodingAgentOperations();
+        store.authPath = resolved;
+        store.lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
+        store.fallbackAuthPath =
+                fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize();
+        return store;
     }
 
     public static String credentialType(Credential credential) {
@@ -802,7 +1500,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         };
     }
 
-    public static FileCredentialStore defaultCredentialStore() {
+    public static CodingAgentOperations defaultCredentialStore() {
         Path home = Path.of(System.getProperty("user.home"));
         return fileCredentialStore(
                 home.resolve(".codingagent").resolve("auth.json"),
@@ -811,10 +1509,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     public static Optional<Credential> readCredential(CredentialStore store, String providerId) throws IOException {
         return switch (store) {
-            case FileCredentialStore file -> {
+            case CodingAgentOperations file -> {
                 validateProviderId(providerId);
                 yield Optional.ofNullable(readAllCredentials(file).get(providerId));
             }
+            default -> throw new IllegalArgumentException("Unknown credential store: " + store.getClass().getName());
         };
     }
 
@@ -825,13 +1524,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     public static Optional<Credential> modifyCredential(
             CredentialStore store, String providerId, UnaryOperator<Credential> operation) throws IOException {
         return switch (store) {
-            case FileCredentialStore file -> {
+            case CodingAgentOperations file -> {
                 validateProviderId(providerId);
                 if (operation == null) {
                     throw new IllegalArgumentException("operation must not be null");
                 }
                 Files.createDirectories(file.authPath.getParent());
-                setPosixPermissions(file.authPath.getParent(), FileCredentialStore.DIRECTORY_PERMISSIONS);
+                setPosixPermissions(file.authPath.getParent(), DIRECTORY_PERMISSIONS);
                 try (FileChannel channel =
                              FileChannel.open(file.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                      FileLock ignored = channel.lock()) {
@@ -876,19 +1575,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     Path temp = Files.createTempFile(file.authPath.getParent(), "auth-", ".json");
                     try {
                         Files.writeString(temp, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
-                        setPosixPermissions(temp, FileCredentialStore.FILE_PERMISSIONS);
+                        setPosixPermissions(temp, FILE_PERMISSIONS);
                         try {
                             Files.move(temp, file.authPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                         } catch (AtomicMoveNotSupportedException e) {
                             Files.move(temp, file.authPath, StandardCopyOption.REPLACE_EXISTING);
                         }
-                        setPosixPermissions(file.authPath, FileCredentialStore.FILE_PERMISSIONS);
+                        setPosixPermissions(file.authPath, FILE_PERMISSIONS);
                     } finally {
                         Files.deleteIfExists(temp);
                     }
                     yield Optional.ofNullable(next);
                 }
             }
+            default -> throw new IllegalArgumentException("Unknown credential store: " + store.getClass().getName());
         };
     }
 
@@ -896,7 +1596,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         modifyCredential(store, providerId, ignored -> null);
     }
 
-    private static Map<String, Credential> readAllCredentials(FileCredentialStore store) throws IOException {
+    private static Map<String, Credential> readAllCredentials(CodingAgentOperations store) throws IOException {
         Path source = Files.exists(store.authPath) ? store.authPath : store.fallbackAuthPath;
         if (source == null || !Files.exists(source)) {
             return new LinkedHashMap<>();
@@ -999,16 +1699,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Validates the authorization endpoint and client id before binding them to the carrier.
      */
-    public static ChatGptAuth chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
+    public static CodingAgentOperations chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
         URI validatedBaseUrl = requireAbsoluteHttpUri(authBaseUrl, "authBaseUrl");
         if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("clientId must not be blank");
-        return new ChatGptAuth(credentials, validatedBaseUrl, clientId);
+        CodingAgentOperations auth = new CodingAgentOperations();
+        auth.credentials = credentials;
+        auth.authBaseUrl = validatedBaseUrl;
+        auth.clientId = clientId;
+        return auth;
     }
 
     /**
      * Starts the Codex device flow. Display the URI and code before completing it.
      */
-    public static ChatGptAuth.DeviceCode chatGptBeginLogin(ChatGptAuth auth) throws IOException {
+    public static ChatGptDeviceCode chatGptBeginLogin(CodingAgentOperations auth) throws IOException {
         ObjectNode request = jsonObject().put("client_id", auth.clientId);
         JsonNode response = authPost(
                 auth.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
@@ -1027,18 +1731,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         if (interval < 0) {
             throw new IOException("Invalid OpenAI device response: interval must not be negative");
         }
-        return new ChatGptAuth.DeviceCode(
+        return new ChatGptDeviceCode(
                 deviceAuthId,
                 userCode,
                 auth.authBaseUrl.resolve("/codex/device"),
                 interval,
-                System.currentTimeMillis() + ChatGptAuth.DEVICE_CODE_LIFETIME_MS);
+                System.currentTimeMillis() + CHATGPT_DEVICE_CODE_LIFETIME_MS);
     }
 
     /**
      * Waits for browser authorization, exchanges the code, and saves refreshable tokens.
      */
-    public static Credential.OAuthCredential chatGptCompleteLogin(ChatGptAuth auth, ChatGptAuth.DeviceCode device)
+    public static Credential.OAuthCredential chatGptCompleteLogin(CodingAgentOperations auth, ChatGptDeviceCode device)
             throws IOException, InterruptedException {
         JsonNode authorization = null;
         ObjectNode request = jsonObject()
@@ -1074,15 +1778,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), null);
-        modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> credential);
+        modifyCredential(auth.credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
         return credential;
     }
 
     /**
      * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
      */
-    public static ChatGptAuth.ChatGptToken chatGptResolveToken(ChatGptAuth auth) throws IOException {
-        Credential credential = readCredential(auth.credentials, ChatGptAuth.PROVIDER_ID)
+    public static ChatGptToken chatGptResolveToken(CodingAgentOperations auth) throws IOException {
+        Credential credential = readCredential(auth.credentials, CHATGPT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
@@ -1100,16 +1804,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), oauth);
-        modifyCredential(auth.credentials, ChatGptAuth.PROVIDER_ID, ignored -> refreshed);
+        modifyCredential(auth.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
         return chatGptToken(refreshed);
     }
 
-    public static boolean chatGptHasCredential(ChatGptAuth auth) throws IOException {
-        return hasRefreshCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
+    public static boolean chatGptHasCredential(CodingAgentOperations auth) throws IOException {
+        return hasRefreshCredential(auth.credentials, CHATGPT_PROVIDER_ID);
     }
 
-    public static void chatGptLogout(ChatGptAuth auth) throws IOException {
-        deleteCredential(auth.credentials, ChatGptAuth.PROVIDER_ID);
+    public static void chatGptLogout(CodingAgentOperations auth) throws IOException {
+        deleteCredential(auth.credentials, CHATGPT_PROVIDER_ID);
     }
 
     private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
@@ -1121,7 +1825,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
         long expiresIn = response.path("expires_in").asLong(3600);
         long expires =
-                System.currentTimeMillis() + Math.max(1, expiresIn) * 1000 - ChatGptAuth.REFRESH_SKEW_MS;
+                System.currentTimeMillis() + Math.max(1, expiresIn) * 1000 - CHATGPT_REFRESH_SKEW_MS;
         Map<String, String> metadata = new LinkedHashMap<>(previous == null ? Map.of() : previous.metadata);
         String idToken = response.path("id_token").asText();
         String accountId;
@@ -1142,20 +1846,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
         }
         if (!accountId.isBlank()) {
-            metadata.put(ChatGptAuth.ACCOUNT_ID, accountId);
+            metadata.put(CHATGPT_ACCOUNT_ID, accountId);
         }
-        if (!metadata.containsKey(ChatGptAuth.ACCOUNT_ID)) {
+        if (!metadata.containsKey(CHATGPT_ACCOUNT_ID)) {
             throw new IOException("OpenAI login did not return a ChatGPT account id");
         }
         return new Credential.OAuthCredential(access, refresh, expires, null, Map.copyOf(metadata));
     }
 
-    private static ChatGptAuth.ChatGptToken chatGptToken(Credential.OAuthCredential credential) throws IOException {
-        String accountId = credential.metadata.get(ChatGptAuth.ACCOUNT_ID);
+    private static ChatGptToken chatGptToken(Credential.OAuthCredential credential) throws IOException {
+        String accountId = credential.metadata.get(CHATGPT_ACCOUNT_ID);
         if (accountId == null || accountId.isBlank()) {
             throw new IOException("Saved ChatGPT login is missing its account id. Run /login again.");
         }
-        return new ChatGptAuth.ChatGptToken(credential.access, accountId);
+        return new ChatGptToken(credential.access, accountId);
     }
 
     private static JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
@@ -1203,23 +1907,24 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Validates every endpoint before binding it to the carrier. Visible for deterministic HTTP tests.
      */
-    public static GitHubCopilotAuth gitHubCopilotAuth(
+    public static CodingAgentOperations gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
-        return new GitHubCopilotAuth(
-                credentials,
-                requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl"),
-                requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl"),
-                requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl"));
+        CodingAgentOperations auth = new CodingAgentOperations();
+        auth.credentials = credentials;
+        auth.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
+        auth.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
+        auth.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
+        return auth;
     }
 
     /**
      * Starts the device flow. Display the resulting URI and code before completing the login.
      */
-    public static GitHubCopilotAuth.DeviceCode gitHubCopilotBeginLogin(GitHubCopilotAuth auth) throws IOException {
+    public static GitHubCopilotDeviceCode gitHubCopilotBeginLogin(CodingAgentOperations auth) throws IOException {
         JsonNode response = authPost(
                 auth.githubBaseUrl.resolve("/login/device/code"),
-                Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
-                mcpFormEncode(Map.of("client_id", GitHubCopilotAuth.CLIENT_ID, "scope", "read:user"))
+                Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
+                mcpFormEncode(Map.of("client_id", GITHUB_COPILOT_CLIENT_ID, "scope", "read:user"))
                         .getBytes(StandardCharsets.UTF_8),
                 true);
         String deviceCode = requiredAuthText(response, "device_code", "GitHub");
@@ -1231,7 +1936,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         if (interval < 0) {
             throw new IOException("Invalid device code response: interval must not be negative");
         }
-        return new GitHubCopilotAuth.DeviceCode(
+        return new GitHubCopilotDeviceCode(
                 deviceCode, userCode, verificationUri, interval, System.currentTimeMillis() + expiresIn * 1000);
     }
 
@@ -1239,15 +1944,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Polls GitHub, exchanges the durable GitHub token for a Copilot token, and saves the credential.
      */
     public static Credential.OAuthCredential gitHubCopilotCompleteLogin(
-            GitHubCopilotAuth auth, GitHubCopilotAuth.DeviceCode device) throws IOException, InterruptedException {
+            CodingAgentOperations auth, GitHubCopilotDeviceCode device) throws IOException, InterruptedException {
         String githubAccessToken = null;
         int intervalSeconds = device.intervalSeconds;
         while (System.currentTimeMillis() < device.expiresAtMs) {
             JsonNode response = authPost(
                     auth.githubBaseUrl.resolve("/login/oauth/access_token"),
-                    Map.of("Accept", "application/json", "User-Agent", GitHubCopilotAuth.USER_AGENT),
+                    Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                     mcpFormEncode(Map.of(
-                            "client_id", GitHubCopilotAuth.CLIENT_ID,
+                            "client_id", GITHUB_COPILOT_CLIENT_ID,
                             "device_code", device.deviceCode,
                             "grant_type", "urn:ietf:params:oauth:grant-type:device_code"))
                             .getBytes(StandardCharsets.UTF_8),
@@ -1280,15 +1985,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             // The Copilot token is valid even if its optional model catalog is transiently unavailable.
         }
         Credential.OAuthCredential saved = credential;
-        modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> saved);
+        modifyCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
         return credential;
     }
 
     /**
      * Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary.
      */
-    public static GitHubCopilotAuth.CopilotToken gitHubCopilotResolveToken(GitHubCopilotAuth auth) throws IOException {
-        Credential credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID)
+    public static CopilotToken gitHubCopilotResolveToken(CodingAgentOperations auth) throws IOException {
+        Credential credential = readCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
@@ -1303,26 +2008,26 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             // Retain the last known entitlement list if model discovery cannot be refreshed.
         }
         Credential.OAuthCredential saved = refreshed;
-        modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> saved);
+        modifyCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
         return copilotToken(auth, refreshed);
     }
 
     /**
      * Reports whether a saved GitHub OAuth credential can be refreshed.
      */
-    public static boolean gitHubCopilotHasCredential(GitHubCopilotAuth auth) throws IOException {
-        return hasRefreshCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
+    public static boolean gitHubCopilotHasCredential(CodingAgentOperations auth) throws IOException {
+        return hasRefreshCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
-    public static void gitHubCopilotLogout(GitHubCopilotAuth auth) throws IOException {
-        deleteCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID);
+    public static void gitHubCopilotLogout(CodingAgentOperations auth) throws IOException {
+        deleteCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
     /**
      * Enables the listed Copilot model policies and reports how many policy requests GitHub accepted.
      */
-    public static int gitHubCopilotEnableModels(GitHubCopilotAuth auth, List<String> modelIds) throws IOException {
-        GitHubCopilotAuth.CopilotToken token = gitHubCopilotResolveToken(auth);
+    public static int gitHubCopilotEnableModels(CodingAgentOperations auth, List<String> modelIds) throws IOException {
+        CopilotToken token = gitHubCopilotResolveToken(auth);
         int enabled = 0;
         for (String modelId : modelIds) {
             URI policyUrl = token.baseUrl.resolve("/models/" + encodeUrlPathSegment(modelId) + "/policy");
@@ -1348,10 +2053,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Re-fetches and persists the enabled-model list without minting a new Copilot API token.
      */
-    public static GitHubCopilotAuth.CopilotToken gitHubCopilotRefreshAvailableModels(GitHubCopilotAuth auth)
+    public static CopilotToken gitHubCopilotRefreshAvailableModels(CodingAgentOperations auth)
             throws IOException {
-        GitHubCopilotAuth.CopilotToken current = gitHubCopilotResolveToken(auth);
-        Credential credential = readCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID)
+        CopilotToken current = gitHubCopilotResolveToken(auth);
+        Credential credential = readCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
@@ -1362,12 +2067,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 oauth.expires,
                 List.copyOf(fetchCopilotAvailableModelIds(auth, current.accessToken)),
                 Map.of());
-        modifyCredential(auth.credentials, GitHubCopilotAuth.PROVIDER_ID, ignored -> refreshed);
+        modifyCredential(auth.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> refreshed);
         return copilotToken(auth, refreshed);
     }
 
     private static Credential.OAuthCredential createCopilotCredential(
-            GitHubCopilotAuth auth, String githubAccessToken, List<String> availableModelIds) throws IOException {
+            CodingAgentOperations auth, String githubAccessToken, List<String> availableModelIds) throws IOException {
         if (githubAccessToken == null || githubAccessToken.isBlank()) {
             throw new IOException("GitHub returned an empty access token");
         }
@@ -1382,7 +2087,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         String token = requiredAuthText(response, "token", "GitHub");
         long expiresAtSeconds = requiredPositiveLong(response, "expires_at");
         long expires = Math.max(
-                System.currentTimeMillis(), expiresAtSeconds * 1000 - GitHubCopilotAuth.REFRESH_SKEW_MS);
+                System.currentTimeMillis(), expiresAtSeconds * 1000 - GITHUB_COPILOT_REFRESH_SKEW_MS);
         return new Credential.OAuthCredential(
                 token,
                 githubAccessToken,
@@ -1392,13 +2097,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static Credential.OAuthCredential withCopilotAvailableModels(
-            GitHubCopilotAuth auth, Credential.OAuthCredential credential) throws IOException {
+            CodingAgentOperations auth, Credential.OAuthCredential credential) throws IOException {
         List<String> available = fetchCopilotAvailableModelIds(auth, credential.access);
         return new Credential.OAuthCredential(
                 credential.access, credential.refresh, credential.expires, List.copyOf(available), Map.of());
     }
 
-    private static List<String> fetchCopilotAvailableModelIds(GitHubCopilotAuth auth, String copilotToken)
+    private static List<String> fetchCopilotAvailableModelIds(CodingAgentOperations auth, String copilotToken)
             throws IOException {
         URI modelsUrl = copilotBaseUrlFromToken(auth, copilotToken).resolve("/models");
         JsonNode response;
@@ -1431,22 +2136,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return pickerEnabled.isEmpty()
                 && copilotBaseUrlFromToken(auth, copilotToken)
                 .toString()
-                .equals(GitHubCopilotAuth.DEFAULT_COPILOT_BASE_URL)
+                .equals(GITHUB_COPILOT_DEFAULT_BASE_URL)
                 ? List.copyOf(policyEnabled)
                 : List.copyOf(pickerEnabled);
     }
 
-    private static GitHubCopilotAuth.CopilotToken copilotToken(
-            GitHubCopilotAuth auth, Credential.OAuthCredential credential) {
+    private static CopilotToken copilotToken(
+            CodingAgentOperations auth, Credential.OAuthCredential credential) {
         List<String> availableModelIds = credential.availableModelIds;
-        return new GitHubCopilotAuth.CopilotToken(
+        return new CopilotToken(
                 credential.access,
                 copilotBaseUrlFromToken(auth, credential.access),
                 availableModelIds == null ? null : List.copyOf(availableModelIds));
     }
 
-    private static URI copilotBaseUrlFromToken(GitHubCopilotAuth auth, String token) {
-        Matcher match = GitHubCopilotAuth.PROXY_ENDPOINT.matcher(token);
+    private static URI copilotBaseUrlFromToken(CodingAgentOperations auth, String token) {
+        Matcher match = GITHUB_COPILOT_PROXY_ENDPOINT.matcher(token);
         if (!match.find()) {
             return auth.defaultCopilotBaseUrl;
         }
@@ -1461,7 +2166,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Accept", "application/json");
         headers.put("Authorization", authorization);
-        headers.put("User-Agent", GitHubCopilotAuth.USER_AGENT);
+        headers.put("User-Agent", GITHUB_COPILOT_USER_AGENT);
         headers.put("Editor-Version", "vscode/1.107.0");
         headers.put("Editor-Plugin-Version", "copilot-chat/0.35.0");
         headers.put("Copilot-Integration-Id", "vscode-chat");
@@ -1581,11 +2286,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Loads the bundled provider model snapshots.
      */
-    public static ModelCatalog loadBundledModelCatalog() {
+    public static CodingAgentOperations loadBundledModelCatalog() {
         Map<String, Model> models = new LinkedHashMap<>();
         Map<String, List<Model>> providers = new LinkedHashMap<>();
-        for (String resourceName : ModelCatalog.RESOURCE_NAMES) {
-            try (InputStream input = ModelCatalog.class.getResourceAsStream(ModelCatalog.RESOURCE_ROOT + resourceName)) {
+        for (String resourceName : MODEL_CATALOG_RESOURCE_NAMES) {
+            try (InputStream input = CodingAgentOperations.class.getResourceAsStream(MODEL_CATALOG_RESOURCE_ROOT + resourceName)) {
                 if (input == null) {
                     throw new IllegalStateException("Missing bundled model catalog resource: " + resourceName);
                 }
@@ -1677,21 +2382,24 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         for (Map.Entry<String, List<Model>> entry : providers.entrySet()) {
             immutableByProvider.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
-        return new ModelCatalog(Map.copyOf(models), Map.copyOf(immutableByProvider));
+        CodingAgentOperations catalog = new CodingAgentOperations();
+        catalog.byProviderAndId = Map.copyOf(models);
+        catalog.byProvider = Map.copyOf(immutableByProvider);
+        return catalog;
     }
 
     /**
      * Finds a model by its provider and id, returning null if it is absent. Use
      * {@link #requireCatalogModel} when absence is a user-facing error.
      */
-    public static Model findCatalogModel(ModelCatalog catalog, String provider, String id) {
+    public static Model findCatalogModel(CodingAgentOperations catalog, String provider, String id) {
         return catalog.byProviderAndId.get(modelCatalogKey(provider, id));
     }
 
     /**
      * Finds a model or throws a clear error that includes the provider/id pair.
      */
-    public static Model requireCatalogModel(ModelCatalog catalog, String provider, String id) {
+    public static Model requireCatalogModel(CodingAgentOperations catalog, String provider, String id) {
         Model model = findCatalogModel(catalog, provider, id);
         if (model == null) {
             throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
@@ -1702,14 +2410,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Returns every bundled model from a provider, preserving source-file order.
      */
-    public static List<Model> catalogModelsForProvider(ModelCatalog catalog, String provider) {
+    public static List<Model> catalogModelsForProvider(CodingAgentOperations catalog, String provider) {
         return catalog.byProvider.getOrDefault(provider, List.of());
     }
 
     /**
      * Returns every bundled model, preserving resource and source-file order.
      */
-    public static List<Model> allCatalogModels(ModelCatalog catalog) {
+    public static List<Model> allCatalogModels(CodingAgentOperations catalog) {
         return List.copyOf(catalog.byProviderAndId.values());
     }
 
@@ -1727,8 +2435,33 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     // -------------------------------------------------------- core providers
 
-    public static Provider requireCoreProvider(CoreProviders core, String id) {
-        Provider provider = core.providers.get(id);
+    public static CodingAgentOperations coreProviders(
+            CodingAgentOperations catalog, Map<String, Provider> providers) {
+        CodingAgentOperations core = new CodingAgentOperations();
+        core.catalog = catalog;
+        core.coreProviders = providers;
+        return core;
+    }
+
+    public static CodingAgentOperations chatGptProvider(
+            List<Model> models, CodingAgentOperations auth, OpenAiResponsesProvider responses) {
+        CodingAgentOperations provider = new CodingAgentOperations();
+        provider.providerKind = ProviderKind.CHATGPT;
+        provider.models = models;
+        provider.auth = auth;
+        provider.responses = responses;
+        return provider;
+    }
+
+    public static CodingAgentOperations googleProvider(List<Model> models) {
+        CodingAgentOperations provider = new CodingAgentOperations();
+        provider.providerKind = ProviderKind.GOOGLE;
+        provider.models = models;
+        return provider;
+    }
+
+    public static Provider requireCoreProvider(CodingAgentOperations core, String id) {
+        Provider provider = core.coreProviders.get(id);
         if (provider == null) {
             throw new IllegalArgumentException("Unknown core provider: " + id);
         }
@@ -2285,18 +3018,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Validates the identity and endpoint of a Chat Completions-compatible service.
      */
-    public static OpenAiCompatibleProvider openAiCompatibleProvider(
+    public static CodingAgentOperations openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
-        return new OpenAiCompatibleProvider(
-                requireNonBlank(id, "id"),
-                requireNonBlank(name, "name"),
-                trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl")),
-                List.copyOf(models));
+        CodingAgentOperations provider = new CodingAgentOperations();
+        provider.providerKind = ProviderKind.OPENAI_COMPATIBLE;
+        provider.id = requireNonBlank(id, "id");
+        provider.name = requireNonBlank(name, "name");
+        provider.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
+        provider.models = List.copyOf(models);
+        return provider;
     }
 
     public static AssistantMessageEventStream openAiCompatibleStream(
-            OpenAiCompatibleProvider provider, Model model, Context context, StreamOptions options) {
-        if (!model.api.equals(OpenAiCompatibleProvider.API)) {
+            CodingAgentOperations provider, Model model, Context context, StreamOptions options) {
+        if (!model.api.equals(OPENAI_COMPATIBLE_API)) {
             throw new IllegalArgumentException("Model " + model + " is not a Chat Completions model");
         }
         return providerStream(model, options, (stream, output, requestOptions) -> {
@@ -2401,7 +3136,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     requestOptions,
                     reader -> {
                         push(stream, new AssistantMessageEvent.Start(output));
-                        Map<Integer, OpenAiCompatibleProvider.ToolCallAccumulator> tools = new LinkedHashMap<>();
+                        Map<Integer, OpenAiToolCallAccumulator> tools = new LinkedHashMap<>();
                         SseReader.SseEvent event;
                         while ((event = nextSseEvent(reader)) != null) {
                             if (isAborted(requestOptions)) {
@@ -2463,8 +3198,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 if (deltas.isArray()) {
                                     for (JsonNode delta1 : deltas) {
                                         int wireIndex = delta1.path("index").asInt();
-                                        OpenAiCompatibleProvider.ToolCallAccumulator accumulator =
-                                                tools.computeIfAbsent(wireIndex, OpenAiCompatibleProvider.ToolCallAccumulator::new);
+                                        OpenAiToolCallAccumulator accumulator =
+                                                tools.computeIfAbsent(wireIndex, OpenAiToolCallAccumulator::new);
                                         accumulator.rawDeltas.add(delta1.deepCopy());
 
                                         JsonNode id = delta1.get("id");
@@ -2521,7 +3256,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 };
                             }
                         }
-                        for (OpenAiCompatibleProvider.ToolCallAccumulator accumulator : tools.values()) {
+                        for (OpenAiToolCallAccumulator accumulator : tools.values()) {
                             if (accumulator.contentIndex == -1) {
                                 // Some OpenAI-compatible streams emit a second, index-only/blank
                                 // tool-call entry. It carries no call data and should not create a
@@ -2562,7 +3297,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static IOException invalidOpenAiToolCall(
-            OpenAiCompatibleProvider.ToolCallAccumulator accumulator, IOException cause) {
+            OpenAiToolCallAccumulator accumulator, IOException cause) {
         ObjectNode diagnostic = jsonObject();
         diagnostic.put("index", accumulator.wireIndex);
         diagnostic.put("id", accumulator.id);
@@ -2979,9 +3714,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     // ------------------------------------------------------ chatgpt provider
 
-    public static void configureCodexRequest(StreamOptions options, ChatGptAuth.ChatGptToken token) {
+    public static void configureCodexRequest(StreamOptions options, ChatGptToken token) {
         options.apiKey = token.accessToken;
-        options.baseUrl = ChatGptAuth.CODEX_API_BASE_URL.toString();
+        options.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
         options.headers.put("ChatGPT-Account-Id", token.accountId);
         options.headers.put("originator", "pi-java");
         options.headers.put("User-Agent", "pi-java (" + System.getProperty("os.name", "unknown") + " "
@@ -3006,30 +3741,32 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Builds the GitHub Copilot router provider over its catalog slice.
      */
-    public static GitHubCopilotProvider newGitHubCopilotProvider(List<Model> models, GitHubCopilotAuth auth) {
+    public static CodingAgentOperations newGitHubCopilotProvider(List<Model> models, CodingAgentOperations auth) {
         List<Model> all = List.copyOf(models);
         List<Model> models1 = copilotModelsFor(all, OpenAiResponsesProvider.API);
-        return new GitHubCopilotProvider(
-                all,
-                auth,
-                new AnthropicProvider(
-                        GitHubCopilotAuth.PROVIDER_ID,
-                        GitHubCopilotProvider.NAME,
+        CodingAgentOperations provider = new CodingAgentOperations();
+        provider.providerKind = ProviderKind.GITHUB_COPILOT;
+        provider.models = all;
+        provider.auth = auth;
+        provider.anthropic = new AnthropicProvider(
+                        GITHUB_COPILOT_PROVIDER_ID,
+                        GITHUB_COPILOT_PROVIDER_NAME,
                         List.copyOf(copilotModelsFor(all, AnthropicProvider.API)),
                         List.of(),
-                        true),
-                openAiCompatibleProvider(
-                        GitHubCopilotAuth.PROVIDER_ID,
-                        GitHubCopilotProvider.NAME,
-                        GitHubCopilotProvider.COMPLETIONS_BASE_URL,
-                        copilotModelsFor(all, OpenAiCompatibleProvider.API)),
-                new OpenAiResponsesProvider(
-                        GitHubCopilotAuth.PROVIDER_ID,
-                        GitHubCopilotProvider.NAME,
+                        true);
+        provider.completions = openAiCompatibleProvider(
+                        GITHUB_COPILOT_PROVIDER_ID,
+                        GITHUB_COPILOT_PROVIDER_NAME,
+                        GITHUB_COPILOT_COMPLETIONS_BASE_URL,
+                        copilotModelsFor(all, OPENAI_COMPATIBLE_API));
+        provider.responses = new OpenAiResponsesProvider(
+                        GITHUB_COPILOT_PROVIDER_ID,
+                        GITHUB_COPILOT_PROVIDER_NAME,
                         List.copyOf(models1),
                         List.of(),
                         null,
-                        OpenAiResponsesProvider.RequestProfile.STANDARD));
+                        OpenAiResponsesProvider.RequestProfile.STANDARD);
+        return provider;
     }
 
     private static List<Model> copilotModelsFor(List<Model> models, String api) {
@@ -3039,7 +3776,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Filters the catalog to models GitHub reports as enabled for the signed-in account.
      */
-    public static List<Model> gitHubCopilotAvailableModels(GitHubCopilotProvider provider) throws IOException {
+    public static List<Model> gitHubCopilotAvailableModels(CodingAgentOperations provider) throws IOException {
         List<String> enabled = gitHubCopilotResolveToken(provider.auth).availableModelIds;
         return filterEnabledCopilotModels(provider, enabled);
     }
@@ -3047,16 +3784,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Enables catalog model policies, then refreshes the account's enabled-model list.
      */
-    public static GitHubCopilotProvider.ModelAccess gitHubCopilotEnableAndRefreshModels(
-            GitHubCopilotProvider provider) throws IOException {
+    public static CopilotModelAccess gitHubCopilotEnableAndRefreshModels(
+            CodingAgentOperations provider) throws IOException {
         int policiesEnabled =
                 gitHubCopilotEnableModels(provider.auth, provider.models.stream().map(model -> model.id).toList());
         List<Model> available = filterEnabledCopilotModels(
                 provider, gitHubCopilotRefreshAvailableModels(provider.auth).availableModelIds);
-        return new GitHubCopilotProvider.ModelAccess(policiesEnabled, List.copyOf(available));
+        return new CopilotModelAccess(policiesEnabled, List.copyOf(available));
     }
 
-    private static List<Model> filterEnabledCopilotModels(GitHubCopilotProvider provider, List<String> enabled) {
+    private static List<Model> filterEnabledCopilotModels(CodingAgentOperations provider, List<String> enabled) {
         if (enabled == null) {
             return provider.models;
         }
@@ -3086,11 +3823,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     public static List<Model> providerModels(Provider provider) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropic.models;
-            case ChatGptProvider chatGpt -> chatGpt.models;
+            case CodingAgentOperations folded -> folded.models;
             case FauxProvider faux -> faux.models;
-            case GitHubCopilotProvider copilot -> copilot.models;
-            case GoogleProvider google -> google.models;
-            case OpenAiCompatibleProvider compatible -> compatible.models;
             case OpenAiResponsesProvider responses -> responses.models;
             default -> throw unknownProvider(provider);
         };
@@ -3105,8 +3839,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             Provider provider, Model model, Context context, StreamOptions options) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
-            case ChatGptProvider chatGpt -> {
-                if (!model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+            case CodingAgentOperations chatGpt when chatGpt.providerKind == ProviderKind.CHATGPT -> {
+                if (!model.provider.equals(CHATGPT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a ChatGPT subscription model");
                 }
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
@@ -3239,14 +3973,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 });
                 yield stream;
             }
-            case GitHubCopilotProvider copilot -> {
-                if (!model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+            case CodingAgentOperations copilot when copilot.providerKind == ProviderKind.GITHUB_COPILOT -> {
+                if (!model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a GitHub Copilot model");
                 }
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
                 if (requestOptions.apiKey == null || requestOptions.apiKey.isBlank()) {
                     try {
-                        GitHubCopilotAuth.CopilotToken token = gitHubCopilotResolveToken(copilot.auth);
+                        CopilotToken token = gitHubCopilotResolveToken(copilot.auth);
                         requestOptions.apiKey = token.accessToken;
                         requestOptions.baseUrl = token.baseUrl.toString();
                     } catch (IOException error) {
@@ -3261,8 +3995,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
                 };
             }
-            case GoogleProvider _ -> {
-                if (!model.api.equals(GoogleProvider.API)) {
+            case CodingAgentOperations google when google.providerKind == ProviderKind.GOOGLE -> {
+                if (!model.api.equals(GOOGLE_API)) {
                     throw new IllegalArgumentException("Model " + model + " is not a Google Generative AI model");
                 }
                 yield providerStream(model, options, (stream, output, requestOptions) -> {
@@ -3455,7 +4189,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     });
                 });
             }
-            case OpenAiCompatibleProvider compatible -> openAiCompatibleStream(compatible, model, context, options);
+            case CodingAgentOperations compatible when compatible.providerKind == ProviderKind.OPENAI_COMPATIBLE ->
+                    openAiCompatibleStream(compatible, model, context, options);
             case OpenAiResponsesProvider responses -> openAiResponsesStream(responses, model, context, options);
             default -> throw unknownProvider(provider);
         };
@@ -3472,10 +4207,26 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             "You summarize coding-agent conversations. Do not continue the conversation. "
                     + "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps.";
 
+    /** Creates the folded mutable state for one agent. */
+    public static CodingAgentOperations agentState(String systemPrompt, Model model) {
+        CodingAgentOperations state = new CodingAgentOperations();
+        state.systemPrompt = systemPrompt;
+        state.selectedModel = model;
+        return state;
+    }
+
+    /** Creates one folded agent carrier. */
+    public static CodingAgentOperations agent(CodingAgentOperations state, Provider provider) {
+        CodingAgentOperations agent = new CodingAgentOperations();
+        agent.state = state;
+        agent.agentProvider = provider;
+        return agent;
+    }
+
     /**
      * Registers an agent event listener; closing the result unsubscribes it.
      */
-    public static AutoCloseable subscribe(Agent agent, Consumer<AgentEvent> listener) {
+    public static AutoCloseable subscribe(CodingAgentOperations agent, Consumer<AgentEvent> listener) {
         agent.listeners.add(listener);
         return () -> agent.listeners.remove(listener);
     }
@@ -3483,7 +4234,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Cancels the turn in flight, if any.
      */
-    public static void abort(Agent agent) {
+    public static void abort(CodingAgentOperations agent) {
         AbortSignal signal = agent.activeSignal;
         if (signal != null) {
             abort(signal);
@@ -3495,8 +4246,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * them with a single checkpoint message. The caller remains responsible for
      * persisting the original transcript if it needs complete history.
      */
-    public static CompactionResult compact(Agent agent, String customInstructions) throws InterruptedException {
-        AgentState state = agent.state;
+    public static CompactionResult compact(CodingAgentOperations agent, String customInstructions) throws InterruptedException {
+        CodingAgentOperations state = agent.state;
         if (state.isStreaming || state.isCompacting) {
             throw new IllegalStateException("Agent is already processing");
         }
@@ -3518,9 +4269,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 : "Summarize this conversation with this focus: " + instructions);
     }
 
-    private static CompactionResult performCompaction(Agent agent, String prompt, boolean automatic)
+    private static CompactionResult performCompaction(CodingAgentOperations agent, String prompt, boolean automatic)
             throws InterruptedException {
-        AgentState state = agent.state;
+        CodingAgentOperations state = agent.state;
         long tokensBefore = estimateMessageTokens(state.messages);
         emit(agent, new AgentEvent.CompactionStart(tokensBefore));
         Context context = new Context(COMPACTION_SYSTEM_PROMPT);
@@ -3545,9 +4296,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Runs a prompt to completion, returning only messages created during this invocation.
      */
-    public static List<Message> prompt(Agent agent, String text) throws InterruptedException {
+    public static List<Message> prompt(CodingAgentOperations agent, String text) throws InterruptedException {
         Message[] prompts = new Message[]{userMessage(text)};
-        AgentState state = agent.state;
+        CodingAgentOperations state = agent.state;
         if (state.isStreaming || state.isCompacting) {
             throw new IllegalStateException("Agent is already processing");
         }
@@ -3558,9 +4309,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         try {
             if (state.autoCompactionEnabled
                     && state.messages.size() > 1
-                    && state.model.contextWindow > state.compactionReserveTokens
-                    && estimateMessageTokens(state.messages) > state.model.contextWindow - state.compactionReserveTokens) {
-                AgentState state1 = agent.state;
+                    && state.selectedModel.contextWindow > state.compactionReserveTokens
+                    && estimateMessageTokens(state.messages) > state.selectedModel.contextWindow - state.compactionReserveTokens) {
+                CodingAgentOperations state1 = agent.state;
                 state1.isCompacting = true;
                 try {
                     performCompaction(agent, compactionPrompt(state1.messages, null), true);
@@ -3581,7 +4332,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 AssistantMessage[] lastAttempt = new AssistantMessage[1];
                 AssistantMessage response = retryAssistantCall(
                         () -> {
-                            AgentState state1 = agent.state;
+                            CodingAgentOperations state1 = agent.state;
                             Context context = new Context(state1.systemPrompt);
                             for (Message message : state1.messages) {
                                 if (!(message instanceof AssistantMessage assistant)
@@ -3602,7 +4353,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             options.signal = agent.activeSignal;
                             options.reasoning = state1.thinkingLevel;
                             options.apiKey = agent.apiKey;
-                            AssistantMessageEventStream stream = stream(agent.provider, state1.model, context, options);
+                            AssistantMessageEventStream stream = stream(agent.agentProvider, state1.selectedModel, context, options);
                             AssistantMessage finalMessage = null;
                             for (AssistantMessageEvent event : events(stream)) {
                                 switch (event) {
@@ -3632,7 +4383,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         agent.retryPolicy,
                         agent.activeSignal,
                         agentRetryCallbacks(agent, () -> {
-                            AgentState state2 = agent.state;
+                            CodingAgentOperations state2 = agent.state;
                             state2.streamingMessage = null;
                             if (lastAttempt[0] == null) return;
                             for (int index = state2.messages.size() - 1; index >= 0; index--) {
@@ -3648,7 +4399,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     emit(agent, new AgentEvent.TurnEnd(response, List.of()));
                     break;
                 }
-                AgentState state1 = agent.state;
+                CodingAgentOperations state1 = agent.state;
                 Map<String, AgentTool> toolsByName = new LinkedHashMap<>();
                 for (AgentTool tool : state1.tools) {
                     toolsByName.put(toolName(tool), tool);
@@ -3709,7 +4460,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static Retry.Callbacks agentRetryCallbacks(Agent agent, Runnable beforeRetryAttempt) {
+    private static Retry.Callbacks agentRetryCallbacks(CodingAgentOperations agent, Runnable beforeRetryAttempt) {
         return new Retry.Callbacks(
                 scheduled -> emit(agent, new AgentEvent.AutoRetryStart(
                         scheduled.attempt, scheduled.maxAttempts, scheduled.delayMs, scheduled.errorMessage)),
@@ -3720,7 +4471,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         finished.success, finished.attempt, finished.finalError)));
     }
 
-    private static AssistantMessage agentComplete(Agent agent, Context context, AbortSignal signal)
+    private static AssistantMessage agentComplete(CodingAgentOperations agent, Context context, AbortSignal signal)
             throws InterruptedException {
         return retryAssistantCall(
                 () -> {
@@ -3729,7 +4480,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     options.reasoning = agent.state.thinkingLevel;
                     options.apiKey = agent.apiKey;
                     options.maxTokens = 4_096;
-                    AssistantMessageEventStream stream = stream(agent.provider, agent.state.model, context, options);
+                    AssistantMessageEventStream stream = stream(agent.agentProvider, agent.state.selectedModel, context, options);
                     AssistantMessage response = null;
                     for (AssistantMessageEvent event : events(stream)) {
                         if (event instanceof AssistantMessageEvent.Done done) response = done.message;
@@ -3772,7 +4523,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return output.toString();
     }
 
-    private static void emit(Agent agent, AgentEvent event) {
+    private static void emit(CodingAgentOperations agent, AgentEvent event) {
         for (Consumer<AgentEvent> listener : agent.listeners) {
             listener.accept(event);
         }
@@ -4267,7 +5018,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Returns tools that filter search results with the given git-ignore configuration.
      */
-    public static List<AgentTool> builtInTools(Path cwd, GitIgnore gitIgnore, Consumer<Path> onPathAccess) {
+    public static List<AgentTool> builtInTools(Path cwd, CodingAgentOperations gitIgnore, Consumer<Path> onPathAccess) {
         Path resolvedCwd = cwd.toAbsolutePath().normalize();
         Consumer<Path> observer = Objects.requireNonNull(onPathAccess, "onPathAccess");
         BuiltInTools.Shell shell = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
@@ -4441,7 +5192,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     // Java's recursive-directory glob requires at least one directory; ripgrep-style globs allow zero.
 
-    private static List<Path> filesUnder(Path root, boolean includeIgnored, GitIgnore gitIgnore, AbortSignal signal)
+    private static List<Path> filesUnder(Path root, boolean includeIgnored, CodingAgentOperations gitIgnore, AbortSignal signal)
             throws IOException {
         List<Path> files;
         if (Files.isRegularFile(root)) {
@@ -4519,7 +5270,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 }
             });
 
-            long deadline = System.nanoTime() + GitIgnore.TIMEOUT.toNanos();
+            long deadline = System.nanoTime() + GIT_IGNORE_TIMEOUT.toNanos();
             try {
                 while (process.isAlive()) {
                     if (isAborted(signal)) {
@@ -5712,7 +6463,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     // ----------------------------------------------------------- mcp client
 
     private static McpClient mcpConnectRemote(
-            McpServerConfig.Remote remote, Path workspace, Duration timeout, McpOAuthClient.Session oauth)
+            McpServerConfig.Remote remote, Path workspace, Duration timeout, McpOAuthSession oauth)
             throws Exception {
         Exception streamableFailure;
         StreamableHttpMcpTransport streamable = new StreamableHttpMcpTransport();
@@ -5888,7 +6639,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Builds a manager for the MCP servers in {@code ~/.codingagent/settings.json}.
      */
-    public static McpManager mcpLoadDefaultManager(Path workspace) throws IOException {
+    public static CodingAgentOperations mcpLoadDefaultManager(Path workspace) throws IOException {
         Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
         return mcpCreateManager(
                 mcpLoadConfiguration(new McpConfigLoader(
@@ -5899,7 +6650,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Builds a manager and starts connecting every enabled server.
      */
-    public static McpManager mcpCreateManager(McpConfiguration configuration, Path workspace) {
+    public static CodingAgentOperations mcpOAuthStore(
+            Path path, Path lockPath, List<Path> importPaths) {
+        CodingAgentOperations store = new CodingAgentOperations();
+        store.path = path;
+        store.lockPath = lockPath;
+        store.importPaths = importPaths;
+        return store;
+    }
+
+    public static CodingAgentOperations mcpOAuthClient(
+            CodingAgentOperations store,
+            HttpClient http,
+            Predicate<URI> browser,
+            Duration callbackTimeout) {
+        CodingAgentOperations client = new CodingAgentOperations();
+        client.store = store;
+        client.http = http;
+        client.browser = browser;
+        client.callbackTimeout = callbackTimeout;
+        return client;
+    }
+
+    public static CodingAgentOperations mcpCreateManager(McpConfiguration configuration, Path workspace) {
         HttpClient http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(15))
@@ -5910,11 +6683,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 ? home.resolve(".local/share/opencode/mcp-auth.json")
                 : Path.of(xdg).resolve("opencode/mcp-auth.json");
         Path resolved = home.resolve(".codingagent/mcp-auth.json").toAbsolutePath().normalize();
-        McpOAuthStore store = new McpOAuthStore(
+        CodingAgentOperations store = mcpOAuthStore(
                 resolved,
                 resolved.resolveSibling(resolved.getFileName() + ".lock"),
-                List.of(openCodeData, home.resolve("Library/Application Support/opencode/mcp-auth.json")).stream().map(value -> value.toAbsolutePath().normalize()).toList());
-        McpOAuthClient oauth = new McpOAuthClient(
+                List.of(openCodeData, home.resolve("Library/Application Support/opencode/mcp-auth.json"))
+                        .stream()
+                        .map(value -> value.toAbsolutePath().normalize())
+                        .toList());
+        CodingAgentOperations oauth = mcpOAuthClient(
                 Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(http, "http"),
                 Objects.requireNonNull(uri -> {
@@ -5934,21 +6710,21 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         return false;
                     }
                 }, "browser"),
-                Objects.requireNonNull(McpOAuthClient.DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
-        McpManager manager = new McpManager();
+                Objects.requireNonNull(MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
+        CodingAgentOperations manager = new CodingAgentOperations();
         manager.workspace = workspace.toAbsolutePath().normalize();
         manager.oauth = oauth;
         configuration.servers.forEach((name, config) -> {
-            McpManager.Runtime runtime = new McpManager.Runtime(name, config);
+            McpRuntime runtime = new McpRuntime(name, config);
             runtime.disabledTools.addAll(switch ((McpServerConfig) config) {
                 case McpServerConfig.Local local -> local.disabledTools;
                 case McpServerConfig.Remote remote -> remote.disabledTools;
             });
             runtime.enabled = mcpConfigEnabled(config);
-            runtime.state = runtime.enabled ? McpManager.State.CONNECTING : McpManager.State.DISABLED;
+            runtime.state = runtime.enabled ? McpState.CONNECTING : McpState.DISABLED;
             manager.servers.put(name, runtime);
         });
-        for (McpManager.Runtime runtime : manager.servers.values()) {
+        for (McpRuntime runtime : manager.servers.values()) {
             // Startup may refresh an existing token, but never opens a browser unexpectedly.
             if (mcpConfigEnabled(runtime.config)) mcpStartConnect(manager, runtime, false);
         }
@@ -5958,17 +6734,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Snapshots one configured server.
      */
-    public static McpManager.ServerStatus mcpStatus(McpManager manager, String name) {
+    public static McpServerStatus mcpStatus(CodingAgentOperations manager, String name) {
         return mcpSnapshot(mcpRequireRuntime(manager, name));
     }
 
     /**
      * Waits for all currently-starting configured servers.
      */
-    public static void mcpAwaitReady(McpManager manager) throws InterruptedException {
+    public static void mcpAwaitReady(CodingAgentOperations manager) throws InterruptedException {
         while (true) {
             List<Thread> connecting = new ArrayList<>();
-            for (McpManager.Runtime runtime : manager.servers.values()) {
+            for (McpRuntime runtime : manager.servers.values()) {
                 synchronized (runtime.lock) {
                     if (runtime.connector != null) connecting.add(runtime.connector);
                 }
@@ -5982,14 +6758,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Returns the current model-visible tool adapters, with OpenCode-compatible names.
      */
-    public static List<AgentTool> mcpTools(McpManager manager) {
+    public static List<AgentTool> mcpTools(CodingAgentOperations manager) {
         LinkedHashMap<String, AgentTool> result = new LinkedHashMap<>();
-        for (McpManager.Runtime runtime : manager.servers.values()) {
+        for (McpRuntime runtime : manager.servers.values()) {
             McpClient client;
             List<McpClient.ToolDefinition> definitions;
             Set<String> disabledTools;
             synchronized (runtime.lock) {
-                if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) continue;
+                if (runtime.state != McpState.CONNECTED || runtime.client == null) continue;
                 client = runtime.client;
                 definitions = runtime.tools;
                 disabledTools = Set.copyOf(runtime.disabledTools);
@@ -6015,7 +6791,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Disconnects every server and releases the manager's sessions.
      */
-    public static void mcpCloseManager(McpManager manager) {
+    public static void mcpCloseManager(CodingAgentOperations manager) {
         if (manager.closed) return;
         manager.closed = true;
         manager.servers.values().forEach(runtime -> {
@@ -6028,7 +6804,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 client = runtime.client;
                 runtime.client = null;
                 runtime.tools = List.of();
-                runtime.state = McpManager.State.DISABLED;
+                runtime.state = McpState.DISABLED;
                 runtime.authorizationUrl = null;
             }
             if (connector != null) connector.interrupt();
@@ -6038,10 +6814,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void mcpFailConnect(
-            McpManager manager,
-            McpManager.Runtime runtime,
+            CodingAgentOperations manager,
+            McpRuntime runtime,
             long generation,
-            McpManager.State state,
+            McpState state,
             Exception error) {
         synchronized (runtime.lock) {
             if (manager.closed || runtime.generation != generation) return;
@@ -6054,7 +6830,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void mcpStartConnect(
-            McpManager manager, McpManager.Runtime runtime, boolean interactiveOAuth) {
+            CodingAgentOperations manager, McpRuntime runtime, boolean interactiveOAuth) {
         McpClient previous;
         Thread previousConnector;
         long generation;
@@ -6062,12 +6838,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         synchronized (runtime.lock) {
             if (manager.closed) return;
             runtime.enabled = true;
-            if (runtime.state == McpManager.State.CONNECTED && runtime.client != null) return;
+            if (runtime.state == McpState.CONNECTED && runtime.client != null) return;
             previous = runtime.client;
             previousConnector = runtime.connector;
             runtime.client = null;
             runtime.tools = List.of();
-            runtime.state = McpManager.State.CONNECTING;
+            runtime.state = McpState.CONNECTING;
             runtime.message = null;
             runtime.authorizationUrl = null;
             generation = ++runtime.generation;
@@ -6079,7 +6855,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             Consumer<URI> authorizationListener = url -> {
                                 synchronized (runtime.lock) {
                                     if (manager.closed || runtime.generation != generation) return;
-                                    runtime.state = McpManager.State.AUTHENTICATING;
+                                    runtime.state = McpState.AUTHENTICATING;
                                     runtime.message = "Complete OAuth authorization in your browser";
                                     runtime.authorizationUrl = url.toString();
                                 }
@@ -6143,11 +6919,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 candidate = mcpInitializeOwned(transport, timeout);
                             } else {
                                 McpServerConfig.Remote remote = (McpServerConfig.Remote) runtime.config;
-                                McpOAuthClient.Session oauthSession = null;
+                                McpOAuthSession oauthSession = null;
                                 if ((remote.oauth == null || !remote.oauth.isBoolean() || remote.oauth.asBoolean()) &&
                                         !remote.headers.keySet().stream().anyMatch(name1 -> name1.equalsIgnoreCase("Authorization"))) {
-                                    McpOAuthClient.OAuthSettings settings = remote.oauth instanceof ObjectNode oauth
-                                            ? new McpOAuthClient.OAuthSettings(
+                                    McpOAuthSettings settings = remote.oauth instanceof ObjectNode oauth
+                                            ? new McpOAuthSettings(
                                             mcpOAuthOptionalText(oauth, "clientId"),
                                             mcpOAuthOptionalText(oauth, "clientSecret"),
                                             mcpOAuthOptionalText(oauth, "scope"),
@@ -6155,8 +6931,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             oauth.path("redirectUri").isTextual()
                                             ? URI.create(oauth.path("redirectUri").asText())
                                             : null)
-                                            : new McpOAuthClient.OAuthSettings(null, null, null, null, null);
-                                    oauthSession = new McpOAuthClient.Session(manager.oauth, runtime.name, remote, settings);
+                                            : new McpOAuthSettings(null, null, null, null, null);
+                                    oauthSession = new McpOAuthSession(manager.oauth, runtime.name, remote, settings);
                                 }
                                 try {
                                     candidate = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
@@ -6164,19 +6940,19 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     if (oauthSession == null || !mcpIsOAuthChallenge(error)) throw error;
                                     if (!interactiveOAuth) {
                                         McpHttpException http = mcpFindHttpException(error);
-                                        McpOAuthClient.Challenge challenge = http == null ? null : mcpOAuthChallenge(http);
+                                        McpOAuthChallenge challenge = http == null ? null : mcpOAuthChallenge(http);
                                         throw new McpOAuthRequiredException(
                                                 challenge != null && mcpOAuthInsufficientScope(challenge)
                                                         ? "MCP server \"" + runtime.name + "\" requires additional OAuth permissions; press Enter to authorize"
                                                         : "MCP server \"" + runtime.name + "\" requires OAuth authentication; press Enter to authorize");
                                     }
                                     McpHttpException challenge = mcpFindHttpException(error);
-                                    McpOAuthClient client = oauthSession.client;
-                                    McpOAuthClient.Challenge challenge1 = mcpOAuthChallenge(challenge);
+                                    CodingAgentOperations client = oauthSession.client;
+                                    McpOAuthChallenge challenge1 = mcpOAuthChallenge(challenge);
                                     if (challenge1 == null) throw challenge;
                                     client.interactiveLock.lockInterruptibly();
                                     try {
-                                        McpOAuthClient.Discovery discovery = mcpOAuthDiscover(client, oauthSession.config, challenge1);
+                                        McpOAuthDiscovery discovery = mcpOAuthDiscover(client, oauthSession.config, challenge1);
                                         String state = mcpRandomUrlToken(client, 32);
                                         String verifier = mcpRandomUrlToken(client, 64);
                                         byte[] result1;
@@ -6255,15 +7031,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                         });
                                         callback.server.start();
                                         try {
-                                            McpOAuthStore.Entry current = mcpOAuthReload(oauthSession);
+                                            McpOAuthEntry current = mcpOAuthReload(oauthSession);
                                             String scope = challenge1.scope != null
                                                     ? challenge1.scope
                                                     : discovery.resourceMetadata != null && !discovery.resourceMetadata.scopes.isEmpty()
                                                       ? String.join(" ", discovery.resourceMetadata.scopes)
                                                       : oauthSession.settings.scope;
-                                            McpOAuthStore.ClientInfo clientInfo;
+                                            McpOAuthClientInfo clientInfo;
                                             if (oauthSession.settings.clientId != null) {
-                                                clientInfo = new McpOAuthStore.ClientInfo(
+                                                clientInfo = new McpOAuthClientInfo(
                                                         oauthSession.settings.clientId,
                                                         oauthSession.settings.clientSecret,
                                                         null,
@@ -6271,7 +7047,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                         null,
                                                         redirectUri.toString());
                                             } else {
-                                                McpOAuthStore.ClientInfo stored = current == null ? null : current.clientInfo;
+                                                McpOAuthClientInfo stored = current == null ? null : current.clientInfo;
                                                 if (mcpOAuthClientUsable(oauthSession, stored, redirectUri)) {
                                                     clientInfo = stored;
                                                 } else {
@@ -6290,27 +7066,27 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                     request.putArray("response_types").add("code");
                                                     if (scope != null) request.put("scope", scope);
                                                     HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint)
-                                                            .timeout(McpOAuthClient.HTTP_TIMEOUT)
+                                                            .timeout(MCP_OAUTH_HTTP_TIMEOUT)
                                                             .setHeader("Accept", "application/json")
                                                             .setHeader("Content-Type", "application/json")
                                                             .POST(HttpRequest.BodyPublishers.ofString(
                                                                     Json.MAPPER.writeValueAsString(request), StandardCharsets.UTF_8));
-                                                    McpOAuthClient.Response response =
+                                                    McpOAuthResponse response =
                                                             mcpOAuthSend(oauthSession.client, builder.build());
                                                     if (!mcpOAuthSuccess(response)) {
                                                         throw mcpOAuthFailure(response, "Dynamic OAuth client registration failed");
                                                     }
                                                     JsonNode body = mcpOAuthParseObject(response, "dynamic client registration");
-                                                    McpOAuthStore.ClientInfo registered = new McpOAuthStore.ClientInfo(
+                                                    McpOAuthClientInfo registered = new McpOAuthClientInfo(
                                                             mcpOAuthRequiredText(body, "client_id", "dynamic client registration"),
                                                             mcpOAuthOptionalText(body, "client_secret"),
                                                             mcpOAuthOptionalLong(body, "client_id_issued_at"),
                                                             mcpOAuthOptionalLong(body, "client_secret_expires_at"),
                                                             mcpOAuthOptionalText(body, "token_endpoint_auth_method"),
                                                             redirectUri.toString());
-                                                    McpOAuthStore.Entry updated = current == null
-                                                            ? new McpOAuthStore.Entry(null, registered)
-                                                            : new McpOAuthStore.Entry(current.tokens, registered);
+                                                    McpOAuthEntry updated = current == null
+                                                            ? new McpOAuthEntry(null, registered)
+                                                            : new McpOAuthEntry(current.tokens, registered);
                                                     mcpOAuthWrite(oauthSession.client.store, oauthSession.name, oauthSession.config.url.toString(), updated);
                                                     oauthSession.entry = updated;
                                                     oauthSession.loaded = true;
@@ -6351,13 +7127,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             parameters1.put("code", code);
                                             parameters1.put("code_verifier", verifier);
                                             parameters1.put("redirect_uri", redirectUri.toString());
-                                            McpOAuthStore.Tokens tokens =
+                                            McpOAuthTokens tokens =
                                                     mcpOAuthRequestTokens(client, discovery, clientInfo, parameters1, null, Map.of());
                                             if (tokens.scope == null && scope != null) {
-                                                tokens = new McpOAuthStore.Tokens(
+                                                tokens = new McpOAuthTokens(
                                                         tokens.accessToken, tokens.refreshToken, tokens.expiresAt, scope);
                                             }
-                                            McpOAuthStore.Entry saved = new McpOAuthStore.Entry(
+                                            McpOAuthEntry saved = new McpOAuthEntry(
                                                     tokens, oauthSession.settings.clientId == null ? clientInfo : null);
                                             mcpOAuthWrite(client.store, oauthSession.name, oauthSession.config.url.toString(), saved);
                                             oauthSession.entry = saved;
@@ -6391,7 +7167,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             synchronized (runtime.lock) {
                                                 if (runtime.generation == generation
                                                         && runtime.client == connected
-                                                        && runtime.state == McpManager.State.CONNECTED) {
+                                                        && runtime.state == McpState.CONNECTED) {
                                                     runtime.tools = List.copyOf(tools1);
                                                 }
                                             }
@@ -6412,17 +7188,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 }
                                 runtime.client = candidate;
                                 runtime.tools = List.copyOf(tools);
-                                runtime.state = McpManager.State.CONNECTED;
+                                runtime.state = McpState.CONNECTED;
                                 runtime.message = null;
                                 runtime.authorizationUrl = null;
                                 candidate = null;
                             }
                         } catch (McpOAuthRequiredException error) {
                             mcpFailConnect(
-                                    manager, runtime, generation, McpManager.State.AUTH_REQUIRED, error);
+                                    manager, runtime, generation, McpState.AUTH_REQUIRED, error);
                         } catch (Exception error) {
                             mcpFailConnect(
-                                    manager, runtime, generation, McpManager.State.FAILED, error);
+                                    manager, runtime, generation, McpState.FAILED, error);
                         } finally {
                             if (candidate != null) mcpCloseClient(candidate);
                             synchronized (runtime.lock) {
@@ -6439,11 +7215,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         connector.start();
     }
 
-    private static McpManager.ServerStatus mcpSnapshot(McpManager.Runtime runtime) {
+    private static McpServerStatus mcpSnapshot(McpRuntime runtime) {
         synchronized (runtime.lock) {
             int enabledToolCount =
                     (int) runtime.tools.stream().filter(tool -> !runtime.disabledTools.contains(tool.name)).count();
-            return new McpManager.ServerStatus(
+            return new McpServerStatus(
                     runtime.name,
                     runtime.state,
                     runtime.message,
@@ -6457,8 +7233,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static McpManager.Runtime mcpRequireRuntime(McpManager manager, String name) {
-        McpManager.Runtime runtime = manager.servers.get(name);
+    private static McpRuntime mcpRequireRuntime(CodingAgentOperations manager, String name) {
+        McpRuntime runtime = manager.servers.get(name);
         if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
         return runtime;
     }
@@ -6474,13 +7250,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Returns a current token and silently refreshes it when it is near expiry.
      */
-    public static String mcpAccessToken(McpOAuthClient.Session session) throws Exception {
+    public static String mcpAccessToken(McpOAuthSession session) throws Exception {
         synchronized (session) {
-            McpOAuthStore.Entry current = session.loaded ? session.entry : mcpOAuthReload(session);
+            McpOAuthEntry current = session.loaded ? session.entry : mcpOAuthReload(session);
             if (current == null || current.tokens == null) return null;
-            McpOAuthStore.Tokens tokens = current.tokens;
+            McpOAuthTokens tokens = current.tokens;
             if (!(tokens.expiresAt != null
-                    && tokens.expiresAt <= Instant.now().getEpochSecond() + McpOAuthClient.REFRESH_SKEW_SECONDS))
+                    && tokens.expiresAt <= Instant.now().getEpochSecond() + MCP_OAUTH_REFRESH_SKEW_SECONDS))
                 return tokens.accessToken;
             if (tokens.refreshToken == null) {
                 return tokens.expiresAt != null && tokens.expiresAt > Instant.now().getEpochSecond()
@@ -6489,7 +7265,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
             try {
                 return mcpOAuthRefresh(session, current, null).tokens.accessToken;
-            } catch (McpOAuthClient.OAuthFailure error) {
+            } catch (McpOAuthFailure error) {
                 if (mcpOAuthInvalidCredential(error)) {
                     mcpOAuthInvalidateAfterRefreshFailure(session, current, error);
                     return null;
@@ -6509,18 +7285,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Refreshes a token rejected by the resource server and tells the transport whether to retry.
      */
     public static boolean mcpRefreshAfterUnauthorized(
-            McpOAuthClient.Session session, McpHttpException failure, String rejectedToken) throws Exception {
+            McpOAuthSession session, McpHttpException failure, String rejectedToken) throws Exception {
         synchronized (session) {
-            McpOAuthClient.Challenge challenge = mcpOAuthChallenge(failure);
+            McpOAuthChallenge challenge = mcpOAuthChallenge(failure);
             if (challenge == null || mcpOAuthInsufficientScope(challenge) || rejectedToken == null) return false;
-            McpOAuthStore.Entry current = mcpOAuthReload(session);
+            McpOAuthEntry current = mcpOAuthReload(session);
             if (current == null || current.tokens == null) return false;
             if (!current.tokens.accessToken.equals(rejectedToken)) return true;
             if (current.tokens.refreshToken == null) return false;
             try {
-                McpOAuthStore.Entry refreshed = mcpOAuthRefresh(session, current, challenge);
+                McpOAuthEntry refreshed = mcpOAuthRefresh(session, current, challenge);
                 return !refreshed.tokens.accessToken.equals(rejectedToken);
-            } catch (McpOAuthClient.OAuthFailure error) {
+            } catch (McpOAuthFailure error) {
                 if (mcpOAuthInvalidCredential(error)) {
                     mcpOAuthInvalidateAfterRefreshFailure(session, current, error);
                     return false;
@@ -6538,15 +7314,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return http != null && mcpOAuthChallenge(http) != null;
     }
 
-    private static McpOAuthStore.Entry mcpOAuthRefresh(
-            McpOAuthClient.Session session, McpOAuthStore.Entry current, McpOAuthClient.Challenge challenge)
+    private static McpOAuthEntry mcpOAuthRefresh(
+            McpOAuthSession session, McpOAuthEntry current, McpOAuthChallenge challenge)
             throws Exception {
-        McpOAuthClient client = session.client;
-        McpOAuthClient.Discovery discovery = mcpOAuthDiscover(client, session.config, challenge);
-        McpOAuthStore.ClientInfo clientInfo;
+        CodingAgentOperations client = session.client;
+        McpOAuthDiscovery discovery = mcpOAuthDiscover(client, session.config, challenge);
+        McpOAuthClientInfo clientInfo;
         URI redirectUri = mcpOAuthRedirectUri(session.settings);
         if (session.settings.clientId != null) {
-            clientInfo = new McpOAuthStore.ClientInfo(
+            clientInfo = new McpOAuthClientInfo(
                     session.settings.clientId,
                     session.settings.clientSecret,
                     null,
@@ -6554,19 +7330,19 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     null,
                     redirectUri.toString());
         } else {
-            McpOAuthStore.ClientInfo candidate = current == null ? null : current.clientInfo;
+            McpOAuthClientInfo candidate = current == null ? null : current.clientInfo;
             clientInfo = mcpOAuthClientUsable(session, candidate, redirectUri) ? candidate : null;
         }
         if (clientInfo == null) {
-            throw new McpOAuthClient.OAuthFailure(
+            throw new McpOAuthFailure(
                     400, "invalid_client", "No OAuth client is registered for this MCP server");
         }
         LinkedHashMap<String, String> parameters = new LinkedHashMap<>();
         parameters.put("grant_type", "refresh_token");
         parameters.put("refresh_token", current.tokens.refreshToken);
-        McpOAuthStore.Tokens refreshed =
+        McpOAuthTokens refreshed =
                 mcpOAuthRequestTokens(client, discovery, clientInfo, parameters, current.tokens, Map.of());
-        McpOAuthStore.Entry updated = new McpOAuthStore.Entry(refreshed, current.clientInfo);
+        McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
         mcpOAuthWrite(client.store, session.name, session.config.url.toString(), updated);
         session.entry = updated;
         session.loaded = true;
@@ -6574,7 +7350,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static boolean mcpOAuthClientUsable(
-            McpOAuthClient.Session session, McpOAuthStore.ClientInfo clientInfo, URI redirectUri) {
+            McpOAuthSession session, McpOAuthClientInfo clientInfo, URI redirectUri) {
         if (clientInfo == null || clientInfo.clientId == null || clientInfo.clientId.isBlank()) return false;
         Long expires = clientInfo.clientSecretExpiresAt;
         if (expires != null && expires > 0 && expires <= Instant.now().getEpochSecond()) return false;
@@ -6582,15 +7358,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return session.settings.configuredRedirectUri == null && session.settings.callbackPort == null;
     }
 
-    private static McpOAuthStore.Entry mcpOAuthReload(McpOAuthClient.Session session) throws IOException {
-        McpOAuthStore.Entry result = null;
+    private static McpOAuthEntry mcpOAuthReload(McpOAuthSession session) throws IOException {
+        McpOAuthEntry result = null;
         String serverUrl = session.config.url.toString();
-        McpOAuthStore.Entry own = mcpOAuthReadEntry(session.client.store.path, session.name, serverUrl, false);
+        McpOAuthEntry own = mcpOAuthReadEntry(session.client.store.path, session.name, serverUrl, false);
         if (own != null) {
             result = own;
         } else {
             for (Path candidate : session.client.store.importPaths) {
-                McpOAuthStore.Entry imported = mcpOAuthReadEntry(candidate, session.name, serverUrl, true);
+                McpOAuthEntry imported = mcpOAuthReadEntry(candidate, session.name, serverUrl, true);
                 if (imported != null) {
                     result = imported;
                     break;
@@ -6603,25 +7379,25 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void mcpOAuthInvalidateAfterRefreshFailure(
-            McpOAuthClient.Session session, McpOAuthStore.Entry current, McpOAuthClient.OAuthFailure failure)
+            McpOAuthSession session, McpOAuthEntry current, McpOAuthFailure failure)
             throws IOException {
         boolean invalidClient = "invalid_client".equals(failure.code) || "unauthorized_client".equals(failure.code);
-        McpOAuthStore.Entry cleared = invalidClient && session.settings.clientId == null
-                ? new McpOAuthStore.Entry(null, null)
-                : new McpOAuthStore.Entry(null, current.clientInfo);
+        McpOAuthEntry cleared = invalidClient && session.settings.clientId == null
+                ? new McpOAuthEntry(null, null)
+                : new McpOAuthEntry(null, current.clientInfo);
         mcpOAuthWrite(session.client.store, session.name, session.config.url.toString(), cleared);
         session.entry = cleared;
         session.loaded = true;
     }
 
-    private static McpOAuthClient.Discovery mcpOAuthDiscover(
-            McpOAuthClient client, McpServerConfig.Remote config, McpOAuthClient.Challenge challenge)
+    private static McpOAuthDiscovery mcpOAuthDiscover(
+            CodingAgentOperations client, McpServerConfig.Remote config, McpOAuthChallenge challenge)
             throws Exception {
-        McpOAuthClient.ResourceMetadata resourceMetadata = null;
+        McpResourceMetadata resourceMetadata = null;
         if (challenge != null && challenge.resourceMetadataUrl != null) {
             URI endpoint1 = challenge.resourceMetadataUrl;
             mcpRequireSecureEndpoint(endpoint1, "OAuth protected resource metadata");
-            McpOAuthClient.Response response1 = mcpOAuthSend(client, mcpOAuthGet(endpoint1, Map.of(), true));
+            McpOAuthResponse response1 = mcpOAuthSend(client, mcpOAuthGet(endpoint1, Map.of(), true));
             if (!mcpOAuthSuccess(response1)) {
                 throw new IOException("OAuth protected resource metadata returned HTTP " + response1.status + " ("
                         + endpoint1 + ")");
@@ -6636,7 +7412,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     server,
                     "/.well-known/oauth-protected-resource" + (path1.equals("/") ? "" : path1),
                     server.getRawQuery());
-            McpOAuthClient.Response response1 = mcpOAuthSend(client, mcpOAuthGet(pathAware, Map.of(), true));
+            McpOAuthResponse response1 = mcpOAuthSend(client, mcpOAuthGet(pathAware, Map.of(), true));
             if (mcpOAuthSuccess(response1)) {
                 resourceMetadata = mcpOAuthParseResourceMetadata(response1);
             } else {
@@ -6663,7 +7439,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 ? resourceMetadata.authorizationServers.getFirst()
                 : mcpUriOrigin(config.url);
         mcpRequireSecureEndpoint(authorizationServer, "authorization server");
-        McpOAuthClient.AuthorizationMetadata metadata = null;
+        McpAuthorizationMetadata metadata = null;
         List<URI> result;
         String path = authorizationServer.getRawPath();
         if (path == null || path.isEmpty() || path.equals("/")) {
@@ -6678,7 +7454,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     mcpUriAtOrigin(authorizationServer, path + "/.well-known/openid-configuration", null));
         }
         for (URI endpoint : result) {
-            McpOAuthClient.Response response = mcpOAuthSend(client, mcpOAuthGet(endpoint, Map.of(), true));
+            McpOAuthResponse response = mcpOAuthSend(client, mcpOAuthGet(endpoint, Map.of(), true));
             if (mcpOAuthSuccess(response)) {
                 JsonNode body = mcpOAuthParseObject(response, "OAuth authorization server metadata");
                 mcpOAuthRequiredText(body, "issuer", "OAuth authorization server metadata");
@@ -6700,7 +7476,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 if (!challengeMethods.contains("S256")) {
                     throw new IOException("OAuth server does not advertise PKCE S256 support");
                 }
-                metadata = new McpOAuthClient.AuthorizationMetadata(
+                metadata = new McpAuthorizationMetadata(
                         authorization,
                         token,
                         registration,
@@ -6738,10 +7514,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         "OAuth protected resource " + resource + " does not match MCP endpoint " + config.url);
             }
         }
-        return new McpOAuthClient.Discovery(authorizationServer, metadata, resourceMetadata, resource);
+        return new McpOAuthDiscovery(authorizationServer, metadata, resourceMetadata, resource);
     }
 
-    private static McpOAuthClient.ResourceMetadata mcpOAuthParseResourceMetadata(McpOAuthClient.Response response)
+    private static McpResourceMetadata mcpOAuthParseResourceMetadata(McpOAuthResponse response)
             throws IOException {
         JsonNode body = mcpOAuthParseObject(response, "OAuth protected resource metadata");
         URI resource = mcpOAuthRequiredUri(body, "resource", "OAuth protected resource metadata");
@@ -6751,15 +7527,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         for (String value : values) result.add(mcpParseAbsoluteHttpUri(value, "authorization_servers"));
         List<URI> servers = List.copyOf(result);
         List<String> scopes = mcpOAuthTextArray(body.get("scopes_supported"), "scopes_supported");
-        return new McpOAuthClient.ResourceMetadata(resource, servers, scopes);
+        return new McpResourceMetadata(resource, servers, scopes);
     }
 
-    private static McpOAuthStore.Tokens mcpOAuthRequestTokens(
-            McpOAuthClient client,
-            McpOAuthClient.Discovery discovery,
-            McpOAuthStore.ClientInfo clientInfo,
+    private static McpOAuthTokens mcpOAuthRequestTokens(
+            CodingAgentOperations client,
+            McpOAuthDiscovery discovery,
+            McpOAuthClientInfo clientInfo,
             LinkedHashMap<String, String> parameters,
-            McpOAuthStore.Tokens previous,
+            McpOAuthTokens previous,
             Map<String, String> configuredHeaders)
             throws Exception {
         parameters.put("resource", discovery.resource.toString());
@@ -6802,13 +7578,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             default -> throw new IOException("Unsupported OAuth token endpoint authentication method: " + method);
         }
         HttpRequest.Builder builder = HttpRequest.newBuilder(discovery.metadata.tokenEndpoint)
-                .timeout(McpOAuthClient.HTTP_TIMEOUT)
+                .timeout(MCP_OAUTH_HTTP_TIMEOUT)
                 .setHeader("Accept", "application/json")
                 .setHeader("Content-Type", "application/x-www-form-urlencoded")
                 .POST(HttpRequest.BodyPublishers.ofString(mcpFormEncode(parameters), StandardCharsets.UTF_8));
         mcpApplyOAuthHeaders(builder, headers);
         HttpRequest request = builder.build();
-        McpOAuthClient.Response response = mcpOAuthSend(client, request);
+        McpOAuthResponse response = mcpOAuthSend(client, request);
         if (!mcpOAuthSuccess(response)) throw mcpOAuthFailure(response, "OAuth token request failed");
         JsonNode body = mcpOAuthParseObject(response, "OAuth token response");
         String access = mcpOAuthRequiredText(body, "access_token", "OAuth token response");
@@ -6825,29 +7601,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         Long expiresAt = expiresIn == null ? null : Instant.now().getEpochSecond() + expiresIn;
         String scope = mcpOAuthOptionalText(body, "scope");
         if (scope == null && previous != null) scope = previous.scope;
-        return new McpOAuthStore.Tokens(access, refresh, expiresAt, scope);
+        return new McpOAuthTokens(access, refresh, expiresAt, scope);
     }
 
     private static HttpRequest mcpOAuthGet(URI uri, Map<String, String> configuredHeaders, boolean metadata) {
         HttpRequest.Builder builder =
-                HttpRequest.newBuilder(uri).timeout(McpOAuthClient.HTTP_TIMEOUT).GET();
+                HttpRequest.newBuilder(uri).timeout(MCP_OAUTH_HTTP_TIMEOUT).GET();
         if (metadata) {
             builder.setHeader("Accept", "application/json");
-            builder.setHeader("MCP-Protocol-Version", McpOAuthClient.PROTOCOL_VERSION);
+            builder.setHeader("MCP-Protocol-Version", MCP_OAUTH_PROTOCOL_VERSION);
         }
         mcpApplyOAuthHeaders(builder, configuredHeaders);
         return builder.build();
     }
 
-    private static McpOAuthClient.Response mcpOAuthSend(McpOAuthClient client, HttpRequest request)
+    private static McpOAuthResponse mcpOAuthSend(CodingAgentOperations client, HttpRequest request)
             throws IOException, InterruptedException {
         HttpResponse<String> response =
                 client.http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        return new McpOAuthClient.Response(
+        return new McpOAuthResponse(
                 response.statusCode(), response.uri(), response.headers().map(), response.body());
     }
 
-    private static boolean mcpOAuthSuccess(McpOAuthClient.Response response) {
+    private static boolean mcpOAuthSuccess(McpOAuthResponse response) {
         return response.status >= 200 && response.status < 300;
     }
 
@@ -6862,7 +7638,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static McpOAuthClient.OAuthFailure mcpOAuthFailure(McpOAuthClient.Response response, String fallback) {
+    private static McpOAuthFailure mcpOAuthFailure(McpOAuthResponse response, String fallback) {
         String code = null;
         String description = null;
         try {
@@ -6873,15 +7649,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
         String message = description != null ? description : code != null ? code : mcpAbbreviate(response.body);
         if (message.isBlank()) message = fallback;
-        return new McpOAuthClient.OAuthFailure(response.status, code, fallback + ": " + message);
+        return new McpOAuthFailure(response.status, code, fallback + ": " + message);
     }
 
-    private static boolean mcpOAuthInvalidCredential(McpOAuthClient.OAuthFailure error) {
+    private static boolean mcpOAuthInvalidCredential(McpOAuthFailure error) {
         return error.code != null
                 && List.of("invalid_grant", "invalid_client", "unauthorized_client").contains(error.code);
     }
 
-    private static JsonNode mcpOAuthParseObject(McpOAuthClient.Response response, String source) throws IOException {
+    private static JsonNode mcpOAuthParseObject(McpOAuthResponse response, String source) throws IOException {
         JsonNode body;
         try {
             body = Json.MAPPER.readTree(response.body);
@@ -6997,7 +7773,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private static String mcpRandomUrlToken(McpOAuthClient client, int bytes) {
+    private static String mcpRandomUrlToken(CodingAgentOperations client, int bytes) {
         byte[] value = new byte[bytes];
         client.random.nextBytes(value);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
@@ -7013,7 +7789,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         throw new IOException(description + " must use HTTPS: " + uri);
     }
 
-    private static McpOAuthClient.Challenge mcpOAuthChallenge(McpHttpException response) {
+    private static McpOAuthChallenge mcpOAuthChallenge(McpHttpException response) {
         List<String> values1 = response.headers.get("WWW-Authenticate".toLowerCase(Locale.ROOT));
         String authenticate = values1 == null || values1.isEmpty() ? null : String.join(", ", values1);
         if (response.status != 401 && response.status != 403) return null;
@@ -7023,7 +7799,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             fields = Map.of();
         } else {
             LinkedHashMap<String, String> values = new LinkedHashMap<>();
-            Matcher matcher = McpOAuthClient.AUTH_PARAMETER.matcher(authenticate);
+            Matcher matcher = MCP_OAUTH_AUTH_PARAMETER.matcher(authenticate);
             while (matcher.find()) {
                 values.put(
                         matcher.group(1).toLowerCase(Locale.ROOT),
@@ -7042,17 +7818,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             } catch (IllegalArgumentException ignored) {
             }
         }
-        return new McpOAuthClient.Challenge(resource, fields.get("scope"), error);
+        return new McpOAuthChallenge(resource, fields.get("scope"), error);
     }
 
-    private static boolean mcpOAuthInsufficientScope(McpOAuthClient.Challenge challenge) {
+    private static boolean mcpOAuthInsufficientScope(McpOAuthChallenge challenge) {
         return "insufficient_scope".equals(challenge.error);
     }
 
-    private static URI mcpOAuthRedirectUri(McpOAuthClient.OAuthSettings settings) {
+    private static URI mcpOAuthRedirectUri(McpOAuthSettings settings) {
         if (settings.configuredRedirectUri != null) return settings.configuredRedirectUri;
-        int port = settings.callbackPort == null ? McpOAuthClient.DEFAULT_CALLBACK_PORT : settings.callbackPort;
-        return URI.create("http://127.0.0.1:" + port + McpOAuthClient.DEFAULT_CALLBACK_PATH);
+        int port = settings.callbackPort == null ? MCP_OAUTH_DEFAULT_CALLBACK_PORT : settings.callbackPort;
+        return URI.create("http://127.0.0.1:" + port + MCP_OAUTH_DEFAULT_CALLBACK_PATH);
     }
 
     // -------------------------------------------------------- mcp oauth store
@@ -7061,24 +7837,24 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Stores one server credential under an exclusive file lock.
      */
     public static void mcpOAuthWrite(
-            McpOAuthStore store, String name, String serverUrl, McpOAuthStore.Entry entry) throws IOException {
+            CodingAgentOperations store, String name, String serverUrl, McpOAuthEntry entry) throws IOException {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("MCP server name must not be blank");
         Files.createDirectories(store.path.getParent());
-        mcpSetPermissions(store.path.getParent(), McpOAuthStore.DIRECTORY_PERMISSIONS);
+        mcpSetPermissions(store.path.getParent(), DIRECTORY_PERMISSIONS);
         try (FileChannel channel =
                      FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = channel.lock()) {
             ObjectNode root = mcpOAuthReadRoot(store.path, false);
             ObjectNode node = jsonObject().put("serverUrl", serverUrl);
             if (entry.tokens != null) {
-                McpOAuthStore.Tokens value = entry.tokens;
+                McpOAuthTokens value = entry.tokens;
                 ObjectNode tokens = node.putObject("tokens").put("accessToken", value.accessToken);
                 mcpPutText(tokens, "refreshToken", value.refreshToken);
                 if (value.expiresAt != null) tokens.put("expiresAt", value.expiresAt);
                 mcpPutText(tokens, "scope", value.scope);
             }
             if (entry.clientInfo != null) {
-                McpOAuthStore.ClientInfo value = entry.clientInfo;
+                McpOAuthClientInfo value = entry.clientInfo;
                 ObjectNode client = node.putObject("clientInfo").put("clientId", value.clientId);
                 mcpPutText(client, "clientSecret", value.clientSecret);
                 if (value.clientIdIssuedAt != null) client.put("clientIdIssuedAt", value.clientIdIssuedAt);
@@ -7092,20 +7868,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             Path temporary = Files.createTempFile(store.path.getParent(), "mcp-auth-", ".json");
             try {
                 Files.writeString(temporary, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
-                mcpSetPermissions(temporary, McpOAuthStore.FILE_PERMISSIONS);
+                mcpSetPermissions(temporary, FILE_PERMISSIONS);
                 try {
                     Files.move(temporary, store.path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException error) {
                     Files.move(temporary, store.path, StandardCopyOption.REPLACE_EXISTING);
                 }
-                mcpSetPermissions(store.path, McpOAuthStore.FILE_PERMISSIONS);
+                mcpSetPermissions(store.path, FILE_PERMISSIONS);
             } finally {
                 Files.deleteIfExists(temporary);
             }
         }
     }
 
-    private static McpOAuthStore.Entry mcpOAuthReadEntry(
+    private static McpOAuthEntry mcpOAuthReadEntry(
             Path source, String name, String serverUrl, boolean lenient) throws IOException {
         if (!Files.isRegularFile(source)) return null;
         ObjectNode root;
@@ -7119,19 +7895,19 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         if (node == null || !node.isObject()) return null;
         if (!node.path("serverUrl").isTextual() || !node.path("serverUrl").asText().equals(serverUrl)) return null;
         try {
-            McpOAuthStore.Tokens tokens = null;
+            McpOAuthTokens tokens = null;
             JsonNode tokenNode = node.get("tokens");
             if (tokenNode != null && tokenNode.isObject() && mcpStoredText(tokenNode, "accessToken") != null) {
-                tokens = new McpOAuthStore.Tokens(
+                tokens = new McpOAuthTokens(
                         mcpStoredText(tokenNode, "accessToken"),
                         mcpStoredText(tokenNode, "refreshToken"),
                         mcpStoredNumber(tokenNode, "expiresAt"),
                         mcpStoredText(tokenNode, "scope"));
             }
-            McpOAuthStore.ClientInfo client = null;
+            McpOAuthClientInfo client = null;
             JsonNode clientNode = node.get("clientInfo");
             if (clientNode != null && clientNode.isObject() && mcpStoredText(clientNode, "clientId") != null) {
-                client = new McpOAuthStore.ClientInfo(
+                client = new McpOAuthClientInfo(
                         mcpStoredText(clientNode, "clientId"),
                         mcpStoredText(clientNode, "clientSecret"),
                         mcpStoredNumber(clientNode, "clientIdIssuedAt"),
@@ -7139,7 +7915,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         mcpStoredText(clientNode, "tokenEndpointAuthMethod"),
                         mcpStoredText(clientNode, "redirectUri"));
             }
-            return new McpOAuthStore.Entry(tokens, client);
+            return new McpOAuthEntry(tokens, client);
         } catch (RuntimeException error) {
             if (lenient) return null;
             throw new IOException("Invalid MCP OAuth credential for \"" + name + "\" in " + source, error);
@@ -7669,7 +8445,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     // ------------------------------------------------------ command suggestions
 
 
-    private static void synchronizeCommandSuggestions(CommandSuggestions suggestions, String buffer) {
+    private static void synchronizeCommandSuggestions(CodingAgentOperations suggestions, String buffer) {
         String value = buffer == null ? "" : buffer;
         if (suggestions.dismissedBuffer != null) {
             if (suggestions.dismissedBuffer.equals(value)) {
@@ -7941,7 +8717,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Runs a searchable selector on the terminal and returns the chosen value.
      */
     public static <T> T select(
-            InteractiveTerminal terminal,
+            CodingAgentOperations terminal,
             String title,
             List<SelectItem<T>> options,
             int initialIndex,
@@ -8059,21 +8835,21 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Wires the line editor, signal handlers, and keybindings onto an existing terminal.
      */
-    public static InteractiveTerminal newInteractiveTerminal(
+    public static CodingAgentOperations newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
-        InteractiveTerminal interactive = new InteractiveTerminal();
-        interactive.terminal = terminal;
+        CodingAgentOperations interactive = new CodingAgentOperations();
+        interactive.jlineTerminal = terminal;
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
         if (columns <= 0 || rows <= 0) {
             terminal.setSize(Size.of(
-                    columns > 0 ? columns : InteractiveTerminal.DEFAULT_COLUMNS,
-                    rows > 0 ? rows : InteractiveTerminal.DEFAULT_ROWS));
+                    columns > 0 ? columns : DEFAULT_COLUMNS,
+                    rows > 0 ? rows : DEFAULT_ROWS));
         }
         interactive.suspendAction = suspendAction;
         interactive.supportsSuspend = supportsSuspend;
         interactive.shellAttributes = new Attributes(terminal.getAttributes());
-        interactive.reader = new LineReaderImpl(interactive.terminal, interactive.terminal.getName(), null) {
+        interactive.reader = new LineReaderImpl(interactive.jlineTerminal, interactive.jlineTerminal.getName(), null) {
             @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
                 if (interactive.dynamicPost == null || post != null) {
@@ -8116,7 +8892,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         String submitWidgetName = "codingagent-submit-or-insert-pasted-newline";
         reader.getWidgets().put(submitWidgetName, () -> {
             LineReaderImpl reader1 = interactive.reader;
-            int next = reader1.peekCharacter(InteractiveTerminal.PASTE_LOOKAHEAD_MILLIS);
+            int next = reader1.peekCharacter(PASTE_LOOKAHEAD_MILLIS);
             // Preserve multiline paste detection even when the pasted first line
             // happens to look like a slash command. A queued CR is instead treated
             // as the user's second Enter after choosing a command.
@@ -8162,8 +8938,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 suggestionDownWidgetName,
                 () -> moveSuggestionOrFallback(interactive, 1, LineReader.DOWN_LINE_OR_SEARCH));
         Reference suggestionDown = new Reference(suggestionDownWidgetName);
-        String terminalUp = KeyMap.key(interactive.terminal, Capability.key_up);
-        String terminalDown = KeyMap.key(interactive.terminal, Capability.key_down);
+        String terminalUp = KeyMap.key(interactive.jlineTerminal, Capability.key_up);
+        String terminalDown = KeyMap.key(interactive.jlineTerminal, Capability.key_down);
 
         reader.getWidgets().put(LineReader.BEGIN_PASTE, () -> {
             StringBuilder content = new StringBuilder();
@@ -8172,19 +8948,19 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 if (value < 0) break;
                 content.append((char) value);
                 boolean result = true;
-                if (content.length() < InteractiveTerminal.BRACKETED_PASTE_END.length()) {
+                if (content.length() < BRACKETED_PASTE_END.length()) {
                     result = false;
                 } else {
-                    int offset = content.length() - InteractiveTerminal.BRACKETED_PASTE_END.length();
-                    for (int index = 0; index < InteractiveTerminal.BRACKETED_PASTE_END.length(); index++) {
-                        if (content.charAt(offset + index) != InteractiveTerminal.BRACKETED_PASTE_END.charAt(index)) {
+                    int offset = content.length() - BRACKETED_PASTE_END.length();
+                    for (int index = 0; index < BRACKETED_PASTE_END.length(); index++) {
+                        if (content.charAt(offset + index) != BRACKETED_PASTE_END.charAt(index)) {
                             result = false;
                             break;
                         }
                     }
                 }
                 if (result) {
-                    content.setLength(content.length() - InteractiveTerminal.BRACKETED_PASTE_END.length());
+                    content.setLength(content.length() - BRACKETED_PASTE_END.length());
                     break;
                 }
             }
@@ -8261,7 +9037,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static boolean moveSuggestionOrFallback(
-            InteractiveTerminal interactive, int delta, String fallbackWidget) {
+            CodingAgentOperations interactive, int delta, String fallbackWidget) {
         if (interactive.activeCommandSuggestions != null) {
             boolean result = true;
             String buffer = interactive.reader.getBuffer().toString();
@@ -8274,11 +9050,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 if (interactive.activeCommandSuggestions.selectedIndex < interactive.activeCommandSuggestions.visibleStart) {
                     interactive.activeCommandSuggestions.visibleStart = interactive.activeCommandSuggestions.selectedIndex;
                 } else if (interactive.activeCommandSuggestions.selectedIndex
-                        >= interactive.activeCommandSuggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS) {
+                        >= interactive.activeCommandSuggestions.visibleStart + VISIBLE_COMMANDS) {
                     interactive.activeCommandSuggestions.visibleStart =
-                            interactive.activeCommandSuggestions.selectedIndex - CommandSuggestions.VISIBLE_COMMANDS + 1;
+                            interactive.activeCommandSuggestions.selectedIndex - VISIBLE_COMMANDS + 1;
                 }
-                interactive.activeCommandSuggestions.visibleStart = Math.clamp(interactive.activeCommandSuggestions.matches.size() - CommandSuggestions.VISIBLE_COMMANDS, 0,
+                interactive.activeCommandSuggestions.visibleStart = Math.clamp(interactive.activeCommandSuggestions.matches.size() - VISIBLE_COMMANDS, 0,
                         interactive.activeCommandSuggestions.visibleStart);
             }
             if (result) {
@@ -8292,21 +9068,27 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Returns null on EOF and an empty string after Ctrl-C.
      */
-    public static String readLine(InteractiveTerminal interactive, String prompt) {
+    public static String readLine(CodingAgentOperations interactive, String prompt) {
         return readLineInternal(interactive, prompt, null, null, null);
+    }
+
+    public static CodingAgentOperations commandSuggestions(List<String> commands) {
+        CodingAgentOperations suggestions = new CodingAgentOperations();
+        suggestions.commands = commands;
+        return suggestions;
     }
 
     /**
      * Reads a line with an alphabetized slash-command panel below the prompt.
      */
     public static String readLine(
-            InteractiveTerminal interactive, String prompt, List<String> slashCommands) {
-        CommandSuggestions suggestions;
+            CodingAgentOperations interactive, String prompt, List<String> slashCommands) {
+        CodingAgentOperations suggestions;
         if (slashCommands == null || slashCommands.isEmpty()) {
             suggestions = null;
         } else {
             Objects.requireNonNull(slashCommands, "commands");
-            suggestions = new CommandSuggestions(slashCommands.stream()
+            suggestions = commandSuggestions(slashCommands.stream()
                     .filter(Objects::nonNull)
                     .map(String::trim)
                     .filter(command -> command.startsWith("/") && command.length() > 1)
@@ -8320,16 +9102,16 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Reads a line whose editable buffer starts with {@code initialValue}.
      */
-    public static String readLine(InteractiveTerminal interactive, String prompt, String initialValue) {
+    public static String readLine(CodingAgentOperations interactive, String prompt, String initialValue) {
         return readLineInternal(interactive, prompt, initialValue, null, null);
     }
 
     private static String readLineInternal(
-            InteractiveTerminal interactive,
+            CodingAgentOperations interactive,
             String prompt,
             String initialBuffer,
             Character mask,
-            CommandSuggestions suggestions) {
+            CodingAgentOperations suggestions) {
         while (true) {
             Theme promptTheme = interactive.theme;
             try {
@@ -8338,9 +9120,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 interactive.reader.setVariable(
                         LineReader.SECONDARY_PROMPT_PATTERN,
                         background.isEmpty()
-                                ? InteractiveTerminal.SECONDARY_PROMPT
+                                ? SECONDARY_PROMPT
                                 : hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
-                                  + InteractiveTerminal.SECONDARY_PROMPT);
+                                  + SECONDARY_PROMPT);
                 String editorPrompt;
                 if (background.isEmpty()) {
                     editorPrompt = prompt;
@@ -8353,9 +9135,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 interactive.activeCommandSuggestions = suggestions;
                 interactive.dynamicPost =
                         suggestions == null ? null : () -> {
-                            int columns = interactive.terminal.getColumns() > 0
-                                    ? interactive.terminal.getColumns()
-                                    : InteractiveTerminal.DEFAULT_COLUMNS;
+                            int columns = interactive.jlineTerminal.getColumns() > 0
+                                    ? interactive.jlineTerminal.getColumns()
+                                    : DEFAULT_COLUMNS;
                             List<String> lines;
                             String buffer = interactive.reader.getBuffer().toString();
                             synchronizeCommandSuggestions(suggestions, buffer);
@@ -8363,7 +9145,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 lines = List.of();
                             } else {
                                 int visibleEnd = Math.min(
-                                        suggestions.matches.size(), suggestions.visibleStart + CommandSuggestions.VISIBLE_COMMANDS);
+                                        suggestions.matches.size(), suggestions.visibleStart + VISIBLE_COMMANDS);
                                 List<String> visible = suggestions.matches.subList(suggestions.visibleStart, visibleEnd);
                                 int longestCommand = visible.stream()
                                         .mapToInt(CodingAgentOperations::visibleWidth)
@@ -8434,7 +9216,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Hosts a component on the alternate screen, restoring the line editor afterwards.
      */
-    public static <T> T runComponent(InteractiveTerminal interactive, TuiComponent<T> component)
+    public static <T> T runComponent(CodingAgentOperations interactive, TuiComponent<T> component)
             throws IOException {
         if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
         synchronized (interactive) {
@@ -8442,13 +9224,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
         try {
             TuiRuntime runtime = new TuiRuntime(
-                    interactive.terminal,
+                    interactive.jlineTerminal,
                     interactive.theme,
                     interactive.supportsSuspend
                             ? () -> {
                         interactive.fullScreenResumeAttributes =
-                        new Attributes(interactive.terminal.getAttributes());
-                        interactive.terminal.setAttributes(interactive.shellAttributes);
+                        new Attributes(interactive.jlineTerminal.getAttributes());
+                        interactive.jlineTerminal.setAttributes(interactive.shellAttributes);
                         interactive.managedSuspend = true;
                         try {
                             callSuspendAction(interactive.suspendAction);
@@ -8521,15 +9303,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     interactive.statusBar.restore();
                     if (interactive.statusBar.size() > 0) {
                         // Alternate-screen switches can drop the scroll region on some terminals.
-                        int rows = interactive.terminal.getRows() > 0
-                                ? interactive.terminal.getRows()
-                                : InteractiveTerminal.DEFAULT_ROWS;
-                        interactive.terminal.puts(Capability.save_cursor);
-                        interactive.terminal.puts(
+                        int rows = interactive.jlineTerminal.getRows() > 0
+                                ? interactive.jlineTerminal.getRows()
+                                : DEFAULT_ROWS;
+                        interactive.jlineTerminal.puts(Capability.save_cursor);
+                        interactive.jlineTerminal.puts(
                                 Capability.change_scroll_region, 0, rows - 1 - interactive.statusBar.size());
-                        interactive.terminal.puts(Capability.restore_cursor);
+                        interactive.jlineTerminal.puts(Capability.restore_cursor);
                         renderStatusBar(interactive);
-                        interactive.terminal.flush();
+                        interactive.jlineTerminal.flush();
                     }
                 }
             }
@@ -8543,17 +9325,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * response or tool. Ctrl-C remains an interrupt alias outside the line editor.
      */
     public static <T> T runInterruptibly(
-            InteractiveTerminal interactive, Callable<T> operation, Runnable interruptHandler)
+            CodingAgentOperations interactive, Callable<T> operation, Runnable interruptHandler)
             throws IOException, InterruptedException {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(interruptHandler, "interruptHandler");
-        Attributes originalAttributes = interactive.terminal.enterRawMode();
+        Attributes originalAttributes = interactive.jlineTerminal.enterRawMode();
         FutureTask<T> task = new FutureTask<>(operation);
         Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
         boolean interruptRequested = false;
         try {
             while (!task.isDone()) {
-                TuiInput input = readTuiInput(interactive.terminal.reader(), 50);
+                TuiInput input = readTuiInput(interactive.jlineTerminal.reader(), 50);
                 if (input instanceof TuiInput.Key key
                         && (key.type == TuiInput.KeyType.ESCAPE || key.type == TuiInput.KeyType.CANCEL)
                         && !interruptRequested
@@ -8583,12 +9365,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
             throw error;
         } finally {
-            interactive.terminal.setAttributes(originalAttributes);
+            interactive.jlineTerminal.setAttributes(originalAttributes);
         }
     }
 
-    private static void suspendInteractive(InteractiveTerminal interactive, Attributes restoreBefore) {
-        if (restoreBefore != null) interactive.terminal.setAttributes(restoreBefore);
+    private static void suspendInteractive(CodingAgentOperations interactive, Attributes restoreBefore) {
+        if (restoreBefore != null) interactive.jlineTerminal.setAttributes(restoreBefore);
         interactive.managedSuspend = true;
         try {
             callSuspendAction(interactive.suspendAction);
@@ -8597,14 +9379,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         } finally {
             repaintScreen(interactive);
             interactive.managedSuspend = false;
-            if (restoreBefore != null) interactive.terminal.enterRawMode();
+            if (restoreBefore != null) interactive.jlineTerminal.enterRawMode();
         }
     }
 
     /**
      * Binds a configured application action while the line editor is active.
      */
-    public static void bindAppAction(InteractiveTerminal interactive, String action, Runnable handler) {
+    public static void bindAppAction(CodingAgentOperations interactive, String action, Runnable handler) {
         Objects.requireNonNull(handler, "handler");
         String widgetName = "codingagent-" + action;
         interactive.reader.getWidgets().put(widgetName, () -> {
@@ -8625,7 +9407,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Prints a status line without losing the active line-editor buffer.
      */
-    public static void printAbove(InteractiveTerminal interactive, String text) {
+    public static void printAbove(CodingAgentOperations interactive, String text) {
         synchronized (interactive) {
             if (interactive.reader.isReading()) resetPromptBackground(interactive, interactive.theme);
             interactive.reader.printAbove(text);
@@ -8633,20 +9415,20 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    public static void print(InteractiveTerminal interactive, String text) {
+    public static void print(CodingAgentOperations interactive, String text) {
         synchronized (interactive) {
             String value = String.valueOf(text);
-            interactive.terminal.writer().print(value);
-            interactive.terminal.writer().flush();
+            interactive.jlineTerminal.writer().print(value);
+            interactive.jlineTerminal.writer().flush();
             remember(interactive, value);
         }
     }
 
-    public static void println(InteractiveTerminal interactive, String text) {
+    public static void println(CodingAgentOperations interactive, String text) {
         synchronized (interactive) {
             String value = String.valueOf(text);
-            interactive.terminal.writer().println(value);
-            interactive.terminal.writer().flush();
+            interactive.jlineTerminal.writer().println(value);
+            interactive.jlineTerminal.writer().flush();
             remember(interactive, value + System.lineSeparator());
         }
     }
@@ -8654,7 +9436,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Replaces the main-screen document and redraws it from the top.
      */
-    public static void replaceScreen(InteractiveTerminal interactive, String document) {
+    public static void replaceScreen(CodingAgentOperations interactive, String document) {
         synchronized (interactive) {
             interactive.screenDocument.setLength(0);
             interactive.screenDocument.append(document == null ? "" : document);
@@ -8662,11 +9444,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    public static Theme terminalTheme(InteractiveTerminal interactive) {
+    public static Theme terminalTheme(CodingAgentOperations interactive) {
         return interactive.theme;
     }
 
-    public static void setTheme(InteractiveTerminal interactive, Theme theme) {
+    public static void setTheme(CodingAgentOperations interactive, Theme theme) {
         interactive.theme = theme;
     }
 
@@ -8674,29 +9456,29 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * Shows activity first so it remains visible when workspace/model details need truncation.
      */
     public static void setStatus(
-            InteractiveTerminal interactive,
+            CodingAgentOperations interactive,
             String activity,
-            InteractiveTerminal.StatusAccent accent,
+            StatusAccent accent,
             String left,
             String right) {
         synchronized (interactive) {
             interactive.statusActivity = activity == null ? "" : activity;
             interactive.statusAccent =
-                    accent == null ? InteractiveTerminal.StatusAccent.NONE : accent;
+                    accent == null ? StatusAccent.NONE : accent;
             interactive.statusLeft = left == null ? "" : left;
             interactive.statusRight = right == null ? "" : right;
             renderStatusBar(interactive);
         }
     }
 
-    private static void renderStatusBar(InteractiveTerminal interactive) {
+    private static void renderStatusBar(CodingAgentOperations interactive) {
         if (interactive.statusLeft == null && interactive.statusRight == null) return;
         if (interactive.statusBar == null) {
-            interactive.statusBar = Status.getStatus(interactive.terminal);
+            interactive.statusBar = Status.getStatus(interactive.jlineTerminal);
         }
         if (interactive.statusBar == null) return;
-        int columns = interactive.terminal.getColumns();
-        int width = columns > 0 ? columns : InteractiveTerminal.DEFAULT_COLUMNS;
+        int columns = interactive.jlineTerminal.getColumns();
+        int width = columns > 0 ? columns : DEFAULT_COLUMNS;
         interactive.statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
                 interactive.statusActivity,
                 interactive.statusAccent,
@@ -8712,7 +9494,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      */
     public static String statusBarLine(
             String activity,
-            InteractiveTerminal.StatusAccent accent,
+            StatusAccent accent,
             String left,
             String right,
             int width,
@@ -8732,7 +9514,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             String details = alignedStatusDetails(left, right, safeWidth);
             return mutedStatus(details, theme);
         }
-        String activityStyle = switch (accent == null ? InteractiveTerminal.StatusAccent.NONE : accent) {
+        String activityStyle = switch (accent == null ? StatusAccent.NONE : accent) {
             case NONE -> theme.muted;
             case READY -> readyStatus(theme);
             case ACTIVE -> activeStatus(theme);
@@ -8760,7 +9542,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void rememberCompletedLine(
-            InteractiveTerminal interactive, String prompt, String line, Character mask, Theme promptTheme) {
+            CodingAgentOperations interactive, String prompt, String line, Character mask, Theme promptTheme) {
         synchronized (interactive) {
             String displayedLine = line;
             if (mask != null) {
@@ -8776,52 +9558,52 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static void remember(InteractiveTerminal interactive, String text) {
+    private static void remember(CodingAgentOperations interactive, String text) {
         synchronized (interactive) {
             interactive.screenDocument.append(text);
         }
     }
 
-    private static void restoreFullScreenAttributes(InteractiveTerminal interactive) {
+    private static void restoreFullScreenAttributes(CodingAgentOperations interactive) {
         if (interactive.fullScreenResumeAttributes != null) {
-            interactive.terminal.setAttributes(interactive.fullScreenResumeAttributes);
+            interactive.jlineTerminal.setAttributes(interactive.fullScreenResumeAttributes);
             interactive.fullScreenResumeAttributes = null;
         }
     }
 
-    private static void resetPromptBackground(InteractiveTerminal interactive, Theme promptTheme) {
+    private static void resetPromptBackground(CodingAgentOperations interactive, Theme promptTheme) {
         if (promptBackground(promptTheme).isEmpty()) return;
-        interactive.terminal.writer().print(promptTheme.reset);
-        interactive.terminal.writer().flush();
+        interactive.jlineTerminal.writer().print(promptTheme.reset);
+        interactive.jlineTerminal.writer().flush();
     }
 
-    private static void repaintScreen(InteractiveTerminal interactive) {
+    private static void repaintScreen(CodingAgentOperations interactive) {
         synchronized (interactive) {
-            interactive.terminal.writer().print(interactive.theme.reset);
-            interactive.terminal.writer().print(InteractiveTerminal.BEGIN_SYNCHRONIZED_OUTPUT);
+            interactive.jlineTerminal.writer().print(interactive.theme.reset);
+            interactive.jlineTerminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
             boolean redrawStatusBar = interactive.statusBar != null && interactive.statusBar.size() > 0;
             // Release the status rows so the redrawn document starts on a clean screen.
             if (redrawStatusBar) interactive.statusBar.update(List.of());
-            interactive.terminal.writer().print(InteractiveTerminal.CLEAR_SCREEN_AND_SCROLLBACK);
+            interactive.jlineTerminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
             // Re-reserve the bottom row before printing so the document scrolls above it.
             if (redrawStatusBar) renderStatusBar(interactive);
-            interactive.terminal.writer().print(interactive.screenDocument);
-            interactive.terminal.writer().print(InteractiveTerminal.END_SYNCHRONIZED_OUTPUT);
-            interactive.terminal.writer().flush();
+            interactive.jlineTerminal.writer().print(interactive.screenDocument);
+            interactive.jlineTerminal.writer().print(END_SYNCHRONIZED_OUTPUT);
+            interactive.jlineTerminal.writer().flush();
         }
     }
 
     /**
      * Restores the signal handlers this terminal replaced and closes JLine.
      */
-    public static void closeTerminal(InteractiveTerminal interactive) throws IOException {
+    public static void closeTerminal(CodingAgentOperations interactive) throws IOException {
         if (interactive.previousContinueHandler != null) {
-            interactive.terminal.handle(Terminal.Signal.CONT, interactive.previousContinueHandler);
+            interactive.jlineTerminal.handle(Terminal.Signal.CONT, interactive.previousContinueHandler);
         }
         if (interactive.previousResizeHandler != null) {
-            interactive.terminal.handle(Terminal.Signal.WINCH, interactive.previousResizeHandler);
+            interactive.jlineTerminal.handle(Terminal.Signal.WINCH, interactive.previousResizeHandler);
         }
-        interactive.terminal.close();
+        interactive.jlineTerminal.close();
     }
 
     // ------------------------------------------------------------------- cli
@@ -8907,8 +9689,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         """.formatted(APP_NAME, APP_NAME));
                 return 0;
             }
-            ModelCatalog catalog = loadBundledModelCatalog();
-            FileCredentialStore credentials = defaultCredentialStore();
+            CodingAgentOperations catalog = loadBundledModelCatalog();
+            CodingAgentOperations credentials = defaultCredentialStore();
             Map<String, Provider> providers1 = new LinkedHashMap<>();
             providers1.put(
                     "anthropic",
@@ -8934,34 +9716,34 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             List.of("OPENAI_API_KEY"),
                             credentials,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
-            ChatGptAuth auth = chatGptAuth(credentials, URI.create("https://auth.openai.com"), ChatGptAuth.CLIENT_ID);
+            CodingAgentOperations auth = chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
             List<Model> models = catalogModelsForProvider(catalog, "openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
-                    .filter(model1 -> ChatGptProvider.CODEX_MODEL_IDS.contains(model1.id))
+                    .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
                     .map(source -> {
                         Model model1 = copyModel(source);
-                        model1.provider = ChatGptAuth.PROVIDER_ID;
-                        model1.baseUrl = ChatGptAuth.CODEX_API_BASE_URL.toString();
+                        model1.provider = CHATGPT_PROVIDER_ID;
+                        model1.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
                         model1.cost = ModelCost.FREE;
                         return model1;
                     })
                     .toList();
             providers1.put(
-                    ChatGptAuth.PROVIDER_ID,
-                    new ChatGptProvider(
+                    CHATGPT_PROVIDER_ID,
+                    chatGptProvider(
                             models,
                             auth,
                             new OpenAiResponsesProvider(
-                                    ChatGptAuth.PROVIDER_ID,
-                                    ChatGptProvider.NAME,
+                                    CHATGPT_PROVIDER_ID,
+                                    CHATGPT_PROVIDER_NAME,
                                     List.copyOf(models),
                                     List.of(),
                                     null,
                                     OpenAiResponsesProvider.RequestProfile.CODEX)));
             providers1.put(
                     "google",
-                    new GoogleProvider(List.copyOf(catalogModelsForProvider(catalog, "google").stream()
-                            .filter(model -> model.api.equals("google-generative-ai"))
+                    googleProvider(List.copyOf(catalogModelsForProvider(catalog, "google").stream()
+                            .filter(model -> model.api.equals(GOOGLE_API))
                             .toList())));
             providers1.put(
                     "github-copilot",
@@ -8970,11 +9752,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     credentials,
                                     URI.create("https://github.com"),
                                     URI.create("https://api.github.com/copilot_internal/v2/token"),
-                                    URI.create(GitHubCopilotAuth.DEFAULT_COPILOT_BASE_URL))));
-            CoreProviders providers = new CoreProviders(catalog, Map.copyOf(providers1));
+                                    URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL))));
+            CodingAgentOperations providers = coreProviders(catalog, Map.copyOf(providers1));
             if (cli.listModels) {
                 String needle = cli.modelSearch == null ? "" : cli.modelSearch.toLowerCase();
-                for (Provider provider : List.copyOf(providers.providers.values())) {
+                for (Provider provider : List.copyOf(providers.coreProviders.values())) {
                     for (Model model : providerModels(provider)) {
                         String id = model.provider + "/" + model.id;
                         if (needle.isEmpty() || id.toLowerCase().contains(needle) || model.name.toLowerCase().contains(needle)) {
@@ -9048,7 +9830,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                 }
                                 case "get_state" -> {
                                     ObjectNode data = jsonObject();
-                                    data.set("model", Json.MAPPER.valueToTree(server.agent.state.model));
+                                    data.set("model", Json.MAPPER.valueToTree(server.agent.state.selectedModel));
                                     data.put("isStreaming", server.agent.state.isStreaming);
                                     data.put("isCompacting", server.agent.state.isCompacting);
                                     data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
@@ -9100,7 +9882,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                     respondRpc(id, type, true, data, null);
                                 }
                                 case "new_session" -> {
-                                    resetRpcAgent(server, server.agent.state.model);
+                                    resetRpcAgent(server, server.agent.state.selectedModel);
                                     respondRpc(id, type, true, jsonObject().put("cancelled", false), null);
                                 }
                                 default -> respondRpc(id, type, false, null, "Unsupported command: " + type);
@@ -9121,11 +9903,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 Model model = resolveCliModel(providers, cli.provider, cli.model);
                 Provider provider = requireCoreProvider(providers, model.provider);
                 Path cwd = Path.of(".").toAbsolutePath().normalize();
-                McpManager mcp = mcpLoadDefaultManager(cwd);
+                CodingAgentOperations mcp = mcpLoadDefaultManager(cwd);
                 try {
                     mcpAwaitReady(mcp);
-                    Agent agent = new Agent(
-                            new AgentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model), provider);
+                    CodingAgentOperations agent = agent(
+                            agentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model), provider);
                     agent.apiKey = cli.apiKey;
                     configureBuiltInTools(agent, cwd, cli.systemPrompt);
                     agent.state.tools.addAll(mcpTools(mcp));
@@ -9141,7 +9923,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             }
                         });
                     }
-                    SessionRecorder recorder = cli.noSession
+                    CodingAgentOperations recorder = cli.noSession
                             ? null
                             : createSessionRecorder(defaultSessionStore(), cwd, model.provider, model.id);
                     List<Message> messages = prompt(agent, cli.message);
@@ -9165,7 +9947,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 }
             }
             Path resolved = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json").toAbsolutePath().normalize();
-            SettingsStore settingsStore = new SettingsStore(resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
+            CodingAgentOperations settingsStore = settingsStore(
+                    resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
             ObjectNode root = readSettingsObject(settingsStore);
             String provider = optionalSettingsText(root, "defaultProvider");
             String model2 = optionalSettingsText(root, "defaultModel");
@@ -9184,12 +9967,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             if (value != null && !value.isNull() && !value.isBoolean()) {
                 throw new IOException("Invalid setting hideThinkingBlock: expected a boolean");
             }
-            SettingsStore.Settings settings = new SettingsStore.Settings(
+            Settings settings = new Settings(
                     provider, model2, thinkingLevel, theme, value != null && value.asBoolean(false));
             Path workspace = Path.of(".").toAbsolutePath().normalize();
-            McpManager mcp = mcpLoadDefaultManager(workspace);
+            CodingAgentOperations mcp = mcpLoadDefaultManager(workspace);
             try {
-                InteractiveTerminal terminal = newInteractiveTerminal(
+                CodingAgentOperations terminal = newInteractiveTerminal(
                         TerminalBuilder.builder().system(true).name(APP_NAME).build(),
                         () -> {
                             Process process =
@@ -9209,7 +9992,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         },
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
-                    InteractiveShell shell = new InteractiveShell();
+                    CodingAgentOperations shell = new CodingAgentOperations();
                     shell.providers = providers;
                     shell.cli = cli;
                     shell.terminal = terminal;
@@ -9246,7 +10029,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         } else {
                             restoreShellModel(shell);
                         }
-                        print(shell.terminal, sessionScreenHeader(shell.agent == null ? null : shell.agent.state.model));
+                        print(shell.terminal, sessionScreenHeader(shell.agent == null ? null : shell.agent.state.selectedModel));
                         refreshShellStatus(shell);
                         shell.statusTicker.scheduleWithFixedDelay(() -> {
                             if (!isDynamicActivity(shell.activity)) return;
@@ -9257,7 +10040,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                         while (true) {
-                            String input = readLine(shell.terminal, "\n> ", InteractiveShell.SLASH_COMMANDS);
+                            String input = readLine(shell.terminal, "\n> ", SLASH_COMMANDS);
                             if (input == null) {
                                 println(shell.terminal, "");
                                 return 0;
@@ -9284,10 +10067,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                 break;
                                             }
                                             name = name.strip();
-                                            AgentState state = shell.agent.state;
-                                            Model model = state.model;
+                                            CodingAgentOperations state = shell.agent.state;
+                                            Model model = state.selectedModel;
                                             List<Message> forkMessages = resumableMessages(state.messages);
-                                            SessionRecorder forkRecorder = null;
+                                            CodingAgentOperations forkRecorder = null;
                                             if (!shell.cli.noSession) {
                                                 try {
                                                     forkRecorder = forkSessionRecorder(
@@ -9319,13 +10102,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                             } else {
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
-                                                        GitHubCopilotProvider copilot = shellCopilotProvider(shell);
-                                                        GitHubCopilotAuth.DeviceCode device = gitHubCopilotBeginLogin(copilot.auth);
+                                                        CodingAgentOperations copilot = shellCopilotProvider(shell);
+                                                        GitHubCopilotDeviceCode device = gitHubCopilotBeginLogin(copilot.auth);
                                                         println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println(shell.terminal, "Waiting for GitHub authorization...");
                                                         gitHubCopilotCompleteLogin(copilot.auth, device);
                                                         println(shell.terminal, "Enabling GitHub Copilot models...");
-                                                        GitHubCopilotProvider.ModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
+                                                        CopilotModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
                                                         if (access.policiesEnabled < copilot.models.size()) {
                                                             println(shell.terminal, "Some GitHub Copilot models are unavailable for this account.");
                                                         }
@@ -9368,8 +10151,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                     }
                                                     case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
                                                          "chatgpt plus/pro" -> {
-                                                        ChatGptProvider chatGpt = shellChatGptProvider(shell);
-                                                        ChatGptAuth.DeviceCode device = chatGptBeginLogin(chatGpt.auth);
+                                                        CodingAgentOperations chatGpt = shellChatGptProvider(shell);
+                                                        ChatGptDeviceCode device = chatGptBeginLogin(chatGpt.auth);
                                                         println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println(shell.terminal, "Waiting for ChatGPT authorization...");
                                                         chatGptCompleteLogin(chatGpt.auth, device);
@@ -9397,18 +10180,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                         }
                                         case "/logout" -> {
                                             try {
-                                                if (shell.agent != null && shell.agent.state.model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+                                                if (shell.agent != null && shell.agent.state.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
                                                     chatGptLogout(shellChatGptProvider(shell).auth);
                                                     shell.agent = null;
                                                     println(shell.terminal, "ChatGPT credentials removed. Run /login or /resume to continue.");
-                                                } else if (shell.agent != null && shell.agent.state.model.provider.equals("openai")) {
+                                                } else if (shell.agent != null && shell.agent.state.selectedModel.provider.equals("openai")) {
                                                     deleteCredential(defaultCredentialStore(), "openai");
                                                     shell.agent = null;
                                                     println(shell.terminal, "OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
                                                     gitHubCopilotLogout(shellCopilotProvider(shell).auth);
                                                     if (shell.agent != null
-                                                            && shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+                                                            && shell.agent.state.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                         shell.agent = null;
                                                         println(shell.terminal, "GitHub Copilot credentials removed. Run /login or /resume to continue.");
                                                     } else {
@@ -9422,11 +10205,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                         case "/models" -> {
                                             List<Model> models2 = new ArrayList<>();
                                             for (Model model1 : allCatalogModels(shell.providers.catalog)) {
-                                                if (!model1.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+                                                if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                     models2.add(model1);
                                                 }
                                             }
-                                            GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+                                            CodingAgentOperations copilot = shellCopilotProvider(shell);
                                             try {
                                                 if (gitHubCopilotHasCredential(copilot.auth)) {
                                                     println(shell.terminal, "Refreshing GitHub Copilot models...");
@@ -9449,7 +10232,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                 int result1 = -1;
                                                 for (int index = 0; index < models1.size(); index++) {
                                                     Model model = models1.get(index);
-                                                    if (model.provider.equals(shell.agent.state.model.provider) && model.id.equals(shell.agent.state.model.id)) {
+                                                    if (model.provider.equals(shell.agent.state.selectedModel.provider) && model.id.equals(shell.agent.state.selectedModel.id)) {
                                                         result1 = index;
                                                         break;
                                                     }
@@ -9551,8 +10334,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 lines.add(frame.theme.muted + empty + frame.theme.reset);
                                                             } else {
                                                                 for (int index = selector1.visibleStart; index < end; index++) {
-                                                                    McpManager.ServerStatus status = mcpStatus(selector1.manager, selector1.filtered.get(index));
-                                                                    McpManager.ToolStatus status1 = selector1.filteredTools.get(index);
+                                                                    McpServerStatus status = mcpStatus(selector1.manager, selector1.filtered.get(index));
+                                                                    McpToolStatus status1 = selector1.filteredTools.get(index);
                                                                     String row = (index == selector1.selectedIndex ? "> " : "  ")
                                                                             + (selector1.view == McpSelector.View.SERVERS
                                                                             ? switch (status.state) {
@@ -9589,7 +10372,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 String result1 = null;
                                                                 if (selector1.view == McpSelector.View.SERVERS) {
                                                                     if (!selector1.filtered.isEmpty()) {
-                                                                        McpManager.ServerStatus selected =
+                                                                        McpServerStatus selected =
                                                                                 mcpStatus(selector1.manager, selector1.filtered.get(selector1.selectedIndex));
                                                                         result1 = selected.message == null ? selected.target : selected.message;
                                                                     }
@@ -9606,7 +10389,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 lines.add(style + truncatePlain("  " + detail, frame.width) + frame.theme.reset);
                                                             }
                                                             if (selector1.view == McpSelector.View.SERVERS && !selector1.filtered.isEmpty()) {
-                                                                McpManager.ServerStatus selected =
+                                                                McpServerStatus selected =
                                                                         mcpStatus(selector1.manager, selector1.filtered.get(selector1.selectedIndex));
                                                                 if (selected.authorizationUrl != null) {
                                                                     String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, frame.width - 2));
@@ -9634,17 +10417,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                         case ENTER -> {
                                                                             if (selector1.view == McpSelector.View.SERVERS) {
                                                                                 if (!selector1.filtered.isEmpty()) {
-                                                                                    McpManager.ServerStatus status;
+                                                                                    McpServerStatus status;
                                                                                     String name = selector1.filtered.get(selector1.selectedIndex);
-                                                                                    McpManager.Runtime runtime2 = mcpRequireRuntime(selector1.manager, name);
-                                                                                    McpManager.State state;
+                                                                                    McpRuntime runtime2 = mcpRequireRuntime(selector1.manager, name);
+                                                                                    McpState state;
                                                                                     synchronized (runtime2.lock) {
                                                                                         state = runtime2.state;
                                                                                     }
-                                                                                    if (state == McpManager.State.CONNECTED
-                                                                                            || state == McpManager.State.CONNECTING
-                                                                                            || state == McpManager.State.AUTHENTICATING) {
-                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector1.manager, name);
+                                                                                    if (state == McpState.CONNECTED
+                                                                                            || state == McpState.CONNECTING
+                                                                                            || state == McpState.AUTHENTICATING) {
+                                                                                        McpRuntime runtime1 = mcpRequireRuntime(selector1.manager, name);
                                                                                         McpClient client;
                                                                                         Thread connector;
                                                                                         synchronized (runtime1.lock) {
@@ -9655,7 +10438,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                             runtime1.client = null;
                                                                                             runtime1.tools = List.of();
                                                                                             runtime1.enabled = false;
-                                                                                            runtime1.state = McpManager.State.DISABLED;
+                                                                                            runtime1.state = McpState.DISABLED;
                                                                                             runtime1.message = null;
                                                                                             runtime1.authorizationUrl = null;
                                                                                         }
@@ -9665,12 +10448,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                             mcpCloseClient(client);
                                                                                         status = mcpSnapshot(runtime1);
                                                                                     } else {
-                                                                                        McpManager.Runtime runtime1 = mcpRequireRuntime(selector1.manager, name);
+                                                                                        McpRuntime runtime1 = mcpRequireRuntime(selector1.manager, name);
                                                                                         mcpStartConnect(selector1.manager, runtime1, true);
                                                                                         status = mcpSnapshot(runtime1);
                                                                                     }
                                                                                     boolean result1;
-                                                                                    McpManager.Runtime runtime = mcpRequireRuntime(selector1.manager, status.name);
+                                                                                    McpRuntime runtime = mcpRequireRuntime(selector1.manager, status.name);
                                                                                     synchronized (runtime.lock) {
                                                                                         result1 = runtime.enabled;
                                                                                     }
@@ -9681,10 +10464,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                 refreshMcpSelectorTools(selector1);
                                                                                 if (!selector1.filteredTools.isEmpty()) {
                                                                                     try {
-                                                                                        McpManager.ToolStatus result1;
-                                                                                        McpManager.Runtime runtime = mcpRequireRuntime(selector1.manager, selector1.toolServer);
+                                                                                        McpToolStatus result1;
+                                                                                        McpRuntime runtime = mcpRequireRuntime(selector1.manager, selector1.toolServer);
                                                                                         synchronized (runtime.lock) {
-                                                                                            if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
+                                                                                            if (runtime.state != McpState.CONNECTED || runtime.client == null) {
                                                                                                 throw new IllegalStateException("MCP server is not connected: " + selector1.toolServer);
                                                                                             }
                                                                                             McpClient.ToolDefinition definition = runtime.tools.stream()
@@ -9699,9 +10482,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                                                 runtime.disabledTools.add(selector1.filteredTools.get(selector1.selectedIndex).name);
                                                                                                 enabled = false;
                                                                                             }
-                                                                                            result1 = new McpManager.ToolStatus(runtime.name, definition.name, definition.description, enabled);
+                                                                                            result1 = new McpToolStatus(runtime.name, definition.name, definition.description, enabled);
                                                                                         }
-                                                                                        McpManager.ToolStatus status = result1;
+                                                                                        McpToolStatus status = result1;
                                                                                         notifyMcpSelectorChange(
                                                                                                 selector1, new McpSelector.Change(status.serverName, status.name, status.enabled));
                                                                                         refreshMcpSelectorTools(selector1);
@@ -9717,7 +10500,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                             if (selector1.view == McpSelector.View.SERVERS) {
                                                                                 if (!selector1.filtered.isEmpty()) {
                                                                                     String server = selector1.filtered.get(selector1.selectedIndex);
-                                                                                    if (mcpStatus(selector1.manager, server).state == McpManager.State.CONNECTED) {
+                                                                                    if (mcpStatus(selector1.manager, server).state == McpState.CONNECTED) {
                                                                                         selector1.view = McpSelector.View.TOOLS;
                                                                                         selector1.toolServer = server;
                                                                                         clearMcpSelectorQuery(selector1);
@@ -9787,7 +10570,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                                 "Thinking level " + shell.agent.state.thinkingLevel.wire)),
                                                         0,
                                                         false);
-                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.model);
+                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.selectedModel);
                                                 List<SelectItem<ThinkingLevel>> items = levels.stream()
                                                         .map(level -> {
                                                             String description = switch (level) {
@@ -9808,7 +10591,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                 if (level != null) {
                                                     shell.agent.state.thinkingLevel = level;
                                                     refreshShellStatus(shell);
-                                                    shell.settings = new SettingsStore.Settings(
+                                                    shell.settings = new Settings(
                                                             shell.settings.defaultProvider, shell.settings.defaultModel, level, shell.settings.theme, shell.settings.hideThinkingBlock);
                                                     try {
                                                         modifySettings(shell.settingsStore, root1 -> root1.put("defaultThinkingLevel", level.wire));
@@ -9837,7 +10620,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                                                 Theme theme1 = namedTheme(input.substring("/theme ".length()).trim());
                                                 setTheme(shell.terminal, theme1);
                                                 refreshShellStatus(shell);
-                                                shell.settings = new SettingsStore.Settings(
+                                                shell.settings = new Settings(
                                                         shell.settings.defaultProvider,
                                                         shell.settings.defaultModel,
                                                         shell.settings.defaultThinkingLevel,
@@ -9870,7 +10653,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             mcpAwaitReady(shell.mcp);
                             syncShellMcpTools(shell);
                             shell.emittedText = false;
-                            shell.streamOutput = InteractiveShell.StreamOutput.NONE;
+                            shell.streamOutput = StreamOutput.NONE;
                             shell.streamedThinkingCharacters = 0;
                             AtomicBoolean interrupted = new AtomicBoolean();
                             List<Message> messages = runInterruptibly(shell.terminal,
@@ -9936,7 +10719,22 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * agent's system prompt. Path-based tools refresh the prompt when they move
      * into a deeper descendant scope.
      */
-    public static void configureBuiltInTools(Agent agent, Path cwd, String baseSystemPrompt) {
+    public static CodingAgentOperations agentInstructions(
+            Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
+        CodingAgentOperations instructions = new CodingAgentOperations();
+        instructions.repositoryRoot = repositoryRoot;
+        instructions.currentDirectory = currentDirectory;
+        instructions.baseSystemPrompt = baseSystemPrompt;
+        return instructions;
+    }
+
+    public static CodingAgentOperations gitIgnore(String executable) {
+        CodingAgentOperations gitIgnore = new CodingAgentOperations();
+        gitIgnore.executable = executable;
+        return gitIgnore;
+    }
+
+    public static void configureBuiltInTools(CodingAgentOperations agent, Path cwd, String baseSystemPrompt) {
         Path directory = instructionDirectory(cwd);
         if (directory == null) {
             throw new IllegalArgumentException("workingDirectory must have a parent directory");
@@ -9948,7 +10746,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 break;
             }
         }
-        AgentInstructions instructions = new AgentInstructions(
+        CodingAgentOperations instructions = agentInstructions(
                 repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
         refreshAgentInstructionsIn(instructions, directory);
         Set<Path> announcedSources = new LinkedHashSet<>();
@@ -9961,7 +10759,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 applyAgentInstructions(agent, instructions, announcedSources);
             }
         });
-        agent.state.tools.addAll(builtInTools(cwd, new GitIgnore("git"), path -> {
+        agent.state.tools.addAll(builtInTools(cwd, gitIgnore("git"), path -> {
             boolean result;
             synchronized (instructions) {
                 Path directory1 = instructionDirectory(path);
@@ -9980,7 +10778,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void applyAgentInstructions(
-            Agent agent, AgentInstructions instructions, Set<Path> announcedSources) {
+            CodingAgentOperations agent, CodingAgentOperations instructions, Set<Path> announcedSources) {
         agent.state.systemPrompt = instructions.systemPrompt;
         List<Path> sources = instructions.sources;
         announcedSources.retainAll(sources);
@@ -9998,7 +10796,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Resolves {@code --provider}/{@code --model} into one bundled catalog model.
      */
-    public static Model resolveCliModel(CoreProviders providers, String providerArg, String modelArg) {
+    public static Model resolveCliModel(CodingAgentOperations providers, String providerArg, String modelArg) {
         String provider = providerArg;
         String model = modelArg;
         if (model != null && model.contains("/")) {
@@ -10099,12 +10897,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         };
     }
 
-    public static InteractiveTerminal.StatusAccent activityAccent(ActivityStatus status) {
+    public static StatusAccent activityAccent(ActivityStatus status) {
         return switch (status.phase) {
-            case READY -> InteractiveTerminal.StatusAccent.READY;
-            case NO_MODEL, RETRYING, STOPPING -> InteractiveTerminal.StatusAccent.WARNING;
-            case RUNNING_TOOL -> InteractiveTerminal.StatusAccent.TOOL;
-            default -> InteractiveTerminal.StatusAccent.ACTIVE;
+            case READY -> StatusAccent.READY;
+            case NO_MODEL, RETRYING, STOPPING -> StatusAccent.WARNING;
+            case RUNNING_TOOL -> StatusAccent.TOOL;
+            default -> StatusAccent.ACTIVE;
         };
     }
 
@@ -10131,7 +10929,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     // ------------------------------------------------------ agent instructions
 
 
-    private static boolean refreshAgentInstructionsIn(AgentInstructions instructions, Path directory) {
+    private static boolean refreshAgentInstructionsIn(CodingAgentOperations instructions, Path directory) {
         List<Path> nextSources = new ArrayList<>();
         List<String> promptParts = new ArrayList<>();
         if (!instructions.baseSystemPrompt.isBlank()) {
@@ -10150,11 +10948,11 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
         for (Path scope : directories) {
             Path instructionFile;
-            Path override = scope.resolve(AgentInstructions.OVERRIDE_FILE);
+            Path override = scope.resolve(AGENTS_OVERRIDE_FILE);
             if (isReadableRegularFile(override)) {
                 instructionFile = override;
             } else {
-                Path standard = scope.resolve(AgentInstructions.AGENTS_FILE);
+                Path standard = scope.resolve(AGENTS_FILE);
                 instructionFile = isReadableRegularFile(standard) ? standard : null;
             }
             if (instructionFile == null) continue;
@@ -10310,12 +11108,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return session.name == null ? session.firstMessage : session.name;
     }
 
-    private static void resumeShellSession(InteractiveShell shell) throws IOException {
+    private static void resumeShellSession(CodingAgentOperations shell) throws IOException {
         if (shell.cli.noSession) {
             println(shell.terminal, "Session persistence is disabled by --no-session.");
             return;
         }
-        SessionStore store = defaultSessionStore();
+        CodingAgentOperations store = defaultSessionStore();
         List<SessionSnapshot> sessions;
         try {
             sessions = shellSessionSnapshots(store, shell.cwd);
@@ -10346,7 +11144,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static List<SessionSnapshot> shellSessionSnapshots(SessionStore store, Path cwd)
+    private static List<SessionSnapshot> shellSessionSnapshots(CodingAgentOperations store, Path cwd)
             throws IOException {
         Set<String> ids = new LinkedHashSet<>();
         for (Path directory : Stream.concat(Stream.of(store.directory), store.legacyDirectories.stream()).toList()) {
@@ -10398,7 +11196,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void resumeSelectedShellSession(
-            InteractiveShell shell, SessionStore store, SessionSnapshot selected) throws IOException {
+            CodingAgentOperations shell, CodingAgentOperations store, SessionSnapshot selected) throws IOException {
         if (!Files.isDirectory(selected.cwd)) {
             println(shell.terminal,
                     "Cannot resume session because its working directory is unavailable: " + selected.cwd);
@@ -10419,12 +11217,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         + "; configure an available model before resuming this session.");
                 return;
             }
-            model = shell.agent.state.model;
+            model = shell.agent.state.selectedModel;
             println(shell.terminal, "Could not restore model " + selected.provider + "/" + selected.model
                     + ". Using " + model + ".");
         }
-        if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-            GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+        if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+            CodingAgentOperations copilot = shellCopilotProvider(shell);
             Model enabled = null;
             try {
                 if (gitHubCopilotHasCredential(copilot.auth)) {
@@ -10436,12 +11234,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             }
             if (enabled != null) model = enabled;
             else if (shell.agent == null
-                    || shell.agent.state.model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
+                    || shell.agent.state.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                 println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id
                         + "; log in or configure another model first.");
                 return;
             } else {
-                Model fallback = shell.agent.state.model;
+                Model fallback = shell.agent.state.selectedModel;
                 println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
                 model = fallback;
             }
@@ -10474,10 +11272,10 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return emittedText ? null : text(response);
     }
 
-    private static void configureShellModel(InteractiveShell shell, Model model, boolean persistModel)
+    private static void configureShellModel(CodingAgentOperations shell, Model model, boolean persistModel)
             throws IOException {
         Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
-        SessionRecorder nextRecorder = null;
+        CodingAgentOperations nextRecorder = null;
         if (!shell.cli.noSession) {
             try {
                 nextRecorder = createSessionRecorder(
@@ -10498,15 +11296,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void configureShellAgent(
-            InteractiveShell shell,
+            CodingAgentOperations shell,
             Model model,
             Path configuredCwd,
-            SessionRecorder nextRecorder,
+            CodingAgentOperations nextRecorder,
             String nextSessionName) {
         Provider provider = requireCoreProvider(shell.providers, model.provider);
-        Agent configured = new Agent(
-                new AgentState(
-                        shell.cli.systemPrompt == null ? "" : shell.cli.systemPrompt, model),
+        CodingAgentOperations configured = agent(
+                agentState(shell.cli.systemPrompt == null ? "" : shell.cli.systemPrompt, model),
                 provider);
         configured.apiKey = shell.cli.apiKey;
         configured.state.thinkingLevel =
@@ -10575,15 +11372,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             if (!shell.hideThinkingBlock) {
                                 finishShellStreamOutput(shell);
                                 print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-                                shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+                                shell.streamOutput = StreamOutput.THINKING;
                                 shell.streamedThinkingCharacters = 0;
                             }
                         }
                         case AssistantMessageEvent.ThinkingDelta delta -> {
                             if (!shell.hideThinkingBlock) {
-                                if (shell.streamOutput != InteractiveShell.StreamOutput.THINKING) {
+                                if (shell.streamOutput != StreamOutput.THINKING) {
                                     print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
-                                    shell.streamOutput = InteractiveShell.StreamOutput.THINKING;
+                                    shell.streamOutput = StreamOutput.THINKING;
                                     shell.streamedThinkingCharacters = 0;
                                 }
                                 print(shell.terminal, theme.muted + delta.delta + theme.reset);
@@ -10592,7 +11389,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         }
                         case AssistantMessageEvent.ThinkingEnd end -> {
                             if (!shell.hideThinkingBlock
-                                    && shell.streamOutput == InteractiveShell.StreamOutput.THINKING) {
+                                    && shell.streamOutput == StreamOutput.THINKING) {
                                 if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
                                     print(shell.terminal, theme.muted + end.content + theme.reset);
                                 }
@@ -10601,12 +11398,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         }
                         case AssistantMessageEvent.TextStart ignored -> {
                             finishShellStreamOutput(shell);
-                            shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+                            shell.streamOutput = StreamOutput.TEXT;
                         }
                         case AssistantMessageEvent.TextDelta delta -> {
-                            if (shell.streamOutput != InteractiveShell.StreamOutput.TEXT) {
+                            if (shell.streamOutput != StreamOutput.TEXT) {
                                 finishShellStreamOutput(shell);
-                                shell.streamOutput = InteractiveShell.StreamOutput.TEXT;
+                                shell.streamOutput = StreamOutput.TEXT;
                             }
                             print(shell.terminal, delta.delta);
                             shell.emittedText = true;
@@ -10669,7 +11466,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Updates cached workspace/model details, then redraws the live activity status.
      */
-    private static void refreshShellStatus(InteractiveShell shell) {
+    private static void refreshShellStatus(CodingAgentOperations shell) {
         String branch = gitBranch(shell.cwd);
         shell.statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), shell.cwd)
                 + (branch == null ? "" : " [" + branch + "]")
@@ -10677,13 +11474,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         shell.statusModel = shell.agent == null
                 ? ""
                 : modelStatus(
-                shell.agent.state.model,
+                shell.agent.state.selectedModel,
                 shell.agent.state.thinkingLevel,
                 contextTokens(shell.agent.state.messages));
         renderShellStatus(shell);
     }
 
-    private static void renderShellStatus(InteractiveShell shell) {
+    private static void renderShellStatus(CodingAgentOperations shell) {
         ActivityStatus current = shell.activity;
         setStatus(
                 shell.terminal,
@@ -10693,7 +11490,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 shell.statusModel);
     }
 
-    private static void setShellActivity(InteractiveShell shell, ActivityStatus next) {
+    private static void setShellActivity(CodingAgentOperations shell, ActivityStatus next) {
         boolean changed;
         synchronized (shell.activityLock) {
             ActivityStatus current = shell.activity;
@@ -10796,23 +11593,23 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         return content.length() > 7 ? content.substring(0, 7) : content;
     }
 
-    private static void syncShellMcpTools(InteractiveShell shell) {
+    private static void syncShellMcpTools(CodingAgentOperations shell) {
         if (shell.agent == null || shell.agent.state.isStreaming) return;
         shell.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
         shell.agent.state.tools.addAll(mcpTools(shell.mcp));
     }
 
-    private static GitHubCopilotProvider shellCopilotProvider(InteractiveShell shell) {
-        return (GitHubCopilotProvider)
-                requireCoreProvider(shell.providers, GitHubCopilotAuth.PROVIDER_ID);
+    private static CodingAgentOperations shellCopilotProvider(CodingAgentOperations shell) {
+        return (CodingAgentOperations)
+                requireCoreProvider(shell.providers, GITHUB_COPILOT_PROVIDER_ID);
     }
 
-    private static ChatGptProvider shellChatGptProvider(InteractiveShell shell) {
-        return (ChatGptProvider) requireCoreProvider(shell.providers, ChatGptAuth.PROVIDER_ID);
+    private static CodingAgentOperations shellChatGptProvider(CodingAgentOperations shell) {
+        return (CodingAgentOperations) requireCoreProvider(shell.providers, CHATGPT_PROVIDER_ID);
     }
 
-    private static void restoreShellModel(InteractiveShell shell) throws IOException {
-        SettingsStore.Settings settings = shell.settings;
+    private static void restoreShellModel(CodingAgentOperations shell) throws IOException {
+        Settings settings = shell.settings;
         Model model = null;
         if (settings.defaultProvider != null && settings.defaultModel != null) {
             try {
@@ -10825,8 +11622,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             if (model == null) {
                 println(shell.terminal, "Saved model " + settings.defaultProvider + "/" + settings.defaultModel
                         + " is unavailable; selecting a fallback.");
-            } else if (model.provider.equals(GitHubCopilotAuth.PROVIDER_ID)) {
-                GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+            } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                CodingAgentOperations copilot = shellCopilotProvider(shell);
                 try {
                     model = gitHubCopilotHasCredential(copilot.auth)
                             ? findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id)
@@ -10840,7 +11637,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                             "Could not restore the saved GitHub Copilot model: " + error.getMessage());
                     model = null;
                 }
-            } else if (model.provider.equals(ChatGptAuth.PROVIDER_ID)) {
+            } else if (model.provider.equals(CHATGPT_PROVIDER_ID)) {
                 try {
                     if (!chatGptHasCredential(shellChatGptProvider(shell).auth)) model = null;
                 } catch (IOException error) {
@@ -10854,7 +11651,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             return;
         }
 
-        ChatGptProvider chatGpt = shellChatGptProvider(shell);
+        CodingAgentOperations chatGpt = shellChatGptProvider(shell);
         try {
             if (chatGptHasCredential(chatGpt.auth) && !chatGpt.models.isEmpty()) {
                 configureShellModel(shell, preferredChatGptModel(chatGpt.models), true);
@@ -10863,7 +11660,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         } catch (IOException error) {
             println(shell.terminal, "ChatGPT login needs attention: " + error.getMessage());
         }
-        GitHubCopilotProvider copilot = shellCopilotProvider(shell);
+        CodingAgentOperations copilot = shellCopilotProvider(shell);
         try {
             if (!gitHubCopilotHasCredential(copilot.auth)) return;
             Model fallback = preferredCopilotModel(gitHubCopilotAvailableModels(copilot));
@@ -10878,7 +11675,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static Model shellSavedModelIn(InteractiveShell shell, List<Model> models) {
+    private static Model shellSavedModelIn(CodingAgentOperations shell, List<Model> models) {
         if (shell.settings.defaultProvider == null || shell.settings.defaultModel == null) return null;
         return findModelIn(models, shell.settings.defaultProvider, shell.settings.defaultModel);
     }
@@ -10921,7 +11718,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 model, model.id, description, model.provider + " " + model.id + " " + model.name);
     }
 
-    private static void showShellTurnDetails(InteractiveShell shell, boolean lineEditorActive) {
+    private static void showShellTurnDetails(CodingAgentOperations shell, boolean lineEditorActive) {
         if (shell.agent == null) {
             showShellShortcutStatus(shell, "No model is configured.", lineEditorActive);
             return;
@@ -10949,9 +11746,9 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void setShellHideThinkingBlock(
-            InteractiveShell shell, boolean hidden, boolean lineEditorActive) {
+            CodingAgentOperations shell, boolean hidden, boolean lineEditorActive) {
         shell.hideThinkingBlock = hidden;
-        shell.settings = new SettingsStore.Settings(
+        shell.settings = new Settings(
                 shell.settings.defaultProvider,
                 shell.settings.defaultModel,
                 shell.settings.defaultThinkingLevel,
@@ -10967,15 +11764,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     }
 
     private static void showShellShortcutStatus(
-            InteractiveShell shell, String status, boolean lineEditorActive) {
+            CodingAgentOperations shell, String status, boolean lineEditorActive) {
         if (lineEditorActive) printAbove(shell.terminal, status);
         else println(shell.terminal, status);
     }
 
-    private static void finishShellStreamOutput(InteractiveShell shell) {
-        if (shell.streamOutput != InteractiveShell.StreamOutput.NONE) {
+    private static void finishShellStreamOutput(CodingAgentOperations shell) {
+        if (shell.streamOutput != StreamOutput.NONE) {
             println(shell.terminal, "");
-            shell.streamOutput = InteractiveShell.StreamOutput.NONE;
+            shell.streamOutput = StreamOutput.NONE;
         }
     }
 
@@ -11117,9 +11914,8 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
         Provider provider = requireCoreProvider(server.providers, model.provider);
-        server.agent = new Agent(
-                new AgentState(
-                        server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model),
+        server.agent = agent(
+                agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model),
                 provider);
         server.agent.apiKey = server.arguments.apiKey;
         configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
@@ -11216,7 +12012,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     private static void filterMcpSelector(McpSelector selector) {
         if (selector.view == McpSelector.View.SERVERS) {
             selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
-                McpManager.ServerStatus status = mcpStatus(selector.manager, name);
+                McpServerStatus status = mcpStatus(selector.manager, name);
                 return name + " " + status.state + " " + status.target;
             });
         } else {
@@ -11230,14 +12026,14 @@ public final class CodingAgentOperations extends JniTerminalProvider {
             selector.filteredTools = List.of();
             return;
         }
-        List<McpManager.ToolStatus> tools;
-        McpManager.Runtime runtime = mcpRequireRuntime(selector.manager, selector.toolServer);
+        List<McpToolStatus> tools;
+        McpRuntime runtime = mcpRequireRuntime(selector.manager, selector.toolServer);
         synchronized (runtime.lock) {
-            if (runtime.state != McpManager.State.CONNECTED || runtime.client == null) {
+            if (runtime.state != McpState.CONNECTED || runtime.client == null) {
                 tools = List.of();
             } else {
                 tools = runtime.tools.stream()
-                        .map(tool1 -> new McpManager.ToolStatus(
+                        .map(tool1 -> new McpToolStatus(
                                 runtime.name, tool1.name, tool1.description, !runtime.disabledTools.contains(tool1.name)))
                         .toList();
             }
@@ -11570,22 +12366,37 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     // --------------------------------------------------------- session recorder
 
-    public static SessionRecorder createSessionRecorder(
-            SessionStore store, Path cwd, String provider, String model) throws IOException {
+    public static CodingAgentOperations sessionRecorder(
+            CodingAgentOperations store, String sessionId) {
+        CodingAgentOperations recorder = new CodingAgentOperations();
+        recorder.sessionStore = store;
+        recorder.sessionId = sessionId;
+        return recorder;
+    }
+
+    public static CodingAgentOperations settingsStore(Path settingsPath, Path lockPath) {
+        CodingAgentOperations store = new CodingAgentOperations();
+        store.settingsPath = settingsPath;
+        store.lockPath = lockPath;
+        return store;
+    }
+
+    public static CodingAgentOperations createSessionRecorder(
+            CodingAgentOperations store, Path cwd, String provider, String model) throws IOException {
         return createSessionRecorder(store, cwd, provider, model, null);
     }
 
     /**
      * Creates a session with an optional user-visible name.
      */
-    public static SessionRecorder createSessionRecorder(
-            SessionStore store, Path cwd, String provider, String model, String sessionName) throws IOException {
+    public static CodingAgentOperations createSessionRecorder(
+            CodingAgentOperations store, Path cwd, String provider, String model, String sessionName) throws IOException {
         Files.createDirectories(store.directory);
-        setPosixPermissions(store.directory, SessionStore.DIRECTORY_PERMISSIONS);
+        setPosixPermissions(store.directory, DIRECTORY_PERMISSIONS);
         String id1 = uuidv7();
         Path file = store.directory.resolve(id1 + ".jsonl");
         Files.createFile(file);
-        setPosixPermissions(file, SessionStore.FILE_PERMISSIONS);
+        setPosixPermissions(file, FILE_PERMISSIONS);
         ObjectNode start = jsonObject();
         start.put("cwd", cwd.toAbsolutePath().normalize().toString());
         start.put("provider", provider);
@@ -11593,21 +12404,21 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         String normalizedName = sessionName == null ? null : sessionName.strip();
         if (normalizedName != null && !normalizedName.isEmpty()) start.put("name", normalizedName);
         appendSessionEntry(store, id1, "session_start", start);
-        return new SessionRecorder(store, id1);
+        return sessionRecorder(store, id1);
     }
 
     /**
      * Creates a named child session containing a copy of the supplied conversation.
      */
-    public static SessionRecorder forkSessionRecorder(
-            SessionStore store,
+    public static CodingAgentOperations forkSessionRecorder(
+            CodingAgentOperations store,
             Path cwd,
             String provider,
             String model,
             String sessionName,
             List<Message> messages)
             throws IOException {
-        SessionRecorder fork = createSessionRecorder(store, cwd, provider, model, sessionName);
+        CodingAgentOperations fork = createSessionRecorder(store, cwd, provider, model, sessionName);
         appendSessionMessages(fork, messages);
         return fork;
     }
@@ -11615,15 +12426,15 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Opens an existing session so future messages continue in the same JSONL file.
      */
-    public static SessionRecorder resumeSessionRecorder(SessionStore store, String sessionId) throws IOException {
+    public static CodingAgentOperations resumeSessionRecorder(CodingAgentOperations store, String sessionId) throws IOException {
         sessionSnapshot(store, sessionId);
-        return new SessionRecorder(store, sessionId);
+        return sessionRecorder(store, sessionId);
     }
 
     /**
      * Appends finished agent messages in chronological order.
      */
-    public static void appendSessionMessages(SessionRecorder recorder, List<Message> messages) throws IOException {
+    public static void appendSessionMessages(CodingAgentOperations recorder, List<Message> messages) throws IOException {
         for (Message message : messages) {
             ObjectNode node = jsonObject();
             node.put("role", role(message));
@@ -11684,7 +12495,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                     encodeSessionUserContent(content, result.content);
                 }
             }
-            appendSessionEntry(recorder.store, recorder.sessionId, "message", node);
+            appendSessionEntry(recorder.sessionStore, recorder.sessionId, "message", node);
         }
     }
 
@@ -11693,7 +12504,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * resume, the latest boundary rebuilds the active model context from that
      * checkpoint and later messages only.
      */
-    public static void appendSessionCompaction(SessionRecorder recorder, CompactionResult result) throws IOException {
+    public static void appendSessionCompaction(CodingAgentOperations recorder, CompactionResult result) throws IOException {
         Objects.requireNonNull(result, "result");
         if (result.summary == null || result.summary.isBlank()) {
             throw new IllegalArgumentException("Compaction summary must not be blank");
@@ -11702,7 +12513,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         checkpoint.put("summary", result.summary);
         checkpoint.put("tokensBefore", result.tokensBefore);
         checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
-        appendSessionEntry(recorder.store, recorder.sessionId, "compaction", checkpoint);
+        appendSessionEntry(recorder.sessionStore, recorder.sessionId, "compaction", checkpoint);
     }
 
     // ------------------------------------------------------------ session store
@@ -11710,17 +12521,18 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Resolves the session directory, dropping legacy directories that duplicate it.
      */
-    public static SessionStore sessionStore(Path directory, List<Path> legacyDirectories) {
+    public static CodingAgentOperations sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
-        return new SessionStore(
-                resolved,
-                legacyDirectories.stream()
-                        .map(path -> path.toAbsolutePath().normalize())
-                        .filter(path -> !path.equals(resolved))
-                        .toList());
+        CodingAgentOperations store = new CodingAgentOperations();
+        store.directory = resolved;
+        store.legacyDirectories = legacyDirectories.stream()
+                .map(path -> path.toAbsolutePath().normalize())
+                .filter(path -> !path.equals(resolved))
+                .toList();
+        return store;
     }
 
-    public static SessionStore defaultSessionStore() {
+    public static CodingAgentOperations defaultSessionStore() {
         Path home = Path.of(System.getProperty("user.home"));
         return sessionStore(
                 home.resolve(".codingagent").resolve("sessions"),
@@ -11730,7 +12542,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Appends a typed payload to an existing session.
      */
-    public static void appendSessionEntry(SessionStore store, String sessionId, String type, JsonNode payload)
+    public static void appendSessionEntry(CodingAgentOperations store, String sessionId, String type, JsonNode payload)
             throws IOException {
         validateSessionId(sessionId);
         if (type == null || type.isBlank()) {
@@ -11757,13 +12569,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Reads and validates all complete entries in file order.
      */
-    public static List<SessionStore.Entry> readSession(SessionStore store, String sessionId) throws IOException {
+    public static List<SessionEntry> readSession(CodingAgentOperations store, String sessionId) throws IOException {
         validateSessionId(sessionId);
         Path file = existingSessionPath(store, sessionId);
         if (file == null) {
             throw new IOException("Unknown session: " + sessionId);
         }
-        List<SessionStore.Entry> entries = new ArrayList<>();
+        List<SessionEntry> entries = new ArrayList<>();
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             int index = 0;
             String line;
@@ -11784,7 +12596,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         || !node.has("payload")) {
                     throw new IOException("Invalid JSONL entry at " + file + ":" + index);
                 }
-                entries.add(new SessionStore.Entry(
+                entries.add(new SessionEntry(
                         node.path("timestamp").asLong(), node.path("type").asText(), node.path("payload")));
             }
         }
@@ -11795,12 +12607,12 @@ public final class CodingAgentOperations extends JniTerminalProvider {
     /**
      * Loads metadata, the complete transcript, and compaction-aware continuation context.
      */
-    public static SessionSnapshot sessionSnapshot(SessionStore store, String sessionId) throws IOException {
-        List<SessionStore.Entry> entries = readSession(store, sessionId);
+    public static SessionSnapshot sessionSnapshot(CodingAgentOperations store, String sessionId) throws IOException {
+        List<SessionEntry> entries = readSession(store, sessionId);
         if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
             throw new IOException("Session has no session_start entry: " + sessionId);
         }
-        SessionStore.Entry start = entries.getFirst();
+        SessionEntry start = entries.getFirst();
         JsonNode payload = start.payload;
         String cwdText = requiredSessionPayloadText(payload, "cwd", sessionId);
         String provider = requiredSessionPayloadText(payload, "provider", sessionId);
@@ -11811,7 +12623,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         String firstMessage = "";
         StringBuilder allMessages = new StringBuilder();
         long modified = start.timestamp;
-        for (SessionStore.Entry entry : entries) {
+        for (SessionEntry entry : entries) {
             modified = Math.max(modified, entry.timestamp);
             if (entry.type.equals("compaction")) {
                 messages.clear();
@@ -11969,7 +12781,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                 List.copyOf(transcriptMessages));
     }
 
-    private static Path existingSessionPath(SessionStore store, String sessionId) {
+    private static Path existingSessionPath(CodingAgentOperations store, String sessionId) {
         Path current = store.directory.resolve(sessionId + ".jsonl");
         if (Files.isRegularFile(current)) return current;
         for (Path legacyDirectory : store.legacyDirectories) {
@@ -11997,13 +12809,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
 
     // ----------------------------------------------------------- settings store
 
-    public static SettingsStore.Settings withSettingsDefaultModel(
-            SettingsStore.Settings settings, String provider, String model) {
-        return new SettingsStore.Settings(
+    public static Settings withSettingsDefaultModel(
+            Settings settings, String provider, String model) {
+        return new Settings(
                 provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
     }
 
-    public static void setSettingsDefaultModelAndProvider(SettingsStore store, String provider, String model)
+    public static void setSettingsDefaultModelAndProvider(CodingAgentOperations store, String provider, String model)
             throws IOException {
         requireSettingsValue(provider, "provider");
         requireSettingsValue(model, "model");
@@ -12018,17 +12830,17 @@ public final class CodingAgentOperations extends JniTerminalProvider {
      * replaces the file atomically. The update reports invalid stored JSON with
      * UncheckedIOException, which is unwrapped into the declared IOException.
      */
-    private static void modifySettings(SettingsStore store, Consumer<ObjectNode> operation) throws IOException {
+    private static void modifySettings(CodingAgentOperations store, Consumer<ObjectNode> operation) throws IOException {
         Path parent = store.settingsPath.getParent();
         if (parent == null) {
             throw new IOException("Settings path has no parent directory: " + store.settingsPath);
         }
         Files.createDirectories(parent);
-        setPosixPermissions(parent, SettingsStore.DIRECTORY_PERMISSIONS);
+        setPosixPermissions(parent, DIRECTORY_PERMISSIONS);
         try (FileChannel channel =
                      FileChannel.open(store.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = channel.lock()) {
-            setPosixPermissions(store.lockPath, SettingsStore.FILE_PERMISSIONS);
+            setPosixPermissions(store.lockPath, FILE_PERMISSIONS);
             ObjectNode root = readSettingsObject(store);
             operation.accept(root);
             Path temp = Files.createTempFile(store.settingsPath.getParent(), "settings-", ".json");
@@ -12039,13 +12851,13 @@ public final class CodingAgentOperations extends JniTerminalProvider {
                         StandardCharsets.UTF_8,
                         StandardOpenOption.WRITE,
                         StandardOpenOption.TRUNCATE_EXISTING);
-                setPosixPermissions(temp, SettingsStore.FILE_PERMISSIONS);
+                setPosixPermissions(temp, FILE_PERMISSIONS);
                 try {
                     Files.move(temp, store.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException error) {
                     Files.move(temp, store.settingsPath, StandardCopyOption.REPLACE_EXISTING);
                 }
-                setPosixPermissions(store.settingsPath, SettingsStore.FILE_PERMISSIONS);
+                setPosixPermissions(store.settingsPath, FILE_PERMISSIONS);
             } finally {
                 Files.deleteIfExists(temp);
             }
@@ -12054,7 +12866,7 @@ public final class CodingAgentOperations extends JniTerminalProvider {
         }
     }
 
-    private static ObjectNode readSettingsObject(SettingsStore store) throws IOException {
+    private static ObjectNode readSettingsObject(CodingAgentOperations store) throws IOException {
         if (!Files.exists(store.settingsPath)) {
             return jsonObject();
         }

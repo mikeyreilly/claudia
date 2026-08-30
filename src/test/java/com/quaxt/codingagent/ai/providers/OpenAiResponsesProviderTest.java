@@ -18,7 +18,6 @@ import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.StreamOptions;
 import com.quaxt.codingagent.ai.auth.Credential;
-import com.quaxt.codingagent.ai.auth.FileCredentialStore;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Context;
@@ -66,7 +65,7 @@ class OpenAiResponsesProviderTest {
 					""");
 		});
 		try {
-			FileCredentialStore credentials =
+			CodingAgentOperations credentials =
 					CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					credentials,

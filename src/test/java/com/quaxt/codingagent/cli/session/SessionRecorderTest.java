@@ -26,8 +26,8 @@ class SessionRecorderTest {
 
 	@Test
 	void recordsACompleteAgentTranscript() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
+		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
 		assistant.content.add(new TextContent("I will use a tool.", null));
 		assistant.stopReason = StopReason.TOOL_USE;
@@ -53,12 +53,12 @@ class SessionRecorderTest {
 
 	@Test
 	void forksTheTranscriptIntoANamedSession() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		SessionRecorder source = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
+		CodingAgentOperations source = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("first prompt"), CodingAgentOperations.userMessage("second prompt"));
 		CodingAgentOperations.appendSessionMessages(source, messages);
 
-		SessionRecorder fork = CodingAgentOperations.forkSessionRecorder(
+		CodingAgentOperations fork = CodingAgentOperations.forkSessionRecorder(
 				store, tempDir, "faux", "faux-1", "  investigation fork  ", messages);
 		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, fork.sessionId);
 
@@ -71,8 +71,8 @@ class SessionRecorderTest {
 
 	@Test
 	void restoresCompactedSessionsUsingOnlyTheCheckpointAndLaterMessagesAsContext() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
+		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(
 				CodingAgentOperations.userMessage("PRE-COMPACTION-SENTINEL"),
 				CodingAgentOperations.userMessage("another message to compact")));
@@ -100,8 +100,8 @@ class SessionRecorderTest {
 
 	@Test
 	void usesTheLatestCompactionBoundaryWhenASessionIsCompactedAgain() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
+		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("first history")));
 		CodingAgentOperations.appendSessionCompaction(recorder, new CompactionResult("first checkpoint", 100, 10));
 		CodingAgentOperations.appendSessionMessages(recorder, List.of(CodingAgentOperations.userMessage("between compactions")));
@@ -117,8 +117,8 @@ class SessionRecorderTest {
 
 	@Test
 	void restoresTypedMessagesAndContinuesTheSameSession() throws Exception {
-		SessionStore store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
-		SessionRecorder recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
+		CodingAgentOperations recorder = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
 		AssistantMessage assistant = new AssistantMessage("faux-api", "faux", "faux-1");
 		assistant.content.add(new ThinkingContent("reasoning", "opaque", false));
 		assistant.content.add(new TextContent("answer", "text-signature"));

@@ -14,7 +14,7 @@ import com.quaxt.codingagent.ai.types.Model;
 class ModelCatalogTest {
 	@Test
 	void loadsAllBundledCoreProviderCatalogs() {
-		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
+		CodingAgentOperations catalog = CodingAgentOperations.loadBundledModelCatalog();
 
 		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "anthropic").size() > 0);
 		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "openai").size() > 0);
@@ -29,7 +29,7 @@ class ModelCatalogTest {
 
 	@Test
 	void loadsGitHubCopilotProtocolModels() {
-		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
+		CodingAgentOperations catalog = CodingAgentOperations.loadBundledModelCatalog();
 
 		assertTrue(CodingAgentOperations.catalogModelsForProvider(catalog, "github-copilot").size() > 25);
 		assertEquals("openai-responses", CodingAgentOperations.requireCatalogModel(catalog, "github-copilot", "gpt-5.6-terra").api);
@@ -48,7 +48,7 @@ class ModelCatalogTest {
 
 	@Test
 	void preservesGeneratedCatalogProperties() {
-		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
+		CodingAgentOperations catalog = CodingAgentOperations.loadBundledModelCatalog();
 
 		Model model = CodingAgentOperations.requireCatalogModel(catalog, "anthropic", "claude-haiku-4-5");
 		assertEquals("anthropic-messages", model.api);
@@ -63,7 +63,7 @@ class ModelCatalogTest {
 
 	@Test
 	void returnsNullOrClearErrorForUnknownModel() {
-		ModelCatalog catalog = CodingAgentOperations.loadBundledModelCatalog();
+		CodingAgentOperations catalog = CodingAgentOperations.loadBundledModelCatalog();
 
 		assertEquals(null, CodingAgentOperations.findCatalogModel(catalog, "openai", "does-not-exist"));
 		IllegalArgumentException exception =
