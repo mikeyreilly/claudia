@@ -182,7 +182,7 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
  * instance methods on the enum singleton; stateless utilities and factories
  * remain static.
  */
-public enum CodingAgentOperations  implements Provider, CredentialStore {
+public enum CodingAgentOperations implements Provider, CredentialStore {
     INSTANCE;
     public static final String APP_NAME = "codingagent";
     public static final String VERSION = "0.1.0-java";
@@ -1579,7 +1579,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private Map<String, Credential> readAllCredentials() throws IOException {
-        Path source = Files.exists(this.authPath) ? this.authPath : this.fallbackAuthPath;
+        Path source = Files.exists(authPath) ? authPath : fallbackAuthPath;
         if (source == null || !Files.exists(source)) {
             return new LinkedHashMap<>();
         }
@@ -1694,9 +1694,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Starts the Codex device flow. Display the URI and code before completing it.
      */
     public ChatGptDeviceCode chatGptBeginLogin() throws IOException {
-        ObjectNode request = jsonObject().put("client_id", this.clientId);
+        ObjectNode request = jsonObject().put("client_id", clientId);
         JsonNode response = authPost(
-                this.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
+                authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
                 Map.of("Accept", "application/json"),
                 Json.MAPPER.writeValueAsBytes(request),
                 false);
@@ -1715,7 +1715,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return new ChatGptDeviceCode(
                 deviceAuthId,
                 userCode,
-                this.authBaseUrl.resolve("/codex/device"),
+                authBaseUrl.resolve("/codex/device"),
                 interval,
                 System.currentTimeMillis() + CHATGPT_DEVICE_CODE_LIFETIME_MS);
     }
@@ -1732,7 +1732,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         while (System.currentTimeMillis() < device.expiresAtMs) {
             try {
                 authorization = authPost(
-                        this.authBaseUrl.resolve("/api/accounts/deviceauth/token"),
+                        authBaseUrl.resolve("/api/accounts/deviceauth/token"),
                         Map.of("Accept", "application/json"),
                         Json.MAPPER.writeValueAsBytes(request),
                         false);
@@ -1751,15 +1751,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         form.put("grant_type", "authorization_code");
         form.put("code", requiredAuthText(authorization, "authorization_code", "OpenAI"));
         form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
-        form.put("client_id", this.clientId);
+        form.put("client_id", clientId);
         form.put("code_verifier", requiredAuthText(authorization, "code_verifier", "OpenAI"));
         Credential.OAuthCredential credential =
                 chatGptCredentialFromTokenResponse(authPost(
-                        this.authBaseUrl.resolve("/oauth/token"),
+                        authBaseUrl.resolve("/oauth/token"),
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), null);
-        modifyCredential(this.credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
+        modifyCredential(credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
         return credential;
     }
 
@@ -1767,7 +1767,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
      */
     public ChatGptToken chatGptResolveToken() throws IOException {
-        Credential credential = readCredential(this.credentials, CHATGPT_PROVIDER_ID)
+        Credential credential = readCredential(credentials, CHATGPT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
@@ -1778,23 +1778,23 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         Map<String, String> form = new LinkedHashMap<>();
         form.put("grant_type", "refresh_token");
         form.put("refresh_token", oauth.refresh);
-        form.put("client_id", this.clientId);
+        form.put("client_id", clientId);
         Credential.OAuthCredential refreshed =
                 chatGptCredentialFromTokenResponse(authPost(
-                        this.authBaseUrl.resolve("/oauth/token"),
+                        authBaseUrl.resolve("/oauth/token"),
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), oauth);
-        modifyCredential(this.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
+        modifyCredential(credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
         return chatGptToken(refreshed);
     }
 
     public boolean chatGptHasCredential() throws IOException {
-        return hasRefreshCredential(this.credentials, CHATGPT_PROVIDER_ID);
+        return hasRefreshCredential(credentials, CHATGPT_PROVIDER_ID);
     }
 
     public void chatGptLogout() throws IOException {
-        deleteCredential(this.credentials, CHATGPT_PROVIDER_ID);
+        deleteCredential(credentials, CHATGPT_PROVIDER_ID);
     }
 
     private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
@@ -1901,7 +1901,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public GitHubCopilotDeviceCode gitHubCopilotBeginLogin() throws IOException {
         JsonNode response = authPost(
-                this.githubBaseUrl.resolve("/login/device/code"),
+                githubBaseUrl.resolve("/login/device/code"),
                 Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                 mcpFormEncode(Map.of("client_id", GITHUB_COPILOT_CLIENT_ID, "scope", "read:user"))
                         .getBytes(StandardCharsets.UTF_8),
@@ -1927,7 +1927,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         int intervalSeconds = device.intervalSeconds;
         while (System.currentTimeMillis() < device.expiresAtMs) {
             JsonNode response = authPost(
-                    this.githubBaseUrl.resolve("/login/oauth/access_token"),
+                    githubBaseUrl.resolve("/login/oauth/access_token"),
                     Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                     mcpFormEncode(Map.of(
                             "client_id", GITHUB_COPILOT_CLIENT_ID,
@@ -1963,7 +1963,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             // The Copilot token is valid even if its optional model catalog is transiently unavailable.
         }
         Credential.OAuthCredential saved = credential;
-        modifyCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
+        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
         return credential;
     }
 
@@ -1971,7 +1971,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary.
      */
     public CopilotToken gitHubCopilotResolveToken() throws IOException {
-        Credential credential = readCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID)
+        Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
@@ -1986,7 +1986,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             // Retain the last known entitlement list if model discovery cannot be refreshed.
         }
         Credential.OAuthCredential saved = refreshed;
-        modifyCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
+        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
         return copilotToken(refreshed);
     }
 
@@ -1994,11 +1994,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Reports whether a saved GitHub OAuth credential can be refreshed.
      */
     public boolean gitHubCopilotHasCredential() throws IOException {
-        return hasRefreshCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID);
+        return hasRefreshCredential(credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
     public void gitHubCopilotLogout() throws IOException {
-        deleteCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID);
+        deleteCredential(credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
     /**
@@ -2034,7 +2034,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public CopilotToken gitHubCopilotRefreshAvailableModels()
             throws IOException {
         CopilotToken current = gitHubCopilotResolveToken();
-        Credential credential = readCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID)
+        Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
@@ -2045,7 +2045,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 oauth.expires,
                 List.copyOf(fetchCopilotAvailableModelIds(current.accessToken)),
                 Map.of());
-        modifyCredential(this.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> refreshed);
+        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> refreshed);
         return copilotToken(refreshed);
     }
 
@@ -2055,7 +2055,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         JsonNode response;
         HttpTransport.Response http = httpGet(
-                this.copilotTokenUrl.toString(), copilotHeaders("token " + githubAccessToken), null, null);
+                copilotTokenUrl.toString(), copilotHeaders("token " + githubAccessToken), null, null);
         try {
             response = Json.MAPPER.readTree(http.body);
         } finally {
@@ -2128,11 +2128,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private URI copilotBaseUrlFromToken(String token) {
         Matcher match = GITHUB_COPILOT_PROXY_ENDPOINT.matcher(token);
         if (!match.find()) {
-            return this.defaultCopilotBaseUrl;
+            return defaultCopilotBaseUrl;
         }
         String host = match.group(1);
         if (!host.matches("[A-Za-z0-9.-]+")) {
-            return this.defaultCopilotBaseUrl;
+            return defaultCopilotBaseUrl;
         }
         return URI.create("https://" + host.replaceFirst("^proxy\\.", "api."));
     }
@@ -2357,8 +2357,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         for (Map.Entry<String, List<Model>> entry : providers.entrySet()) {
             immutableByProvider.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
-        this.byProviderAndId = Map.copyOf(models);
-        this.byProvider = Map.copyOf(immutableByProvider);
+        byProviderAndId = Map.copyOf(models);
+        byProvider = Map.copyOf(immutableByProvider);
     }
 
     /**
@@ -2366,7 +2366,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * {@link #requireCatalogModel} when absence is a user-facing error.
      */
     public Model findCatalogModel(String provider, String id) {
-        return this.byProviderAndId.get(modelCatalogKey(provider, id));
+        return byProviderAndId.get(modelCatalogKey(provider, id));
     }
 
     /**
@@ -2384,14 +2384,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Returns every bundled model from a provider, preserving source-file order.
      */
     public List<Model> catalogModelsForProvider(String provider) {
-        return this.byProvider.getOrDefault(provider, List.of());
+        return byProvider.getOrDefault(provider, List.of());
     }
 
     /**
      * Returns every bundled model, preserving resource and source-file order.
      */
     public List<Model> allCatalogModels() {
-        return List.copyOf(this.byProviderAndId.values());
+        return List.copyOf(byProviderAndId.values());
     }
 
     private static String requiredCatalogText(JsonNode node, String field) {
@@ -2409,7 +2409,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     // -------------------------------------------------------- core providers
 
     public void coreProviders(Map<String, Provider> providers) {
-        this.coreProviders = providers;
+        coreProviders = providers;
     }
 
     public CodingAgentOperations chatGptProvider(List<Model> models, OpenAiResponsesProvider responses) {
@@ -2420,12 +2420,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public void googleProvider(List<Model> models) {
-        this.providerKind = ProviderKind.GOOGLE;
+        providerKind = ProviderKind.GOOGLE;
         this.models = models;
     }
 
     public Provider requireCoreProvider(String id) {
-        Provider provider = this.coreProviders.get(id);
+        Provider provider = coreProviders.get(id);
         if (provider == null) {
             throw new IllegalArgumentException("Unknown core provider: " + id);
         }
@@ -2981,7 +2981,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
-        this.providerKind = ProviderKind.OPENAI_COMPATIBLE;
+        providerKind = ProviderKind.OPENAI_COMPATIBLE;
         this.id = requireNonBlank(id, "id");
         this.name = requireNonBlank(name, "name");
         this.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
@@ -3743,16 +3743,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public CopilotModelAccess gitHubCopilotEnableAndRefreshModels() throws IOException {
         int policiesEnabled =
-                gitHubCopilotEnableModels(this.models.stream().map(model -> model.id).toList());
+                gitHubCopilotEnableModels(models.stream().map(model -> model.id).toList());
         List<Model> available = filterEnabledCopilotModels(gitHubCopilotRefreshAvailableModels().availableModelIds);
         return new CopilotModelAccess(policiesEnabled, List.copyOf(available));
     }
 
     private List<Model> filterEnabledCopilotModels(List<String> enabled) {
         if (enabled == null) {
-            return this.models;
+            return models;
         }
-        return this.models.stream().filter(model -> enabled.contains(model.id)).toList();
+        return models.stream().filter(model -> enabled.contains(model.id)).toList();
     }
 
     private static List<String> fauxChunks(String value) {
@@ -4165,20 +4165,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /** Creates the folded mutable state for one agent. */
     public void agentState(String systemPrompt, Model model) {
         this.systemPrompt = systemPrompt;
-        this.selectedModel = model;
+        selectedModel = model;
     }
 
     /** Configures the singleton as the active agent. */
     public void agent(Provider provider) {
-        this.agentProvider = provider;
+        agentProvider = provider;
     }
 
     /**
      * Registers an agent event listener; closing the result unsubscribes it.
      */
     public AutoCloseable subscribe(Consumer<AgentEvent> listener) {
-        this.listeners.add(listener);
-        return () -> this.listeners.remove(listener);
+        listeners.add(listener);
+        return () -> listeners.remove(listener);
     }
 
     /**
@@ -4212,7 +4212,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private static String compactionPrompt(List<Message> messages, String instructions) {
-        return "<conversation>\n" + serializeMessages(messages) + "\n</conversation>\n\n"
+        StringBuilder serialized = new StringBuilder();
+        for (Message message : messages) {
+            if (message instanceof UserMessage user) serialized.append("[User] ").append(text(user));
+            else if (message instanceof AssistantMessage assistant) {
+                String thinking = thinking(assistant);
+                if (!thinking.isBlank()) serialized.append("[Assistant thinking] ").append(thinking).append('\n');
+                serialized.append("[Assistant] ").append(text(assistant));
+                for (ToolCall call : toolCalls(assistant))
+                    serialized.append("\n[Tool call] ").append(call.name).append(' ').append(call.arguments);
+            } else if (message instanceof ToolResultMessage toolResult)
+                serialized.append("[Tool result] ").append(text(toolResult));
+            serialized.append("\n\n");
+        }
+        return "<conversation>\n" + serialized + "\n</conversation>\n\n"
                 + (instructions == null || instructions.isBlank()
                 ? "Summarize this conversation for a future coding-agent turn."
                 : "Summarize this conversation with this focus: " + instructions);
@@ -4224,7 +4237,25 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         emit(new AgentEvent.CompactionStart(tokensBefore));
         Context context = new Context(COMPACTION_SYSTEM_PROMPT);
         context.messages.add(userMessage(prompt));
-        AssistantMessage response = agentComplete(context, new AbortSignal());
+        AbortSignal signal = new AbortSignal();
+        AssistantMessage response = retryAssistantCall(
+                () -> {
+                    StreamOptions options = new StreamOptions();
+                    options.signal = signal;
+                    options.reasoning = thinkingLevel;
+                    options.apiKey = apiKey;
+                    options.maxTokens = 4_096;
+                    AssistantMessageEventStream stream = stream(agentProvider, selectedModel, context, options);
+                    AssistantMessage completed = null;
+                    for (AssistantMessageEvent event : events(stream)) {
+                        if (event instanceof AssistantMessageEvent.Done done) completed = done.message;
+                        if (event instanceof AssistantMessageEvent.Error error) completed = error.error;
+                    }
+                    return completed == null ? result(stream) : completed;
+                },
+                retryPolicy,
+                signal,
+                agentRetryCallbacks(null));
         String summary = text(response);
         if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED || summary.isBlank()) {
             String detail = summary.isBlank() && !automatic
@@ -4414,28 +4445,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         finished.success, finished.attempt, finished.finalError)));
     }
 
-    private AssistantMessage agentComplete(Context context, AbortSignal signal)
-            throws InterruptedException {
-        return retryAssistantCall(
-                () -> {
-                    StreamOptions options = new StreamOptions();
-                    options.signal = signal;
-                    options.reasoning = this.thinkingLevel;
-                    options.apiKey = this.apiKey;
-                    options.maxTokens = 4_096;
-                    AssistantMessageEventStream stream = stream(this.agentProvider, this.selectedModel, context, options);
-                    AssistantMessage response = null;
-                    for (AssistantMessageEvent event : events(stream)) {
-                        if (event instanceof AssistantMessageEvent.Done done) response = done.message;
-                        if (event instanceof AssistantMessageEvent.Error error) response = error.error;
-                    }
-                    return response == null ? result(stream) : response;
-                },
-                this.retryPolicy,
-                signal,
-                agentRetryCallbacks(null));
-    }
-
     private static long estimateMessageTokens(List<Message> messages) {
         long characters = 0;
         for (Message message : messages) {
@@ -4449,25 +4458,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return (characters + 3) / 4;
     }
 
-    private static String serializeMessages(List<Message> messages) {
-        StringBuilder output = new StringBuilder();
-        for (Message message : messages) {
-            if (message instanceof UserMessage user) output.append("[User] ").append(text(user));
-            else if (message instanceof AssistantMessage assistant) {
-                String thinking = thinking(assistant);
-                if (!thinking.isBlank()) output.append("[Assistant thinking] ").append(thinking).append('\n');
-                output.append("[Assistant] ").append(text(assistant));
-                for (ToolCall call : toolCalls(assistant))
-                    output.append("\n[Tool call] ").append(call.name).append(' ').append(call.arguments);
-            } else if (message instanceof ToolResultMessage toolResult)
-                output.append("[Tool result] ").append(text(toolResult));
-            output.append("\n\n");
-        }
-        return output.toString();
-    }
-
     private void emit(AgentEvent event) {
-        for (Consumer<AgentEvent> listener : this.listeners) {
+        for (Consumer<AgentEvent> listener : listeners) {
             listener.accept(event);
         }
     }
@@ -5186,7 +5178,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             Process process;
             try {
                 process = new ProcessBuilder(
-                        this.executable, "-C", workingDirectory.toString(), "check-ignore", "--stdin", "-z")
+                        executable, "-C", workingDirectory.toString(), "check-ignore", "--stdin", "-z")
                         .redirectErrorStream(true)
                         .start();
             } catch (IOException ignored) {
@@ -6584,7 +6576,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void mcpLoadDefaultManager(Path workspace) throws IOException {
         Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
-        this.mcpCreateManager(
+        mcpCreateManager(
                 mcpLoadConfiguration(new McpConfigLoader(
                         settingsPath.toAbsolutePath().normalize(), Map.copyOf(System.getenv()))),
                 workspace);
@@ -6607,11 +6599,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public void mcpCreateManager(McpConfiguration configuration, Path workspace) {
-        if (!this.closed && !this.servers.isEmpty()) {
-            this.mcpCloseManager();
+        if (!closed && !servers.isEmpty()) {
+            mcpCloseManager();
         }
-        this.servers = new LinkedHashMap<>();
-        this.closed = false;
+        servers = new LinkedHashMap<>();
+        closed = false;
         HttpClient http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(15))
@@ -6655,11 +6647,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             });
             runtime.enabled = mcpConfigEnabled(config);
             runtime.state = runtime.enabled ? McpState.CONNECTING : McpState.DISABLED;
-            this.servers.put(name, runtime);
+            servers.put(name, runtime);
         });
-        for (McpRuntime runtime : this.servers.values()) {
+        for (McpRuntime runtime : servers.values()) {
             // Startup may refresh an existing token, but never opens a browser unexpectedly.
-            if (mcpConfigEnabled(runtime.config)) this.mcpStartConnect(runtime, false);
+            if (mcpConfigEnabled(runtime.config)) mcpStartConnect(runtime, false);
         }
     }
 
@@ -6676,7 +6668,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public void mcpAwaitReady() throws InterruptedException {
         while (true) {
             List<Thread> connecting = new ArrayList<>();
-            for (McpRuntime runtime : this.servers.values()) {
+            for (McpRuntime runtime : servers.values()) {
                 synchronized (runtime.lock) {
                     if (runtime.connector != null) connecting.add(runtime.connector);
                 }
@@ -6692,7 +6684,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public List<AgentTool> mcpTools() {
         LinkedHashMap<String, AgentTool> result = new LinkedHashMap<>();
-        for (McpRuntime runtime : this.servers.values()) {
+        for (McpRuntime runtime : servers.values()) {
             McpClient client;
             List<McpClient.ToolDefinition> definitions;
             Set<String> disabledTools;
@@ -6724,9 +6716,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Disconnects every server and releases the manager's sessions.
      */
     public void mcpCloseManager() {
-        if (this.closed) return;
-        this.closed = true;
-        this.servers.values().forEach(runtime -> {
+        if (closed) return;
+        closed = true;
+        servers.values().forEach(runtime -> {
             McpClient client;
             Thread connector;
             synchronized (runtime.lock) {
@@ -6747,9 +6739,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private void mcpFailConnect(McpRuntime runtime, long generation, McpState state, Exception error) {
         synchronized (runtime.lock) {
-            if (this.closed || runtime.generation != generation) return;
+            if (closed || runtime.generation != generation) return;
             runtime.state = state;
-            runtime.message = mcpErrorMessage(error);
+            String message = error.getMessage();
+            if (message == null || message.isBlank()) message = error.toString();
+            runtime.message = message.replaceAll("\\s+", " ").trim();
             runtime.authorizationUrl = null;
             runtime.client = null;
             runtime.tools = List.of();
@@ -6762,7 +6756,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         long generation;
         Thread connector;
         synchronized (runtime.lock) {
-            if (this.closed) return;
+            if (closed) return;
             runtime.enabled = true;
             if (runtime.state == McpState.CONNECTED && runtime.client != null) return;
             previous = runtime.client;
@@ -6780,7 +6774,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         try {
                             Consumer<URI> authorizationListener = url -> {
                                 synchronized (runtime.lock) {
-                                    if (this.closed || runtime.generation != generation) return;
+                                    if (closed || runtime.generation != generation) return;
                                     runtime.state = McpState.AUTHENTICATING;
                                     runtime.message = "Complete OAuth authorization in your browser";
                                     runtime.authorizationUrl = url.toString();
@@ -6795,7 +6789,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     : Duration.ofMillis(configuredTimeout);
                             if (runtime.config instanceof McpServerConfig.Local local) {
                                 StdioMcpTransport transport = new StdioMcpTransport();
-                                transport.workspace = this.workspace.toAbsolutePath().normalize();
+                                transport.workspace = workspace.toAbsolutePath().normalize();
                                 Path processDirectory = local.cwd == null || local.cwd.isBlank()
                                         ? transport.workspace
                                         : mcpResolvePath(transport.workspace, local.cwd);
@@ -6861,7 +6855,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     oauthSession = new McpOAuthSession(runtime.name, remote, settings);
                                 }
                                 try {
-                                    candidate = mcpConnectRemote(remote, this.workspace, timeout, oauthSession);
+                                    candidate = mcpConnectRemote(remote, workspace, timeout, oauthSession);
                                 } catch (Exception error) {
                                     if (oauthSession == null || !mcpIsOAuthChallenge(error)) throw error;
                                     if (!interactiveOAuth) {
@@ -6875,11 +6869,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     McpHttpException challenge = mcpFindHttpException(error);
                                     McpOAuthChallenge challenge1 = mcpOAuthChallenge(challenge);
                                     if (challenge1 == null) throw challenge;
-                                    this.interactiveLock.lockInterruptibly();
+                                    interactiveLock.lockInterruptibly();
                                     try {
-                                        McpOAuthDiscovery discovery = this.mcpOAuthDiscover(oauthSession.config, challenge1);
-                                        String state = this.mcpRandomUrlToken(32);
-                                        String verifier = this.mcpRandomUrlToken(64);
+                                        McpOAuthDiscovery discovery = mcpOAuthDiscover(oauthSession.config, challenge1);
+                                        String state = mcpRandomUrlToken(32);
+                                        String verifier = mcpRandomUrlToken(64);
                                         byte[] result1;
                                         try {
                                             result1 = MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII));
@@ -6921,7 +6915,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                     mcpRespondToRedirect(exchange, 404, mcpCallbackPage("Not found", false));
                                                     return;
                                                 }
-                                                Map<String, String> parameters = mcpFormDecode(exchange.getRequestURI().getRawQuery());
+                                                Map<String, String> parameters = new LinkedHashMap<>();
+                                                String query = exchange.getRequestURI().getRawQuery();
+                                                if (query != null && !query.isEmpty()) {
+                                                    for (String part : query.split("&")) {
+                                                        int separator = part.indexOf('=');
+                                                        String name = separator < 0 ? part : part.substring(0, separator);
+                                                        String value = separator < 0 ? "" : part.substring(separator + 1);
+                                                        parameters.put(
+                                                                URLDecoder.decode(name, StandardCharsets.UTF_8),
+                                                                URLDecoder.decode(value, StandardCharsets.UTF_8));
+                                                    }
+                                                }
                                                 String returnedState = parameters.get("state");
                                                 if (returnedState == null || !MessageDigest.isEqual(
                                                         callback.expectedState.getBytes(StandardCharsets.UTF_8),
@@ -6997,7 +7002,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                             .POST(HttpRequest.BodyPublishers.ofString(
                                                                     Json.MAPPER.writeValueAsString(request), StandardCharsets.UTF_8));
                                                     McpOAuthResponse response =
-                                                            this.mcpOAuthSend(builder.build());
+                                                            mcpOAuthSend(builder.build());
                                                     if (!mcpOAuthSuccess(response)) {
                                                         throw mcpOAuthFailure(response, "Dynamic OAuth client registration failed");
                                                     }
@@ -7012,7 +7017,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                     McpOAuthEntry updated = current == null
                                                             ? new McpOAuthEntry(null, registered)
                                                             : new McpOAuthEntry(current.tokens, registered);
-                                                    this.mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), updated);
+                                                    mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), updated);
                                                     oauthSession.entry = updated;
                                                     oauthSession.loaded = true;
                                                     clientInfo = registered;
@@ -7036,12 +7041,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             String separator = discovery.metadata.authorizationEndpoint.getRawQuery() == null ? "?" : "&";
                                             URI authorizationUrl = URI.create(value + separator + mcpFormEncode(parameters));
                                             authorizationListener.accept(authorizationUrl);
-                                            this.browser.test(authorizationUrl);
+                                            browser.test(authorizationUrl);
                                             String code;
                                             try {
-                                                code = callback.code.get(this.callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
+                                                code = callback.code.get(callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
                                             } catch (TimeoutException error1) {
-                                                throw new IOException("OAuth authorization timed out after " + this.callbackTimeout.toMinutes() + " minutes", error1);
+                                                throw new IOException("OAuth authorization timed out after " + callbackTimeout.toMinutes() + " minutes", error1);
                                             } catch (ExecutionException error1) {
                                                 Throwable cause = error1.getCause();
                                                 if (cause instanceof IOException io) throw io;
@@ -7053,14 +7058,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             parameters1.put("code_verifier", verifier);
                                             parameters1.put("redirect_uri", redirectUri.toString());
                                             McpOAuthTokens tokens =
-                                                    this.mcpOAuthRequestTokens(discovery, clientInfo, parameters1, null, Map.of());
+                                                    mcpOAuthRequestTokens(discovery, clientInfo, parameters1, null, Map.of());
                                             if (tokens.scope == null && scope != null) {
                                                 tokens = new McpOAuthTokens(
                                                         tokens.accessToken, tokens.refreshToken, tokens.expiresAt, scope);
                                             }
                                             McpOAuthEntry saved = new McpOAuthEntry(
                                                     tokens, oauthSession.settings.clientId == null ? clientInfo : null);
-                                            this.mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), saved);
+                                            mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), saved);
                                             oauthSession.entry = saved;
                                             oauthSession.loaded = true;
                                         } finally {
@@ -7068,10 +7073,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             callback.executor.shutdownNow();
                                         }
                                     } finally {
-                                        this.interactiveLock.unlock();
+                                        interactiveLock.unlock();
                                     }
                                     try {
-                                        candidate = mcpConnectRemote(remote, this.workspace, timeout, oauthSession);
+                                        candidate = mcpConnectRemote(remote, workspace, timeout, oauthSession);
                                     } catch (Exception retryError) {
                                         if (mcpIsOAuthChallenge(retryError)) {
                                             throw new IOException("MCP server rejected the OAuth token after authorization", retryError);
@@ -7108,7 +7113,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 case SseHttpMcpTransport sse -> sse.notificationListener = listener;
                             }
                             synchronized (runtime.lock) {
-                                if (this.closed || runtime.generation != generation || Thread.currentThread().isInterrupted()) {
+                                if (closed || runtime.generation != generation || Thread.currentThread().isInterrupted()) {
                                     return;
                                 }
                                 runtime.client = candidate;
@@ -7157,15 +7162,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private McpRuntime mcpRequireRuntime(String name) {
-        McpRuntime runtime = this.servers.get(name);
+        McpRuntime runtime = servers.get(name);
         if (runtime == null) throw new IllegalArgumentException("MCP server is not configured: " + name);
         return runtime;
-    }
-
-    private static String mcpErrorMessage(Exception error) {
-        String value = error.getMessage();
-        if (value == null || value.isBlank()) value = error.toString();
-        return value.replaceAll("\\s+", " ").trim();
     }
 
     // ------------------------------------------------------- mcp oauth client
@@ -7240,7 +7239,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private McpOAuthEntry mcpOAuthRefresh(
             McpOAuthSession session, McpOAuthEntry current, McpOAuthChallenge challenge)
             throws Exception {
-        McpOAuthDiscovery discovery = this.mcpOAuthDiscover(session.config, challenge);
+        McpOAuthDiscovery discovery = mcpOAuthDiscover(session.config, challenge);
         McpOAuthClientInfo clientInfo;
         URI redirectUri = mcpOAuthRedirectUri(session.settings);
         if (session.settings.clientId != null) {
@@ -7263,9 +7262,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         parameters.put("grant_type", "refresh_token");
         parameters.put("refresh_token", current.tokens.refreshToken);
         McpOAuthTokens refreshed =
-                this.mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
+                mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
         McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
-        this.mcpOAuthWrite(session.name, session.config.url.toString(), updated);
+        mcpOAuthWrite(session.name, session.config.url.toString(), updated);
         session.entry = updated;
         session.loaded = true;
         return updated;
@@ -7283,11 +7282,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private McpOAuthEntry mcpOAuthReload(McpOAuthSession session) throws IOException {
         McpOAuthEntry result = null;
         String serverUrl = session.config.url.toString();
-        McpOAuthEntry own = mcpOAuthReadEntry(this.path, session.name, serverUrl, false);
+        McpOAuthEntry own = mcpOAuthReadEntry(path, session.name, serverUrl, false);
         if (own != null) {
             result = own;
         } else {
-            for (Path candidate : this.importPaths) {
+            for (Path candidate : importPaths) {
                 McpOAuthEntry imported = mcpOAuthReadEntry(candidate, session.name, serverUrl, true);
                 if (imported != null) {
                     result = imported;
@@ -7307,7 +7306,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         McpOAuthEntry cleared = invalidClient && session.settings.clientId == null
                 ? new McpOAuthEntry(null, null)
                 : new McpOAuthEntry(null, current.clientInfo);
-        this.mcpOAuthWrite(session.name, session.config.url.toString(), cleared);
+        mcpOAuthWrite(session.name, session.config.url.toString(), cleared);
         session.entry = cleared;
         session.loaded = true;
     }
@@ -7533,7 +7532,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private McpOAuthResponse mcpOAuthSend(HttpRequest request)
             throws IOException, InterruptedException {
         HttpResponse<String> response =
-                this.http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new McpOAuthResponse(
                 response.statusCode(), response.uri(), response.headers().map(), response.body());
     }
@@ -7670,27 +7669,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 .orElse("");
     }
 
-    private static Map<String, String> mcpFormDecode(String query) {
-        Map<String, String> values = new LinkedHashMap<>();
-        if (query == null || query.isEmpty()) return values;
-        for (String part : query.split("&")) {
-            int separator = part.indexOf('=');
-            String name = separator < 0 ? part : part.substring(0, separator);
-            String value = separator < 0 ? "" : part.substring(separator + 1);
-            values.put(
-                    URLDecoder.decode(name, StandardCharsets.UTF_8),
-                    URLDecoder.decode(value, StandardCharsets.UTF_8));
-        }
-        return values;
-    }
-
     private static String mcpUrlEncode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private String mcpRandomUrlToken(int bytes) {
         byte[] value = new byte[bytes];
-        this.random.nextBytes(value);
+        random.nextBytes(value);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
     }
 
@@ -7753,12 +7738,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void mcpOAuthWrite(String name, String serverUrl, McpOAuthEntry entry) throws IOException {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("MCP server name must not be blank");
-        Files.createDirectories(this.path.getParent());
-        mcpSetPermissions(this.path.getParent(), DIRECTORY_PERMISSIONS);
+        Files.createDirectories(path.getParent());
+        mcpSetPermissions(path.getParent(), DIRECTORY_PERMISSIONS);
         try (FileChannel channel =
-                     FileChannel.open(this.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                     FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = channel.lock()) {
-            ObjectNode root = mcpOAuthReadRoot(this.path, false);
+            ObjectNode root = mcpOAuthReadRoot(path, false);
             ObjectNode node = jsonObject().put("serverUrl", serverUrl);
             if (entry.tokens != null) {
                 McpOAuthTokens value = entry.tokens;
@@ -7779,16 +7764,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 mcpPutText(client, "redirectUri", value.redirectUri);
             }
             root.set(name, node);
-            Path temporary = Files.createTempFile(this.path.getParent(), "mcp-auth-", ".json");
+            Path temporary = Files.createTempFile(path.getParent(), "mcp-auth-", ".json");
             try {
                 Files.writeString(temporary, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
                 mcpSetPermissions(temporary, FILE_PERMISSIONS);
                 try {
-                    Files.move(temporary, this.path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException error) {
-                    Files.move(temporary, this.path, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
                 }
-                mcpSetPermissions(this.path, FILE_PERMISSIONS);
+                mcpSetPermissions(path, FILE_PERMISSIONS);
             } finally {
                 Files.deleteIfExists(temporary);
             }
@@ -8361,20 +8346,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private void synchronizeCommandSuggestions(String buffer) {
         String value = buffer == null ? "" : buffer;
-        if (this.dismissedBuffer != null) {
-            if (this.dismissedBuffer.equals(value)) {
-                this.matches = List.of();
-                this.query = value;
-                this.selectedIndex = 0;
-                this.visibleStart = 0;
+        if (dismissedBuffer != null) {
+            if (dismissedBuffer.equals(value)) {
+                matches = List.of();
+                query = value;
+                selectedIndex = 0;
+                visibleStart = 0;
                 return;
             }
-            this.dismissedBuffer = null;
+            dismissedBuffer = null;
         }
-        if (value.equals(this.query)) return;
-        this.query = value;
-        this.selectedIndex = 0;
-        this.visibleStart = 0;
+        if (value.equals(query)) return;
+        query = value;
+        selectedIndex = 0;
+        visibleStart = 0;
         boolean result = true;
         if (value.isEmpty() || value.charAt(0) != '/') {
             result = false;
@@ -8387,11 +8372,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             }
         }
         if (!result) {
-            this.matches = List.of();
+            matches = List.of();
             return;
         }
-        this.matches =
-                this.commands.stream().filter(command -> command.startsWith(value)).toList();
+        matches =
+                commands.stream().filter(command -> command.startsWith(value)).toList();
     }
 
     private static String styleMuted(String value, Theme theme) {
@@ -8576,8 +8561,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     }
                     default -> {
                         if (selector.searchable || key.type == TuiInput.KeyType.CLEAR) {
-                            int cursor = editQuery(
-                                    selector.query, selector.queryCursor, key, () -> filterFuzzyItems(selector));
+                            int cursor = editQuery(selector.query, selector.queryCursor, key, () -> {
+                                selector.filteredItems = fuzzyFilter(
+                                        selector.items, selector.query.toString(), item -> item.searchText);
+                                if (selector.query.isEmpty()) {
+                                    int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
+                                    selector.selectedIndex = Math.max(currentIndex, 0);
+                                } else {
+                                    selector.selectedIndex = 0;
+                                }
+                            });
                             if (cursor >= 0) selector.queryCursor = cursor;
                         }
                     }
@@ -8614,17 +8607,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         selector.selectedIndex =
                 Math.floorMod(selector.selectedIndex + delta, selector.filteredItems.size());
-    }
-
-    private static <T> void filterFuzzyItems(FuzzySelector<T> selector) {
-        selector.filteredItems =
-                fuzzyFilter(selector.items, selector.query.toString(), item -> item.searchText);
-        if (selector.query.isEmpty()) {
-            int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
-            selector.selectedIndex = Math.max(currentIndex, 0);
-        } else {
-            selector.selectedIndex = 0;
-        }
     }
 
     /**
@@ -8745,20 +8727,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
-        this.screenDocument = new StringBuilder();
-        this.statusBar = null;
-        this.statusActivity = null;
-        this.statusAccent = StatusAccent.NONE;
-        this.statusLeft = null;
-        this.statusRight = null;
-        this.fullScreenResumeAttributes = null;
-        this.managedSuspend = false;
-        this.suspendedBuffer = null;
-        this.suspendedCursor = -1;
-        this.restoreCursor = -1;
-        this.commandSuggestionsActive = false;
-        this.dynamicPost = null;
-        this.jlineTerminal = terminal;
+        screenDocument = new StringBuilder();
+        statusBar = null;
+        statusActivity = null;
+        statusAccent = StatusAccent.NONE;
+        statusLeft = null;
+        statusRight = null;
+        fullScreenResumeAttributes = null;
+        managedSuspend = false;
+        suspendedBuffer = null;
+        suspendedCursor = -1;
+        restoreCursor = -1;
+        commandSuggestionsActive = false;
+        dynamicPost = null;
+        jlineTerminal = terminal;
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
         if (columns <= 0 || rows <= 0) {
@@ -8768,8 +8750,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         this.suspendAction = suspendAction;
         this.supportsSuspend = supportsSuspend;
-        this.shellAttributes = new Attributes(terminal.getAttributes());
-        this.reader = new LineReaderImpl(this.jlineTerminal, this.jlineTerminal.getName(), null) {
+        shellAttributes = new Attributes(terminal.getAttributes());
+        this.reader = new LineReaderImpl(jlineTerminal, this.jlineTerminal.getName(), null) {
             @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
                 if (CodingAgentOperations.this.dynamicPost == null || post != null) {
@@ -8822,13 +8804,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return true;
             }
             boolean result = false;
-            if (this.commandSuggestionsActive) {
+            if (commandSuggestionsActive) {
                 String command = null;
                 String buffer = this.reader.getBuffer().toString();
-                this.synchronizeCommandSuggestions(buffer);
-                if (!this.matches.isEmpty()) {
-                    String selected = this.matches.get(this.selectedIndex);
-                    this.dismissedBuffer = selected;
+                synchronizeCommandSuggestions(buffer);
+                if (!matches.isEmpty()) {
+                    String selected = matches.get(selectedIndex);
+                    dismissedBuffer = selected;
                     command = selected;
                 }
                 if (command != null) {
@@ -8858,8 +8840,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 suggestionDownWidgetName,
                 () -> this.moveSuggestionOrFallback(1, LineReader.DOWN_LINE_OR_SEARCH));
         Reference suggestionDown = new Reference(suggestionDownWidgetName);
-        String terminalUp = KeyMap.key(this.jlineTerminal, Capability.key_up);
-        String terminalDown = KeyMap.key(this.jlineTerminal, Capability.key_down);
+        String terminalUp = KeyMap.key(jlineTerminal, Capability.key_up);
+        String terminalDown = KeyMap.key(jlineTerminal, Capability.key_down);
 
         reader.getWidgets().put(LineReader.BEGIN_PASTE, () -> {
             StringBuilder content = new StringBuilder();
@@ -8893,47 +8875,47 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             bindNavigationKey(keyMap1, suggestionUp, terminalUp, "\u001b[A", "\u001bOA");
             bindNavigationKey(keyMap1, suggestionDown, terminalDown, "\u001b[B", "\u001bOB");
         }
-        this.previousContinueHandler = supportsSuspend
+        previousContinueHandler = supportsSuspend
                 ? terminal.handle(Terminal.Signal.CONT, signal -> {
             try {
-                if (this.previousContinueHandler != null
-                    && this.previousContinueHandler != Terminal.SignalHandler.SIG_DFL
-                    && this.previousContinueHandler != Terminal.SignalHandler.SIG_IGN) {
-                    this.previousContinueHandler.handle(signal);
+                if (previousContinueHandler != null
+                    && previousContinueHandler != Terminal.SignalHandler.SIG_DFL
+                    && previousContinueHandler != Terminal.SignalHandler.SIG_IGN) {
+                    previousContinueHandler.handle(signal);
                 }
             } finally {
-                if (!this.managedSuspend) this.repaintScreen();
+                if (!managedSuspend) repaintScreen();
             }
         })
                 : null;
-        this.previousResizeHandler =
+        previousResizeHandler =
                 terminal.handle(Terminal.Signal.WINCH, signal -> {
-                    if (this.previousResizeHandler != null
-                            && this.previousResizeHandler != Terminal.SignalHandler.SIG_DFL
-                            && this.previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
-                        this.previousResizeHandler.handle(signal);
+                    if (previousResizeHandler != null
+                            && previousResizeHandler != Terminal.SignalHandler.SIG_DFL
+                            && previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
+                        previousResizeHandler.handle(signal);
                     }
                     synchronized (this) {
-                        if (this.statusBar != null) {
-                            this.statusBar.resize();
-                            this.renderStatusBar();
+                        if (statusBar != null) {
+                            statusBar.resize();
+                            renderStatusBar();
                         }
                     }
                 });
         if (supportsSuspend) {
             this.reader.getWidgets().compute(LineReader.CALLBACK_INIT, (_, previousInit) -> () -> {
                 boolean initialized = previousInit == null || previousInit.apply();
-                if (this.restoreCursor >= 0) {
+                if (restoreCursor >= 0) {
                     this.reader
                             .getBuffer()
-                            .cursor(Math.min(this.restoreCursor, this.reader.getBuffer().length()));
-                    this.restoreCursor = -1;
+                            .cursor(Math.min(restoreCursor, this.reader.getBuffer().length()));
+                    restoreCursor = -1;
                 }
                 return initialized;
             });
             this.reader.getWidgets().put("suspend-process", () -> {
-                this.suspendedBuffer = this.reader.getBuffer().toString();
-                this.suspendedCursor = this.reader.getBuffer().cursor();
+                suspendedBuffer = this.reader.getBuffer().toString();
+                suspendedCursor = this.reader.getBuffer().cursor();
                 throw SUSPEND_REQUESTED;
             });
             Reference suspend = new Reference("suspend-process");
@@ -8941,7 +8923,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 keyMap.bind(suspend, appKeySequence("suspend"));
             }
         }
-        this.theme = Theme.DARK;
+        theme = Theme.DARK;
     }
 
     private void bindNavigationKey(
@@ -8956,26 +8938,26 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private boolean moveSuggestionOrFallback(int delta, String fallbackWidget) {
-        if (this.commandSuggestionsActive) {
+        if (commandSuggestionsActive) {
             boolean result = true;
-            String buffer = this.reader.getBuffer().toString();
+            String buffer = reader.getBuffer().toString();
             synchronizeCommandSuggestions(buffer);
-            if (this.matches.isEmpty()) {
+            if (matches.isEmpty()) {
                 result = false;
             } else {
-                this.selectedIndex = Math.floorMod(this.selectedIndex + delta, this.matches.size());
-                if (this.selectedIndex < this.visibleStart) {
-                    this.visibleStart = this.selectedIndex;
-                } else if (this.selectedIndex >= this.visibleStart + VISIBLE_COMMANDS) {
-                    this.visibleStart = this.selectedIndex - VISIBLE_COMMANDS + 1;
+                selectedIndex = Math.floorMod(selectedIndex + delta, matches.size());
+                if (selectedIndex < visibleStart) {
+                    visibleStart = selectedIndex;
+                } else if (selectedIndex >= visibleStart + VISIBLE_COMMANDS) {
+                    visibleStart = selectedIndex - VISIBLE_COMMANDS + 1;
                 }
-                this.visibleStart = Math.clamp(this.matches.size() - VISIBLE_COMMANDS, 0, this.visibleStart);
+                visibleStart = Math.clamp(matches.size() - VISIBLE_COMMANDS, 0, visibleStart);
             }
             if (result) {
                 return true;
             }
         }
-        this.reader.callWidget(fallbackWidget);
+        reader.callWidget(fallbackWidget);
         return true;
     }
 
@@ -8988,11 +8970,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     public void commandSuggestions(List<String> commands) {
         this.commands = commands;
-        this.query = null;
-        this.dismissedBuffer = null;
-        this.matches = List.of();
-        this.selectedIndex = 0;
-        this.visibleStart = 0;
+        query = null;
+        dismissedBuffer = null;
+        matches = List.of();
+        selectedIndex = 0;
+        visibleStart = 0;
     }
 
     /**
@@ -9022,11 +9004,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private String readLineInternal(String prompt, String initialBuffer, Character mask, boolean suggestionsEnabled) {
         while (true) {
-            Theme promptTheme = this.theme;
+            Theme promptTheme = theme;
             try {
                 String result;
                 String background = promptBackground(promptTheme);
-                this.reader.setVariable(
+                reader.setVariable(
                         LineReader.SECONDARY_PROMPT_PATTERN,
                         background.isEmpty()
                                 ? SECONDARY_PROMPT
@@ -9041,21 +9023,21 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             + hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
                             + prompt.substring(activeLineOffset);
                 }
-                this.commandSuggestionsActive = suggestionsEnabled;
-                this.dynamicPost =
+                commandSuggestionsActive = suggestionsEnabled;
+                dynamicPost =
                         !suggestionsEnabled ? null : () -> {
-                            int columns = this.jlineTerminal.getColumns() > 0
-                                    ? this.jlineTerminal.getColumns()
+                            int columns = jlineTerminal.getColumns() > 0
+                                    ? jlineTerminal.getColumns()
                                     : DEFAULT_COLUMNS;
                             List<String> lines;
-                            String buffer = this.reader.getBuffer().toString();
+                            String buffer = reader.getBuffer().toString();
                             synchronizeCommandSuggestions(buffer);
-                            if (this.matches.isEmpty()) {
+                            if (matches.isEmpty()) {
                                 lines = List.of();
                             } else {
                                 int visibleEnd = Math.min(
-                                        this.matches.size(), this.visibleStart + VISIBLE_COMMANDS);
-                                List<String> visible = this.matches.subList(this.visibleStart, visibleEnd);
+                                        matches.size(), visibleStart + VISIBLE_COMMANDS);
+                                List<String> visible = matches.subList(visibleStart, visibleEnd);
                                 int longestCommand = visible.stream()
                                         .mapToInt(CodingAgentOperations::visibleWidth)
                                         .max()
@@ -9064,9 +9046,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 String border = "─".repeat(innerWidth);
                                 List<String> lines1 = new ArrayList<>(visible.size() + 2);
                                 lines1.add(styleMuted("╭" + border + "╮", promptTheme));
-                                for (int index = this.visibleStart; index < visibleEnd; index++) {
-                                    boolean selected = index == this.selectedIndex;
-                                    String content = (selected ? "› " : "  ") + this.matches.get(index);
+                                for (int index = visibleStart; index < visibleEnd; index++) {
+                                    boolean selected = index == selectedIndex;
+                                    String content = (selected ? "› " : "  ") + matches.get(index);
                                     content = truncatePlain(content, innerWidth);
                                     content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
                                     String styledContent = selected && !promptTheme.heading.isEmpty()
@@ -9083,10 +9065,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                    : AttributedString.fromAnsi(String.join("\n", lines));
                         };
                 try {
-                    result = this.reader.readLine(editorPrompt, null, mask, initialBuffer);
+                    result = reader.readLine(editorPrompt, null, mask, initialBuffer);
                 } finally {
-                    this.dynamicPost = null;
-                    this.commandSuggestionsActive = false;
+                    dynamicPost = null;
+                    commandSuggestionsActive = false;
                     resetPromptBackground(promptTheme);
                 }
                 String line =
@@ -9097,8 +9079,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 if (signal != SUSPEND_REQUESTED) {
                     throw signal;
                 }
-                initialBuffer = this.suspendedBuffer;
-                this.restoreCursor = this.suspendedCursor;
+                initialBuffer = suspendedBuffer;
+                restoreCursor = suspendedCursor;
                 suspendInteractive(null);
             } catch (UserInterruptException ignored) {
                 rememberCompletedLine(prompt, "", mask, promptTheme);
@@ -9127,25 +9109,25 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public <T> T runComponent(TuiComponent<T> component)
             throws IOException {
-        if (this.reader.isReading()) resetPromptBackground(this.theme);
+        if (reader.isReading()) resetPromptBackground(theme);
         synchronized (this) {
-            if (this.statusBar != null) this.statusBar.suspend();
+            if (statusBar != null) statusBar.suspend();
         }
         try {
             TuiRuntime runtime = new TuiRuntime(
-                    this.jlineTerminal,
-                    this.theme,
-                    this.supportsSuspend
+                    jlineTerminal,
+                    theme,
+                    supportsSuspend
                             ? () -> {
-                        this.fullScreenResumeAttributes =
-                        new Attributes(this.jlineTerminal.getAttributes());
-                        this.jlineTerminal.setAttributes(this.shellAttributes);
-                        this.managedSuspend = true;
+                        fullScreenResumeAttributes =
+                        new Attributes(jlineTerminal.getAttributes());
+                        jlineTerminal.setAttributes(shellAttributes);
+                        managedSuspend = true;
                         try {
-                            callSuspendAction(this.suspendAction);
+                            callSuspendAction(suspendAction);
                         } catch (IOException | RuntimeException | Error error) {
                             restoreFullScreenAttributes();
-                            this.managedSuspend = false;
+                            managedSuspend = false;
                             throw error;
                         }
                         return null;
@@ -9157,7 +9139,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 repaintScreen();
                             } finally {
                                 restoreFullScreenAttributes();
-                                this.managedSuspend = false;
+                                managedSuspend = false;
                             }
                         }
                     });
@@ -9208,23 +9190,23 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
         } finally {
             synchronized (this) {
-                if (this.statusBar != null) {
-                    this.statusBar.restore();
-                    if (this.statusBar.size() > 0) {
+                if (statusBar != null) {
+                    statusBar.restore();
+                    if (statusBar.size() > 0) {
                         // Alternate-screen switches can drop the scroll region on some terminals.
-                        int rows = this.jlineTerminal.getRows() > 0
-                                ? this.jlineTerminal.getRows()
+                        int rows = jlineTerminal.getRows() > 0
+                                ? jlineTerminal.getRows()
                                 : DEFAULT_ROWS;
-                        this.jlineTerminal.puts(Capability.save_cursor);
-                        this.jlineTerminal.puts(
-                                Capability.change_scroll_region, 0, rows - 1 - this.statusBar.size());
-                        this.jlineTerminal.puts(Capability.restore_cursor);
+                        jlineTerminal.puts(Capability.save_cursor);
+                        jlineTerminal.puts(
+                                Capability.change_scroll_region, 0, rows - 1 - statusBar.size());
+                        jlineTerminal.puts(Capability.restore_cursor);
                         renderStatusBar();
-                        this.jlineTerminal.flush();
+                        jlineTerminal.flush();
                     }
                 }
             }
-            if (this.reader.isReading()) this.reader.callWidget(LineReader.REDRAW_LINE);
+            if (reader.isReading()) reader.callWidget(LineReader.REDRAW_LINE);
         }
     }
 
@@ -9237,13 +9219,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             throws IOException, InterruptedException {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(interruptHandler, "interruptHandler");
-        Attributes originalAttributes = this.jlineTerminal.enterRawMode();
+        Attributes originalAttributes = jlineTerminal.enterRawMode();
         FutureTask<T> task = new FutureTask<>(operation);
         Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
         boolean interruptRequested = false;
         try {
             while (!task.isDone()) {
-                TuiInput input = readTuiInput(this.jlineTerminal.reader(), 50);
+                TuiInput input = readTuiInput(jlineTerminal.reader(), 50);
                 if (input instanceof TuiInput.Key key
                         && (key.type == TuiInput.KeyType.ESCAPE || key.type == TuiInput.KeyType.CANCEL)
                         && !interruptRequested
@@ -9252,7 +9234,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     interruptHandler.run();
                 } else if (input instanceof TuiInput.Key key
                         && key.type == TuiInput.KeyType.SUSPEND
-                        && this.supportsSuspend) {
+                        && supportsSuspend) {
                     suspendInteractive(originalAttributes);
                 }
             }
@@ -9273,21 +9255,21 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             }
             throw error;
         } finally {
-            this.jlineTerminal.setAttributes(originalAttributes);
+            jlineTerminal.setAttributes(originalAttributes);
         }
     }
 
     private void suspendInteractive(Attributes restoreBefore) {
-        if (restoreBefore != null) this.jlineTerminal.setAttributes(restoreBefore);
-        this.managedSuspend = true;
+        if (restoreBefore != null) jlineTerminal.setAttributes(restoreBefore);
+        managedSuspend = true;
         try {
-            callSuspendAction(this.suspendAction);
+            callSuspendAction(suspendAction);
         } catch (IOException error) {
             println("Could not suspend process: " + error.getMessage());
         } finally {
             repaintScreen();
-            this.managedSuspend = false;
-            if (restoreBefore != null) this.jlineTerminal.enterRawMode();
+            managedSuspend = false;
+            if (restoreBefore != null) jlineTerminal.enterRawMode();
         }
     }
 
@@ -9297,17 +9279,17 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public void bindAppAction(String action, Runnable handler) {
         Objects.requireNonNull(handler, "handler");
         String widgetName = "codingagent-" + action;
-        this.reader.getWidgets().put(widgetName, () -> {
-            resetPromptBackground(this.theme);
+        reader.getWidgets().put(widgetName, () -> {
+            resetPromptBackground(theme);
             try {
                 handler.run();
             } finally {
-                this.reader.callWidget(LineReader.REDRAW_LINE);
+                reader.callWidget(LineReader.REDRAW_LINE);
             }
             return true;
         });
         Reference reference = new Reference(widgetName);
-        for (var keyMap : this.reader.getKeyMaps().values()) {
+        for (var keyMap : reader.getKeyMaps().values()) {
             keyMap.bind(reference, appKeySequence(action));
         }
     }
@@ -9317,8 +9299,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void printAbove(String text) {
         synchronized (this) {
-            if (this.reader.isReading()) resetPromptBackground(this.theme);
-            this.reader.printAbove(text);
+            if (reader.isReading()) resetPromptBackground(theme);
+            reader.printAbove(text);
             remember(text + System.lineSeparator());
         }
     }
@@ -9326,8 +9308,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public void print(String text) {
         synchronized (this) {
             String value = String.valueOf(text);
-            this.jlineTerminal.writer().print(value);
-            this.jlineTerminal.writer().flush();
+            jlineTerminal.writer().print(value);
+            jlineTerminal.writer().flush();
             remember(value);
         }
     }
@@ -9335,8 +9317,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public void println(String text) {
         synchronized (this) {
             String value = String.valueOf(text);
-            this.jlineTerminal.writer().println(value);
-            this.jlineTerminal.writer().flush();
+            jlineTerminal.writer().println(value);
+            jlineTerminal.writer().flush();
             remember(value + System.lineSeparator());
         }
     }
@@ -9346,14 +9328,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void replaceScreen(String document) {
         synchronized (this) {
-            this.screenDocument.setLength(0);
-            this.screenDocument.append(document == null ? "" : document);
+            screenDocument.setLength(0);
+            screenDocument.append(document == null ? "" : document);
             repaintScreen();
         }
     }
 
     public Theme terminalTheme() {
-        return this.theme;
+        return theme;
     }
 
     public void setTheme(Theme theme) {
@@ -9365,30 +9347,30 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public void setStatus(String activity, StatusAccent accent, String left, String right) {
         synchronized (this) {
-            this.statusActivity = activity == null ? "" : activity;
-            this.statusAccent =
+            statusActivity = activity == null ? "" : activity;
+            statusAccent =
                     accent == null ? StatusAccent.NONE : accent;
-            this.statusLeft = left == null ? "" : left;
-            this.statusRight = right == null ? "" : right;
+            statusLeft = left == null ? "" : left;
+            statusRight = right == null ? "" : right;
             renderStatusBar();
         }
     }
 
     private void renderStatusBar() {
-        if (this.statusLeft == null && this.statusRight == null) return;
-        if (this.statusBar == null) {
-            this.statusBar = Status.getStatus(this.jlineTerminal);
+        if (statusLeft == null && statusRight == null) return;
+        if (statusBar == null) {
+            statusBar = Status.getStatus(jlineTerminal);
         }
-        if (this.statusBar == null) return;
-        int columns = this.jlineTerminal.getColumns();
+        if (statusBar == null) return;
+        int columns = jlineTerminal.getColumns();
         int width = columns > 0 ? columns : DEFAULT_COLUMNS;
-        this.statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
-                this.statusActivity,
-                this.statusAccent,
-                this.statusLeft,
-                this.statusRight,
+        statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
+                statusActivity,
+                statusAccent,
+                statusLeft,
+                statusRight,
                 width,
-                this.theme))));
+                theme))));
     }
 
     /**
@@ -9460,36 +9442,36 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private void remember(String text) {
         synchronized (this) {
-            this.screenDocument.append(text);
+            screenDocument.append(text);
         }
     }
 
     private void restoreFullScreenAttributes() {
-        if (this.fullScreenResumeAttributes != null) {
-            this.jlineTerminal.setAttributes(this.fullScreenResumeAttributes);
-            this.fullScreenResumeAttributes = null;
+        if (fullScreenResumeAttributes != null) {
+            jlineTerminal.setAttributes(fullScreenResumeAttributes);
+            fullScreenResumeAttributes = null;
         }
     }
 
     private void resetPromptBackground(Theme promptTheme) {
         if (promptBackground(promptTheme).isEmpty()) return;
-        this.jlineTerminal.writer().print(promptTheme.reset);
-        this.jlineTerminal.writer().flush();
+        jlineTerminal.writer().print(promptTheme.reset);
+        jlineTerminal.writer().flush();
     }
 
     private void repaintScreen() {
         synchronized (this) {
-            this.jlineTerminal.writer().print(this.theme.reset);
-            this.jlineTerminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
-            boolean redrawStatusBar = this.statusBar != null && this.statusBar.size() > 0;
+            jlineTerminal.writer().print(theme.reset);
+            jlineTerminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
+            boolean redrawStatusBar = statusBar != null && statusBar.size() > 0;
             // Release the status rows so the redrawn document starts on a clean screen.
-            if (redrawStatusBar) this.statusBar.update(List.of());
-            this.jlineTerminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
+            if (redrawStatusBar) statusBar.update(List.of());
+            jlineTerminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
             // Re-reserve the bottom row before printing so the document scrolls above it.
             if (redrawStatusBar) renderStatusBar();
-            this.jlineTerminal.writer().print(this.screenDocument);
-            this.jlineTerminal.writer().print(END_SYNCHRONIZED_OUTPUT);
-            this.jlineTerminal.writer().flush();
+            jlineTerminal.writer().print(screenDocument);
+            jlineTerminal.writer().print(END_SYNCHRONIZED_OUTPUT);
+            jlineTerminal.writer().flush();
         }
     }
 
@@ -9497,13 +9479,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Restores the signal handlers this terminal replaced and closes JLine.
      */
     public void closeTerminal() throws IOException {
-        if (this.previousContinueHandler != null) {
-            this.jlineTerminal.handle(Terminal.Signal.CONT, this.previousContinueHandler);
+        if (previousContinueHandler != null) {
+            jlineTerminal.handle(Terminal.Signal.CONT, previousContinueHandler);
         }
-        if (this.previousResizeHandler != null) {
-            this.jlineTerminal.handle(Terminal.Signal.WINCH, this.previousResizeHandler);
+        if (previousResizeHandler != null) {
+            jlineTerminal.handle(Terminal.Signal.WINCH, previousResizeHandler);
         }
-        this.jlineTerminal.close();
+        jlineTerminal.close();
     }
 
     // ------------------------------------------------------------------- cli
@@ -9524,22 +9506,22 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
                 switch (arg) {
-                    case "-h", "--help" -> this.help = true;
-                    case "-v", "--version" -> this.version = true;
+                    case "-h", "--help" -> help = true;
+                    case "-v", "--version" -> version = true;
                     case "--list-models" -> {
-                        this.listModels = true;
+                        listModels = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
-                            this.modelSearch = args[++i];
+                            modelSearch = args[++i];
                         }
                     }
                     case "--provider" -> this.provider = cliArgumentValue(args, ++i, arg);
                     case "--model" -> this.model = cliArgumentValue(args, ++i, arg);
                     case "--api-key" -> this.apiKey = cliArgumentValue(args, ++i, arg);
-                    case "--system-prompt" -> this.systemPrompt = cliArgumentValue(args, ++i, arg);
-                    case "--no-session" -> this.noSession = true;
-                    case "--mode" -> this.mode = cliArgumentValue(args, ++i, arg);
+                    case "--system-prompt" -> systemPrompt = cliArgumentValue(args, ++i, arg);
+                    case "--no-session" -> noSession = true;
+                    case "--mode" -> mode = cliArgumentValue(args, ++i, arg);
                     case "-p", "--print" -> {
-                        this.print = true;
+                        print = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
                             messageParts.add(args[++i]);
                         }
@@ -9553,14 +9535,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
             }
             this.message = String.join(" ", messageParts);
-            if (!this.mode.equals("print") && !this.mode.equals("json") && !this.mode.equals("rpc")) {
+            if (!mode.equals("print") && !mode.equals("json") && !mode.equals("rpc")) {
                 throw new IllegalArgumentException("--mode must be print, json, or rpc");
             }
-            if (this.version) {
+            if (version) {
                 System.out.println(VERSION);
                 return 0;
             }
-            if (this.help) {
+            if (help) {
                 System.out.println("""
                         %s - coding agent (Java port)
                         
@@ -9589,14 +9571,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return 0;
             }
             loadBundledModelCatalog();
-            CodingAgentOperations credentials = defaultCredentialStore();
+            defaultCredentialStore();
             Map<String, Provider> providers1 = new LinkedHashMap<>();
             providers1.put(
                     "anthropic",
                     new AnthropicProvider(
                             "anthropic",
                             "Anthropic",
-                            this.catalogModelsForProvider("anthropic").stream()
+                            catalogModelsForProvider("anthropic").stream()
                                     .filter(model1 -> model1.api.equals("anthropic-messages"))
                                     .toList(),
                             List.of(
@@ -9609,14 +9591,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     new OpenAiResponsesProvider(
                             "openai",
                             "OpenAI",
-                            List.copyOf(this.catalogModelsForProvider("openai").stream()
+                            List.copyOf(catalogModelsForProvider("openai").stream()
                                     .filter(model -> model.api.equals("openai-responses"))
                                     .toList()),
                             List.of("OPENAI_API_KEY"),
-                            credentials,
+                            this,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
-            this.chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
-            List<Model> models = this.catalogModelsForProvider("openai").stream()
+            chatGptAuth(this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+            List<Model> models = catalogModelsForProvider("openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
                     .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
                     .map(source -> {
@@ -9629,29 +9611,29 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     .toList();
             providers1.put(
                     CHATGPT_PROVIDER_ID,
-                    this.chatGptProvider(models, new OpenAiResponsesProvider(
+                    chatGptProvider(models, new OpenAiResponsesProvider(
                                     CHATGPT_PROVIDER_ID,
                                     CHATGPT_PROVIDER_NAME,
                                     List.copyOf(models),
                                     List.of(),
                                     null,
                                     OpenAiResponsesProvider.RequestProfile.CODEX)));
-            googleProvider(List.copyOf(this.catalogModelsForProvider("google").stream()
+            googleProvider(List.copyOf(catalogModelsForProvider("google").stream()
                     .filter(model -> model.api.equals(GOOGLE_API))
                     .toList()));
-            providers1.put("google",this);
+            providers1.put("google", this);
             gitHubCopilotAuth(
-                    credentials,
+                    this,
                     URI.create("https://github.com"),
                     URI.create("https://api.github.com/copilot_internal/v2/token"),
                     URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
             providers1.put(
                     "github-copilot",
-                    this.newGitHubCopilotProvider(this.catalogModelsForProvider("github-copilot")));
-             coreProviders(Map.copyOf(providers1));
-            if (this.listModels) {
-                String needle = this.modelSearch == null ? "" : this.modelSearch.toLowerCase();
-                for (Provider provider : List.copyOf(this.coreProviders.values())) {
+                    newGitHubCopilotProvider(catalogModelsForProvider("github-copilot")));
+            coreProviders(Map.copyOf(providers1));
+            if (listModels) {
+                String needle = modelSearch == null ? "" : modelSearch.toLowerCase();
+                for (Provider provider : List.copyOf(coreProviders.values())) {
                     for (Model model : providerModels(provider)) {
                         String id = model.provider + "/" + model.id;
                         if (needle.isEmpty() || id.toLowerCase().contains(needle) || model.name.toLowerCase().contains(needle)) {
@@ -9661,7 +9643,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
                 return 0;
             }
-            if (this.mode.equals("rpc")) {
+            if (mode.equals("rpc")) {
                 RpcServer server = new RpcServer();
                 server.providers = this;
                 server.arguments = this;
@@ -9674,14 +9656,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     if (this.provider != null && !this.provider.equals(parts[0])) {
                         throw new IllegalArgumentException("--provider conflicts with the provider in --model");
                     }
-                    initialModel = this.requireCatalogModel(parts[0], parts[1]);
+                    initialModel = requireCatalogModel(parts[0], parts[1]);
                 } else {
                     if (this.provider == null) {
                         throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                     }
-                    initialModel = this.requireCatalogModel(this.provider, this.model);
+                    initialModel = requireCatalogModel(this.provider, this.model);
                 }
-                server.mcp =this;
+                server.mcp = this;
                 mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
                 try {
                     resetRpcAgent(server, initialModel);
@@ -9792,49 +9774,44 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
                 return 0;
             }
-            if (this.print) {
+            if (print) {
                 if (this.message.isBlank()) {
                     throw new IllegalArgumentException("--print requires a prompt");
                 }
-                Model model = this.resolveCliModel(this.provider, this.model);
-                Provider provider = this.requireCoreProvider(model.provider);
+                Model model = resolveCliModel(this.provider, this.model);
+                Provider provider = requireCoreProvider(model.provider);
                 Path cwd = Path.of(".").toAbsolutePath().normalize();
                 mcpLoadDefaultManager(cwd);
                 try {
-                    this.mcpAwaitReady();
-                    agentState(this.systemPrompt == null ? "" : this.systemPrompt, model);
+                    mcpAwaitReady();
+                    agentState(systemPrompt == null ? "" : systemPrompt, model);
                     agent(provider);
-                    this.configureBuiltInTools(cwd, this.systemPrompt);
-                    this.tools.addAll(this.mcpTools());
-                    if (this.mode.equals("json")) {
-                        this.subscribe(event -> {
+                    configureBuiltInTools(cwd, systemPrompt);
+                    tools.addAll(mcpTools());
+                    if (mode.equals("json")) {
+                        subscribe(event -> {
                             ObjectNode node = encodeAgentEvent(event, false);
                             if (node != null) System.out.println(node);
                         });
                     } else {
-                        this.subscribe(event -> {
+                        subscribe(event -> {
                             if (event instanceof AgentEvent.InstructionLoaded loaded) {
                                 System.err.println(instructionLoadedMessage(loaded.path));
                             }
                         });
                     }
-                    CodingAgentOperations recorder;
-                    if (this.noSession) recorder = null;
-                    else {
-                        recorder = this;
+                    if (!noSession) {
                         defaultSessionStore();
                         createSessionRecorder(cwd, model.provider, model.id);
                     }
-                    List<Message> messages = this.prompt(this.message);
-                    if (recorder != null) {
-                        recorder.appendSessionMessages(messages);
-                    }
+                    List<Message> messages = prompt(this.message);
+                    if (!noSession) appendSessionMessages(messages);
                     if (this.messages.getLast() instanceof AssistantMessage response) {
                         if (response.errorMessage != null) {
                             System.err.println("Error: " + response.errorMessage);
                             return 1;
                         }
-                        if (!this.mode.equals("json")) {
+                        if (!mode.equals("json")) {
                             System.out.println(text(response));
                         }
                         return 0;
@@ -9842,14 +9819,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
                     throw new IllegalStateException("Agent ended without an assistant response");
                 } finally {
-                    this.mcpCloseManager();
+                    mcpCloseManager();
                 }
             }
             Path resolved = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json").toAbsolutePath().normalize();
             settingsStore(
                     resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
-            CodingAgentOperations settingsStore = this;
-            ObjectNode root = settingsStore.readSettingsObject();
+            ObjectNode root = readSettingsObject();
             String provider = optionalSettingsText(root, "defaultProvider");
             String model2 = optionalSettingsText(root, "defaultModel");
             String theme = optionalSettingsText(root, "theme");
@@ -9860,7 +9836,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     thinkingLevel = thinkingLevelFromWire(thinking);
                 } catch (IllegalArgumentException error2) {
                     throw new IOException(
-                            "Invalid defaultThinkingLevel in " + settingsStore.settingsPath + ": " + thinking, error2);
+                            "Invalid defaultThinkingLevel in " + settingsPath + ": " + thinking, error2);
                 }
             }
             JsonNode value = root.get("hideThinkingBlock");
@@ -9872,15 +9848,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             Path workspace = Path.of(".").toAbsolutePath().normalize();
             mcpLoadDefaultManager(workspace);
             try {
-                CodingAgentOperations terminal =this;
-                        newInteractiveTerminal(
+                newInteractiveTerminal(
                         TerminalBuilder.builder().system(true).name(APP_NAME).build(),
                         () -> {
                             Process process =
                                     new ProcessBuilder("/bin/kill", "-TSTP", "0").redirectErrorStream(true).start();
                             try {
                                 int exitCode = process.waitFor();
-                      if (exitCode != 0) {
+                                if (exitCode != 0) {
                                     String output =
                                             new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
                                     throw new IOException(output.isEmpty() ? "kill exited with code " + exitCode : output);
@@ -9894,239 +9869,467 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
                     this.settings = settings;
-                    this.agentConfigured = false;
-                    this.recordingSession = false;
-                    this.hideThinkingBlock = settings.hideThinkingBlock;
-                    this.activity = noModelActivity(System.nanoTime());
-                    this.statusTicker = Executors.newSingleThreadScheduledExecutor(
+                    agentConfigured = false;
+                    recordingSession = false;
+                    hideThinkingBlock = settings.hideThinkingBlock;
+                    activity = noModelActivity(System.nanoTime());
+                    statusTicker = Executors.newSingleThreadScheduledExecutor(
                             Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
-                    terminal.bindAppAction("expandTools", () -> this.showShellTurnDetails(true));
-                    terminal.bindAppAction("toggleThinking", () -> this.setShellHideThinkingBlock(!this.hideThinkingBlock, true));
+                    bindAppAction("expandTools", () -> showShellTurnDetails(true));
+                    bindAppAction("toggleThinking", () -> setShellHideThinkingBlock(!hideThinkingBlock, true));
                     try {
                         if (this.settings.theme != null) {
-                            this.setTheme(namedTheme(this.settings.theme));
+                            setTheme(namedTheme(this.settings.theme));
                         }
                         if (this.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
-                            this.configureShellModel(this.resolveCliModel(this.provider, this.model), false);
+                            configureShellModel(resolveCliModel(this.provider, this.model), false);
                         } else if (this.provider != null) {
-                            List<Model> models1 = providerModels(this.requireCoreProvider(this.provider));
+                            List<Model> models1 = providerModels(requireCoreProvider(this.provider));
                             if (models1.isEmpty()) {
                                 throw new IllegalArgumentException("No bundled models for provider: " + this.provider);
                             }
                             List<SelectItem<Model>> items =
                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
-                            Model model = terminal.select("Select a model", items, -1, true);
+                            Model model = select("Select a model", items, -1, true);
                             if (model == null) return 0;
-                            this.configureShellModel(model, true);
+                            configureShellModel(model, true);
                         } else {
-                            this.restoreShellModel();
+                            restore: {
+                                Settings savedSettings = this.settings;
+                                Model model = null;
+                                if (savedSettings.defaultProvider != null && savedSettings.defaultModel != null) {
+                                    try {
+                                        model = findModelIn(
+                                                providerModels(requireCoreProvider(savedSettings.defaultProvider)),
+                                                savedSettings.defaultProvider,
+                                                savedSettings.defaultModel);
+                                    } catch (IllegalArgumentException ignored) {
+                                    }
+                                    if (model == null) {
+                                        println("Saved model " + savedSettings.defaultProvider + "/" + savedSettings.defaultModel
+                                                + " is unavailable; selecting a fallback.");
+                                    } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                                requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                                        try {
+                                            model = copilot.gitHubCopilotHasCredential()
+                                                    ? findModelIn(copilot.gitHubCopilotAvailableModels(), model.provider, model.id)
+                                                    : null;
+                                            if (model == null) {
+                                                println("Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
+                                            }
+                                        } catch (IOException error) {
+                                            println("Could not restore the saved GitHub Copilot model: " + error.getMessage());
+                                            model = null;
+                                        }
+                                    } else if (model.provider.equals(CHATGPT_PROVIDER_ID)) {
+                                        try {
+                                            if (!((CodingAgentOperations) requireCoreProvider(CHATGPT_PROVIDER_ID))
+                                                    .chatGptHasCredential()) model = null;
+                                        } catch (IOException error) {
+                                            println("Could not restore the saved ChatGPT model: " + error.getMessage());
+                                            model = null;
+                                        }
+                                    }
+                                }
+                                if (model != null) {
+                                    configureShellModel(model, false);
+                                    break restore;
+                                }
+
+                                CodingAgentOperations chatGpt = (CodingAgentOperations)
+                                        requireCoreProvider(CHATGPT_PROVIDER_ID);
+                                try {
+                                    if (chatGpt.chatGptHasCredential() && !chatGpt.models.isEmpty()) {
+                                        configureShellModel(preferredChatGptModel(chatGpt.models), true);
+                                        break restore;
+                                    }
+                                } catch (IOException error) {
+                                    println("ChatGPT login needs attention: " + error.getMessage());
+                                }
+                                CodingAgentOperations copilot = (CodingAgentOperations)
+                                        requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                                try {
+                                    if (!copilot.gitHubCopilotHasCredential()) break restore;
+                                    Model fallback = preferredCopilotModel(copilot.gitHubCopilotAvailableModels());
+                                    if (fallback == null) {
+                                        println("GitHub Copilot has no enabled coding models. Run /login to refresh access.");
+                                    } else {
+                                        configureShellModel(fallback, true);
+                                    }
+                                } catch (IOException error) {
+                                    println("GitHub Copilot login needs attention: " + error.getMessage());
+                                }
+                            }
                         }
-                        this.print(sessionScreenHeader(!this.agentConfigured ? null : this.selectedModel));
-                        this.refreshShellStatus();
-                        this.statusTicker.scheduleWithFixedDelay(() -> {
-                            if (!isDynamicActivity(this.activity)) return;
+                        print(sessionScreenHeader(!agentConfigured ? null : selectedModel));
+                        refreshShellStatus();
+                        statusTicker.scheduleWithFixedDelay(() -> {
+                            if (!isDynamicActivity(activity)) return;
                             try {
-                                this.renderShellStatus();
+                                renderShellStatus();
                             } catch (RuntimeException ignored) {
                                 // A best-effort repaint must not terminate the shell's status ticker.
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                         while (true) {
-                            String input = this.readLine("\n> ", SLASH_COMMANDS);
+                            String input = readLine("\n> ", SLASH_COMMANDS);
                             if (input == null) {
-                                this.println("");
+                                println("");
                                 return 0;
                             }
                             if (input.isBlank()) continue;
                             if (input.startsWith("/")) {
                                 String trimmed = input.trim();
                                 boolean exit = trimmed.equals("/exit") || trimmed.equals("/quit");
-                                this.setShellActivity(activeActivity(
+                                setShellActivity(activeActivity(
                                         ActivityStatus.Phase.RUNNING_COMMAND, trimmed.split("\\s+", 2)[0], System.nanoTime()));
                                 try {
                                     if (!exit) switch (trimmed) {
                                         case "/help" ->
-                                                this.println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
-                                        case "/details" -> this.showShellTurnDetails(false);
+                                                println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                        case "/details" -> showShellTurnDetails(false);
                                         case "/fork" -> {
-                                            if (!this.agentConfigured) {
-                                                this.println("No model is configured.");
+                                            if (!agentConfigured) {
+                                                println("No model is configured.");
                                                 break;
                                             }
-                                            String name = this.readLine("Fork session name: ", forkName(this.sessionName));
+                                            String name = readLine("Fork session name: ", forkName(sessionName));
                                             if (name == null || name.isBlank()) {
-                                                this.println("Fork cancelled.");
+                                                println("Fork cancelled.");
                                                 break;
                                             }
                                             name = name.strip();
-                                            Model model = this.selectedModel;
+                                            Model model = selectedModel;
                                             List<Message> forkMessages = resumableMessages(this.messages);
                                             boolean recordingEnabled = false;
-                                            if (!this.noSession) {
+                                            if (!noSession) {
                                                 try {
                                                     defaultSessionStore();
                                                     forkSessionRecorder(
                                                             this.cwd, model.provider, model.id, name, forkMessages);
                                                     recordingEnabled = true;
                                                 } catch (IOException error) {
-                                                    this.println("Failed to fork session: " + error.getMessage());
+                                                    println("Failed to fork session: " + error.getMessage());
                                                     break;
                                                 }
                                             }
-                                            this.configureShellAgent(model, this.cwd, recordingEnabled, name);
+                                            configureShellAgent(model, this.cwd, recordingEnabled, name);
                                             this.messages.addAll(forkMessages);
-                                            this.refreshShellStatus();
-                                            this.println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
+                                            refreshShellStatus();
+                                            println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
                                         }
-                                        case "/resume" -> this.resumeShellSession();
+                                        case "/resume" -> {
+                                            resume: {
+                                                if (noSession) {
+                                                    println("Session persistence is disabled by --no-session.");
+                                                    break resume;
+                                                }
+                                                defaultSessionStore();
+                                                List<SessionSnapshot> sessions;
+                                                try {
+                                                    Set<String> ids = new LinkedHashSet<>();
+                                                    for (Path directory : Stream.concat(
+                                                            Stream.of(this.directory), legacyDirectories.stream()).toList()) {
+                                                        if (!Files.isDirectory(directory)) continue;
+                                                        try (Stream<Path> files = Files.list(directory)) {
+                                                            files.filter(Files::isRegularFile)
+                                                                    .filter(path -> path.getFileName().toString().endsWith(".jsonl"))
+                                                                    .map(path -> path.getFileName().toString().replaceFirst("\\.jsonl$", ""))
+                                                                    .forEach(ids::add);
+                                                        }
+                                                    }
+                                                    Path normalizedCwd = cwd == null ? null : cwd.toAbsolutePath().normalize();
+                                                    List<SessionSnapshot> snapshots = new ArrayList<>();
+                                                    for (String id : ids) {
+                                                        try {
+                                                            SessionSnapshot snapshot = sessionSnapshot(id);
+                                                            boolean sameDirectory = normalizedCwd == null;
+                                                            if (!sameDirectory) try {
+                                                                sameDirectory = snapshot.cwd.toRealPath().equals(normalizedCwd.toRealPath());
+                                                            } catch (IOException ignored) {
+                                                                sameDirectory = snapshot.cwd.equals(normalizedCwd);
+                                                            }
+                                                            if (sameDirectory) snapshots.add(snapshot);
+                                                        } catch (IOException | IllegalArgumentException ignored) {
+                                                            // Discovery is best effort: one corrupt session must not hide the rest.
+                                                        }
+                                                    }
+                                                    snapshots.sort(Comparator.comparing(
+                                                            (SessionSnapshot snapshot) -> snapshot.modified).reversed());
+                                                    sessions = List.copyOf(snapshots);
+                                                } catch (IOException error) {
+                                                    println("Failed to list saved sessions: " + error.getMessage());
+                                                    break resume;
+                                                }
+                                                if (sessions.isEmpty()) {
+                                                    println("No saved sessions in " + cwd + ".");
+                                                    break resume;
+                                                }
+                                                String currentId = !recordingSession ? null : sessionId;
+                                                List<SelectItem<SessionSnapshot>> items = sessions.stream()
+                                                        .filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
+                                                        .map(session -> {
+                                                            String name = sessionDisplayName(session);
+                                                            String label = abbreviateShellText(
+                                                                    name.replaceAll("[\\p{Cntrl}]", " "), 90);
+                                                            long minutes = Math.max(0, Duration.between(
+                                                                    session.modified, Instant.now()).toMinutes());
+                                                            long hours = minutes / 60;
+                                                            long days = hours / 24;
+                                                            String age = minutes < 1 ? "now"
+                                                                    : minutes < 60 ? minutes + "m"
+                                                                      : hours < 24 ? hours + "h"
+                                                                        : days < 7 ? days + "d"
+                                                                          : days < 30 ? days / 7 + "w"
+                                                                            : days < 365 ? days / 30 + "mo" : days / 365 + "y";
+                                                            String description = session.messageCount + " messages  " + age
+                                                                    + "  [" + session.provider + "/" + session.model + "]";
+                                                            return new SelectItem<>(session, label, description,
+                                                                    session.id + " " + name + " " + session.provider + " "
+                                                                            + session.model + " " + session.firstMessage + " "
+                                                                            + session.allMessagesText);
+                                                        })
+                                                        .toList();
+                                                if (items.isEmpty()) {
+                                                    println("No resumable sessions in " + cwd + ".");
+                                                    break resume;
+                                                }
+                                                SessionSnapshot selected =
+                                                        select("Resume Session (Current Folder)", items, -1, true);
+                                                if (selected == null) break resume;
+                                                try {
+                                                    if (!Files.isDirectory(selected.cwd)) {
+                                                        println("Cannot resume session because its working directory is unavailable: "
+                                                                + selected.cwd);
+                                                        break resume;
+                                                    }
+                                                    Model model;
+                                                    try {
+                                                        model = findModelIn(
+                                                                providerModels(requireCoreProvider(selected.provider)),
+                                                                selected.provider,
+                                                                selected.model);
+                                                    } catch (IllegalArgumentException ignored) {
+                                                        model = null;
+                                                    }
+                                                    if (model == null) {
+                                                        if (!agentConfigured) {
+                                                            println("Cannot restore model " + selected.provider + "/" + selected.model
+                                                                    + "; configure an available model before resuming this session.");
+                                                            break resume;
+                                                        }
+                                                        model = selectedModel;
+                                                        println("Could not restore model " + selected.provider + "/" + selected.model
+                                                                + ". Using " + model + ".");
+                                                    }
+                                                    if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                                                requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                                                        Model enabled = null;
+                                                        try {
+                                                            if (copilot.gitHubCopilotHasCredential()) {
+                                                                enabled = findModelIn(
+                                                                        copilot.gitHubCopilotAvailableModels(),
+                                                                        model.provider,
+                                                                        model.id);
+                                                            }
+                                                        } catch (IOException error) {
+                                                            println("Could not refresh GitHub Copilot model access: "
+                                                                    + error.getMessage());
+                                                        }
+                                                        if (enabled != null) model = enabled;
+                                                        else if (!agentConfigured
+                                                                || selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                                            println("Cannot restore GitHub Copilot model " + model.id
+                                                                    + "; log in or configure another model first.");
+                                                            break resume;
+                                                        } else {
+                                                            Model fallback = selectedModel;
+                                                            println("Could not restore model " + model + ". Using " + fallback + ".");
+                                                            model = fallback;
+                                                        }
+                                                    }
+                                                    // A session snapshot's messages are compaction-aware, so resuming cannot
+                                                    // resurrect summarized transcript entries into the next model request.
+                                                    List<Message> restored = resumableMessages(selected.messages);
+                                                    resumeSessionRecorder(selected.id);
+                                                    configureShellAgent(model, selected.cwd, true, selected.name);
+                                                    settings = withSettingsDefaultModel(settings, model.provider, model.id);
+                                                    messages.addAll(restored);
+                                                    refreshShellStatus();
+                                                    replaceScreen(renderSessionScreen(
+                                                            model,
+                                                            selected.transcriptMessages,
+                                                            hideThinkingBlock,
+                                                            terminalTheme()));
+                                                    try {
+                                                        setSettingsDefaultModelAndProvider(model.provider, model.id);
+                                                    } catch (IOException error) {
+                                                        println("Resumed model could not be saved as the default: "
+                                                                + error.getMessage());
+                                                    }
+                                                    println("Resumed session " + sessionDisplayName(selected) + " with "
+                                                            + restored.size() + " message(s) using " + model + ".");
+                                                } catch (IOException | IllegalArgumentException error) {
+                                                    println("Failed to resume session: " + error.getMessage());
+                                                }
+                                            }
+                                        }
                                         case "/login" -> {
-                                            this.println("Log in to a provider:");
-                                            this.println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
-                                            this.println("  2. OpenAI API key — use separately billed Platform API credits");
-                                            this.println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
-                                            String choice = this.readLine("Select provider [1-3]: ");
+                                            println("Log in to a provider:");
+                                            println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+                                            println("  2. OpenAI API key — use separately billed Platform API credits");
+                                            println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+                                            String choice = readLine("Select provider [1-3]: ");
                                             if (choice == null || choice.isBlank()) {
-                                                this.println("Login cancelled.");
+                                                println("Login cancelled.");
                                             } else {
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
-                                                        CodingAgentOperations copilot = this.shellCopilotProvider();
+                                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                                                requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                                         GitHubCopilotDeviceCode device = copilot.gitHubCopilotBeginLogin();
-                                                        this.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        this.println("Waiting for GitHub authorization...");
+                                                        println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        println("Waiting for GitHub authorization...");
                                                         copilot.gitHubCopilotCompleteLogin(device);
-                                                        this.println("Enabling GitHub Copilot models...");
+                                                        println("Enabling GitHub Copilot models...");
                                                         CopilotModelAccess access = copilot.gitHubCopilotEnableAndRefreshModels();
                                                         if (access.policiesEnabled < copilot.models.size()) {
-                                                            this.println("Some GitHub Copilot models are unavailable for this account.");
+                                                            println("Some GitHub Copilot models are unavailable for this account.");
                                                         }
                                                         List<Model> models1 = access.models;
-                                                        Model model = this.shellSavedModelIn(models1);
+                                                        Model model = shellSavedModelIn(models1);
                                                         if (model == null) model = preferredCopilotModel(models1);
                                                         if (model == null) {
-                                                            this.println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
+                                                            println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
                                                         } else {
-                                                            this.configureShellModel(model, true);
-                                                            this.println("GitHub Copilot is ready with " + model + ".");
+                                                            configureShellModel(model, true);
+                                                            println("GitHub Copilot is ready with " + model + ".");
                                                         }
                                                     }
                                                     case "2", "openai", "open ai", "openai api", "openai api key" -> {
-                                                        String apiKey = this.readLineInternal("OpenAI API key: ", null, '*', false);
+                                                        String apiKey = readLineInternal("OpenAI API key: ", null, '*', false);
                                                         if (apiKey == null || apiKey.isBlank()) {
-                                                            this.println("OpenAI login cancelled.");
+                                                            println("OpenAI login cancelled.");
                                                         } else {
                                                             modifyCredential(
                                                                     defaultCredentialStore(),
                                                                     "openai",
                                                                     ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
-                                                            List<Model> models1 = providerModels(this.requireCoreProvider("openai"));
-                                                            Model model = this.shellSavedModelIn(models1);
+                                                            List<Model> models1 = providerModels(requireCoreProvider("openai"));
+                                                            Model model = shellSavedModelIn(models1);
                                                             if (model == null) {
                                                                 model = this.select("Select an OpenAI model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
                                                             }
                                                             if (model == null) {
-                                                                this.println("OpenAI API key saved. Run /models when you are ready to select a model.");
+                                                                println("OpenAI API key saved. Run /models when you are ready to select a model.");
                                                             } else {
-                                                                this.configureShellModel(model, true);
-                                                                this.println("OpenAI is ready with " + model + ".");
+                                                                configureShellModel(model, true);
+                                                                println("OpenAI is ready with " + model + ".");
                                                             }
                                                         }
                                                     }
                                                     case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
                                                          "chatgpt plus/pro" -> {
-                                                        CodingAgentOperations chatGpt = this.shellChatGptProvider();
+                                                        CodingAgentOperations chatGpt = (CodingAgentOperations)
+                                                                requireCoreProvider(CHATGPT_PROVIDER_ID);
                                                         ChatGptDeviceCode device = chatGpt.chatGptBeginLogin();
-                                                        this.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        this.println("Waiting for ChatGPT authorization...");
+                                                        println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        println("Waiting for ChatGPT authorization...");
                                                         chatGpt.chatGptCompleteLogin(device);
                                                         List<Model> models1 = chatGpt.models;
-                                                        Model model = this.shellSavedModelIn(models1);
+                                                        Model model = shellSavedModelIn(models1);
                                                         if (model == null) {
                                                             model = this.select("Select a ChatGPT model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
                                                         }
                                                         if (model == null) {
-                                                            this.println("ChatGPT login saved. Run /models when you are ready to select a model.");
+                                                            println("ChatGPT login saved. Run /models when you are ready to select a model.");
                                                         } else {
-                                                            this.configureShellModel(model, true);
-                                                            this.println("ChatGPT Plus/Pro is ready with " + model + ".");
+                                                            configureShellModel(model, true);
+                                                            println("ChatGPT Plus/Pro is ready with " + model + ".");
                                                         }
                                                     }
                                                     default ->
-                                                            this.println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+                                                            println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
                                                 }
                                             }
                                         }
                                         case "/logout" -> {
                                             try {
-                                                if (this.agentConfigured && this.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
-                                                    this.shellChatGptProvider().chatGptLogout();
-                                                    this.agentConfigured = false;
-                                                    this.println("ChatGPT credentials removed. Run /login or /resume to continue.");
-                                                } else if (this.agentConfigured && this.selectedModel.provider.equals("openai")) {
+                                                if (agentConfigured && selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
+                                                    ((CodingAgentOperations) requireCoreProvider(CHATGPT_PROVIDER_ID))
+                                                            .chatGptLogout();
+                                                    agentConfigured = false;
+                                                    println("ChatGPT credentials removed. Run /login or /resume to continue.");
+                                                } else if (agentConfigured && selectedModel.provider.equals("openai")) {
                                                     deleteCredential(defaultCredentialStore(), "openai");
-                                                    this.agentConfigured = false;
-                                                    this.println("OpenAI API key removed. Run /login or /resume to continue.");
+                                                    agentConfigured = false;
+                                                    println("OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
-                                                    this.shellCopilotProvider().gitHubCopilotLogout();
-                                                    if (this.agentConfigured
-                                                            && this.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        this.agentConfigured = false;
-                                                        this.println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
+                                                    ((CodingAgentOperations) requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID))
+                                                            .gitHubCopilotLogout();
+                                                    if (agentConfigured
+                                                            && selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                                        agentConfigured = false;
+                                                        println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
                                                     } else {
-                                                        this.println("GitHub Copilot credentials removed.");
+                                                        println("GitHub Copilot credentials removed.");
                                                     }
                                                 }
                                             } finally {
-                                                this.refreshShellStatus();
+                                                refreshShellStatus();
                                             }
                                         }
                                         case "/models" -> {
                                             List<Model> models2 = new ArrayList<>();
-                                            for (Model model1 : this.allCatalogModels()) {
+                                            for (Model model1 : allCatalogModels()) {
                                                 if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                     models2.add(model1);
                                                 }
                                             }
-                                            CodingAgentOperations copilot = this.shellCopilotProvider();
+                                            CodingAgentOperations copilot = (CodingAgentOperations)
+                                                    requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                             try {
                                                 if (copilot.gitHubCopilotHasCredential()) {
-                                                    this.println("Refreshing GitHub Copilot models...");
+                                                    println("Refreshing GitHub Copilot models...");
                                                     models2.addAll(copilot.gitHubCopilotEnableAndRefreshModels().models);
                                                 } else {
                                                     models2.addAll(copilot.models);
                                                 }
                                             } catch (IOException error) {
-                                                this.println("Could not refresh GitHub Copilot model access: " + error.getMessage());
+                                                println("Could not refresh GitHub Copilot model access: " + error.getMessage());
                                                 models2.addAll(copilot.models);
                                             }
-                                            models2.addAll(this.shellChatGptProvider().models);
+                                            models2.addAll(((CodingAgentOperations)
+                                                    requireCoreProvider(CHATGPT_PROVIDER_ID)).models);
                                             List<Model> models1 = List.copyOf(models2);
                                             List<SelectItem<Model>> items =
                                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
                                             int currentIndex;
-                                            if (!this.agentConfigured) {
+                                            if (!agentConfigured) {
                                                 currentIndex = -1;
                                             } else {
                                                 int result1 = -1;
                                                 for (int index = 0; index < models1.size(); index++) {
                                                     Model model = models1.get(index);
-                                                    if (model.provider.equals(this.selectedModel.provider) && model.id.equals(this.selectedModel.id)) {
+                                                    if (model.provider.equals(selectedModel.provider) && model.id.equals(selectedModel.id)) {
                                                         result1 = index;
                                                         break;
                                                     }
                                                 }
                                                 currentIndex = result1;
                                             }
-                                            Model model = this.select("Select a model", items, currentIndex, true);
+                                            Model model = select("Select a model", items, currentIndex, true);
                                             if (model != null) {
-                                                this.configureShellModel(model, true);
-                                                this.println("Using " + model + " in a new agent session.");
+                                                configureShellModel(model, true);
+                                                println("Using " + model + " in a new agent session.");
                                             }
                                         }
                                         case "/mcp" -> {
-                                            if (this.servers.isEmpty()) {
-                                                this.println("No MCP servers configured in ~/.codingagent/settings.json.");
+                                            if (servers.isEmpty()) {
+                                                println("No MCP servers configured in ~/.codingagent/settings.json.");
                                             } else {
                                                 McpSelector selector1 = new McpSelector();
                                                 selector1.manager = this;
@@ -10177,15 +10380,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                     } catch (IOException error) {
                                                         throw new UncheckedIOException(error);
                                                     } finally {
-                                                        this.syncShellMcpTools();
+                                                        syncShellMcpTools();
                                                     }
                                                 };
-                                                selector1.names = this.servers.values().stream()
+                                                selector1.names = servers.values().stream()
                                                         .sorted(Comparator.comparing(runtime -> runtime.name))
                                                         .map(CodingAgentOperations::mcpSnapshot)
                                                         .toList().stream().map(status -> status.name).toList();
                                                 selector1.filtered = selector1.names;
-                                                this.runComponent(new TuiComponent<>(
+                                                runComponent(new TuiComponent<>(
                                                         frame -> {
                                                             if (selector1.view == McpSelector.View.TOOLS)
                                                                 refreshMcpSelectorTools(selector1);
@@ -10432,19 +10635,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         },
                                                         () -> selector1.complete,
                                                         () -> null));// An OAuth connection may finish asynchronously while the selector is open.
-                                                this.syncShellMcpTools();
+                                                syncShellMcpTools();
                                             }
                                         }
                                         case "/settings" -> {
-                                            if (!this.agentConfigured) {
-                                                this.println("No model is configured.");
+                                            if (!agentConfigured) {
+                                                println("No model is configured.");
                                             } else {
                                                 this.select("Settings", List.of(new SelectItem<>(
                                                                 "thinking",
                                                                 "Thinking level",
                                                                 this.thinkingLevel.wire,
                                                                 "Thinking level " + this.thinkingLevel.wire)), 0, false);
-                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(this.selectedModel);
+                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(selectedModel);
                                                 List<SelectItem<ThinkingLevel>> items = levels.stream()
                                                         .map(level -> {
                                                             String description = switch (level) {
@@ -10461,39 +10664,39 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         })
                                                         .toList();
                                                 int currentIndex = Math.max(0, levels.indexOf(this.thinkingLevel));
-                                                ThinkingLevel level = this.select("Thinking level", items, currentIndex, false);
+                                                ThinkingLevel level = select("Thinking level", items, currentIndex, false);
                                                 if (level != null) {
                                                     this.thinkingLevel = level;
-                                                    this.refreshShellStatus();
+                                                    refreshShellStatus();
                                                     this.settings = new Settings(
                                                             this.settings.defaultProvider, this.settings.defaultModel, level, this.settings.theme, this.settings.hideThinkingBlock);
                                                     try {
                                                         this.modifySettings(root1 -> root1.put("defaultThinkingLevel", level.wire));
-                                                        this.println("Thinking level: " + level.wire);
+                                                        println("Thinking level: " + level.wire);
                                                     } catch (IOException error) {
-                                                        this.println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
+                                                        println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
                                                     }
                                                 }
                                             }
                                         }
                                         case "/compact" -> {
-                                            if (!this.agentConfigured) {
-                                                this.println("No model is configured.");
+                                            if (!agentConfigured) {
+                                                println("No model is configured.");
                                                 break;
                                             }
                                             try {
-                                                CompactionResult result1 = this.compact(null);
-                                                this.println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
-                                                this.refreshShellStatus();
+                                                CompactionResult result1 = compact(null);
+                                                println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
+                                                refreshShellStatus();
                                             } catch (IllegalStateException error) {
-                                                this.println("Error: " + error.getMessage());
+                                                println("Error: " + error.getMessage());
                                             }
                                         }
                                         default -> {
                                             if (input.startsWith("/theme ")) {
                                                 Theme theme1 = namedTheme(input.substring("/theme ".length()).trim());
-                                                this.setTheme(theme1);
-                                                this.refreshShellStatus();
+                                                setTheme(theme1);
+                                                refreshShellStatus();
                                                 this.settings = new Settings(
                                                         this.settings.defaultProvider,
                                                         this.settings.defaultModel,
@@ -10503,67 +10706,67 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                 try {
                                                     requireSettingsValue(theme1.name1, "theme");
                                                     this.modifySettings(root1 -> root1.put("theme", theme1.name1));
-                                                    this.println("Theme: " + this.terminalTheme().name1);
+                                                    println("Theme: " + terminalTheme().name1);
                                                 } catch (IOException error) {
-                                                    this.println("Theme changed for this session, but could not be saved: " + error.getMessage());
+                                                    println("Theme changed for this session, but could not be saved: " + error.getMessage());
                                                 }
-                                            } else this.println("Unknown command: " + input);
+                                            } else println("Unknown command: " + input);
                                         }
                                     }
                                 } finally {
-                                    this.setShellActivity(!this.agentConfigured
+                                    setShellActivity(!agentConfigured
                                             ? noModelActivity(System.nanoTime())
                                             : readyActivity(System.nanoTime()));
-                                    this.refreshShellStatus();
+                                    refreshShellStatus();
                                 }
                                 if (exit) return 0;
                                 continue;
                             }
-                            if (!this.agentConfigured) {
-                                this.println("No model configured. Run /login to choose a provider.");
+                            if (!agentConfigured) {
+                                println("No model configured. Run /login to choose a provider.");
                                 continue;
                             }
-                            this.setShellActivity(activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
-                            this.mcpAwaitReady();
-                            this.syncShellMcpTools();
-                            this.emittedText = false;
-                            this.streamOutput = StreamOutput.NONE;
-                            this.streamedThinkingCharacters = 0;
+                            setShellActivity(activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
+                            mcpAwaitReady();
+                            syncShellMcpTools();
+                            emittedText = false;
+                            streamOutput = StreamOutput.NONE;
+                            streamedThinkingCharacters = 0;
                             AtomicBoolean interrupted = new AtomicBoolean();
-                            List<Message> messages = this.runInterruptibly(() -> this.prompt(input), () -> {
+                            List<Message> messages = runInterruptibly(() -> prompt(input), () -> {
                                         interrupted.set(true);
-                                        this.setShellActivity(activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
-                                        this.abort();
+                                        setShellActivity(activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
+                                        abort();
                                     });
-                            if (this.recordingSession) this.appendSessionMessages(messages);
+                            if (recordingSession) appendSessionMessages(messages);
                             if (interrupted.get()) {
-                                this.finishShellStreamOutput();
-                                this.println("Interrupted.");
+                                finishShellStreamOutput();
+                                println("Interrupted.");
                             } else if (this.messages.getLast() instanceof AssistantMessage response) {
-                                String finalOutput = finalAssistantOutput(response, this.emittedText);
+                                String finalOutput = finalAssistantOutput(response, emittedText);
                                 if (finalOutput != null) {
-                                    this.finishShellStreamOutput();
-                                    this.println(finalOutput);
+                                    finishShellStreamOutput();
+                                    println(finalOutput);
                                 }
                             }
 // AgentEnd normally performs this transition. Reassert it here to close
 // the small race where Escape arrives after AgentEnd but before the task returns.
-                            this.setShellActivity(readyActivity(System.nanoTime()));
-                            this.refreshShellStatus();
+                            setShellActivity(readyActivity(System.nanoTime()));
+                            refreshShellStatus();
                         }
                     } finally {
-                        this.statusTicker.shutdownNow();
+                        statusTicker.shutdownNow();
                         try {
-                            this.statusTicker.awaitTermination(1, TimeUnit.SECONDS);
+                            statusTicker.awaitTermination(1, TimeUnit.SECONDS);
                         } catch (InterruptedException interrupted) {
                             Thread.currentThread().interrupt();
                         }
                     }
                 } finally {
-                    terminal.closeTerminal();
+                    closeTerminal();
                 }
             } finally {
-                this.mcpCloseManager();
+                mcpCloseManager();
             }
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
@@ -10615,28 +10818,27 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         agentInstructions(
                 repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
-        this.refreshAgentInstructionsIn(directory);
+        refreshAgentInstructionsIn(directory);
         Set<Path> announcedSources = new LinkedHashSet<>();
-        this.systemPrompt = this.systemPrompt;
         subscribe(event -> {
             if (event instanceof AgentEvent.AgentStart) {
                 synchronized (this) {
-                    this.refreshAgentInstructionsIn(this.currentDirectory);
+                    refreshAgentInstructionsIn(currentDirectory);
                 }
                 applyAgentInstructions(announcedSources);
             }
         });
         gitIgnore("git");
-        this.tools.addAll(this.builtInTools(cwd, path -> {
+        tools.addAll(builtInTools(cwd, path -> {
             boolean result;
             synchronized (this) {
                 Path directory1 = instructionDirectory(path);
                 if (directory1 == null
                         || !directory1.startsWith(this.repositoryRoot)
-                        || !directory1.startsWith(this.currentDirectory)) {
+                        || !directory1.startsWith(currentDirectory)) {
                     result = false;
                 } else {
-                    result = this.refreshAgentInstructionsIn(directory1);
+                    result = refreshAgentInstructionsIn(directory1);
                 }
             }
             if (result) {
@@ -10798,18 +11000,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private boolean refreshAgentInstructionsIn(Path directory) {
         List<Path> nextSources = new ArrayList<>();
         List<String> promptParts = new ArrayList<>();
-        if (!this.baseSystemPrompt.isBlank()) {
-            promptParts.add(this.baseSystemPrompt);
+        if (!baseSystemPrompt.isBlank()) {
+            promptParts.add(baseSystemPrompt);
         }
         List<Path> directories = new ArrayList<>();
         for (Path current = directory; current != null; current = current.getParent()) {
             directories.add(current);
-            if (current.equals(this.repositoryRoot)) {
+            if (current.equals(repositoryRoot)) {
                 Collections.reverse(directories);
                 break;
             }
         }
-        if (directories.isEmpty() || !directories.getFirst().equals(this.repositoryRoot)) {
+        if (directories.isEmpty() || !directories.getFirst().equals(repositoryRoot)) {
             directories.clear();
         }
         for (Path scope : directories) {
@@ -10834,12 +11036,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
         String nextPrompt = String.join("\n\n", promptParts);
         List<Path> immutableSources = List.copyOf(nextSources);
-        boolean changed = !Objects.equals(directory, this.currentDirectory)
-                || !nextPrompt.equals(this.systemPrompt)
-                || !immutableSources.equals(this.sources);
-        this.currentDirectory = directory;
-        this.systemPrompt = nextPrompt;
-        this.sources = immutableSources;
+        boolean changed = !Objects.equals(directory, currentDirectory)
+                || !nextPrompt.equals(systemPrompt)
+                || !immutableSources.equals(sources);
+        currentDirectory = directory;
+        systemPrompt = nextPrompt;
+        sources = immutableSources;
         return changed;
     }
 
@@ -10974,159 +11176,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return session.name == null ? session.firstMessage : session.name;
     }
 
-    private void resumeShellSession() throws IOException {
-        if (this.noSession) {
-            println("Session persistence is disabled by --no-session.");
-            return;
-        }
-        CodingAgentOperations store =this;
-        defaultSessionStore();
-        List<SessionSnapshot> sessions;
-        try {
-            sessions = store.shellSessionSnapshots(this.cwd);
-        } catch (IOException error) {
-            println("Failed to list saved sessions: " + error.getMessage());
-            return;
-        }
-        if (sessions.isEmpty()) {
-            println("No saved sessions in " + this.cwd + ".");
-            return;
-        }
-        String currentId = !this.recordingSession ? null : this.sessionId;
-        List<SelectItem<SessionSnapshot>> items = sessions.stream()
-                .filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
-                .map(CodingAgentOperations::shellSessionItem)
-                .toList();
-        if (items.isEmpty()) {
-            println("No resumable sessions in " + this.cwd + ".");
-            return;
-        }
-        SessionSnapshot selected =
-                select("Resume Session (Current Folder)", items, -1, true);
-        if (selected == null) return;
-        try {
-            resumeSelectedShellSession(selected);
-        } catch (IOException | IllegalArgumentException error) {
-            println("Failed to resume session: " + error.getMessage());
-        }
-    }
-
-    private List<SessionSnapshot> shellSessionSnapshots(Path cwd)
-            throws IOException {
-        Set<String> ids = new LinkedHashSet<>();
-        for (Path directory : Stream.concat(Stream.of(this.directory), this.legacyDirectories.stream()).toList()) {
-            if (!Files.isDirectory(directory)) continue;
-            try (Stream<Path> files = Files.list(directory)) {
-                files.filter(Files::isRegularFile)
-                        .filter(path -> path.getFileName().toString().endsWith(".jsonl"))
-                        .map(path -> path.getFileName().toString().replaceFirst("\\.jsonl$", ""))
-                        .forEach(ids::add);
-            }
-        }
-        Path normalizedCwd = cwd == null ? null : cwd.toAbsolutePath().normalize();
-        List<SessionSnapshot> snapshots = new ArrayList<>();
-        for (String id : ids) {
-            try {
-                SessionSnapshot snapshot = sessionSnapshot(id);
-                boolean sameDirectory = normalizedCwd == null;
-                if (!sameDirectory) try {
-                    sameDirectory = snapshot.cwd.toRealPath().equals(normalizedCwd.toRealPath());
-                } catch (IOException ignored) {
-                    sameDirectory = snapshot.cwd.equals(normalizedCwd);
-                }
-                if (sameDirectory) snapshots.add(snapshot);
-            } catch (IOException | IllegalArgumentException ignored) {
-                // Discovery is best effort: one corrupt session must not hide the rest.
-            }
-        }
-        snapshots.sort(Comparator.comparing((SessionSnapshot snapshot) -> snapshot.modified).reversed());
-        return List.copyOf(snapshots);
-    }
-
-    private static SelectItem<SessionSnapshot> shellSessionItem(SessionSnapshot session) {
-        String name = sessionDisplayName(session);
-        String label = abbreviateShellText(name.replaceAll("[\\p{Cntrl}]", " "), 90);
-        long minutes = Math.max(0, Duration.between(session.modified, Instant.now()).toMinutes());
-        long hours = minutes / 60;
-        long days = hours / 24;
-        String age = minutes < 1 ? "now"
-                : minutes < 60 ? minutes + "m"
-                  : hours < 24 ? hours + "h"
-                    : days < 7 ? days + "d"
-                      : days < 30 ? days / 7 + "w"
-                        : days < 365 ? days / 30 + "mo" : days / 365 + "y";
-        String description = session.messageCount + " messages  " + age
-                + "  [" + session.provider + "/" + session.model + "]";
-        return new SelectItem<>(session, label, description,
-                session.id + " " + name + " " + session.provider + " " + session.model + " "
-                        + session.firstMessage + " " + session.allMessagesText);
-    }
-
-    private void resumeSelectedShellSession(SessionSnapshot selected) throws IOException {
-        if (!Files.isDirectory(selected.cwd)) {
-            println("Cannot resume session because its working directory is unavailable: " + selected.cwd);
-            return;
-        }
-        Model model;
-        try {
-            model = findModelIn(
-                    providerModels(requireCoreProvider(selected.provider)),
-                    selected.provider,
-                    selected.model);
-        } catch (IllegalArgumentException ignored) {
-            model = null;
-        }
-        if (model == null) {
-            if (!this.agentConfigured) {
-                println("Cannot restore model " + selected.provider + "/" + selected.model
-                        + "; configure an available model before resuming this session.");
-                return;
-            }
-            model = this.selectedModel;
-            println("Could not restore model " + selected.provider + "/" + selected.model
-                    + ". Using " + model + ".");
-        }
-        if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-            CodingAgentOperations copilot = shellCopilotProvider();
-            Model enabled = null;
-            try {
-                if (copilot.gitHubCopilotHasCredential()) {
-                    enabled = findModelIn(copilot.gitHubCopilotAvailableModels(), model.provider, model.id);
-                }
-            } catch (IOException error) {
-                println("Could not refresh GitHub Copilot model access: " + error.getMessage());
-            }
-            if (enabled != null) model = enabled;
-            else if (!this.agentConfigured
-                    || this.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                println("Cannot restore GitHub Copilot model " + model.id
-                        + "; log in or configure another model first.");
-                return;
-            } else {
-                Model fallback = this.selectedModel;
-                println("Could not restore model " + model + ". Using " + fallback + ".");
-                model = fallback;
-            }
-        }
-        // A session snapshot's messages are compaction-aware, so resuming cannot
-        // resurrect summarized transcript entries into the next model request.
-        List<Message> restored = resumableMessages(selected.messages);
-        resumeSessionRecorder(selected.id);
-        configureShellAgent(model, selected.cwd, true, selected.name);
-        this.settings = withSettingsDefaultModel(this.settings, model.provider, model.id);
-        this.messages.addAll(restored);
-        refreshShellStatus();
-        replaceScreen(renderSessionScreen(
-                model, selected.transcriptMessages, this.hideThinkingBlock, terminalTheme()));
-        try {
-            setSettingsDefaultModelAndProvider(model.provider, model.id);
-        } catch (IOException error) {
-            println("Resumed model could not be saved as the default: " + error.getMessage());
-        }
-        println("Resumed session " + sessionDisplayName(selected) + " with "
-                + restored.size() + " message(s) using " + model + ".");
-    }
-
     /**
      * The text to print after a turn, or null when it was already streamed.
      */
@@ -11139,7 +11188,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             throws IOException {
         Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
         boolean recordingEnabled = false;
-        if (!this.noSession) {
+        if (!noSession) {
             try {
                 defaultSessionStore();
                 createSessionRecorder(configuredCwd, model.provider, model.id);
@@ -11150,7 +11199,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
         configureShellAgent(model, configuredCwd, recordingEnabled, null);
         if (persistModel) {
-            this.settings = withSettingsDefaultModel(this.settings, model.provider, model.id);
+            settings = withSettingsDefaultModel(settings, model.provider, model.id);
             try {
                 setSettingsDefaultModelAndProvider(model.provider, model.id);
             } catch (IOException error) {
@@ -11161,10 +11210,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private void configureShellAgent(Model model, Path configuredCwd, boolean recordingEnabled, String nextSessionName) {
         Provider provider = requireCoreProvider(model.provider);
-        agentState(this.systemPrompt == null ? "" : this.systemPrompt, model);
+        agentState(systemPrompt == null ? "" : systemPrompt, model);
         agent(provider);
         thinkingLevel =
-                initialThinkingLevel(model, this.settings.defaultThinkingLevel);
+                initialThinkingLevel(model, settings.defaultThinkingLevel);
         configureBuiltInTools(configuredCwd, systemPrompt);
         tools.addAll(mcpTools());
         subscribe(event -> {
@@ -11177,7 +11226,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
                 case AgentEvent.CompactionStart ignored -> setShellActivity(activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
                 case AgentEvent.CompactionEnd end -> {
-                    if (this.recordingSession) {
+                    if (recordingSession) {
                         try {
                             appendSessionCompaction(end.result);
                         } catch (IOException error) {
@@ -11186,7 +11235,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             println("Warning: compacted context could not be saved for resume: " + error.getMessage());
                         }
                     }
-                    if (this.agentConfigured && this.isStreaming) {
+                    if (agentConfigured && isStreaming) {
                         setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
                     } else {
                         setShellActivity(readyActivity(System.nanoTime()));
@@ -11304,11 +11353,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
             }
         });
-        this.cwd = configuredCwd.toAbsolutePath().normalize();
-        this.agentConfigured = true;
-        this.recordingSession = recordingEnabled;
-        this.sessionName = nextSessionName;
-        if (this.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
+        cwd = configuredCwd.toAbsolutePath().normalize();
+        agentConfigured = true;
+        recordingSession = recordingEnabled;
+        sessionName = nextSessionName;
+        if (activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
             setShellActivity(readyActivity(System.nanoTime()));
         }
         refreshShellStatus();
@@ -11318,35 +11367,35 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Updates cached workspace/model details, then redraws the live activity status.
      */
     private void refreshShellStatus() {
-        String branch = gitBranch(this.cwd);
-        this.statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), this.cwd)
+        String branch = gitBranch(cwd);
+        statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
                 + (branch == null ? "" : " [" + branch + "]")
-                + (this.sessionName == null ? "" : " \u2022 " + this.sessionName);
-        this.statusModel = !this.agentConfigured
+                + (sessionName == null ? "" : " \u2022 " + sessionName);
+        statusModel = !agentConfigured
                 ? ""
                 : modelStatus(
-                this.selectedModel,
-                this.thinkingLevel,
-                contextTokens(this.messages));
+                selectedModel,
+                thinkingLevel,
+                contextTokens(messages));
         renderShellStatus();
     }
 
     private void renderShellStatus() {
-        ActivityStatus current = this.activity;
-        setStatus(activityLabel(current, System.nanoTime()), activityAccent(current), this.statusLocation, this.statusModel);
+        ActivityStatus current = activity;
+        setStatus(activityLabel(current, System.nanoTime()), activityAccent(current), statusLocation, statusModel);
     }
 
     private void setShellActivity(ActivityStatus next) {
         boolean changed;
-        synchronized (this.activityLock) {
-            ActivityStatus current = this.activity;
+        synchronized (activityLock) {
+            ActivityStatus current = activity;
             if (current.phase == ActivityStatus.Phase.STOPPING
                     && next.phase != ActivityStatus.Phase.READY
                     && next.phase != ActivityStatus.Phase.NO_MODEL) {
                 return;
             }
             changed = !sameActivity(current, next);
-            if (changed) this.activity = next;
+            if (changed) activity = next;
         }
         if (changed) renderShellStatus();
     }
@@ -11440,87 +11489,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private void syncShellMcpTools() {
-        if (!this.agentConfigured || this.isStreaming) return;
-        this.tools.removeIf(McpAgentTool.class::isInstance);
-        this.tools.addAll(mcpTools());
-    }
-
-    private CodingAgentOperations shellCopilotProvider() {
-        return (CodingAgentOperations)
-                requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-    }
-
-    private CodingAgentOperations shellChatGptProvider() {
-        return (CodingAgentOperations) requireCoreProvider(CHATGPT_PROVIDER_ID);
-    }
-
-    private void restoreShellModel() throws IOException {
-        Settings settings = this.settings;
-        Model model = null;
-        if (settings.defaultProvider != null && settings.defaultModel != null) {
-            try {
-                model = findModelIn(
-                        providerModels(requireCoreProvider(settings.defaultProvider)),
-                        settings.defaultProvider,
-                        settings.defaultModel);
-            } catch (IllegalArgumentException ignored) {
-            }
-            if (model == null) {
-                println("Saved model " + settings.defaultProvider + "/" + settings.defaultModel
-                        + " is unavailable; selecting a fallback.");
-            } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                CodingAgentOperations copilot = shellCopilotProvider();
-                try {
-                    model = copilot.gitHubCopilotHasCredential()
-                            ? findModelIn(copilot.gitHubCopilotAvailableModels(), model.provider, model.id)
-                            : null;
-                    if (model == null) {
-                        println("Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
-                    }
-                } catch (IOException error) {
-                    println("Could not restore the saved GitHub Copilot model: " + error.getMessage());
-                    model = null;
-                }
-            } else if (model.provider.equals(CHATGPT_PROVIDER_ID)) {
-                try {
-                    if (!shellChatGptProvider().chatGptHasCredential()) model = null;
-                } catch (IOException error) {
-                    println("Could not restore the saved ChatGPT model: " + error.getMessage());
-                    model = null;
-                }
-            }
-        }
-        if (model != null) {
-            configureShellModel(model, false);
-            return;
-        }
-
-        CodingAgentOperations chatGpt = shellChatGptProvider();
-        try {
-            if (chatGpt.chatGptHasCredential() && !chatGpt.models.isEmpty()) {
-                configureShellModel(preferredChatGptModel(chatGpt.models), true);
-                return;
-            }
-        } catch (IOException error) {
-            println("ChatGPT login needs attention: " + error.getMessage());
-        }
-        CodingAgentOperations copilot = shellCopilotProvider();
-        try {
-            if (!copilot.gitHubCopilotHasCredential()) return;
-            Model fallback = preferredCopilotModel(copilot.gitHubCopilotAvailableModels());
-            if (fallback == null) {
-                println("GitHub Copilot has no enabled coding models. Run /login to refresh access.");
-            } else {
-                configureShellModel(fallback, true);
-            }
-        } catch (IOException error) {
-            println("GitHub Copilot login needs attention: " + error.getMessage());
-        }
+        if (!agentConfigured || isStreaming) return;
+        tools.removeIf(McpAgentTool.class::isInstance);
+        tools.addAll(mcpTools());
     }
 
     private Model shellSavedModelIn(List<Model> models) {
-        if (this.settings.defaultProvider == null || this.settings.defaultModel == null) return null;
-        return findModelIn(models, this.settings.defaultProvider, this.settings.defaultModel);
+        if (settings.defaultProvider == null || settings.defaultModel == null) return null;
+        return findModelIn(models, settings.defaultProvider, settings.defaultModel);
     }
 
     /**
@@ -11562,12 +11538,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private void showShellTurnDetails(boolean lineEditorActive) {
-        if (!this.agentConfigured) {
+        if (!agentConfigured) {
             showShellShortcutStatus("No model is configured.", lineEditorActive);
             return;
         }
         TurnDetailsComponent details =
-                turnDetailsForLatestTurn(this.messages, this.hideThinkingBlock);
+                turnDetailsForLatestTurn(messages, hideThinkingBlock);
         if (details == null) {
             showShellShortcutStatus("The latest turn has no reasoning or tool details.", lineEditorActive);
             return;
@@ -11578,7 +11554,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     input -> handleTurnDetailsInput(details, input),
                     () -> details.complete,
                     () -> details.thinkingHidden));
-            if (hiddenAfter != this.hideThinkingBlock) {
+            if (hiddenAfter != hideThinkingBlock) {
                 setShellHideThinkingBlock(hiddenAfter, lineEditorActive);
             }
         } catch (IOException error) {
@@ -11587,12 +11563,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private void setShellHideThinkingBlock(boolean hidden, boolean lineEditorActive) {
-        this.hideThinkingBlock = hidden;
-        this.settings = new Settings(
-                this.settings.defaultProvider,
-                this.settings.defaultModel,
-                this.settings.defaultThinkingLevel,
-                this.settings.theme,
+        hideThinkingBlock = hidden;
+        settings = new Settings(
+                settings.defaultProvider,
+                settings.defaultModel,
+                settings.defaultThinkingLevel,
+                settings.theme,
                 hidden);
         String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
         try {
@@ -11609,9 +11585,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private void finishShellStreamOutput() {
-        if (this.streamOutput != StreamOutput.NONE) {
+        if (streamOutput != StreamOutput.NONE) {
             println("");
-            this.streamOutput = StreamOutput.NONE;
+            streamOutput = StreamOutput.NONE;
         }
     }
 
@@ -11777,7 +11753,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         if (server.arguments.noSession) server.recorder = null;
         else {
             defaultSessionStore();
-            this.createSessionRecorder(Path.of("."), model.provider, model.id);
+            createSessionRecorder(Path.of("."), model.provider, model.id);
             server.recorder = this;
         }
     }
@@ -12226,10 +12202,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Creates a session with an optional user-visible name.
      */
     public CodingAgentOperations createSessionRecorder(Path cwd, String provider, String model, String sessionName) throws IOException {
-        Files.createDirectories(this.directory);
-        setPosixPermissions(this.directory, DIRECTORY_PERMISSIONS);
+        Files.createDirectories(directory);
+        setPosixPermissions(directory, DIRECTORY_PERMISSIONS);
         String id1 = uuidv7();
-        Path file = this.directory.resolve(id1 + ".jsonl");
+        Path file = directory.resolve(id1 + ".jsonl");
         Files.createFile(file);
         setPosixPermissions(file, FILE_PERMISSIONS);
         ObjectNode start = jsonObject();
@@ -12324,7 +12300,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     encodeSessionUserContent(content, result.content);
                 }
             }
-            appendSessionEntry(this.sessionId, "message", node);
+            appendSessionEntry(sessionId, "message", node);
         }
     }
 
@@ -12342,7 +12318,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         checkpoint.put("summary", result.summary);
         checkpoint.put("tokensBefore", result.tokensBefore);
         checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
-        appendSessionEntry(this.sessionId, "compaction", checkpoint);
+        appendSessionEntry(sessionId, "compaction", checkpoint);
     }
 
     // ------------------------------------------------------------ session store
@@ -12609,9 +12585,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private Path existingSessionPath(String sessionId) {
-        Path current = this.directory.resolve(sessionId + ".jsonl");
+        Path current = directory.resolve(sessionId + ".jsonl");
         if (Files.isRegularFile(current)) return current;
-        for (Path legacyDirectory : this.legacyDirectories) {
+        for (Path legacyDirectory : legacyDirectories) {
             Path legacy = legacyDirectory.resolve(sessionId + ".jsonl");
             if (Files.isRegularFile(legacy)) return legacy;
         }
@@ -12658,19 +12634,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * UncheckedIOException, which is unwrapped into the declared IOException.
      */
     private void modifySettings(Consumer<ObjectNode> operation) throws IOException {
-        Path parent = this.settingsPath.getParent();
+        Path parent = settingsPath.getParent();
         if (parent == null) {
-            throw new IOException("Settings path has no parent directory: " + this.settingsPath);
+            throw new IOException("Settings path has no parent directory: " + settingsPath);
         }
         Files.createDirectories(parent);
         setPosixPermissions(parent, DIRECTORY_PERMISSIONS);
         try (FileChannel channel =
-                     FileChannel.open(this.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                     FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = channel.lock()) {
-            setPosixPermissions(this.lockPath, FILE_PERMISSIONS);
+            setPosixPermissions(lockPath, FILE_PERMISSIONS);
             ObjectNode root = readSettingsObject();
             operation.accept(root);
-            Path temp = Files.createTempFile(this.settingsPath.getParent(), "settings-", ".json");
+            Path temp = Files.createTempFile(settingsPath.getParent(), "settings-", ".json");
             try {
                 Files.writeString(
                         temp,
@@ -12680,11 +12656,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         StandardOpenOption.TRUNCATE_EXISTING);
                 setPosixPermissions(temp, FILE_PERMISSIONS);
                 try {
-                    Files.move(temp, this.settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(temp, settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException error) {
-                    Files.move(temp, this.settingsPath, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(temp, settingsPath, StandardCopyOption.REPLACE_EXISTING);
                 }
-                setPosixPermissions(this.settingsPath, FILE_PERMISSIONS);
+                setPosixPermissions(settingsPath, FILE_PERMISSIONS);
             } finally {
                 Files.deleteIfExists(temp);
             }
@@ -12694,18 +12670,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private ObjectNode readSettingsObject() throws IOException {
-        if (!Files.exists(this.settingsPath)) {
+        if (!Files.exists(settingsPath)) {
             return jsonObject();
         }
         JsonNode root;
         try {
-            root = Json.MAPPER.readTree(Files.readString(this.settingsPath, StandardCharsets.UTF_8));
+            root = Json.MAPPER.readTree(Files.readString(settingsPath, StandardCharsets.UTF_8));
         } catch (IOException error) {
             throw new IOException(
-                    "Failed to read settings file " + this.settingsPath + ": " + error.getMessage(), error);
+                    "Failed to read settings file " + settingsPath + ": " + error.getMessage(), error);
         }
         if (!(root instanceof ObjectNode object)) {
-            throw new IOException("Invalid settings file " + this.settingsPath + ": expected a JSON object");
+            throw new IOException("Invalid settings file " + settingsPath + ": expected a JSON object");
         }
         return object;
     }
