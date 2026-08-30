@@ -49,7 +49,8 @@ class GoogleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = CodingAgentOperations.googleProvider(List.of(model));
+			CodingAgentOperations.googleProvider(List.of(model));
+			CodingAgentOperations provider = CodingAgentOperations.INSTANCE;
 			Context context = new Context("system");
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 

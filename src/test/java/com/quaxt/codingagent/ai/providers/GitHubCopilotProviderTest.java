@@ -92,7 +92,9 @@ class GitHubCopilotProviderTest {
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			CodingAgentOperations provider = CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)).newGitHubCopilotProvider(models);
+			CodingAgentOperations.gitHubCopilotAuth(
+					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(models);
 
 			assertEquals("anthropic", CodingAgentOperations.text(
 					CodingAgentOperations.result(CodingAgentOperations.stream(provider, models.get(0), new Context(), new StreamOptions()))));
@@ -130,8 +132,9 @@ class GitHubCopilotProviderTest {
 		server.start();
 		try {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
-			Model opus = CodingAgentOperations.copyModel(
-					CodingAgentOperations.loadBundledModelCatalog().requireCatalogModel(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
+			CodingAgentOperations.loadBundledModelCatalog();
+			Model opus = CodingAgentOperations.copyModel(CodingAgentOperations.INSTANCE.requireCatalogModel(
+					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
 
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
@@ -142,7 +145,9 @@ class GitHubCopilotProviderTest {
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			CodingAgentOperations provider = CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)).newGitHubCopilotProvider(List.of(opus));
+			CodingAgentOperations.gitHubCopilotAuth(
+					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(List.of(opus));
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("Use adaptive thinking"));
 
