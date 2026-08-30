@@ -177,11 +177,7 @@ import org.jline.utils.WCWidth;
 
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
-/**
- * Single home for project-owned behavior and state. Stateful operations are
- * instance methods on the enum singleton; stateless utilities and factories
- * remain static.
- */
+/** Main class. Should contain all application logic to the greatest extent that is reasonable.*/
 public enum CodingAgentOperations implements Provider, CredentialStore {
     INSTANCE;
     public static final String APP_NAME = "codingagent";
