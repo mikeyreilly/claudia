@@ -41,8 +41,9 @@ class McpRemoteTest {
 					5_000L,
 					List.of(),
 					List.of());
-			CodingAgentOperations manager = CodingAgentOperations.mcpCreateManager(
+			CodingAgentOperations.mcpCreateManager(
 					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
+			CodingAgentOperations manager = CodingAgentOperations.INSTANCE;
 			try {
 				manager.mcpAwaitReady();
 				assertEquals(CodingAgentOperations.McpState.CONNECTED, manager.mcpStatus("remote").state);
