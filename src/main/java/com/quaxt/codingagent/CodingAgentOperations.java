@@ -3743,7 +3743,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         List<Model> all = List.copyOf(models);
         List<Model> models1 = copilotModelsFor(all, OpenAiResponsesProvider.API);
         CodingAgentOperations provider = INSTANCE;
-        provider.providerKind = ProviderKind.GITHUB_COPILOT;
         provider.models = all;
 
         provider.anthropic = new AnthropicProvider(
@@ -3764,6 +3763,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         List.of(),
                         null,
                         OpenAiResponsesProvider.RequestProfile.STANDARD);
+        provider.providerKind = ProviderKind.GITHUB_COPILOT;
         return provider;
     }
 
@@ -6671,6 +6671,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations mcpCreateManager(McpConfiguration configuration, Path workspace) {
+        CodingAgentOperations manager = INSTANCE;
+        if (!manager.closed && !manager.servers.isEmpty()) {
+            mcpCloseManager(manager);
+        }
+        manager.servers = new LinkedHashMap<>();
+        manager.closed = false;
         HttpClient http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(15))
@@ -6709,7 +6715,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     }
                 }, "browser"),
                 Objects.requireNonNull(MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
-        CodingAgentOperations manager = INSTANCE;
         manager.workspace = workspace.toAbsolutePath().normalize();
         manager.oauth = oauth;
         configuration.servers.forEach((name, config) -> {
@@ -8836,6 +8841,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public static CodingAgentOperations newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
         CodingAgentOperations interactive = INSTANCE;
+        interactive.screenDocument = new StringBuilder();
+        interactive.statusBar = null;
+        interactive.statusActivity = null;
+        interactive.statusAccent = StatusAccent.NONE;
+        interactive.statusLeft = null;
+        interactive.statusRight = null;
+        interactive.fullScreenResumeAttributes = null;
+        interactive.managedSuspend = false;
+        interactive.suspendedBuffer = null;
+        interactive.suspendedCursor = -1;
+        interactive.restoreCursor = -1;
+        interactive.activeCommandSuggestions = null;
+        interactive.dynamicPost = null;
         interactive.jlineTerminal = terminal;
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
@@ -9073,6 +9091,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public static CodingAgentOperations commandSuggestions(List<String> commands) {
         CodingAgentOperations suggestions = INSTANCE;
         suggestions.commands = commands;
+        suggestions.query = null;
+        suggestions.dismissedBuffer = null;
+        suggestions.matches = List.of();
+        suggestions.selectedIndex = 0;
+        suggestions.visibleStart = 0;
         return suggestions;
     }
 

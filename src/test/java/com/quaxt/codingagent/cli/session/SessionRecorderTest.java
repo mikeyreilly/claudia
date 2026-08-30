@@ -55,6 +55,7 @@ class SessionRecorderTest {
 	void forksTheTranscriptIntoANamedSession() throws Exception {
 		CodingAgentOperations store = CodingAgentOperations.sessionStore(tempDir.resolve("sessions"), List.of());
 		CodingAgentOperations source = CodingAgentOperations.createSessionRecorder(store, tempDir, "faux", "faux-1");
+		String sourceSessionId = source.sessionId;
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("first prompt"), CodingAgentOperations.userMessage("second prompt"));
 		CodingAgentOperations.appendSessionMessages(source, messages);
 
@@ -62,11 +63,11 @@ class SessionRecorderTest {
 				store, tempDir, "faux", "faux-1", "  investigation fork  ", messages);
 		SessionSnapshot snapshot = CodingAgentOperations.sessionSnapshot(store, fork.sessionId);
 
-		assertNotEquals(source.sessionId, fork.sessionId);
+		assertNotEquals(sourceSessionId, fork.sessionId);
 		assertEquals("investigation fork", snapshot.name);
 		assertEquals(2, snapshot.messageCount);
 		assertEquals("first prompt", snapshot.firstMessage);
-		assertEquals(2, CodingAgentOperations.sessionSnapshot(store, source.sessionId).messageCount);
+		assertEquals(2, CodingAgentOperations.sessionSnapshot(store, sourceSessionId).messageCount);
 	}
 
 	@Test
