@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.cli.tools;
 
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.file.Path;
 import java.util.function.Consumer;
@@ -17,7 +18,7 @@ public final class LocalTool implements AgentTool {
 	public String description;
 	public ObjectNode parameters;
 	public Consumer<Path> onPathAccess;
-	public GitIgnore gitIgnore;
+	public CodingAgentOperations gitIgnore;
 	public BuiltInTools.Shell shell;
 
 	public LocalTool(
@@ -27,7 +28,7 @@ public final class LocalTool implements AgentTool {
 			String description,
 			ObjectNode parameters,
 			Consumer<Path> onPathAccess,
-			GitIgnore gitIgnore,
+			CodingAgentOperations gitIgnore,
 			BuiltInTools.Shell shell) {
 		this.kind = kind;
 		this.cwd = cwd;

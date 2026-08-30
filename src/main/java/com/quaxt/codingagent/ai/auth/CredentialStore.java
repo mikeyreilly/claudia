@@ -4,10 +4,10 @@ import java.util.Objects;
 
 /**
  * Persistent credential store marker. Mutations are serialized and atomically
- * written by the operations in CodingAgentOperations, which dispatch over the
- * concrete store carriers permitted here.
+ * written by CodingAgentOperations. The folded operations carrier implements
+ * this marker when it represents the file credential store.
  */
-public sealed interface CredentialStore permits FileCredentialStore {
+public interface CredentialStore {
 
 	/** Provider id and credential type pair, without the secret material. */
 	final class CredentialInfo {

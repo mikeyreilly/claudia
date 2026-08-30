@@ -39,15 +39,15 @@ class ChatGptAuthTest {
 			});
 			server.start();
 
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			ChatGptAuth auth = CodingAgentOperations.chatGptAuth(store, base, "test-client");
-			ChatGptAuth.DeviceCode device = CodingAgentOperations.chatGptBeginLogin(auth);
+			CodingAgentOperations auth = CodingAgentOperations.chatGptAuth(store, base, "test-client");
+			CodingAgentOperations.ChatGptDeviceCode device = CodingAgentOperations.chatGptBeginLogin(auth);
 			assertEquals("ABCD-EFGH", device.userCode);
 			CodingAgentOperations.chatGptCompleteLogin(auth, device);
 			assertTrue(CodingAgentOperations.chatGptHasCredential(auth));
 
-			ChatGptAuth.ChatGptToken refreshed = CodingAgentOperations.chatGptResolveToken(auth);
+			CodingAgentOperations.ChatGptToken refreshed = CodingAgentOperations.chatGptResolveToken(auth);
 			assertEquals("access-2", refreshed.accessToken);
 			assertEquals("account-123", refreshed.accountId);
 			assertEquals(2, tokenExchanges.get());

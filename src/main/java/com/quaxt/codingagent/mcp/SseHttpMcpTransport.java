@@ -1,5 +1,6 @@
 package com.quaxt.codingagent.mcp;
 
+import com.quaxt.codingagent.CodingAgentOperations;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.InputStream;
 import java.net.URI;
@@ -22,7 +23,7 @@ import java.util.function.BiConsumer;
 public final class SseHttpMcpTransport implements McpTransport {
 	public URI url;
 	public Map<String, String> headers;
-	public McpOAuthClient.Session oauth;
+	public CodingAgentOperations.McpOAuthSession oauth;
 	public Path workspace;
 	public HttpClient client = HttpClient.newBuilder()
 			.followRedirects(HttpClient.Redirect.NORMAL)

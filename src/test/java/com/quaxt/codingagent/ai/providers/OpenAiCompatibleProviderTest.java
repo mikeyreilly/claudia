@@ -55,7 +55,7 @@ class OpenAiCompatibleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			OpenAiCompatibleProvider provider =
+			CodingAgentOperations provider =
 					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 			Context context = new Context("system instructions");
 			context.messages.add(CodingAgentOperations.userMessage("hello"));
@@ -98,7 +98,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			OpenAiCompatibleProvider provider =
+			CodingAgentOperations provider =
 					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
@@ -124,7 +124,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			OpenAiCompatibleProvider provider =
+			CodingAgentOperations provider =
 					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
@@ -152,7 +152,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			OpenAiCompatibleProvider provider =
+			CodingAgentOperations provider =
 					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessageEventStream stream =
@@ -188,7 +188,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			OpenAiCompatibleProvider provider =
+			CodingAgentOperations provider =
 					CodingAgentOperations.openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =

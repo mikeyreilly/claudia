@@ -19,8 +19,6 @@ import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.StreamOptions;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.auth.Credential;
-import com.quaxt.codingagent.ai.auth.FileCredentialStore;
-import com.quaxt.codingagent.ai.auth.GitHubCopilotAuth;
 import com.quaxt.codingagent.ai.types.Context;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
@@ -86,14 +84,14 @@ class GitHubCopilotProviderTest {
 					model("anthropic", "anthropic-messages", base),
 					model("completions", "openai-completions", base),
 					model("responses", "openai-responses", base));
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(
+			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
-					GitHubCopilotAuth.PROVIDER_ID,
+					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			GitHubCopilotProvider provider = CodingAgentOperations.newGitHubCopilotProvider(
+			CodingAgentOperations provider = CodingAgentOperations.newGitHubCopilotProvider(
 					models,
 					CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)));
 
@@ -135,16 +133,16 @@ class GitHubCopilotProviderTest {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
 			Model opus = CodingAgentOperations.copyModel(
 					CodingAgentOperations.requireCatalogModel(
-					CodingAgentOperations.loadBundledModelCatalog(), GitHubCopilotAuth.PROVIDER_ID, "claude-opus-5"));
+					CodingAgentOperations.loadBundledModelCatalog(), CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
-			FileCredentialStore store = CodingAgentOperations.fileCredentialStore(
+			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
-					GitHubCopilotAuth.PROVIDER_ID,
+					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			GitHubCopilotProvider provider = CodingAgentOperations.newGitHubCopilotProvider(
+			CodingAgentOperations provider = CodingAgentOperations.newGitHubCopilotProvider(
 					List.of(opus),
 					CodingAgentOperations.gitHubCopilotAuth(store, URI.create(base), URI.create(base + "/token"), URI.create(base)));
 			Context context = new Context();
@@ -171,7 +169,7 @@ class GitHubCopilotProviderTest {
 		model.id = id;
 		model.name = id;
 		model.api = api;
-		model.provider = GitHubCopilotAuth.PROVIDER_ID;
+		model.provider = CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID;
 		model.baseUrl = baseUrl;
 		model.cost = ModelCost.FREE;
 		model.contextWindow = 1000;

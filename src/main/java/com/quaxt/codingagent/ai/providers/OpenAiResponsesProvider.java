@@ -7,7 +7,7 @@ import com.quaxt.codingagent.ai.types.Model;
 
 /**
  * Streaming carrier for OpenAI's Responses API adapter. It covers the generated
- * first-party OpenAI catalog; {@link OpenAiCompatibleProvider} handles the
+ * first-party OpenAI catalog; the compatible-provider operations handle the
  * separate Chat Completions wire protocol. All behavior lives in
  * CodingAgentOperations.
  */

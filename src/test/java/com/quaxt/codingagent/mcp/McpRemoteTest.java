@@ -41,11 +41,11 @@ class McpRemoteTest {
 					5_000L,
 					List.of(),
 					List.of());
-			McpManager manager = CodingAgentOperations.mcpCreateManager(
+			CodingAgentOperations manager = CodingAgentOperations.mcpCreateManager(
 					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
 			try {
 				CodingAgentOperations.mcpAwaitReady(manager);
-				assertEquals(McpManager.State.CONNECTED, CodingAgentOperations.mcpStatus(manager, "remote").state);
+				assertEquals(CodingAgentOperations.McpState.CONNECTED, CodingAgentOperations.mcpStatus(manager, "remote").state);
 				AgentTool tool = CodingAgentOperations.mcpTools(manager).getFirst();
 				AgentTool.ToolResult result = CodingAgentOperations.executeTool(
 						tool, "id", CodingAgentOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});

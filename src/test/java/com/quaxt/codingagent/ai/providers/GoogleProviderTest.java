@@ -49,7 +49,7 @@ class GoogleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			GoogleProvider provider = new GoogleProvider(List.of(model));
+			CodingAgentOperations provider = CodingAgentOperations.googleProvider(List.of(model));
 			Context context = new Context("system");
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 

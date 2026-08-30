@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quaxt.codingagent.ai.StreamOptions;
-import com.quaxt.codingagent.ai.auth.ChatGptAuth;
 import org.junit.jupiter.api.Test;
 import com.quaxt.codingagent.CodingAgentOperations;
 
@@ -15,10 +14,10 @@ class ChatGptProviderTest {
 		options.sessionId = "session-1";
 
 		CodingAgentOperations.configureCodexRequest(
-				options, new ChatGptAuth.ChatGptToken("access-token", "account-1"));
+				options, new CodingAgentOperations.ChatGptToken("access-token", "account-1"));
 
 		assertEquals("access-token", options.apiKey);
-		assertEquals(ChatGptAuth.CODEX_API_BASE_URL.toString(), options.baseUrl);
+		assertEquals(CodingAgentOperations.CHATGPT_CODEX_API_BASE_URL.toString(), options.baseUrl);
 		assertEquals("account-1", options.headers.get("ChatGPT-Account-Id"));
 		assertEquals("pi-java", options.headers.get("originator"));
 		assertTrue(options.headers.get("User-Agent").startsWith("pi-java ("));
