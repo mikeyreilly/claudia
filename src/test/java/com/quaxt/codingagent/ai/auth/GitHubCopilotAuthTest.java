@@ -58,7 +58,7 @@ class GitHubCopilotAuthTest {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
 			store.fileCredentialStore(tempDir.resolve("auth.json"), null);
-			CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
+			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
 
 			CodingAgentOperations.GitHubCopilotDeviceCode device = auth.gitHubCopilotBeginLogin();
@@ -92,12 +92,12 @@ class GitHubCopilotAuthTest {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
 			store.fileCredentialStore(tempDir.resolve("failing-auth.json"), null);
-			CodingAgentOperations.modifyCredential(
+			CodingAgentOperations.INSTANCE.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"expired-token", "github-token", 0, null, Map.of()));
-			CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
+			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
 
 			IOException error = assertThrows(IOException.class, () -> auth.gitHubCopilotResolveToken());

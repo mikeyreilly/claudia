@@ -80,7 +80,7 @@ class InteractiveShellTest {
 		toolUse.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
-		var restored = CodingAgentOperations.resumableMessages(
+		var restored = CodingAgentOperations.INSTANCE.resumableMessages(
 				List.of(user, failed, orphanedResult, toolUse, laterUser, aborted));
 
 		assertEquals(4, restored.size());
@@ -113,9 +113,9 @@ class InteractiveShellTest {
 						System.currentTimeMillis()),
 				answer);
 
-		String visible = CodingAgentOperations.renderSessionScreen(model, messages, false, Theme.PLAIN);
-		String hidden = CodingAgentOperations.renderSessionScreen(model, messages, true, Theme.PLAIN);
-		String dark = CodingAgentOperations.renderSessionScreen(model, messages, true, Theme.DARK);
+		String visible = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, false, Theme.PLAIN);
+		String hidden = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true, Theme.PLAIN);
+		String dark = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true, Theme.DARK);
 
 		assertTrue(visible.startsWith("codingagent "));
 		assertTrue(visible.contains("\n> Check the project\n"));
@@ -155,7 +155,7 @@ class InteractiveShellTest {
 		failed.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
-		String screen = CodingAgentOperations.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false, Theme.PLAIN);
+		String screen = CodingAgentOperations.INSTANCE.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false, Theme.PLAIN);
 
 		assertTrue(screen.contains("Checking the source."));
 		assertTrue(screen.contains("[read] Reading README.md"));

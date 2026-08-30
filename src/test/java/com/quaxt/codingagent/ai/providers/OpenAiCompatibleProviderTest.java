@@ -38,7 +38,7 @@ class OpenAiCompatibleProviderTest {
 
 	private static CodingAgentOperations openAiCompatibleProvider(
 			String id, String name, String baseUrl, List<Model> models) {
-		CodingAgentOperations.openAiCompatibleProvider(id, name, baseUrl, models);
+		CodingAgentOperations.INSTANCE.openAiCompatibleProvider(id, name, baseUrl, models);
 		return CodingAgentOperations.INSTANCE;
 	}
 
@@ -66,7 +66,7 @@ class OpenAiCompatibleProviderTest {
 			context.messages.add(CodingAgentOperations.userMessage("hello"));
 
 			AssistantMessageEventStream stream =
-					CodingAgentOperations.stream(provider, model, context, options("test-key"));
+					CodingAgentOperations.INSTANCE.stream(provider, model, context, options("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
 			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
@@ -106,7 +106,7 @@ class OpenAiCompatibleProviderTest {
 			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
 			assertEquals("read", CodingAgentOperations.toolCalls(result).getFirst().name);
@@ -131,7 +131,7 @@ class OpenAiCompatibleProviderTest {
 			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
 			assertEquals(1, CodingAgentOperations.toolCalls(result).size());
@@ -158,7 +158,7 @@ class OpenAiCompatibleProviderTest {
 			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessageEventStream stream =
-					CodingAgentOperations.stream(provider, model, new Context(), options("test-key"));
+					CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
 			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
@@ -193,7 +193,7 @@ class OpenAiCompatibleProviderTest {
 			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, new Context(), options("test-key")));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
 
 			assertEquals(StopReason.ERROR, result.stopReason);
 			assertTrue(result.errorMessage.startsWith("OpenAI tool call arguments must be a JSON object"));

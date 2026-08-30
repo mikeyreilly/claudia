@@ -38,20 +38,20 @@ class TurnDetailsComponentTest {
 		TurnDetailsComponent component = details(false);
 		CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN);
 
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.DOWN));
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.DOWN));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
 		assertTrue(component.sections.get(1).expanded);
 		assertFalse(component.sections.get(2).expanded);
 		assertTrue(plain(CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN)).contains("secret read output"));
 
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
 		assertTrue(component.sections.get(1).expanded);
 		assertTrue(component.sections.get(2).expanded);
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
 		assertFalse(component.sections.get(1).expanded);
 		assertFalse(component.sections.get(2).expanded);
 
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.TOGGLE_THINKING));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.TOGGLE_THINKING));
 		assertFalse(component.sections.get(0).expanded);
 		assertTrue(component.thinkingHidden);
 	}
@@ -66,7 +66,7 @@ class TurnDetailsComponentTest {
 				List.of(CodingAgentOperations.userMessage("inspect"), assistant), false);
 
 		String firstPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
-		CodingAgentOperations.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.PAGE_DOWN));
+		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.PAGE_DOWN));
 		String secondPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
 
 		assertTrue(firstPage.contains("reasoning line 0"));

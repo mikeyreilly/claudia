@@ -43,7 +43,7 @@ class RetryTest {
 	@Test
 	void retriesUntilSuccess() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
 				() -> calls.incrementAndGet() < 3
 						? message(StopReason.ERROR, "503 service unavailable")
 						: message(StopReason.STOP, null),
@@ -57,7 +57,7 @@ class RetryTest {
 	@Test
 	void returnsErrorAfterExhaustingRetries() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "500 internal error");
@@ -72,7 +72,7 @@ class RetryTest {
 	@Test
 	void doesNotRetryNonRetryable() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "billing problem");
@@ -92,9 +92,9 @@ class RetryTest {
 				Thread.sleep(30);
 			} catch (InterruptedException ignored) {
 			}
-			CodingAgentOperations.abort(signal);
+			CodingAgentOperations.INSTANCE.abort(signal);
 		});
-		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
 				() -> message(StopReason.ERROR, "503 service unavailable"),
 				new Retry.Policy(true, 3, 10_000),
 				signal,
@@ -107,7 +107,7 @@ class RetryTest {
 	@Test
 	void neverRetriesAbortedResponses() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.retryAssistantCall(
+		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ABORTED, null);

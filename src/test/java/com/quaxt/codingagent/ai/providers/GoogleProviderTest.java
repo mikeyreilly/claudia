@@ -49,13 +49,13 @@ class GoogleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations.googleProvider(List.of(model));
+			CodingAgentOperations.INSTANCE.googleProvider(List.of(model));
 			CodingAgentOperations provider = CodingAgentOperations.INSTANCE;
 			Context context = new Context("system");
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, options("test-key")));
 
 			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);

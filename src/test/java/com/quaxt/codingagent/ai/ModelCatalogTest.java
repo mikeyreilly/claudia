@@ -71,7 +71,7 @@ class ModelCatalogTest {
 	}
 
 	private static CodingAgentOperations loadBundledModelCatalog() {
-		CodingAgentOperations.loadBundledModelCatalog();
+		CodingAgentOperations.INSTANCE.loadBundledModelCatalog();
 		return CodingAgentOperations.INSTANCE;
 	}
 }

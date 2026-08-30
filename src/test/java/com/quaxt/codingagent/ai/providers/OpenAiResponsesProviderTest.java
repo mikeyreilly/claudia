@@ -68,7 +68,7 @@ class OpenAiResponsesProviderTest {
 
 			CodingAgentOperations.INSTANCE.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			CodingAgentOperations credentials = CodingAgentOperations.INSTANCE;
-					CodingAgentOperations.modifyCredential(
+					CodingAgentOperations.INSTANCE.modifyCredential(
 					credentials,
 					"openai",
 					ignored -> new Credential.ApiKeyCredential("saved-key", Map.of()));
@@ -79,7 +79,7 @@ class OpenAiResponsesProviderTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
-			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, new StreamOptions()));
+			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, new StreamOptions()));
 
 			assertEquals(StopReason.STOP, result.stopReason);
 		} finally {
@@ -119,7 +119,7 @@ class OpenAiResponsesProviderTest {
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, options("test-key")));
 
 			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);
@@ -164,7 +164,7 @@ class OpenAiResponsesProviderTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.stream(provider,
+			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider,
 					model, context, options("test-key", ThinkingLevel.MEDIUM)));
 
 			JsonNode body = Json.MAPPER.readTree(request.get());
@@ -200,7 +200,7 @@ class OpenAiResponsesProviderTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			CodingAgentOperations.result(CodingAgentOperations.stream(provider,
+			CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider,
 					model,
 					context,
 					sessionOptions("test-key", ThinkingLevel.MEDIUM, "session-1", 4_096)));
@@ -252,7 +252,7 @@ class OpenAiResponsesProviderTest {
 					false,
 					System.currentTimeMillis()));
 
-			CodingAgentOperations.result(CodingAgentOperations.stream(provider, model, context, options("test-key")));
+			CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, options("test-key")));
 
 			JsonNode input = Json.MAPPER.readTree(request.get()).path("input");
 			assertEquals("reasoning", input.get(0).path("type").asText());

@@ -158,7 +158,7 @@ class SessionRecorderTest {
 	}
 
 	private static CodingAgentOperations sessionStore(Path directory) {
-		CodingAgentOperations.sessionStore(directory, List.of());
+		CodingAgentOperations.INSTANCE.sessionStore(directory, List.of());
 		return CodingAgentOperations.INSTANCE;
 	}
 }
