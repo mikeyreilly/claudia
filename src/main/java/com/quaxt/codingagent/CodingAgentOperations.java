@@ -984,7 +984,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Marks the signal aborted and runs (once) every registered listener.
      */
-    public static void abort(AbortSignal signal) {
+    public void abort(AbortSignal signal) {
         List<Runnable> toRun;
         synchronized (signal) {
             if (signal.aborted) {
@@ -1008,7 +1008,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Registers a listener, invoking it immediately if already aborted.
      */
-    public static void onAbort(AbortSignal signal, Runnable listener) {
+    public void onAbort(AbortSignal signal, Runnable listener) {
         boolean runNow;
         synchronized (signal) {
             runNow = signal.aborted;
@@ -1232,7 +1232,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * for non-2xx status (body fully read), AbortedException when the signal
      * fires, and IOException for transport failures.
      */
-    public static HttpTransport.Response httpPostJson(
+    public HttpTransport.Response httpPostJson(
             String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
             throws IOException {
         return httpPost(url, "application/json", headers, body, timeoutMs, signal);
@@ -1241,13 +1241,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * POST an URL-encoded form body and return a streaming response.
      */
-    public static HttpTransport.Response httpPostForm(
+    public HttpTransport.Response httpPostForm(
             String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
             throws IOException {
         return httpPost(url, "application/x-www-form-urlencoded", headers, body, timeoutMs, signal);
     }
 
-    private static HttpTransport.Response httpPost(
+    private HttpTransport.Response httpPost(
             String url,
             String contentType,
             Map<String, String> headers,
@@ -1268,7 +1268,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return httpSend(builder.build(), signal);
     }
 
-    public static HttpTransport.Response httpGet(
+    public HttpTransport.Response httpGet(
             String url, Map<String, String> headers, Integer timeoutMs, AbortSignal signal) throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -1282,7 +1282,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return httpSend(builder.build(), signal);
     }
 
-    private static HttpTransport.Response httpSend(HttpRequest request, AbortSignal signal) throws IOException {
+    private HttpTransport.Response httpSend(HttpRequest request, AbortSignal signal) throws IOException {
         if (signal != null && isAborted(signal)) {
             throw new HttpTransport.AbortedException();
         }
@@ -1346,7 +1346,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Releases a streaming response body; failures are ignored.
      */
-    public static void closeHttpResponse(HttpTransport.Response response) {
+    public void closeHttpResponse(HttpTransport.Response response) {
         if (response == null) {
             return;
         }
@@ -1416,7 +1416,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Releases an SSE reader; failures are ignored.
      */
-    public static void closeSseReader(SseReader source) {
+    public void closeSseReader(SseReader source) {
         if (source == null) {
             return;
         }
@@ -1492,7 +1492,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return this;
     }
 
-    public static Optional<Credential> readCredential(CredentialStore store, String providerId) throws IOException {
+    public Optional<Credential> readCredential(CredentialStore store, String providerId) throws IOException {
         return switch (store) {
             case CodingAgentOperations file -> {
                 validateProviderId(providerId);
@@ -1506,7 +1506,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Atomically applies a mutation to a provider credential. Returning null
      * removes the credential.
      */
-    public static Optional<Credential> modifyCredential(
+    public Optional<Credential> modifyCredential(
             CredentialStore store, String providerId, UnaryOperator<Credential> operation) throws IOException {
         return switch (store) {
             case CodingAgentOperations file -> {
@@ -1577,7 +1577,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         };
     }
 
-    public static void deleteCredential(CredentialStore store, String providerId) throws IOException {
+    public void deleteCredential(CredentialStore store, String providerId) throws IOException {
         modifyCredential(store, providerId, ignored -> null);
     }
 
@@ -1665,7 +1665,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return new IOException("Invalid credential for provider \"" + providerId + "\"");
     }
 
-    private static void setPosixPermissions(Path path, Set<PosixFilePermission> permissions) throws IOException {
+    private void setPosixPermissions(Path path, Set<PosixFilePermission> permissions) throws IOException {
         try {
             Files.setPosixFilePermissions(path, permissions);
         } catch (UnsupportedOperationException ignored) {
@@ -1673,7 +1673,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void validateProviderId(String providerId) {
+    private void validateProviderId(String providerId) {
         if (providerId == null || providerId.isBlank() || providerId.indexOf('/') >= 0 || providerId.indexOf('\\') >= 0) {
             throw new IllegalArgumentException("Invalid provider id: " + providerId);
         }
@@ -1846,7 +1846,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return new ChatGptToken(credential.access, accountId);
     }
 
-    private static JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
+    private JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
             throws IOException {
         HttpTransport.Response response = form
                 ? httpPostForm(url.toString(), headers, body, null, null)
@@ -1858,7 +1858,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static boolean hasRefreshCredential(CredentialStore store, String provider) throws IOException {
+    private boolean hasRefreshCredential(CredentialStore store, String provider) throws IOException {
         return readCredential(store, provider)
                 .filter(Credential.OAuthCredential.class::isInstance)
                 .map(Credential.OAuthCredential.class::cast)
@@ -1880,7 +1880,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return uri;
     }
 
-    private static void sleepSeconds(int seconds) throws InterruptedException {
+    private void sleepSeconds(int seconds) throws InterruptedException {
         if (seconds > 0) {
             Thread.sleep(seconds * 1000L);
         }
@@ -1891,7 +1891,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Validates every endpoint before binding it to the carrier. Visible for deterministic HTTP tests.
      */
-    public static void gitHubCopilotAuth(
+    public void gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
         INSTANCE.credentials = credentials;
         INSTANCE.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
@@ -2264,7 +2264,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Loads the bundled provider model snapshots.
      */
-    public static void loadBundledModelCatalog() {
+    public void loadBundledModelCatalog() {
         Map<String, Model> models = new LinkedHashMap<>();
         Map<String, List<Model>> providers = new LinkedHashMap<>();
         for (String resourceName : MODEL_CATALOG_RESOURCE_NAMES) {
@@ -2411,7 +2411,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // -------------------------------------------------------- core providers
 
-    public static void coreProviders(Map<String, Provider> providers) {
+    public void coreProviders(Map<String, Provider> providers) {
         INSTANCE.coreProviders = providers;
     }
 
@@ -2422,7 +2422,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return this;
     }
 
-    public static void googleProvider(List<Model> models) {
+    public void googleProvider(List<Model> models) {
         INSTANCE.providerKind = ProviderKind.GOOGLE;
         INSTANCE.models = models;
     }
@@ -2483,7 +2483,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * errors. Aborts are terminal and never retried; aborts during backoff are
      * normalized to an aborted AssistantMessage.
      */
-    public static AssistantMessage retryAssistantCall(
+    public AssistantMessage retryAssistantCall(
             Callable<AssistantMessage> produce, Retry.Policy policy, AbortSignal signal, Retry.Callbacks callbacks)
             throws InterruptedException {
         int maxAttempts = policy != null && policy.enabled ? policy.maxRetries : 0;
@@ -2557,7 +2557,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void notifyRetryFinished(
+    private void notifyRetryFinished(
             Retry.Callbacks callbacks, boolean success, int attempt, String finalError) {
         if (callbacks != null && callbacks.onRetryFinished != null) {
             callbacks.onRetryFinished.accept(new Retry.Finished(success, attempt, finalError));
@@ -2608,7 +2608,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return stream;
     }
 
-    private static void postJsonSse(
+    private void postJsonSse(
             String url,
             Map<String, String> headers,
             JsonNode request,
@@ -2629,13 +2629,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void abortStream(AssistantMessageEventStream stream, AssistantMessage output) {
+    private void abortStream(AssistantMessageEventStream stream, AssistantMessage output) {
         output.stopReason = StopReason.ABORTED;
         output.errorMessage = "Request was aborted";
         push(stream, new AssistantMessageEvent.Error(StopReason.ABORTED, output));
     }
 
-    private static void ensureContentIndex(AssistantMessage output, int index, AssistantContent value) {
+    private void ensureContentIndex(AssistantMessage output, int index, AssistantContent value) {
         while (output.content.size() <= index) {
             output.content.add(new TextContent("", null));
         }
@@ -2644,7 +2644,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ------------------------------------------------------------- anthropic
 
-    public static AssistantMessageEventStream anthropicStream(
+    public AssistantMessageEventStream anthropicStream(
             AnthropicProvider provider, Model model, Context context, StreamOptions options) {
         if (!model.api.equals(AnthropicProvider.API)) {
             throw new IllegalArgumentException("Model " + model + " is not an Anthropic Messages model");
@@ -2921,7 +2921,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return options.baseUrl == null || options.baseUrl.isBlank() ? model.baseUrl : options.baseUrl;
     }
 
-    private static void anthropicAppendContent(ArrayNode target, List<? extends UserContent> content) {
+    private void anthropicAppendContent(ArrayNode target, List<? extends UserContent> content) {
         for (UserContent block : content) {
             if (block instanceof TextContent text) {
                 target.addObject().put("type", "text").put("text", text.text);
@@ -2934,7 +2934,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void anthropicFinishTool(
+    private void anthropicFinishTool(
             AssistantMessageEventStream stream,
             AssistantMessage output,
             int index,
@@ -2953,7 +2953,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         push(stream, new AssistantMessageEvent.ToolCallEnd(index, completed, output));
     }
 
-    private static void anthropicReadUsage(JsonNode usage, AssistantMessage output) {
+    private void anthropicReadUsage(JsonNode usage, AssistantMessage output) {
         if (!usage.isObject()) {
             return;
         }
@@ -2985,7 +2985,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Validates the identity and endpoint of a Chat Completions-compatible service.
      */
-    public static void openAiCompatibleProvider(
+    public void openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
         INSTANCE.providerKind = ProviderKind.OPENAI_COMPATIBLE;
         INSTANCE.id = requireNonBlank(id, "id");
@@ -3286,7 +3286,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ------------------------------------------------------ openai responses
 
-    public static AssistantMessageEventStream openAiResponsesStream(
+    public AssistantMessageEventStream openAiResponsesStream(
             OpenAiResponsesProvider provider, Model model, Context context, StreamOptions options) {
         if (!model.api.equals(OpenAiResponsesProvider.API)) {
             throw new IllegalArgumentException("Model " + model + " is not an OpenAI Responses model");
@@ -3604,7 +3604,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         });
     }
 
-    private static void openAiResponsesAppendThinkingDelta(
+    private void openAiResponsesAppendThinkingDelta(
             AssistantMessageEventStream stream,
             AssistantMessage output,
             OpenAiResponsesProvider.OutputItem item,
@@ -3618,7 +3618,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         push(stream, new AssistantMessageEvent.ThinkingDelta(item.contentIndex, delta, output));
     }
 
-    private static void openAiResponsesFinishTool(
+    private void openAiResponsesFinishTool(
             AssistantMessageEventStream stream,
             AssistantMessage output,
             JsonNode event,
@@ -3678,7 +3678,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ------------------------------------------------------ chatgpt provider
 
-    public static void configureCodexRequest(StreamOptions options, ChatGptToken token) {
+    public void configureCodexRequest(StreamOptions options, ChatGptToken token) {
         options.apiKey = token.accessToken;
         options.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
         options.headers.put("ChatGPT-Account-Id", token.accountId);
@@ -3796,7 +3796,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * returned stream (Error event with stopReason ERROR/ABORTED) rather than
      * thrown, except for argument validation.
      */
-    public static AssistantMessageEventStream stream(
+    public AssistantMessageEventStream stream(
             Provider provider, Model model, Context context, StreamOptions options) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
@@ -4169,13 +4169,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     + "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps.";
 
     /** Creates the folded mutable state for one agent. */
-    public static void agentState(String systemPrompt, Model model) {
+    public void agentState(String systemPrompt, Model model) {
         INSTANCE.systemPrompt = systemPrompt;
         INSTANCE.selectedModel = model;
     }
 
     /** Configures the singleton as the active agent. */
-    public static void agent(Provider provider) {
+    public void agent(Provider provider) {
         INSTANCE.agentProvider = provider;
     }
 
@@ -4514,7 +4514,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Runs one tool call. Partial results are reported to {@code onUpdate} by
      * tools that produce them; failures are thrown for the caller to surface.
      */
-    public static AgentTool.ToolResult executeTool(
+    public AgentTool.ToolResult executeTool(
             AgentTool tool,
             String toolCallId,
             ObjectNode arguments,
@@ -5049,7 +5049,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         null));
     }
 
-    private static AgentTool.ToolResult readToolFile(Path file, ObjectNode arguments, AbortSignal signal)
+    private AgentTool.ToolResult readToolFile(Path file, ObjectNode arguments, AbortSignal signal)
             throws IOException {
         requireNotAborted(signal);
         if (!Files.isRegularFile(file)) {
@@ -5109,13 +5109,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return null;
     }
 
-    private static void rejectArchivePath(LocalTool tool, String value) {
+    private void rejectArchivePath(LocalTool tool, String value) {
         if (localToolArchiveLocation(tool, value) != null) {
             throw new IllegalArgumentException("archives are read-only through this tool");
         }
     }
 
-    private static void requireNotAborted(AbortSignal signal) {
+    private void requireNotAborted(AbortSignal signal) {
         if (isAborted(signal)) {
             throw new IllegalStateException("Operation aborted");
         }
@@ -5388,7 +5388,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ----------------------------------------------------------- git ignore
 
-    private static void joinThreads(Thread... threads) throws InterruptedException {
+    private void joinThreads(Thread... threads) throws InterruptedException {
         for (Thread thread : threads) thread.join();
     }
 
@@ -5751,7 +5751,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Sends one JSON-RPC request over the transport that owns this connection.
      */
-    public static JsonNode mcpTransportRequest(
+    public JsonNode mcpTransportRequest(
             McpTransport transport, String method, ObjectNode params, Duration timeout, AbortSignal signal)
             throws Exception {
         return switch (transport) {
@@ -5834,7 +5834,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Releases the process, sockets, and streams owned by this transport.
      */
-    public static void mcpTransportClose(McpTransport transport) {
+    public void mcpTransportClose(McpTransport transport) {
         switch (transport) {
             case StdioMcpTransport stdio -> {
                 if (!stdio.closed) {
@@ -5944,14 +5944,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // --------------------------------------------------- mcp stdio transport
 
-    private static void mcpStdioNotify(StdioMcpTransport transport, String method, ObjectNode params)
+    private void mcpStdioNotify(StdioMcpTransport transport, String method, ObjectNode params)
             throws IOException {
         ObjectNode message = jsonObject().put("jsonrpc", "2.0").put("method", method);
         if (params != null) message.set("params", params);
         mcpStdioWrite(transport, message);
     }
 
-    private static void mcpStdioDispatch(StdioMcpTransport transport, JsonNode message) {
+    private void mcpStdioDispatch(StdioMcpTransport transport, JsonNode message) {
         if (message.isArray()) {
             for (JsonNode item : message) mcpStdioDispatch(transport, item);
             return;
@@ -5978,7 +5978,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         else future.complete(message.get("result"));
     }
 
-    private static void mcpStdioCancel(StdioMcpTransport transport, long id, String reason) {
+    private void mcpStdioCancel(StdioMcpTransport transport, long id, String reason) {
         transport.pending.remove(id);
         try {
             mcpStdioNotify(
@@ -5988,7 +5988,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void mcpStdioWrite(StdioMcpTransport transport, JsonNode message) throws IOException {
+    private void mcpStdioWrite(StdioMcpTransport transport, JsonNode message) throws IOException {
         if (transport.closed) throw new IOException("MCP stdio transport is closed");
         synchronized (transport.writeLock) {
             transport.writer.write(Json.MAPPER.writeValueAsString(message));
@@ -5997,7 +5997,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void mcpStdioAppendStderr(StdioMcpTransport transport, String value) {
+    private void mcpStdioAppendStderr(StdioMcpTransport transport, String value) {
         synchronized (transport.stderr) {
             transport.stderr.append(value);
             if (transport.stderr.length() > StdioMcpTransport.STDERR_LIMIT) {
@@ -6017,14 +6017,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return detail.isBlank() ? status : status + ": " + detail;
     }
 
-    private static void mcpFailPending(Map<Long, CompletableFuture<JsonNode>> pending, Exception error) {
+    private void mcpFailPending(Map<Long, CompletableFuture<JsonNode>> pending, Exception error) {
         for (CompletableFuture<JsonNode> future : pending.values()) future.completeExceptionally(error);
         pending.clear();
     }
 
     // ---------------------------------------- mcp streamable http transport
 
-    private static HttpResponse<String> mcpStreamablePost(
+    private HttpResponse<String> mcpStreamablePost(
             StreamableHttpMcpTransport transport,
             JsonNode message,
             Duration timeout,
@@ -6073,7 +6073,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return response;
     }
 
-    private static List<JsonNode> mcpStreamableResponseMessages(
+    private List<JsonNode> mcpStreamableResponseMessages(
             StreamableHttpMcpTransport transport, HttpResponse<String> response) throws IOException {
         String body = response.body();
         if (body == null || body.isBlank() || response.statusCode() == 202) return List.of();
@@ -6109,7 +6109,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return List.of(parsed);
     }
 
-    private static void mcpAddSseData(List<JsonNode> result, StringBuilder data) throws IOException {
+    private void mcpAddSseData(List<JsonNode> result, StringBuilder data) throws IOException {
         if (data.isEmpty()) return;
         JsonNode parsed = Json.MAPPER.readTree(data.toString());
         if (parsed.isArray()) parsed.forEach(result::add);
@@ -6117,7 +6117,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         data.setLength(0);
     }
 
-    private static void mcpStreamableDispatchServerMessage(
+    private void mcpStreamableDispatchServerMessage(
             StreamableHttpMcpTransport transport, JsonNode message, Duration timeout) {
         if (!message.isObject() || !message.path("method").isTextual()) return;
         String method = message.path("method").asText();
@@ -6134,7 +6134,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void mcpStreamableDispatchListenerData(StreamableHttpMcpTransport transport, StringBuilder data) {
+    private void mcpStreamableDispatchListenerData(StreamableHttpMcpTransport transport, StringBuilder data) {
         if (data.isEmpty()) return;
         try {
             JsonNode message = Json.MAPPER.readTree(data.toString());
@@ -6171,7 +6171,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ----------------------------------------------------- mcp sse transport
 
-    private static void mcpSseOpenEventStream(SseHttpMcpTransport transport, boolean authRetry) {
+    private void mcpSseOpenEventStream(SseHttpMcpTransport transport, boolean authRetry) {
         String bearer;
         try {
             bearer = transport.oauth == null ? null : mcpAccessToken(transport.oauth);
@@ -6265,14 +6265,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         });
     }
 
-    private static void mcpSseNotify(SseHttpMcpTransport transport, String method, ObjectNode params) throws Exception {
+    private void mcpSseNotify(SseHttpMcpTransport transport, String method, ObjectNode params) throws Exception {
         URI target = mcpAwaitSse(transport.endpoint, Duration.ofSeconds(10), null);
         ObjectNode envelope = jsonObject().put("jsonrpc", "2.0").put("method", method);
         if (params != null) envelope.set("params", params);
         mcpSsePost(transport, target, envelope, Duration.ofSeconds(10), null, true);
     }
 
-    private static void mcpSsePost(
+    private void mcpSsePost(
             SseHttpMcpTransport transport,
             URI target,
             JsonNode message,
@@ -6309,7 +6309,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void mcpSseDispatchEvent(SseHttpMcpTransport transport, String event, String data)
+    private void mcpSseDispatchEvent(SseHttpMcpTransport transport, String event, String data)
             throws IOException {
         if (data.isBlank()) return;
         if (event.equals("endpoint")) {
@@ -6324,7 +6324,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         mcpSseDispatch(transport, Json.MAPPER.readTree(data));
     }
 
-    private static void mcpSseDispatch(SseHttpMcpTransport transport, JsonNode message) {
+    private void mcpSseDispatch(SseHttpMcpTransport transport, JsonNode message) {
         if (message == null) return;
         if (message.isArray()) {
             message.forEach(item -> mcpSseDispatch(transport, item));
@@ -6356,7 +6356,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         else result.complete(message.get("result"));
     }
 
-    private static void mcpCaptureSseSession(SseHttpMcpTransport transport, HttpResponse<?> response) {
+    private void mcpCaptureSseSession(SseHttpMcpTransport transport, HttpResponse<?> response) {
         response.headers().firstValue("Mcp-Session-Id").ifPresent(value -> transport.sessionId = value);
     }
 
@@ -6411,7 +6411,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ----------------------------------------------------------- mcp client
 
-    private static McpClient mcpConnectRemote(
+    private McpClient mcpConnectRemote(
             McpServerConfig.Remote remote, Path workspace, Duration timeout, McpOAuthSession oauth)
             throws Exception {
         Exception streamableFailure;
@@ -6441,7 +6441,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static McpClient mcpInitializeOwned(McpTransport transport, Duration timeout) throws Exception {
+    private McpClient mcpInitializeOwned(McpTransport transport, Duration timeout) throws Exception {
         try {
             ObjectNode params = jsonObject().put("protocolVersion", McpClient.PROTOCOL_VERSION);
             params.putObject("capabilities").putObject("roots");
@@ -6540,7 +6540,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Reads the full paginated tool catalog advertised by a connected server.
      */
-    public static List<McpClient.ToolDefinition> mcpListTools(McpClient client) throws Exception {
+    public List<McpClient.ToolDefinition> mcpListTools(McpClient client) throws Exception {
         if (!client.capabilities.has("tools")) return List.of();
         List<McpClient.ToolDefinition> result = new ArrayList<>();
         Set<String> cursors = new HashSet<>();
@@ -6579,7 +6579,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Closes the session and the transport it owns.
      */
-    public static void mcpCloseClient(McpClient client) {
+    public void mcpCloseClient(McpClient client) {
         mcpTransportClose(client.transport);
     }
 
@@ -6588,7 +6588,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Builds a manager for the MCP servers in {@code ~/.codingagent/settings.json}.
      */
-    public static void mcpLoadDefaultManager(Path workspace) throws IOException {
+    public void mcpLoadDefaultManager(Path workspace) throws IOException {
         Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
         INSTANCE.mcpCreateManager(
                 mcpLoadConfiguration(new McpConfigLoader(
@@ -6599,7 +6599,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Builds a manager and starts connecting every enabled server.
      */
-    public static void mcpOAuthStore(
+    public void mcpOAuthStore(
             Path path, Path lockPath, List<Path> importPaths) {
         INSTANCE.path = path;
         INSTANCE.lockPath = lockPath;
@@ -6612,7 +6612,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         this.callbackTimeout = callbackTimeout;
     }
 
-    public static void mcpCreateManager(McpConfiguration configuration, Path workspace) {
+    public void mcpCreateManager(McpConfiguration configuration, Path workspace) {
         if (!INSTANCE.closed && !INSTANCE.servers.isEmpty()) {
             INSTANCE.mcpCloseManager();
         }
@@ -7179,7 +7179,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Returns a current token and silently refreshes it when it is near expiry.
      */
-    public static String mcpAccessToken(McpOAuthSession session) throws Exception {
+    public String mcpAccessToken(McpOAuthSession session) throws Exception {
         synchronized (session) {
             McpOAuthEntry current = session.loaded ? session.entry : mcpOAuthReload(session);
             if (current == null || current.tokens == null) return null;
@@ -7213,7 +7213,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Refreshes a token rejected by the resource server and tells the transport whether to retry.
      */
-    public static boolean mcpRefreshAfterUnauthorized(
+    public boolean mcpRefreshAfterUnauthorized(
             McpOAuthSession session, McpHttpException failure, String rejectedToken) throws Exception {
         synchronized (session) {
             McpOAuthChallenge challenge = mcpOAuthChallenge(failure);
@@ -7306,7 +7306,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return session.entry;
     }
 
-    private static void mcpOAuthInvalidateAfterRefreshFailure(
+    private void mcpOAuthInvalidateAfterRefreshFailure(
             McpOAuthSession session, McpOAuthEntry current, McpOAuthFailure failure)
             throws IOException {
         boolean invalidClient = "invalid_client".equals(failure.code) || "unauthorized_client".equals(failure.code);
@@ -7525,7 +7525,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return new McpOAuthTokens(access, refresh, expiresAt, scope);
     }
 
-    private static HttpRequest mcpOAuthGet(URI uri, Map<String, String> configuredHeaders, boolean metadata) {
+    private HttpRequest mcpOAuthGet(URI uri, Map<String, String> configuredHeaders, boolean metadata) {
         HttpRequest.Builder builder =
                 HttpRequest.newBuilder(uri).timeout(MCP_OAUTH_HTTP_TIMEOUT).GET();
         if (metadata) {
@@ -7548,7 +7548,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return response.status >= 200 && response.status < 300;
     }
 
-    private static void mcpApplyOAuthHeaders(HttpRequest.Builder request, Map<String, String> headers) {
+    private void mcpApplyOAuthHeaders(HttpRequest.Builder request, Map<String, String> headers) {
         for (var header : headers.entrySet()) {
             String name = header.getKey();
             if (!mcpRestrictedHeader(name)
@@ -7700,7 +7700,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
     }
 
-    private static void mcpRequireSecureEndpoint(URI uri, String description) throws IOException {
+    private void mcpRequireSecureEndpoint(URI uri, String description) throws IOException {
         if (uri.getScheme().equalsIgnoreCase("https")) return;
         if (uri.getScheme().equalsIgnoreCase("http")) {
             String host = uri.getHost();
@@ -7866,11 +7866,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return value != null && value.isNumber() ? (long) Math.floor(value.asDouble()) : null;
     }
 
-    private static void mcpPutText(ObjectNode node, String field, String value) {
+    private void mcpPutText(ObjectNode node, String field, String value) {
         if (value != null && !value.isBlank()) node.put(field, value);
     }
 
-    private static void mcpSetPermissions(Path target, Set<PosixFilePermission> permissions) throws IOException {
+    private void mcpSetPermissions(Path target, Set<PosixFilePermission> permissions) throws IOException {
         try {
             Files.setPosixFilePermissions(target, permissions);
         } catch (UnsupportedOperationException ignored) {
@@ -7880,7 +7880,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ----------------------------------------------------- mcp oauth callback
 
-    private static void mcpRespondToRedirect(HttpExchange exchange, int status, String body) throws IOException {
+    private void mcpRespondToRedirect(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
@@ -8136,12 +8136,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Resets the baseline, for example after the terminal scrolls externally.
      */
-    public static void resetAnsiRenderer(AnsiRenderer renderer) {
+    public void resetAnsiRenderer(AnsiRenderer renderer) {
         renderer.previousLines = List.of();
     }
 
 
-    private static void ansiMoveTo(StringBuilder output, int zeroBasedLine) {
+    private void ansiMoveTo(StringBuilder output, int zeroBasedLine) {
         output.append("\u001b[").append(zeroBasedLine + 1).append(";1H");
     }
 
@@ -8409,7 +8409,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Applies one normalized input event to a component.
      */
-    public static void handleComponentInput(TuiComponent<?> component, TuiInput input) {
+    public void handleComponentInput(TuiComponent<?> component, TuiInput input) {
         component.handle.accept(input);
     }
 
@@ -8660,7 +8660,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return rows > 0 ? rows : TuiRuntime.DEFAULT_ROWS;
     }
 
-    private static void startTuiRuntime(TuiRuntime runtime) {
+    private void startTuiRuntime(TuiRuntime runtime) {
         runtime.originalAttributes = runtime.terminal.enterRawMode();
         if (!runtime.terminal.puts(Capability.enter_ca_mode)) {
             runtime.terminal.writer().write("\u001b[?1049h");
@@ -8676,7 +8676,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         runtime.terminal.flush();
     }
 
-    private static void stopTuiRuntime(TuiRuntime runtime) {
+    private void stopTuiRuntime(TuiRuntime runtime) {
         if (!runtime.active) {
             return;
         }
@@ -8695,7 +8695,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         runtime.active = false;
     }
 
-    private static void renderTuiFrame(
+    private void renderTuiFrame(
             TuiRuntime runtime, TuiComponent<?> component, int width, int height) {
         int safeWidth = Math.max(20, width);
         int safeHeight = Math.max(5, height);
@@ -8725,7 +8725,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         runtime.terminal.flush();
     }
 
-    private static void clearTuiScreen(TuiRuntime runtime) {
+    private void clearTuiScreen(TuiRuntime runtime) {
         runtime.terminal.writer().write("\u001b[2J\u001b[H");
     }
 
@@ -8734,7 +8734,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Invokes a suspend hook, preserving its IOException contract.
      */
-    private static void callSuspendAction(Callable<Void> action) throws IOException {
+    private void callSuspendAction(Callable<Void> action) throws IOException {
         try {
             action.call();
         } catch (IOException | RuntimeException error) {
@@ -8749,7 +8749,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Wires the line editor, signal handlers, and keybindings onto an existing terminal.
      */
-    public static void newInteractiveTerminal(
+    public void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
         INSTANCE.screenDocument = new StringBuilder();
         INSTANCE.statusBar = null;
@@ -8950,7 +8950,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         INSTANCE.theme = Theme.DARK;
     }
 
-    private static void bindNavigationKey(
+    private void bindNavigationKey(
             KeyMap<Binding> keyMap,
             Reference widget,
             String terminalSequence,
@@ -8992,7 +8992,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return readLineInternal(prompt, null, null, false);
     }
 
-    public static void commandSuggestions(List<String> commands) {
+    public void commandSuggestions(List<String> commands) {
         INSTANCE.commands = commands;
         INSTANCE.query = null;
         INSTANCE.dismissedBuffer = null;
@@ -9517,7 +9517,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Process entry point for the shaded jar and the native executable.
      */
-    public static void main(String[] args) {
+    public void main(String[] args) {
         System.exit(INSTANCE.cliRun(args));
     }
 
@@ -10603,14 +10603,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * agent's system prompt. Path-based tools refresh the prompt when they move
      * into a deeper descendant scope.
      */
-    public static void agentInstructions(
+    public void agentInstructions(
             Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
         INSTANCE.repositoryRoot = repositoryRoot;
         INSTANCE.currentDirectory = currentDirectory;
         INSTANCE.baseSystemPrompt = baseSystemPrompt;
     }
 
-    public static void gitIgnore(String executable) {
+    public void gitIgnore(String executable) {
         INSTANCE.executable = executable;
     }
 
@@ -10881,7 +10881,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Rebuilds the visible transcript for a resumed session.
      */
-    public static String renderSessionScreen(
+    public String renderSessionScreen(
             Model model, List<Message> messages, boolean hideThinking, Theme theme) {
         StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
         Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
@@ -10939,7 +10939,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return header.toString();
     }
 
-    private static void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
+    private void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
         screen.append("  ")
                 .append(result.isError ? "Error" : "Done")
                 .append(": ")
@@ -10950,7 +10950,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Drops failed turns and synthesizes results for tool calls that never completed.
      */
-    public static List<Message> resumableMessages(List<Message> messages) {
+    public List<Message> resumableMessages(List<Message> messages) {
         List<Message> result = new ArrayList<>();
         Map<String, String> pendingToolCalls = new LinkedHashMap<>();
         for (Message message : messages) {
@@ -10970,7 +10970,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return List.copyOf(result);
     }
 
-    private static void appendMissingToolResults(
+    private void appendMissingToolResults(
             List<Message> messages, Map<String, String> pendingToolCalls) {
         for (Map.Entry<String, String> toolCall : pendingToolCalls.entrySet()) {
             messages.add(new ToolResultMessage(
@@ -11765,7 +11765,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ------------------------------------------------------------- rpc server
 
-    private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
+    private void resetRpcAgent(RpcServer server, Model model) throws IOException {
         server.providers.requireCoreProvider(model.provider);
         Provider provider = INSTANCE;
         agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model);
@@ -11797,7 +11797,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void respondRpc(
+    private void respondRpc(
             String id, String command, boolean success, JsonNode data, String error) {
         ObjectNode response = jsonObject();
         response.put("type", "response");
@@ -11830,7 +11830,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 : selector.filteredTools.size();
     }
 
-    private static void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
+    private void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
         try {
             selector.onChange.accept(change);
             selector.changeError = null;
@@ -11845,7 +11845,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void closeMcpSelectorTools(McpSelector selector) {
+    private void closeMcpSelectorTools(McpSelector selector) {
         if (selector.view != McpSelector.View.TOOLS) return;
         String server = selector.toolServer;
         selector.view = McpSelector.View.SERVERS;
@@ -11856,17 +11856,17 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         if (index >= 0) selector.selectedIndex = index;
     }
 
-    private static void moveMcpSelector(McpSelector selector, int delta) {
+    private void moveMcpSelector(McpSelector selector, int delta) {
         int itemCount = mcpSelectorItemCount(selector);
         if (itemCount > 0) selector.selectedIndex = Math.floorMod(selector.selectedIndex + delta, itemCount);
     }
 
-    private static void clearMcpSelectorQuery(McpSelector selector) {
+    private void clearMcpSelectorQuery(McpSelector selector) {
         selector.query.setLength(0);
         selector.queryCursor = 0;
     }
 
-    private static void filterMcpSelector(McpSelector selector) {
+    private void filterMcpSelector(McpSelector selector) {
         if (selector.view == McpSelector.View.SERVERS) {
             selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
                 McpServerStatus status = selector.manager.mcpStatus(name);
@@ -11878,7 +11878,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         selector.selectedIndex = 0;
     }
 
-    private static void refreshMcpSelectorTools(McpSelector selector) {
+    private void refreshMcpSelectorTools(McpSelector selector) {
         if (selector.toolServer == null) {
             selector.filteredTools = List.of();
             return;
@@ -12075,7 +12075,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return lines;
     }
 
-    public static void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
+    public void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
         switch (input) {
             case TuiInput.Key key -> {
                 switch (key.type) {
@@ -12129,23 +12129,23 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         }
     }
 
-    private static void moveTurnDetails(TurnDetailsComponent details, int delta) {
+    private void moveTurnDetails(TurnDetailsComponent details, int delta) {
         details.selectedIndex = Math.floorMod(details.selectedIndex + delta, details.sections.size());
         details.keepSelectionVisible = true;
     }
 
-    private static void scrollTurnDetails(TurnDetailsComponent details, int delta) {
+    private void scrollTurnDetails(TurnDetailsComponent details, int delta) {
         details.scrollTop = Math.max(0, details.scrollTop + delta);
         details.keepSelectionVisible = false;
     }
 
-    private static void toggleSelectedTurnDetail(TurnDetailsComponent details) {
+    private void toggleSelectedTurnDetail(TurnDetailsComponent details) {
         TurnDetailsComponent.Section section = details.sections.get(details.selectedIndex);
         section.expanded = !section.expanded;
         details.keepSelectionVisible = true;
     }
 
-    private static void toggleTurnDetailsKind(
+    private void toggleTurnDetailsKind(
             TurnDetailsComponent details, TurnDetailsComponent.Kind kind) {
         if (details.sections.stream().noneMatch(section -> section.kind == kind)) return;
         boolean expand =
@@ -12172,7 +12172,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // ------------------------------------------------------------ session codec
 
-    private static void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
+    private void encodeSessionUserContent(ArrayNode target, List<UserContent> source) {
         for (UserContent block : source) {
             if (block instanceof TextContent text) {
                 ObjectNode encoded = target.addObject().put("type", "text").put("text", text.text);
@@ -12217,7 +12217,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return value != null && value.isTextual() ? value.asText() : null;
     }
 
-    private static void putNullableSessionText(ObjectNode node, String field, String value) {
+    private void putNullableSessionText(ObjectNode node, String field, String value) {
         if (value != null) node.put(field, value);
     }
 
@@ -12228,7 +12228,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return this;
     }
 
-    public static void settingsStore(Path settingsPath, Path lockPath) {
+    public void settingsStore(Path settingsPath, Path lockPath) {
         INSTANCE.settingsPath = settingsPath;
         INSTANCE.lockPath = lockPath;
     }
@@ -12365,7 +12365,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Resolves the session directory, dropping legacy directories that duplicate it.
      */
-    public static void sessionStore(Path directory, List<Path> legacyDirectories) {
+    public void sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
         INSTANCE.directory = resolved;
         INSTANCE.legacyDirectories = legacyDirectories.stream()
@@ -12374,7 +12374,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 .toList();
     }
 
-    public static void defaultSessionStore() {
+    public void defaultSessionStore() {
         Path home = Path.of(System.getProperty("user.home"));
         sessionStore(
                 home.resolve(".codingagent").resolve("sessions"),
@@ -12642,7 +12642,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return value.asText();
     }
 
-    private static void validateSessionId(String sessionId) {
+    private void validateSessionId(String sessionId) {
         if (sessionId == null
                 || !sessionId.matches("[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
             throw new IllegalArgumentException("Invalid session id: " + sessionId);
@@ -12756,7 +12756,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return value.asText();
     }
 
-    private static void requireSettingsValue(String value, String name) {
+    private void requireSettingsValue(String value, String name) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(name + " must not be blank");
         }
