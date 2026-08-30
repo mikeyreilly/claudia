@@ -1468,14 +1468,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Resolves the credential file, its sibling lock file, and the optional legacy file.
      */
-    public static CodingAgentOperations fileCredentialStore(Path authPath, Path fallbackAuthPath) {
+    public void fileCredentialStore(Path authPath, Path fallbackAuthPath) {
         Path resolved = authPath.toAbsolutePath().normalize();
-        CodingAgentOperations store = INSTANCE;
-        store.authPath = resolved;
-        store.lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
-        store.fallbackAuthPath =
+
+        authPath = resolved;
+        lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
+        fallbackAuthPath =
                 fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize();
-        return store;
     }
 
     public static String credentialType(Credential credential) {
@@ -1485,11 +1484,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         };
     }
 
-    public static CodingAgentOperations defaultCredentialStore() {
+    public CodingAgentOperations defaultCredentialStore() {
         Path home = Path.of(System.getProperty("user.home"));
-        return fileCredentialStore(
+        fileCredentialStore(
                 home.resolve(".codingagent").resolve("auth.json"),
                 home.resolve(".pi-java").resolve("auth.json"));
+        return this;
     }
 
     public static Optional<Credential> readCredential(CredentialStore store, String providerId) throws IOException {
@@ -9544,13 +9544,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * Process entry point for the shaded jar and the native executable.
      */
     public static void main(String[] args) {
-        System.exit(cliRun(args));
+        System.exit(INSTANCE.cliRun(args));
     }
 
     /**
      * Parses the command line, runs the selected mode, and returns the exit code.
      */
-    public static int cliRun(String[] args) {
+    public int cliRun(String[] args) {
         try {
             CodingAgentOperations cli = INSTANCE;
             List<String> messageParts = new ArrayList<>();

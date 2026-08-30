@@ -65,9 +65,10 @@ class OpenAiResponsesProviderTest {
 					""");
 		});
 		try {
-			CodingAgentOperations credentials =
-					CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
-			CodingAgentOperations.modifyCredential(
+
+			CodingAgentOperations.INSTANCE.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations credentials = CodingAgentOperations.INSTANCE;
+					CodingAgentOperations.modifyCredential(
 					credentials,
 					"openai",
 					ignored -> new Credential.ApiKeyCredential("saved-key", Map.of()));

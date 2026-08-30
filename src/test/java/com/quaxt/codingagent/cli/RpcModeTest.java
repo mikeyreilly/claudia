@@ -21,7 +21,7 @@ class RpcModeTest {
 			System.setIn(new ByteArrayInputStream("{\"id\":\"state-1\",\"type\":\"get_state\"}\n".getBytes(StandardCharsets.UTF_8)));
 			System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
 
-			assertEquals(0, CodingAgentOperations.cliRun(new String[] {"--mode", "rpc", "--model", "anthropic/claude-haiku-4-5", "--no-session"}));
+			assertEquals(0, CodingAgentOperations.INSTANCE.cliRun(new String[] {"--mode", "rpc", "--model", "anthropic/claude-haiku-4-5", "--no-session"}));
 		} finally {
 			System.setIn(originalInput);
 			System.setOut(originalOutput);

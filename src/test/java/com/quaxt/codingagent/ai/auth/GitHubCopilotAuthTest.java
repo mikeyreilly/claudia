@@ -56,7 +56,8 @@ class GitHubCopilotAuthTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			store.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			CodingAgentOperations auth = CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 
 			CodingAgentOperations.GitHubCopilotDeviceCode device = auth.gitHubCopilotBeginLogin();
@@ -88,7 +89,8 @@ class GitHubCopilotAuthTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("failing-auth.json"), null);
+			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			store.fileCredentialStore(tempDir.resolve("failing-auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,

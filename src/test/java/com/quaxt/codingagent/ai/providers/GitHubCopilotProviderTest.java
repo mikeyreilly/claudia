@@ -84,7 +84,8 @@ class GitHubCopilotProviderTest {
 					model("anthropic", "anthropic-messages", base),
 					model("completions", "openai-completions", base),
 					model("responses", "openai-responses", base));
-			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(
+			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,
@@ -132,7 +133,9 @@ class GitHubCopilotProviderTest {
 			Model opus = CodingAgentOperations.copyModel(
 					CodingAgentOperations.loadBundledModelCatalog().requireCatalogModel(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
-			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(
+
+			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
 			CodingAgentOperations.modifyCredential(
 					store,

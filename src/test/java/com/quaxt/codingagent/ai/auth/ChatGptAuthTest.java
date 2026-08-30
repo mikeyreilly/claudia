@@ -39,7 +39,8 @@ class ChatGptAuthTest {
 			});
 			server.start();
 
-			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			store.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
 			CodingAgentOperations auth = CodingAgentOperations.chatGptAuth(store, base, "test-client");
 			CodingAgentOperations.ChatGptDeviceCode device = auth.chatGptBeginLogin();
