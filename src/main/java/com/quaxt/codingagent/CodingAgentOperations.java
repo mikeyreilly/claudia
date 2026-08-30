@@ -1471,9 +1471,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public void fileCredentialStore(Path authPath, Path fallbackAuthPath) {
         Path resolved = authPath.toAbsolutePath().normalize();
 
-        authPath = resolved;
+        this.authPath = resolved;
         lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
-        fallbackAuthPath =
+        this.fallbackAuthPath =
                 fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize();
     }
 
@@ -1684,14 +1684,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Validates the authorization endpoint and client id before binding them to the carrier.
      */
-    public static CodingAgentOperations chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
+    public void chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
         URI validatedBaseUrl = requireAbsoluteHttpUri(authBaseUrl, "authBaseUrl");
         if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("clientId must not be blank");
-        CodingAgentOperations auth = INSTANCE;
-        auth.credentials = credentials;
-        auth.authBaseUrl = validatedBaseUrl;
-        auth.clientId = clientId;
-        return auth;
+
+        this.credentials = credentials;
+        this.authBaseUrl = validatedBaseUrl;
+        this.clientId = clientId;
     }
 
     /**
@@ -9648,7 +9647,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             List.of("OPENAI_API_KEY"),
                             credentials,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
-            CodingAgentOperations auth = chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+            CodingAgentOperations auth = INSTANCE;
+            auth.chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
             List<Model> models = catalog.catalogModelsForProvider("openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
                     .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
