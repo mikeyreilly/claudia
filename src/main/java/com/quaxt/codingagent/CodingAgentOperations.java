@@ -183,7 +183,8 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
  * has at most one live instance of its role in a normal application run.
  * Operations remain static; folded roles use separate instances of this class.
  */
-public final class CodingAgentOperations extends JniTerminalProvider implements Provider, CredentialStore {
+public enum CodingAgentOperations  implements Provider, CredentialStore {
+    INSTANCE;
     public static final String APP_NAME = "codingagent";
     public static final String VERSION = "0.1.0-java";
 
@@ -431,7 +432,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     public String name;
     public String baseUrl;
     public List<Model> models;
-    public CodingAgentOperations auth;
+
     public AnthropicProvider anthropic;
     public CodingAgentOperations completions;
     public OpenAiResponsesProvider responses;
@@ -912,8 +913,6 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     public String message = "";
     public boolean noSession;
     public String mode = "print";
-    public CodingAgentOperations() {
-    }
 
     private static final CancellationException SUSPEND_REQUESTED =
             new CancellationException("Interactive terminal suspend requested");
@@ -1485,7 +1484,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations fileCredentialStore(Path authPath, Path fallbackAuthPath) {
         Path resolved = authPath.toAbsolutePath().normalize();
-        CodingAgentOperations store = new CodingAgentOperations();
+        CodingAgentOperations store = INSTANCE;
         store.authPath = resolved;
         store.lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
         store.fallbackAuthPath =
@@ -1702,7 +1701,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     public static CodingAgentOperations chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
         URI validatedBaseUrl = requireAbsoluteHttpUri(authBaseUrl, "authBaseUrl");
         if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("clientId must not be blank");
-        CodingAgentOperations auth = new CodingAgentOperations();
+        CodingAgentOperations auth = INSTANCE;
         auth.credentials = credentials;
         auth.authBaseUrl = validatedBaseUrl;
         auth.clientId = clientId;
@@ -1909,7 +1908,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
-        CodingAgentOperations auth = new CodingAgentOperations();
+        CodingAgentOperations auth = INSTANCE;
         auth.credentials = credentials;
         auth.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
         auth.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
@@ -2382,7 +2381,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
         for (Map.Entry<String, List<Model>> entry : providers.entrySet()) {
             immutableByProvider.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
-        CodingAgentOperations catalog = new CodingAgentOperations();
+        CodingAgentOperations catalog = INSTANCE;
         catalog.byProviderAndId = Map.copyOf(models);
         catalog.byProvider = Map.copyOf(immutableByProvider);
         return catalog;
@@ -2437,7 +2436,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
     public static CodingAgentOperations coreProviders(
             CodingAgentOperations catalog, Map<String, Provider> providers) {
-        CodingAgentOperations core = new CodingAgentOperations();
+        CodingAgentOperations core = INSTANCE;
         core.catalog = catalog;
         core.coreProviders = providers;
         return core;
@@ -2445,16 +2444,15 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
     public static CodingAgentOperations chatGptProvider(
             List<Model> models, CodingAgentOperations auth, OpenAiResponsesProvider responses) {
-        CodingAgentOperations provider = new CodingAgentOperations();
+        CodingAgentOperations provider = INSTANCE;
         provider.providerKind = ProviderKind.CHATGPT;
         provider.models = models;
-        provider.auth = auth;
         provider.responses = responses;
         return provider;
     }
 
     public static CodingAgentOperations googleProvider(List<Model> models) {
-        CodingAgentOperations provider = new CodingAgentOperations();
+        CodingAgentOperations provider = INSTANCE;
         provider.providerKind = ProviderKind.GOOGLE;
         provider.models = models;
         return provider;
@@ -3020,7 +3018,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
-        CodingAgentOperations provider = new CodingAgentOperations();
+        CodingAgentOperations provider = INSTANCE;
         provider.providerKind = ProviderKind.OPENAI_COMPATIBLE;
         provider.id = requireNonBlank(id, "id");
         provider.name = requireNonBlank(name, "name");
@@ -3744,10 +3742,10 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     public static CodingAgentOperations newGitHubCopilotProvider(List<Model> models, CodingAgentOperations auth) {
         List<Model> all = List.copyOf(models);
         List<Model> models1 = copilotModelsFor(all, OpenAiResponsesProvider.API);
-        CodingAgentOperations provider = new CodingAgentOperations();
+        CodingAgentOperations provider = INSTANCE;
         provider.providerKind = ProviderKind.GITHUB_COPILOT;
         provider.models = all;
-        provider.auth = auth;
+
         provider.anthropic = new AnthropicProvider(
                         GITHUB_COPILOT_PROVIDER_ID,
                         GITHUB_COPILOT_PROVIDER_NAME,
@@ -3777,7 +3775,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      * Filters the catalog to models GitHub reports as enabled for the signed-in account.
      */
     public static List<Model> gitHubCopilotAvailableModels(CodingAgentOperations provider) throws IOException {
-        List<String> enabled = gitHubCopilotResolveToken(provider.auth).availableModelIds;
+        List<String> enabled = gitHubCopilotResolveToken(provider).availableModelIds;
         return filterEnabledCopilotModels(provider, enabled);
     }
 
@@ -3787,9 +3785,9 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     public static CopilotModelAccess gitHubCopilotEnableAndRefreshModels(
             CodingAgentOperations provider) throws IOException {
         int policiesEnabled =
-                gitHubCopilotEnableModels(provider.auth, provider.models.stream().map(model -> model.id).toList());
+                gitHubCopilotEnableModels(provider, provider.models.stream().map(model -> model.id).toList());
         List<Model> available = filterEnabledCopilotModels(
-                provider, gitHubCopilotRefreshAvailableModels(provider.auth).availableModelIds);
+                provider, gitHubCopilotRefreshAvailableModels(provider).availableModelIds);
         return new CopilotModelAccess(policiesEnabled, List.copyOf(available));
     }
 
@@ -3845,7 +3843,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                 }
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
                 try {
-                    configureCodexRequest(requestOptions, chatGptResolveToken(chatGpt.auth));
+                    configureCodexRequest(requestOptions, chatGptResolveToken(chatGpt));
                 } catch (IOException error) {
                     yield providerErrorStream(model, error);
                 }
@@ -3980,7 +3978,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
                 if (requestOptions.apiKey == null || requestOptions.apiKey.isBlank()) {
                     try {
-                        CopilotToken token = gitHubCopilotResolveToken(copilot.auth);
+                        CopilotToken token = gitHubCopilotResolveToken(copilot);
                         requestOptions.apiKey = token.accessToken;
                         requestOptions.baseUrl = token.baseUrl.toString();
                     } catch (IOException error) {
@@ -4209,7 +4207,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
     /** Creates the folded mutable state for one agent. */
     public static CodingAgentOperations agentState(String systemPrompt, Model model) {
-        CodingAgentOperations state = new CodingAgentOperations();
+        CodingAgentOperations state = INSTANCE;
         state.systemPrompt = systemPrompt;
         state.selectedModel = model;
         return state;
@@ -4217,7 +4215,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
     /** Creates one folded agent carrier. */
     public static CodingAgentOperations agent(CodingAgentOperations state, Provider provider) {
-        CodingAgentOperations agent = new CodingAgentOperations();
+        CodingAgentOperations agent = INSTANCE;
         agent.state = state;
         agent.agentProvider = provider;
         return agent;
@@ -6652,7 +6650,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations mcpOAuthStore(
             Path path, Path lockPath, List<Path> importPaths) {
-        CodingAgentOperations store = new CodingAgentOperations();
+        CodingAgentOperations store = INSTANCE;
         store.path = path;
         store.lockPath = lockPath;
         store.importPaths = importPaths;
@@ -6664,7 +6662,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
             HttpClient http,
             Predicate<URI> browser,
             Duration callbackTimeout) {
-        CodingAgentOperations client = new CodingAgentOperations();
+        CodingAgentOperations client = INSTANCE;
         client.store = store;
         client.http = http;
         client.browser = browser;
@@ -6711,7 +6709,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                     }
                 }, "browser"),
                 Objects.requireNonNull(MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
-        CodingAgentOperations manager = new CodingAgentOperations();
+        CodingAgentOperations manager = INSTANCE;
         manager.workspace = workspace.toAbsolutePath().normalize();
         manager.oauth = oauth;
         configuration.servers.forEach((name, config) -> {
@@ -8837,7 +8835,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
-        CodingAgentOperations interactive = new CodingAgentOperations();
+        CodingAgentOperations interactive = INSTANCE;
         interactive.jlineTerminal = terminal;
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
@@ -9073,7 +9071,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     }
 
     public static CodingAgentOperations commandSuggestions(List<String> commands) {
-        CodingAgentOperations suggestions = new CodingAgentOperations();
+        CodingAgentOperations suggestions = INSTANCE;
         suggestions.commands = commands;
         return suggestions;
     }
@@ -9620,7 +9618,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static int cliRun(String[] args) {
         try {
-            CodingAgentOperations cli = new CodingAgentOperations();
+            CodingAgentOperations cli = INSTANCE;
             List<String> messageParts = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
@@ -9992,7 +9990,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                         },
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
-                    CodingAgentOperations shell = new CodingAgentOperations();
+                    CodingAgentOperations shell = INSTANCE;
                     shell.providers = providers;
                     shell.cli = cli;
                     shell.terminal = terminal;
@@ -10103,10 +10101,10 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
                                                         CodingAgentOperations copilot = shellCopilotProvider(shell);
-                                                        GitHubCopilotDeviceCode device = gitHubCopilotBeginLogin(copilot.auth);
+                                                        GitHubCopilotDeviceCode device = gitHubCopilotBeginLogin(copilot);
                                                         println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println(shell.terminal, "Waiting for GitHub authorization...");
-                                                        gitHubCopilotCompleteLogin(copilot.auth, device);
+                                                        gitHubCopilotCompleteLogin(copilot, device);
                                                         println(shell.terminal, "Enabling GitHub Copilot models...");
                                                         CopilotModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
                                                         if (access.policiesEnabled < copilot.models.size()) {
@@ -10152,10 +10150,10 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                                                     case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
                                                          "chatgpt plus/pro" -> {
                                                         CodingAgentOperations chatGpt = shellChatGptProvider(shell);
-                                                        ChatGptDeviceCode device = chatGptBeginLogin(chatGpt.auth);
+                                                        ChatGptDeviceCode device = chatGptBeginLogin(chatGpt);
                                                         println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println(shell.terminal, "Waiting for ChatGPT authorization...");
-                                                        chatGptCompleteLogin(chatGpt.auth, device);
+                                                        chatGptCompleteLogin(chatGpt, device);
                                                         List<Model> models1 = chatGpt.models;
                                                         Model model = shellSavedModelIn(shell, models1);
                                                         if (model == null) {
@@ -10181,7 +10179,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                                         case "/logout" -> {
                                             try {
                                                 if (shell.agent != null && shell.agent.state.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
-                                                    chatGptLogout(shellChatGptProvider(shell).auth);
+                                                    chatGptLogout(shellChatGptProvider(shell));
                                                     shell.agent = null;
                                                     println(shell.terminal, "ChatGPT credentials removed. Run /login or /resume to continue.");
                                                 } else if (shell.agent != null && shell.agent.state.selectedModel.provider.equals("openai")) {
@@ -10189,7 +10187,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                                                     shell.agent = null;
                                                     println(shell.terminal, "OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
-                                                    gitHubCopilotLogout(shellCopilotProvider(shell).auth);
+                                                    gitHubCopilotLogout(shellCopilotProvider(shell));
                                                     if (shell.agent != null
                                                             && shell.agent.state.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                         shell.agent = null;
@@ -10211,7 +10209,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                                             }
                                             CodingAgentOperations copilot = shellCopilotProvider(shell);
                                             try {
-                                                if (gitHubCopilotHasCredential(copilot.auth)) {
+                                                if (gitHubCopilotHasCredential(copilot)) {
                                                     println(shell.terminal, "Refreshing GitHub Copilot models...");
                                                     models2.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
                                                 } else {
@@ -10721,7 +10719,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations agentInstructions(
             Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
-        CodingAgentOperations instructions = new CodingAgentOperations();
+        CodingAgentOperations instructions = INSTANCE;
         instructions.repositoryRoot = repositoryRoot;
         instructions.currentDirectory = currentDirectory;
         instructions.baseSystemPrompt = baseSystemPrompt;
@@ -10729,7 +10727,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
     }
 
     public static CodingAgentOperations gitIgnore(String executable) {
-        CodingAgentOperations gitIgnore = new CodingAgentOperations();
+        CodingAgentOperations gitIgnore = INSTANCE;
         gitIgnore.executable = executable;
         return gitIgnore;
     }
@@ -11225,7 +11223,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
             CodingAgentOperations copilot = shellCopilotProvider(shell);
             Model enabled = null;
             try {
-                if (gitHubCopilotHasCredential(copilot.auth)) {
+                if (gitHubCopilotHasCredential(copilot)) {
                     enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
                 }
             } catch (IOException error) {
@@ -11625,7 +11623,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
             } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                 CodingAgentOperations copilot = shellCopilotProvider(shell);
                 try {
-                    model = gitHubCopilotHasCredential(copilot.auth)
+                    model = gitHubCopilotHasCredential(copilot)
                             ? findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id)
                             : null;
                     if (model == null) {
@@ -11639,7 +11637,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
                 }
             } else if (model.provider.equals(CHATGPT_PROVIDER_ID)) {
                 try {
-                    if (!chatGptHasCredential(shellChatGptProvider(shell).auth)) model = null;
+                    if (!chatGptHasCredential(shellChatGptProvider(shell))) model = null;
                 } catch (IOException error) {
                     println(shell.terminal, "Could not restore the saved ChatGPT model: " + error.getMessage());
                     model = null;
@@ -11653,7 +11651,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
         CodingAgentOperations chatGpt = shellChatGptProvider(shell);
         try {
-            if (chatGptHasCredential(chatGpt.auth) && !chatGpt.models.isEmpty()) {
+            if (chatGptHasCredential(chatGpt) && !chatGpt.models.isEmpty()) {
                 configureShellModel(shell, preferredChatGptModel(chatGpt.models), true);
                 return;
             }
@@ -11662,7 +11660,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
         }
         CodingAgentOperations copilot = shellCopilotProvider(shell);
         try {
-            if (!gitHubCopilotHasCredential(copilot.auth)) return;
+            if (!gitHubCopilotHasCredential(copilot)) return;
             Model fallback = preferredCopilotModel(gitHubCopilotAvailableModels(copilot));
             if (fallback == null) {
                 println(shell.terminal,
@@ -12368,14 +12366,14 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
 
     public static CodingAgentOperations sessionRecorder(
             CodingAgentOperations store, String sessionId) {
-        CodingAgentOperations recorder = new CodingAgentOperations();
+        CodingAgentOperations recorder = INSTANCE;
         recorder.sessionStore = store;
         recorder.sessionId = sessionId;
         return recorder;
     }
 
     public static CodingAgentOperations settingsStore(Path settingsPath, Path lockPath) {
-        CodingAgentOperations store = new CodingAgentOperations();
+        CodingAgentOperations store = INSTANCE;
         store.settingsPath = settingsPath;
         store.lockPath = lockPath;
         return store;
@@ -12523,7 +12521,7 @@ public final class CodingAgentOperations extends JniTerminalProvider implements 
      */
     public static CodingAgentOperations sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
-        CodingAgentOperations store = new CodingAgentOperations();
+        CodingAgentOperations store = INSTANCE;
         store.directory = resolved;
         store.legacyDirectories = legacyDirectories.stream()
                 .map(path -> path.toAbsolutePath().normalize())
