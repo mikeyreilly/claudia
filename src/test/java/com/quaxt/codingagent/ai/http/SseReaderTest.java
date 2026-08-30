@@ -26,7 +26,7 @@ class SseReaderTest {
 			assertEquals("{\"a\":1}", event.data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 
@@ -36,7 +36,7 @@ class SseReaderTest {
 		try {
 			assertEquals("line1\nline2", next(r).data);
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 
@@ -46,7 +46,7 @@ class SseReaderTest {
 		try {
 			assertEquals("x", next(r).data);
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 
@@ -59,7 +59,7 @@ class SseReaderTest {
 			assertEquals("[DONE]", next(r).data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 
@@ -70,7 +70,7 @@ class SseReaderTest {
 			assertEquals("tail", next(r).data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 
@@ -80,7 +80,7 @@ class SseReaderTest {
 		try {
 			assertEquals(" two spaces", next(r).data);
 		} finally {
-			CodingAgentOperations.closeSseReader(r);
+			CodingAgentOperations.INSTANCE.closeSseReader(r);
 		}
 	}
 }

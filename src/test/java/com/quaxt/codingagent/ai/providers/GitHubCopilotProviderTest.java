@@ -87,21 +87,21 @@ class GitHubCopilotProviderTest {
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
 			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
-			CodingAgentOperations.modifyCredential(
+			CodingAgentOperations.INSTANCE.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			CodingAgentOperations.gitHubCopilotAuth(
+			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
 					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
 			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(models);
 
 			assertEquals("anthropic", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, models.get(0), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(0), new Context(), new StreamOptions()))));
 			assertEquals("completions", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, models.get(1), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(1), new Context(), new StreamOptions()))));
 			assertEquals("responses", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.stream(provider, models.get(2), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(2), new Context(), new StreamOptions()))));
 		} finally {
 			server.stop(0);
 		}
@@ -132,7 +132,7 @@ class GitHubCopilotProviderTest {
 		server.start();
 		try {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
-			CodingAgentOperations.loadBundledModelCatalog();
+			CodingAgentOperations.INSTANCE.loadBundledModelCatalog();
 			Model opus = CodingAgentOperations.copyModel(CodingAgentOperations.INSTANCE.requireCatalogModel(
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
@@ -140,12 +140,12 @@ class GitHubCopilotProviderTest {
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
 			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
-			CodingAgentOperations.modifyCredential(
+			CodingAgentOperations.INSTANCE.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			CodingAgentOperations.gitHubCopilotAuth(
+			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
 					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
 			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(List.of(opus));
 			Context context = new Context();
@@ -154,7 +154,7 @@ class GitHubCopilotProviderTest {
 			assertEquals(
 					"adaptive",
 					CodingAgentOperations.text(CodingAgentOperations.result(
-							CodingAgentOperations.stream(provider, opus, context, options(null, ThinkingLevel.MEDIUM)))));
+							CodingAgentOperations.INSTANCE.stream(provider, opus, context, options(null, ThinkingLevel.MEDIUM)))));
 
 			JsonNode payload = request.get();
 			assertNotNull(payload);

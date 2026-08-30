@@ -13,7 +13,7 @@ class ChatGptProviderTest {
 		StreamOptions options = new StreamOptions();
 		options.sessionId = "session-1";
 
-		CodingAgentOperations.configureCodexRequest(
+		CodingAgentOperations.INSTANCE.configureCodexRequest(
 				options, new CodingAgentOperations.ChatGptToken("access-token", "account-1"));
 
 		assertEquals("access-token", options.apiKey);

@@ -539,7 +539,7 @@ class InteractiveTerminalTest {
 
 	private static CodingAgentOperations newInteractiveTerminal(
 			Terminal terminal, java.util.concurrent.Callable<Void> suspendAction, boolean supportsSuspend) {
-		CodingAgentOperations.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
+		CodingAgentOperations.INSTANCE.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
 		return CodingAgentOperations.INSTANCE;
 	}
 

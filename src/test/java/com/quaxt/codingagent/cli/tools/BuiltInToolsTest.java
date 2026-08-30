@@ -43,7 +43,7 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve("example.txt"), "duplicate duplicate");
 		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", "example.txt");
 		edit.putArray("edits").addObject().put("oldText", "duplicate").put("newText", "changed");
-		assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.executeTool(
+		assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.INSTANCE.executeTool(
 				tool(builtInTools("git", tempDir), "edit"), "id", edit, new AbortSignal(), ignored -> {}));
 	}
 
@@ -92,7 +92,7 @@ class BuiltInToolsTest {
 
 		IllegalArgumentException error = assertThrows(
 				IllegalArgumentException.class,
-				() -> CodingAgentOperations.executeTool(
+				() -> CodingAgentOperations.INSTANCE.executeTool(
 						tool(builtInTools("git", tempDir), "grep"),
 						"id",
 						arguments,
@@ -256,7 +256,7 @@ class BuiltInToolsTest {
 	}
 
 	private static List<AgentTool> builtInTools(String gitExecutable, Path cwd) {
-		CodingAgentOperations.gitIgnore(gitExecutable);
+		CodingAgentOperations.INSTANCE.gitIgnore(gitExecutable);
 		return CodingAgentOperations.INSTANCE.builtInTools(cwd, ignored -> {});
 	}
 
@@ -283,7 +283,7 @@ class BuiltInToolsTest {
 	}
 
 	private static String run(List<AgentTool> tools, String name, ObjectNode arguments) throws Exception {
-		AgentTool.ToolResult result = CodingAgentOperations.executeTool(
+		AgentTool.ToolResult result = CodingAgentOperations.INSTANCE.executeTool(
 				tool(tools, name), "id", arguments, new AbortSignal(), ignored -> {});
 		return ((TextContent) result.content.getFirst()).text;
 	}
