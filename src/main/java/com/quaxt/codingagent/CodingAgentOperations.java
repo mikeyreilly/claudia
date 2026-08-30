@@ -412,7 +412,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     // Folded model catalog and core-provider registry state
     public Map<String, Model> byProviderAndId;
     public Map<String, List<Model>> byProvider;
-    public CodingAgentOperations catalog;
     public Map<String, Provider> coreProviders;
 
     // Folded file credential store and provider-authentication state
@@ -434,11 +433,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public List<Model> models;
 
     public AnthropicProvider anthropic;
-    public CodingAgentOperations completions;
     public OpenAiResponsesProvider responses;
 
     // Folded Agent and AgentState state
-    public CodingAgentOperations state;
     public Provider agentProvider;
     public List<Consumer<AgentEvent>> listeners = new CopyOnWriteArrayList<>();
     public volatile AbortSignal activeSignal;
@@ -524,7 +521,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public String baseSystemPrompt;
     public Path currentDirectory;
     public List<Path> sources = List.of();
-    public CodingAgentOperations sessionStore;
     public String sessionId;
     public Path directory;
     public List<Path> legacyDirectories;
@@ -619,7 +615,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     /** Per-server OAuth state; the session instance is its own monitor. */
     public static final class McpOAuthSession {
-        public CodingAgentOperations client;
         public String name;
         public McpServerConfig.Remote config;
         public McpOAuthSettings settings;
@@ -627,11 +622,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         public boolean loaded;
 
         public McpOAuthSession(
-                CodingAgentOperations client,
                 String name,
                 McpServerConfig.Remote config,
                 McpOAuthSettings settings) {
-            this.client = client;
             this.name = name;
             this.config = config;
             this.settings = settings;
@@ -804,12 +797,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // McpManager fields
     public Path workspace;
-    public CodingAgentOperations oauth;
     public LinkedHashMap<String, McpRuntime> servers = new LinkedHashMap<>();
     public volatile boolean closed;
 
     // McpOAuthClient fields
-    public CodingAgentOperations store;
     public HttpClient http;
     public Predicate<URI> browser;
     public Duration callbackTimeout;
@@ -849,14 +840,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     // InteractiveShell fields
-    public CodingAgentOperations providers;
-    public CodingAgentOperations cli;
-    public CodingAgentOperations terminal;
-    public CodingAgentOperations settingsStore;
-    public CodingAgentOperations mcp;
     public Settings settings;
-    public CodingAgentOperations agent;
-    public CodingAgentOperations recorder;
+    public boolean agentConfigured;
+    public boolean recordingSession;
     public String sessionName;
     public Path cwd = Path.of(".").toAbsolutePath().normalize();
     public boolean emittedText;
@@ -889,7 +875,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public String suspendedBuffer;
     public int suspendedCursor = -1;
     public int restoreCursor = -1;
-    public CodingAgentOperations activeCommandSuggestions;
+    public boolean commandSuggestionsActive;
     public Supplier<AttributedString> dynamicPost;
 
     // CommandSuggestions fields
@@ -2434,10 +2420,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     // -------------------------------------------------------- core providers
 
-    public static CodingAgentOperations coreProviders(
-            CodingAgentOperations catalog, Map<String, Provider> providers) {
+    public static CodingAgentOperations coreProviders(Map<String, Provider> providers) {
         CodingAgentOperations core = INSTANCE;
-        core.catalog = catalog;
         core.coreProviders = providers;
         return core;
     }
@@ -3751,7 +3735,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         List.copyOf(copilotModelsFor(all, AnthropicProvider.API)),
                         List.of(),
                         true);
-        provider.completions = openAiCompatibleProvider(
+        openAiCompatibleProvider(
                         GITHUB_COPILOT_PROVIDER_ID,
                         GITHUB_COPILOT_PROVIDER_NAME,
                         GITHUB_COPILOT_COMPLETIONS_BASE_URL,
@@ -3988,7 +3972,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 yield switch (model.api) {
                     case "anthropic-messages" -> anthropicStream(copilot.anthropic, model, context, requestOptions);
                     case "openai-completions" ->
-                            openAiCompatibleStream(copilot.completions, model, context, requestOptions);
+                            openAiCompatibleStream(copilot, model, context, requestOptions);
                     case "openai-responses" -> openAiResponsesStream(copilot.responses, model, context, requestOptions);
                     default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
                 };
@@ -4213,10 +4197,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         return state;
     }
 
-    /** Creates one folded agent carrier. */
-    public static CodingAgentOperations agent(CodingAgentOperations state, Provider provider) {
+    /** Configures the singleton as the active agent. */
+    public static CodingAgentOperations agent(Provider provider) {
         CodingAgentOperations agent = INSTANCE;
-        agent.state = state;
         agent.agentProvider = provider;
         return agent;
     }
@@ -4245,7 +4228,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      * persisting the original transcript if it needs complete history.
      */
     public static CompactionResult compact(CodingAgentOperations agent, String customInstructions) throws InterruptedException {
-        CodingAgentOperations state = agent.state;
+        CodingAgentOperations state = agent;
         if (state.isStreaming || state.isCompacting) {
             throw new IllegalStateException("Agent is already processing");
         }
@@ -4269,7 +4252,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private static CompactionResult performCompaction(CodingAgentOperations agent, String prompt, boolean automatic)
             throws InterruptedException {
-        CodingAgentOperations state = agent.state;
+        CodingAgentOperations state = agent;
         long tokensBefore = estimateMessageTokens(state.messages);
         emit(agent, new AgentEvent.CompactionStart(tokensBefore));
         Context context = new Context(COMPACTION_SYSTEM_PROMPT);
@@ -4296,7 +4279,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static List<Message> prompt(CodingAgentOperations agent, String text) throws InterruptedException {
         Message[] prompts = new Message[]{userMessage(text)};
-        CodingAgentOperations state = agent.state;
+        CodingAgentOperations state = agent;
         if (state.isStreaming || state.isCompacting) {
             throw new IllegalStateException("Agent is already processing");
         }
@@ -4309,7 +4292,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     && state.messages.size() > 1
                     && state.selectedModel.contextWindow > state.compactionReserveTokens
                     && estimateMessageTokens(state.messages) > state.selectedModel.contextWindow - state.compactionReserveTokens) {
-                CodingAgentOperations state1 = agent.state;
+                CodingAgentOperations state1 = agent;
                 state1.isCompacting = true;
                 try {
                     performCompaction(agent, compactionPrompt(state1.messages, null), true);
@@ -4330,7 +4313,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 AssistantMessage[] lastAttempt = new AssistantMessage[1];
                 AssistantMessage response = retryAssistantCall(
                         () -> {
-                            CodingAgentOperations state1 = agent.state;
+                            CodingAgentOperations state1 = agent;
                             Context context = new Context(state1.systemPrompt);
                             for (Message message : state1.messages) {
                                 if (!(message instanceof AssistantMessage assistant)
@@ -4381,7 +4364,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         agent.retryPolicy,
                         agent.activeSignal,
                         agentRetryCallbacks(agent, () -> {
-                            CodingAgentOperations state2 = agent.state;
+                            CodingAgentOperations state2 = agent;
                             state2.streamingMessage = null;
                             if (lastAttempt[0] == null) return;
                             for (int index = state2.messages.size() - 1; index >= 0; index--) {
@@ -4397,7 +4380,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     emit(agent, new AgentEvent.TurnEnd(response, List.of()));
                     break;
                 }
-                CodingAgentOperations state1 = agent.state;
+                CodingAgentOperations state1 = agent;
                 Map<String, AgentTool> toolsByName = new LinkedHashMap<>();
                 for (AgentTool tool : state1.tools) {
                     toolsByName.put(toolName(tool), tool);
@@ -4475,10 +4458,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 () -> {
                     StreamOptions options = new StreamOptions();
                     options.signal = signal;
-                    options.reasoning = agent.state.thinkingLevel;
+                    options.reasoning = agent.thinkingLevel;
                     options.apiKey = agent.apiKey;
                     options.maxTokens = 4_096;
-                    AssistantMessageEventStream stream = stream(agent.agentProvider, agent.state.selectedModel, context, options);
+                    AssistantMessageEventStream stream = stream(agent.agentProvider, agent.selectedModel, context, options);
                     AssistantMessage response = null;
                     for (AssistantMessageEvent event : events(stream)) {
                         if (event instanceof AssistantMessageEvent.Done done) response = done.message;
@@ -6658,12 +6641,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations mcpOAuthClient(
-            CodingAgentOperations store,
+            CodingAgentOperations client,
             HttpClient http,
             Predicate<URI> browser,
             Duration callbackTimeout) {
-        CodingAgentOperations client = INSTANCE;
-        client.store = store;
         client.http = http;
         client.browser = browser;
         client.callbackTimeout = callbackTimeout;
@@ -6687,15 +6668,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 ? home.resolve(".local/share/opencode/mcp-auth.json")
                 : Path.of(xdg).resolve("opencode/mcp-auth.json");
         Path resolved = home.resolve(".codingagent/mcp-auth.json").toAbsolutePath().normalize();
-        CodingAgentOperations store = mcpOAuthStore(
+        mcpOAuthStore(
                 resolved,
                 resolved.resolveSibling(resolved.getFileName() + ".lock"),
                 List.of(openCodeData, home.resolve("Library/Application Support/opencode/mcp-auth.json"))
                         .stream()
                         .map(value -> value.toAbsolutePath().normalize())
                         .toList());
-        CodingAgentOperations oauth = mcpOAuthClient(
-                Objects.requireNonNull(store, "store"),
+        mcpOAuthClient(
+                manager,
                 Objects.requireNonNull(http, "http"),
                 Objects.requireNonNull(uri -> {
                     String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
@@ -6716,7 +6697,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }, "browser"),
                 Objects.requireNonNull(MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
         manager.workspace = workspace.toAbsolutePath().normalize();
-        manager.oauth = oauth;
         configuration.servers.forEach((name, config) -> {
             McpRuntime runtime = new McpRuntime(name, config);
             runtime.disabledTools.addAll(switch ((McpServerConfig) config) {
@@ -6935,7 +6915,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             ? URI.create(oauth.path("redirectUri").asText())
                                             : null)
                                             : new McpOAuthSettings(null, null, null, null, null);
-                                    oauthSession = new McpOAuthSession(manager.oauth, runtime.name, remote, settings);
+                                    oauthSession = new McpOAuthSession(runtime.name, remote, settings);
                                 }
                                 try {
                                     candidate = mcpConnectRemote(remote, manager.workspace, timeout, oauthSession);
@@ -6950,7 +6930,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         : "MCP server \"" + runtime.name + "\" requires OAuth authentication; press Enter to authorize");
                                     }
                                     McpHttpException challenge = mcpFindHttpException(error);
-                                    CodingAgentOperations client = oauthSession.client;
+                                    CodingAgentOperations client = INSTANCE;
                                     McpOAuthChallenge challenge1 = mcpOAuthChallenge(challenge);
                                     if (challenge1 == null) throw challenge;
                                     client.interactiveLock.lockInterruptibly();
@@ -7075,7 +7055,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                             .POST(HttpRequest.BodyPublishers.ofString(
                                                                     Json.MAPPER.writeValueAsString(request), StandardCharsets.UTF_8));
                                                     McpOAuthResponse response =
-                                                            mcpOAuthSend(oauthSession.client, builder.build());
+                                                            mcpOAuthSend(INSTANCE, builder.build());
                                                     if (!mcpOAuthSuccess(response)) {
                                                         throw mcpOAuthFailure(response, "Dynamic OAuth client registration failed");
                                                     }
@@ -7090,7 +7070,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                     McpOAuthEntry updated = current == null
                                                             ? new McpOAuthEntry(null, registered)
                                                             : new McpOAuthEntry(current.tokens, registered);
-                                                    mcpOAuthWrite(oauthSession.client.store, oauthSession.name, oauthSession.config.url.toString(), updated);
+                                                    mcpOAuthWrite(INSTANCE, oauthSession.name, oauthSession.config.url.toString(), updated);
                                                     oauthSession.entry = updated;
                                                     oauthSession.loaded = true;
                                                     clientInfo = registered;
@@ -7138,7 +7118,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             }
                                             McpOAuthEntry saved = new McpOAuthEntry(
                                                     tokens, oauthSession.settings.clientId == null ? clientInfo : null);
-                                            mcpOAuthWrite(client.store, oauthSession.name, oauthSession.config.url.toString(), saved);
+                                            mcpOAuthWrite(client, oauthSession.name, oauthSession.config.url.toString(), saved);
                                             oauthSession.entry = saved;
                                             oauthSession.loaded = true;
                                         } finally {
@@ -7320,7 +7300,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private static McpOAuthEntry mcpOAuthRefresh(
             McpOAuthSession session, McpOAuthEntry current, McpOAuthChallenge challenge)
             throws Exception {
-        CodingAgentOperations client = session.client;
+        CodingAgentOperations client = INSTANCE;
         McpOAuthDiscovery discovery = mcpOAuthDiscover(client, session.config, challenge);
         McpOAuthClientInfo clientInfo;
         URI redirectUri = mcpOAuthRedirectUri(session.settings);
@@ -7346,7 +7326,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         McpOAuthTokens refreshed =
                 mcpOAuthRequestTokens(client, discovery, clientInfo, parameters, current.tokens, Map.of());
         McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
-        mcpOAuthWrite(client.store, session.name, session.config.url.toString(), updated);
+        mcpOAuthWrite(client, session.name, session.config.url.toString(), updated);
         session.entry = updated;
         session.loaded = true;
         return updated;
@@ -7364,11 +7344,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private static McpOAuthEntry mcpOAuthReload(McpOAuthSession session) throws IOException {
         McpOAuthEntry result = null;
         String serverUrl = session.config.url.toString();
-        McpOAuthEntry own = mcpOAuthReadEntry(session.client.store.path, session.name, serverUrl, false);
+        McpOAuthEntry own = mcpOAuthReadEntry(INSTANCE.path, session.name, serverUrl, false);
         if (own != null) {
             result = own;
         } else {
-            for (Path candidate : session.client.store.importPaths) {
+            for (Path candidate : INSTANCE.importPaths) {
                 McpOAuthEntry imported = mcpOAuthReadEntry(candidate, session.name, serverUrl, true);
                 if (imported != null) {
                     result = imported;
@@ -7388,7 +7368,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         McpOAuthEntry cleared = invalidClient && session.settings.clientId == null
                 ? new McpOAuthEntry(null, null)
                 : new McpOAuthEntry(null, current.clientInfo);
-        mcpOAuthWrite(session.client.store, session.name, session.config.url.toString(), cleared);
+        mcpOAuthWrite(INSTANCE, session.name, session.config.url.toString(), cleared);
         session.entry = cleared;
         session.loaded = true;
     }
@@ -8852,7 +8832,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         interactive.suspendedBuffer = null;
         interactive.suspendedCursor = -1;
         interactive.restoreCursor = -1;
-        interactive.activeCommandSuggestions = null;
+        interactive.commandSuggestionsActive = false;
         interactive.dynamicPost = null;
         interactive.jlineTerminal = terminal;
         int columns = terminal.getColumns();
@@ -8918,13 +8898,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return true;
             }
             boolean result = false;
-            if (interactive.activeCommandSuggestions != null) {
+            if (interactive.commandSuggestionsActive) {
                 String command = null;
                 String buffer = interactive.reader.getBuffer().toString();
-                synchronizeCommandSuggestions(interactive.activeCommandSuggestions, buffer);
-                if (!interactive.activeCommandSuggestions.matches.isEmpty()) {
-                    String selected = interactive.activeCommandSuggestions.matches.get(interactive.activeCommandSuggestions.selectedIndex);
-                    interactive.activeCommandSuggestions.dismissedBuffer = selected;
+                synchronizeCommandSuggestions(interactive, buffer);
+                if (!interactive.matches.isEmpty()) {
+                    String selected = interactive.matches.get(interactive.selectedIndex);
+                    interactive.dismissedBuffer = selected;
                     command = selected;
                 }
                 if (command != null) {
@@ -9054,24 +9034,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private static boolean moveSuggestionOrFallback(
             CodingAgentOperations interactive, int delta, String fallbackWidget) {
-        if (interactive.activeCommandSuggestions != null) {
+        if (interactive.commandSuggestionsActive) {
             boolean result = true;
             String buffer = interactive.reader.getBuffer().toString();
-            synchronizeCommandSuggestions(interactive.activeCommandSuggestions, buffer);
-            if (interactive.activeCommandSuggestions.matches.isEmpty()) {
+            synchronizeCommandSuggestions(interactive, buffer);
+            if (interactive.matches.isEmpty()) {
                 result = false;
             } else {
-                interactive.activeCommandSuggestions.selectedIndex =
-                        Math.floorMod(interactive.activeCommandSuggestions.selectedIndex + delta, interactive.activeCommandSuggestions.matches.size());
-                if (interactive.activeCommandSuggestions.selectedIndex < interactive.activeCommandSuggestions.visibleStart) {
-                    interactive.activeCommandSuggestions.visibleStart = interactive.activeCommandSuggestions.selectedIndex;
-                } else if (interactive.activeCommandSuggestions.selectedIndex
-                        >= interactive.activeCommandSuggestions.visibleStart + VISIBLE_COMMANDS) {
-                    interactive.activeCommandSuggestions.visibleStart =
-                            interactive.activeCommandSuggestions.selectedIndex - VISIBLE_COMMANDS + 1;
+                interactive.selectedIndex = Math.floorMod(interactive.selectedIndex + delta, interactive.matches.size());
+                if (interactive.selectedIndex < interactive.visibleStart) {
+                    interactive.visibleStart = interactive.selectedIndex;
+                } else if (interactive.selectedIndex >= interactive.visibleStart + VISIBLE_COMMANDS) {
+                    interactive.visibleStart = interactive.selectedIndex - VISIBLE_COMMANDS + 1;
                 }
-                interactive.activeCommandSuggestions.visibleStart = Math.clamp(interactive.activeCommandSuggestions.matches.size() - VISIBLE_COMMANDS, 0,
-                        interactive.activeCommandSuggestions.visibleStart);
+                interactive.visibleStart = Math.clamp(interactive.matches.size() - VISIBLE_COMMANDS, 0, interactive.visibleStart);
             }
             if (result) {
                 return true;
@@ -9153,7 +9129,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             + hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
                             + prompt.substring(activeLineOffset);
                 }
-                interactive.activeCommandSuggestions = suggestions;
+                interactive.commandSuggestionsActive = suggestions != null;
                 interactive.dynamicPost =
                         suggestions == null ? null : () -> {
                             int columns = interactive.jlineTerminal.getColumns() > 0
@@ -9198,7 +9174,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     result = interactive.reader.readLine(editorPrompt, null, mask, initialBuffer);
                 } finally {
                     interactive.dynamicPost = null;
-                    interactive.activeCommandSuggestions = null;
+                    interactive.commandSuggestionsActive = false;
                     resetPromptBackground(interactive, promptTheme);
                 }
                 String line =
@@ -9774,7 +9750,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     URI.create("https://github.com"),
                                     URI.create("https://api.github.com/copilot_internal/v2/token"),
                                     URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL))));
-            CodingAgentOperations providers = coreProviders(catalog, Map.copyOf(providers1));
+            CodingAgentOperations providers = coreProviders(Map.copyOf(providers1));
             if (cli.listModels) {
                 String needle = cli.modelSearch == null ? "" : cli.modelSearch.toLowerCase();
                 for (Provider provider : List.copyOf(providers.coreProviders.values())) {
@@ -9800,12 +9776,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     if (cli.provider != null && !cli.provider.equals(parts[0])) {
                         throw new IllegalArgumentException("--provider conflicts with the provider in --model");
                     }
-                    initialModel = requireCatalogModel(providers.catalog, parts[0], parts[1]);
+                    initialModel = requireCatalogModel(providers, parts[0], parts[1]);
                 } else {
                     if (cli.provider == null) {
                         throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                     }
-                    initialModel = requireCatalogModel(providers.catalog, cli.provider, cli.model);
+                    initialModel = requireCatalogModel(providers, cli.provider, cli.model);
                 }
                 server.mcp = mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
                 try {
@@ -9839,8 +9815,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                         throw new IllegalArgumentException("prompt requires a non-empty string message");
                                     }
                                     mcpAwaitReady(server.mcp);
-                                    server.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
-                                    server.agent.state.tools.addAll(mcpTools(server.mcp));
+                                    server.agent.tools.removeIf(McpAgentTool.class::isInstance);
+                                    server.agent.tools.addAll(mcpTools(server.mcp));
                                     List<Message> messages = prompt(server.agent, message.asText());
                                     if (server.recorder != null) appendSessionMessages(server.recorder, messages);
                                     respondRpc(id, "prompt", true, null, null);
@@ -9851,23 +9827,23 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 }
                                 case "get_state" -> {
                                     ObjectNode data = jsonObject();
-                                    data.set("model", Json.MAPPER.valueToTree(server.agent.state.selectedModel));
-                                    data.put("isStreaming", server.agent.state.isStreaming);
-                                    data.put("isCompacting", server.agent.state.isCompacting);
-                                    data.put("autoCompactionEnabled", server.agent.state.autoCompactionEnabled);
-                                    data.put("messageCount", server.agent.state.messages.size());
+                                    data.set("model", Json.MAPPER.valueToTree(server.agent.selectedModel));
+                                    data.put("isStreaming", server.agent.isStreaming);
+                                    data.put("isCompacting", server.agent.isCompacting);
+                                    data.put("autoCompactionEnabled", server.agent.autoCompactionEnabled);
+                                    data.put("messageCount", server.agent.messages.size());
                                     data.put("sessionId", server.recorder == null ? "" : server.recorder.sessionId);
                                     respondRpc(id, type, true, data, null);
                                 }
                                 case "get_available_models" -> {
                                     ObjectNode data = jsonObject();
-                                    data.set("models", Json.MAPPER.valueToTree(allCatalogModels(server.providers.catalog)));
+                                    data.set("models", Json.MAPPER.valueToTree(allCatalogModels(server.providers)));
                                     respondRpc(id, type, true, data, null);
                                 }
                                 case "set_model" -> {
                                     String provider = requiredRpcText(command, "provider");
                                     String modelId = requiredRpcText(command, "modelId");
-                                    Model model = requireCatalogModel(server.providers.catalog, provider, modelId);
+                                    Model model = requireCatalogModel(server.providers, provider, modelId);
                                     resetRpcAgent(server, model);
                                     respondRpc(id, "set_model", true, Json.MAPPER.valueToTree(model), null);
                                 }
@@ -9882,16 +9858,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     if (!command.path("enabled").isBoolean()) {
                                         throw new IllegalArgumentException("enabled must be a boolean");
                                     }
-                                    server.agent.state.autoCompactionEnabled = command.path("enabled").asBoolean();
+                                    server.agent.autoCompactionEnabled = command.path("enabled").asBoolean();
                                     respondRpc(id, type, true, null, null);
                                 }
                                 case "get_messages" -> {
                                     ObjectNode data = jsonObject();
-                                    data.set("messages", Json.MAPPER.valueToTree(server.agent.state.messages));
+                                    data.set("messages", Json.MAPPER.valueToTree(server.agent.messages));
                                     respondRpc(id, type, true, data, null);
                                 }
                                 case "get_last_assistant_text" -> {
-                                    String assistantText = server.agent.state.messages.reversed().stream()
+                                    String assistantText = server.agent.messages.reversed().stream()
                                             .filter(AssistantMessage.class::isInstance)
                                             .map(AssistantMessage.class::cast)
                                             .map(CodingAgentOperations::text)
@@ -9903,7 +9879,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     respondRpc(id, type, true, data, null);
                                 }
                                 case "new_session" -> {
-                                    resetRpcAgent(server, server.agent.state.selectedModel);
+                                    resetRpcAgent(server, server.agent.selectedModel);
                                     respondRpc(id, type, true, jsonObject().put("cancelled", false), null);
                                 }
                                 default -> respondRpc(id, type, false, null, "Unsupported command: " + type);
@@ -9927,11 +9903,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 CodingAgentOperations mcp = mcpLoadDefaultManager(cwd);
                 try {
                     mcpAwaitReady(mcp);
-                    CodingAgentOperations agent = agent(
-                            agentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model), provider);
+                    agentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model);
+                    CodingAgentOperations agent = agent(provider);
                     agent.apiKey = cli.apiKey;
                     configureBuiltInTools(agent, cwd, cli.systemPrompt);
-                    agent.state.tools.addAll(mcpTools(mcp));
+                    agent.tools.addAll(mcpTools(mcp));
                     if (cli.mode.equals("json")) {
                         subscribe(agent, event -> {
                             ObjectNode node = encodeAgentEvent(event, false);
@@ -9951,7 +9927,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     if (recorder != null) {
                         appendSessionMessages(recorder, messages);
                     }
-                    if (agent.state.messages.getLast() instanceof AssistantMessage response) {
+                    if (agent.messages.getLast() instanceof AssistantMessage response) {
                         if (response.errorMessage != null) {
                             System.err.println("Error: " + response.errorMessage);
                             return 1;
@@ -10014,12 +9990,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
                     CodingAgentOperations shell = INSTANCE;
-                    shell.providers = providers;
-                    shell.cli = cli;
-                    shell.terminal = terminal;
-                    shell.settingsStore = settingsStore;
-                    shell.mcp = mcp;
                     shell.settings = settings;
+                    shell.agentConfigured = false;
+                    shell.recordingSession = false;
                     shell.hideThinkingBlock = settings.hideThinkingBlock;
                     shell.activity = noModelActivity(System.nanoTime());
                     shell.statusTicker = Executors.newSingleThreadScheduledExecutor(
@@ -10031,7 +10004,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             () -> setShellHideThinkingBlock(shell, !shell.hideThinkingBlock, true));
                     try {
                         if (shell.settings.theme != null) {
-                            setTheme(shell.terminal, namedTheme(shell.settings.theme));
+                            setTheme(shell, namedTheme(shell.settings.theme));
                         }
                         if (cli.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
@@ -10050,7 +10023,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         } else {
                             restoreShellModel(shell);
                         }
-                        print(shell.terminal, sessionScreenHeader(shell.agent == null ? null : shell.agent.state.selectedModel));
+                        print(shell, sessionScreenHeader(!shell.agentConfigured ? null : shell.selectedModel));
                         refreshShellStatus(shell);
                         shell.statusTicker.scheduleWithFixedDelay(() -> {
                             if (!isDynamicActivity(shell.activity)) return;
@@ -10061,9 +10034,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                         while (true) {
-                            String input = readLine(shell.terminal, "\n> ", SLASH_COMMANDS);
+                            String input = readLine(shell, "\n> ", SLASH_COMMANDS);
                             if (input == null) {
-                                println(shell.terminal, "");
+                                println(shell, "");
                                 return 0;
                             }
                             if (input.isBlank()) continue;
@@ -10075,98 +10048,98 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 try {
                                     if (!exit) switch (trimmed) {
                                         case "/help" ->
-                                                println(shell.terminal, "Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                                println(shell, "Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
                                         case "/details" -> showShellTurnDetails(shell, false);
                                         case "/fork" -> {
-                                            if (shell.agent == null) {
-                                                println(shell.terminal, "No model is configured.");
+                                            if (!shell.agentConfigured) {
+                                                println(shell, "No model is configured.");
                                                 break;
                                             }
-                                            String name = readLine(shell.terminal, "Fork session name: ", forkName(shell.sessionName));
+                                            String name = readLine(shell, "Fork session name: ", forkName(shell.sessionName));
                                             if (name == null || name.isBlank()) {
-                                                println(shell.terminal, "Fork cancelled.");
+                                                println(shell, "Fork cancelled.");
                                                 break;
                                             }
                                             name = name.strip();
-                                            CodingAgentOperations state = shell.agent.state;
+                                            CodingAgentOperations state = shell;
                                             Model model = state.selectedModel;
                                             List<Message> forkMessages = resumableMessages(state.messages);
                                             CodingAgentOperations forkRecorder = null;
-                                            if (!shell.cli.noSession) {
+                                            if (!shell.noSession) {
                                                 try {
                                                     forkRecorder = forkSessionRecorder(
                                                             defaultSessionStore(), shell.cwd, model.provider, model.id, name, forkMessages);
                                                 } catch (IOException error) {
-                                                    println(shell.terminal, "Failed to fork session: " + error.getMessage());
+                                                    println(shell, "Failed to fork session: " + error.getMessage());
                                                     break;
                                                 }
                                             }
                                             configureShellAgent(shell, model, shell.cwd, forkRecorder, name);
-                                            shell.agent.state.systemPrompt = state.systemPrompt;
-                                            shell.agent.state.thinkingLevel = state.thinkingLevel;
-                                            shell.agent.state.autoCompactionEnabled = state.autoCompactionEnabled;
-                                            shell.agent.state.compactionReserveTokens = state.compactionReserveTokens;
-                                            shell.agent.state.messages.addAll(forkMessages);
+                                            shell.systemPrompt = state.systemPrompt;
+                                            shell.thinkingLevel = state.thinkingLevel;
+                                            shell.autoCompactionEnabled = state.autoCompactionEnabled;
+                                            shell.compactionReserveTokens = state.compactionReserveTokens;
+                                            shell.messages.addAll(forkMessages);
                                             refreshShellStatus(shell);
-                                            println(shell.terminal,
+                                            println(shell,
                                                     "Forked session " + name + " with " + forkMessages.size() + " message(s).");
                                         }
                                         case "/resume" -> resumeShellSession(shell);
                                         case "/login" -> {
-                                            println(shell.terminal, "Log in to a provider:");
-                                            println(shell.terminal, "  1. GitHub Copilot — sign in through GitHub's device authorization flow");
-                                            println(shell.terminal, "  2. OpenAI API key — use separately billed Platform API credits");
-                                            println(shell.terminal, "  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
-                                            String choice = readLine(shell.terminal, "Select provider [1-3]: ");
+                                            println(shell, "Log in to a provider:");
+                                            println(shell, "  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+                                            println(shell, "  2. OpenAI API key — use separately billed Platform API credits");
+                                            println(shell, "  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+                                            String choice = readLine(shell, "Select provider [1-3]: ");
                                             if (choice == null || choice.isBlank()) {
-                                                println(shell.terminal, "Login cancelled.");
+                                                println(shell, "Login cancelled.");
                                             } else {
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
                                                         CodingAgentOperations copilot = shellCopilotProvider(shell);
                                                         GitHubCopilotDeviceCode device = gitHubCopilotBeginLogin(copilot);
-                                                        println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        println(shell.terminal, "Waiting for GitHub authorization...");
+                                                        println(shell, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        println(shell, "Waiting for GitHub authorization...");
                                                         gitHubCopilotCompleteLogin(copilot, device);
-                                                        println(shell.terminal, "Enabling GitHub Copilot models...");
+                                                        println(shell, "Enabling GitHub Copilot models...");
                                                         CopilotModelAccess access = gitHubCopilotEnableAndRefreshModels(copilot);
                                                         if (access.policiesEnabled < copilot.models.size()) {
-                                                            println(shell.terminal, "Some GitHub Copilot models are unavailable for this account.");
+                                                            println(shell, "Some GitHub Copilot models are unavailable for this account.");
                                                         }
                                                         List<Model> models1 = access.models;
                                                         Model model = shellSavedModelIn(shell, models1);
                                                         if (model == null) model = preferredCopilotModel(models1);
                                                         if (model == null) {
-                                                            println(shell.terminal, "GitHub Copilot login succeeded, but no enabled coding model was returned.");
+                                                            println(shell, "GitHub Copilot login succeeded, but no enabled coding model was returned.");
                                                         } else {
                                                             configureShellModel(shell, model, true);
-                                                            println(shell.terminal, "GitHub Copilot is ready with " + model + ".");
+                                                            println(shell, "GitHub Copilot is ready with " + model + ".");
                                                         }
                                                     }
                                                     case "2", "openai", "open ai", "openai api", "openai api key" -> {
-                                                        String apiKey = readLineInternal(shell.terminal, "OpenAI API key: ", null, '*', null);
+                                                        String apiKey = readLineInternal(shell, "OpenAI API key: ", null, '*', null);
                                                         if (apiKey == null || apiKey.isBlank()) {
-                                                            println(shell.terminal, "OpenAI login cancelled.");
+                                                            println(shell, "OpenAI login cancelled.");
                                                         } else {
                                                             modifyCredential(
                                                                     defaultCredentialStore(),
                                                                     "openai",
                                                                     ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
-                                                            List<Model> models1 = providerModels(requireCoreProvider(shell.providers, "openai"));
+                                                            List<Model> models1 = providerModels(requireCoreProvider(shell, "openai"));
                                                             Model model = shellSavedModelIn(shell, models1);
                                                             if (model == null) {
                                                                 model = select(
-                                                                        shell.terminal,
+                                                                        shell,
                                                                         "Select an OpenAI model",
                                                                         models1.stream().map(CodingAgentOperations::shellModelItem).toList(),
                                                                         -1,
                                                                         true);
                                                             }
                                                             if (model == null) {
-                                                                println(shell.terminal, "OpenAI API key saved. Run /models when you are ready to select a model.");
+                                                                println(shell, "OpenAI API key saved. Run /models when you are ready to select a model.");
                                                             } else {
                                                                 configureShellModel(shell, model, true);
-                                                                println(shell.terminal, "OpenAI is ready with " + model + ".");
+                                                                println(shell, "OpenAI is ready with " + model + ".");
                                                             }
                                                         }
                                                     }
@@ -10174,49 +10147,49 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                          "chatgpt plus/pro" -> {
                                                         CodingAgentOperations chatGpt = shellChatGptProvider(shell);
                                                         ChatGptDeviceCode device = chatGptBeginLogin(chatGpt);
-                                                        println(shell.terminal, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        println(shell.terminal, "Waiting for ChatGPT authorization...");
+                                                        println(shell, "Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        println(shell, "Waiting for ChatGPT authorization...");
                                                         chatGptCompleteLogin(chatGpt, device);
                                                         List<Model> models1 = chatGpt.models;
                                                         Model model = shellSavedModelIn(shell, models1);
                                                         if (model == null) {
                                                             model = select(
-                                                                    shell.terminal,
+                                                                    shell,
                                                                     "Select a ChatGPT model",
                                                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList(),
                                                                     -1,
                                                                     true);
                                                         }
                                                         if (model == null) {
-                                                            println(shell.terminal, "ChatGPT login saved. Run /models when you are ready to select a model.");
+                                                            println(shell, "ChatGPT login saved. Run /models when you are ready to select a model.");
                                                         } else {
                                                             configureShellModel(shell, model, true);
-                                                            println(shell.terminal, "ChatGPT Plus/Pro is ready with " + model + ".");
+                                                            println(shell, "ChatGPT Plus/Pro is ready with " + model + ".");
                                                         }
                                                     }
                                                     default ->
-                                                            println(shell.terminal, "Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+                                                            println(shell, "Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
                                                 }
                                             }
                                         }
                                         case "/logout" -> {
                                             try {
-                                                if (shell.agent != null && shell.agent.state.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
+                                                if (shell.agentConfigured && shell.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
                                                     chatGptLogout(shellChatGptProvider(shell));
-                                                    shell.agent = null;
-                                                    println(shell.terminal, "ChatGPT credentials removed. Run /login or /resume to continue.");
-                                                } else if (shell.agent != null && shell.agent.state.selectedModel.provider.equals("openai")) {
+                                                    shell.agentConfigured = false;
+                                                    println(shell, "ChatGPT credentials removed. Run /login or /resume to continue.");
+                                                } else if (shell.agentConfigured && shell.selectedModel.provider.equals("openai")) {
                                                     deleteCredential(defaultCredentialStore(), "openai");
-                                                    shell.agent = null;
-                                                    println(shell.terminal, "OpenAI API key removed. Run /login or /resume to continue.");
+                                                    shell.agentConfigured = false;
+                                                    println(shell, "OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
                                                     gitHubCopilotLogout(shellCopilotProvider(shell));
-                                                    if (shell.agent != null
-                                                            && shell.agent.state.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        shell.agent = null;
-                                                        println(shell.terminal, "GitHub Copilot credentials removed. Run /login or /resume to continue.");
+                                                    if (shell.agentConfigured
+                                                            && shell.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                                        shell.agentConfigured = false;
+                                                        println(shell, "GitHub Copilot credentials removed. Run /login or /resume to continue.");
                                                     } else {
-                                                        println(shell.terminal, "GitHub Copilot credentials removed.");
+                                                        println(shell, "GitHub Copilot credentials removed.");
                                                     }
                                                 }
                                             } finally {
@@ -10225,7 +10198,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                         }
                                         case "/models" -> {
                                             List<Model> models2 = new ArrayList<>();
-                                            for (Model model1 : allCatalogModels(shell.providers.catalog)) {
+                                            for (Model model1 : allCatalogModels(shell)) {
                                                 if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                     models2.add(model1);
                                                 }
@@ -10233,13 +10206,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             CodingAgentOperations copilot = shellCopilotProvider(shell);
                                             try {
                                                 if (gitHubCopilotHasCredential(copilot)) {
-                                                    println(shell.terminal, "Refreshing GitHub Copilot models...");
+                                                    println(shell, "Refreshing GitHub Copilot models...");
                                                     models2.addAll(gitHubCopilotEnableAndRefreshModels(copilot).models);
                                                 } else {
                                                     models2.addAll(copilot.models);
                                                 }
                                             } catch (IOException error) {
-                                                println(shell.terminal, "Could not refresh GitHub Copilot model access: " + error.getMessage());
+                                                println(shell, "Could not refresh GitHub Copilot model access: " + error.getMessage());
                                                 models2.addAll(copilot.models);
                                             }
                                             models2.addAll(shellChatGptProvider(shell).models);
@@ -10247,37 +10220,37 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             List<SelectItem<Model>> items =
                                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
                                             int currentIndex;
-                                            if (shell.agent == null) {
+                                            if (!shell.agentConfigured) {
                                                 currentIndex = -1;
                                             } else {
                                                 int result1 = -1;
                                                 for (int index = 0; index < models1.size(); index++) {
                                                     Model model = models1.get(index);
-                                                    if (model.provider.equals(shell.agent.state.selectedModel.provider) && model.id.equals(shell.agent.state.selectedModel.id)) {
+                                                    if (model.provider.equals(shell.selectedModel.provider) && model.id.equals(shell.selectedModel.id)) {
                                                         result1 = index;
                                                         break;
                                                     }
                                                 }
                                                 currentIndex = result1;
                                             }
-                                            Model model = select(shell.terminal, "Select a model", items, currentIndex, true);
+                                            Model model = select(shell, "Select a model", items, currentIndex, true);
                                             if (model != null) {
                                                 configureShellModel(shell, model, true);
-                                                println(shell.terminal, "Using " + model + " in a new agent session.");
+                                                println(shell, "Using " + model + " in a new agent session.");
                                             }
                                         }
                                         case "/mcp" -> {
-                                            if (shell.mcp.servers.isEmpty()) {
-                                                println(shell.terminal, "No MCP servers configured in ~/.codingagent/settings.json.");
+                                            if (shell.servers.isEmpty()) {
+                                                println(shell, "No MCP servers configured in ~/.codingagent/settings.json.");
                                             } else {
                                                 McpSelector selector1 = new McpSelector();
-                                                selector1.manager = shell.mcp;
+                                                selector1.manager = shell;
                                                 selector1.onChange = change -> {
                                                     try {
                                                         if (change.toolName != null) {
                                                             requireSettingsValue(change.serverName, "serverName");
                                                             requireSettingsValue(change.toolName, "toolName");
-                                                            modifySettings(shell.settingsStore, root1 -> {
+                                                            modifySettings(shell, root1 -> {
                                                                 ObjectNode server = settingsMcpServer(root1, change.serverName);
                                                                 ArrayNode disabledTools = null;
                                                                 JsonNode value1 = server.get("disabledTools");
@@ -10314,7 +10287,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                             });
                                                         } else {
                                                             requireSettingsValue(change.serverName, "serverName");
-                                                            modifySettings(shell.settingsStore, root1 -> settingsMcpServer(root1, change.serverName).put("enabled", change.enabled));
+                                                            modifySettings(shell, root1 -> settingsMcpServer(root1, change.serverName).put("enabled", change.enabled));
                                                         }
                                                     } catch (IOException error) {
                                                         throw new UncheckedIOException(error);
@@ -10322,12 +10295,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         syncShellMcpTools(shell);
                                                     }
                                                 };
-                                                selector1.names = shell.mcp.servers.values().stream()
+                                                selector1.names = shell.servers.values().stream()
                                                         .sorted(Comparator.comparing(runtime -> runtime.name))
                                                         .map(CodingAgentOperations::mcpSnapshot)
                                                         .toList().stream().map(status -> status.name).toList();
                                                 selector1.filtered = selector1.names;
-                                                runComponent(shell.terminal, new TuiComponent<>(
+                                                runComponent(shell, new TuiComponent<>(
                                                         frame -> {
                                                             if (selector1.view == McpSelector.View.TOOLS)
                                                                 refreshMcpSelectorTools(selector1);
@@ -10578,20 +10551,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             }
                                         }
                                         case "/settings" -> {
-                                            if (shell.agent == null) {
-                                                println(shell.terminal, "No model is configured.");
+                                            if (!shell.agentConfigured) {
+                                                println(shell, "No model is configured.");
                                             } else {
                                                 select(
-                                                        shell.terminal,
+                                                        shell,
                                                         "Settings",
                                                         List.of(new SelectItem<>(
                                                                 "thinking",
                                                                 "Thinking level",
-                                                                shell.agent.state.thinkingLevel.wire,
-                                                                "Thinking level " + shell.agent.state.thinkingLevel.wire)),
+                                                                shell.thinkingLevel.wire,
+                                                                "Thinking level " + shell.thinkingLevel.wire)),
                                                         0,
                                                         false);
-                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.agent.state.selectedModel);
+                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.selectedModel);
                                                 List<SelectItem<ThinkingLevel>> items = levels.stream()
                                                         .map(level -> {
                                                             String description = switch (level) {
@@ -10607,39 +10580,39 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                                     level, level.wire, description, level.wire + " " + description);
                                                         })
                                                         .toList();
-                                                int currentIndex = Math.max(0, levels.indexOf(shell.agent.state.thinkingLevel));
-                                                ThinkingLevel level = select(shell.terminal, "Thinking level", items, currentIndex, false);
+                                                int currentIndex = Math.max(0, levels.indexOf(shell.thinkingLevel));
+                                                ThinkingLevel level = select(shell, "Thinking level", items, currentIndex, false);
                                                 if (level != null) {
-                                                    shell.agent.state.thinkingLevel = level;
+                                                    shell.thinkingLevel = level;
                                                     refreshShellStatus(shell);
                                                     shell.settings = new Settings(
                                                             shell.settings.defaultProvider, shell.settings.defaultModel, level, shell.settings.theme, shell.settings.hideThinkingBlock);
                                                     try {
-                                                        modifySettings(shell.settingsStore, root1 -> root1.put("defaultThinkingLevel", level.wire));
-                                                        println(shell.terminal, "Thinking level: " + level.wire);
+                                                        modifySettings(shell, root1 -> root1.put("defaultThinkingLevel", level.wire));
+                                                        println(shell, "Thinking level: " + level.wire);
                                                     } catch (IOException error) {
-                                                        println(shell.terminal, "Thinking level changed for this session, but could not be saved: " + error.getMessage());
+                                                        println(shell, "Thinking level changed for this session, but could not be saved: " + error.getMessage());
                                                     }
                                                 }
                                             }
                                         }
                                         case "/compact" -> {
-                                            if (shell.agent == null) {
-                                                println(shell.terminal, "No model is configured.");
+                                            if (!shell.agentConfigured) {
+                                                println(shell, "No model is configured.");
                                                 break;
                                             }
                                             try {
-                                                CompactionResult result1 = compact(shell.agent, null);
-                                                println(shell.terminal, "Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
+                                                CompactionResult result1 = compact(shell, null);
+                                                println(shell, "Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
                                                 refreshShellStatus(shell);
                                             } catch (IllegalStateException error) {
-                                                println(shell.terminal, "Error: " + error.getMessage());
+                                                println(shell, "Error: " + error.getMessage());
                                             }
                                         }
                                         default -> {
                                             if (input.startsWith("/theme ")) {
                                                 Theme theme1 = namedTheme(input.substring("/theme ".length()).trim());
-                                                setTheme(shell.terminal, theme1);
+                                                setTheme(shell, theme1);
                                                 refreshShellStatus(shell);
                                                 shell.settings = new Settings(
                                                         shell.settings.defaultProvider,
@@ -10649,16 +10622,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         shell.settings.hideThinkingBlock);
                                                 try {
                                                     requireSettingsValue(theme1.name1, "theme");
-                                                    modifySettings(shell.settingsStore, root1 -> root1.put("theme", theme1.name1));
-                                                    println(shell.terminal, "Theme: " + terminalTheme(shell.terminal).name1);
+                                                    modifySettings(shell, root1 -> root1.put("theme", theme1.name1));
+                                                    println(shell, "Theme: " + terminalTheme(shell).name1);
                                                 } catch (IOException error) {
-                                                    println(shell.terminal, "Theme changed for this session, but could not be saved: " + error.getMessage());
+                                                    println(shell, "Theme changed for this session, but could not be saved: " + error.getMessage());
                                                 }
-                                            } else println(shell.terminal, "Unknown command: " + input);
+                                            } else println(shell, "Unknown command: " + input);
                                         }
                                     }
                                 } finally {
-                                    setShellActivity(shell, shell.agent == null
+                                    setShellActivity(shell, !shell.agentConfigured
                                             ? noModelActivity(System.nanoTime())
                                             : readyActivity(System.nanoTime()));
                                     refreshShellStatus(shell);
@@ -10666,34 +10639,34 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 if (exit) return 0;
                                 continue;
                             }
-                            if (shell.agent == null) {
-                                println(shell.terminal, "No model configured. Run /login to choose a provider.");
+                            if (!shell.agentConfigured) {
+                                println(shell, "No model configured. Run /login to choose a provider.");
                                 continue;
                             }
                             setShellActivity(shell, activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
-                            mcpAwaitReady(shell.mcp);
+                            mcpAwaitReady(shell);
                             syncShellMcpTools(shell);
                             shell.emittedText = false;
                             shell.streamOutput = StreamOutput.NONE;
                             shell.streamedThinkingCharacters = 0;
                             AtomicBoolean interrupted = new AtomicBoolean();
-                            List<Message> messages = runInterruptibly(shell.terminal,
-                                    () -> prompt(shell.agent, input),
+                            List<Message> messages = runInterruptibly(shell,
+                                    () -> prompt(shell, input),
                                     () -> {
                                         interrupted.set(true);
                                         setShellActivity(
                                                 shell, activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
-                                        abort(shell.agent);
+                                        abort(shell);
                                     });
-                            if (shell.recorder != null) appendSessionMessages(shell.recorder, messages);
+                            if (shell.recordingSession) appendSessionMessages(shell, messages);
                             if (interrupted.get()) {
                                 finishShellStreamOutput(shell);
-                                println(shell.terminal, "Interrupted.");
-                            } else if (shell.agent.state.messages.getLast() instanceof AssistantMessage response) {
+                                println(shell, "Interrupted.");
+                            } else if (shell.messages.getLast() instanceof AssistantMessage response) {
                                 String finalOutput = finalAssistantOutput(response, shell.emittedText);
                                 if (finalOutput != null) {
                                     finishShellStreamOutput(shell);
-                                    println(shell.terminal, finalOutput);
+                                    println(shell, finalOutput);
                                 }
                             }
 // AgentEnd normally performs this transition. Reassert it here to close
@@ -10771,7 +10744,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
         refreshAgentInstructionsIn(instructions, directory);
         Set<Path> announcedSources = new LinkedHashSet<>();
-        agent.state.systemPrompt = instructions.systemPrompt;
+        agent.systemPrompt = instructions.systemPrompt;
         subscribe(agent, event -> {
             if (event instanceof AgentEvent.AgentStart) {
                 synchronized (instructions) {
@@ -10780,7 +10753,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 applyAgentInstructions(agent, instructions, announcedSources);
             }
         });
-        agent.state.tools.addAll(builtInTools(cwd, gitIgnore("git"), path -> {
+        agent.tools.addAll(builtInTools(cwd, gitIgnore("git"), path -> {
             boolean result;
             synchronized (instructions) {
                 Path directory1 = instructionDirectory(path);
@@ -10800,7 +10773,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private static void applyAgentInstructions(
             CodingAgentOperations agent, CodingAgentOperations instructions, Set<Path> announcedSources) {
-        agent.state.systemPrompt = instructions.systemPrompt;
+        agent.systemPrompt = instructions.systemPrompt;
         List<Path> sources = instructions.sources;
         announcedSources.retainAll(sources);
         for (Path source : sources) {
@@ -11130,8 +11103,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private static void resumeShellSession(CodingAgentOperations shell) throws IOException {
-        if (shell.cli.noSession) {
-            println(shell.terminal, "Session persistence is disabled by --no-session.");
+        if (shell.noSession) {
+            println(shell, "Session persistence is disabled by --no-session.");
             return;
         }
         CodingAgentOperations store = defaultSessionStore();
@@ -11139,29 +11112,29 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         try {
             sessions = shellSessionSnapshots(store, shell.cwd);
         } catch (IOException error) {
-            println(shell.terminal, "Failed to list saved sessions: " + error.getMessage());
+            println(shell, "Failed to list saved sessions: " + error.getMessage());
             return;
         }
         if (sessions.isEmpty()) {
-            println(shell.terminal, "No saved sessions in " + shell.cwd + ".");
+            println(shell, "No saved sessions in " + shell.cwd + ".");
             return;
         }
-        String currentId = shell.recorder == null ? null : shell.recorder.sessionId;
+        String currentId = !shell.recordingSession ? null : shell.sessionId;
         List<SelectItem<SessionSnapshot>> items = sessions.stream()
                 .filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
                 .map(CodingAgentOperations::shellSessionItem)
                 .toList();
         if (items.isEmpty()) {
-            println(shell.terminal, "No resumable sessions in " + shell.cwd + ".");
+            println(shell, "No resumable sessions in " + shell.cwd + ".");
             return;
         }
         SessionSnapshot selected =
-                select(shell.terminal, "Resume Session (Current Folder)", items, -1, true);
+                select(shell, "Resume Session (Current Folder)", items, -1, true);
         if (selected == null) return;
         try {
             resumeSelectedShellSession(shell, store, selected);
         } catch (IOException | IllegalArgumentException error) {
-            println(shell.terminal, "Failed to resume session: " + error.getMessage());
+            println(shell, "Failed to resume session: " + error.getMessage());
         }
     }
 
@@ -11219,27 +11192,27 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private static void resumeSelectedShellSession(
             CodingAgentOperations shell, CodingAgentOperations store, SessionSnapshot selected) throws IOException {
         if (!Files.isDirectory(selected.cwd)) {
-            println(shell.terminal,
+            println(shell,
                     "Cannot resume session because its working directory is unavailable: " + selected.cwd);
             return;
         }
         Model model;
         try {
             model = findModelIn(
-                    providerModels(requireCoreProvider(shell.providers, selected.provider)),
+                    providerModels(requireCoreProvider(shell, selected.provider)),
                     selected.provider,
                     selected.model);
         } catch (IllegalArgumentException ignored) {
             model = null;
         }
         if (model == null) {
-            if (shell.agent == null) {
-                println(shell.terminal, "Cannot restore model " + selected.provider + "/" + selected.model
+            if (!shell.agentConfigured) {
+                println(shell, "Cannot restore model " + selected.provider + "/" + selected.model
                         + "; configure an available model before resuming this session.");
                 return;
             }
-            model = shell.agent.state.selectedModel;
-            println(shell.terminal, "Could not restore model " + selected.provider + "/" + selected.model
+            model = shell.selectedModel;
+            println(shell, "Could not restore model " + selected.provider + "/" + selected.model
                     + ". Using " + model + ".");
         }
         if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
@@ -11250,18 +11223,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     enabled = findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id);
                 }
             } catch (IOException error) {
-                println(shell.terminal,
+                println(shell,
                         "Could not refresh GitHub Copilot model access: " + error.getMessage());
             }
             if (enabled != null) model = enabled;
-            else if (shell.agent == null
-                    || shell.agent.state.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                println(shell.terminal, "Cannot restore GitHub Copilot model " + model.id
+            else if (!shell.agentConfigured
+                    || shell.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                println(shell, "Cannot restore GitHub Copilot model " + model.id
                         + "; log in or configure another model first.");
                 return;
             } else {
-                Model fallback = shell.agent.state.selectedModel;
-                println(shell.terminal, "Could not restore model " + model + ". Using " + fallback + ".");
+                Model fallback = shell.selectedModel;
+                println(shell, "Could not restore model " + model + ". Using " + fallback + ".");
                 model = fallback;
             }
         }
@@ -11271,17 +11244,17 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         configureShellAgent(
                 shell, model, selected.cwd, resumeSessionRecorder(store, selected.id), selected.name);
         shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
-        shell.agent.state.messages.addAll(restored);
+        shell.messages.addAll(restored);
         refreshShellStatus(shell);
-        replaceScreen(shell.terminal, renderSessionScreen(
-                model, selected.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell.terminal)));
+        replaceScreen(shell, renderSessionScreen(
+                model, selected.transcriptMessages, shell.hideThinkingBlock, terminalTheme(shell)));
         try {
-            setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
+            setSettingsDefaultModelAndProvider(shell, model.provider, model.id);
         } catch (IOException error) {
-            println(shell.terminal,
+            println(shell,
                     "Resumed model could not be saved as the default: " + error.getMessage());
         }
-        println(shell.terminal, "Resumed session " + sessionDisplayName(selected) + " with "
+        println(shell, "Resumed session " + sessionDisplayName(selected) + " with "
                 + restored.size() + " message(s) using " + model + ".");
     }
 
@@ -11297,21 +11270,21 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             throws IOException {
         Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
         CodingAgentOperations nextRecorder = null;
-        if (!shell.cli.noSession) {
+        if (!shell.noSession) {
             try {
                 nextRecorder = createSessionRecorder(
                         defaultSessionStore(), configuredCwd, model.provider, model.id);
             } catch (IOException error) {
-                println(shell.terminal, "Model configured, but session persistence is unavailable: " + error.getMessage());
+                println(shell, "Model configured, but session persistence is unavailable: " + error.getMessage());
             }
         }
         configureShellAgent(shell, model, configuredCwd, nextRecorder, null);
         if (persistModel) {
             shell.settings = withSettingsDefaultModel(shell.settings, model.provider, model.id);
             try {
-                setSettingsDefaultModelAndProvider(shell.settingsStore, model.provider, model.id);
+                setSettingsDefaultModelAndProvider(shell, model.provider, model.id);
             } catch (IOException error) {
-                println(shell.terminal, "Model changed for this session, but could not be saved: " + error.getMessage());
+                println(shell, "Model changed for this session, but could not be saved: " + error.getMessage());
             }
         }
     }
@@ -11322,15 +11295,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             Path configuredCwd,
             CodingAgentOperations nextRecorder,
             String nextSessionName) {
-        Provider provider = requireCoreProvider(shell.providers, model.provider);
-        CodingAgentOperations configured = agent(
-                agentState(shell.cli.systemPrompt == null ? "" : shell.cli.systemPrompt, model),
-                provider);
-        configured.apiKey = shell.cli.apiKey;
-        configured.state.thinkingLevel =
+        Provider provider = requireCoreProvider(shell, model.provider);
+        agentState(shell.systemPrompt == null ? "" : shell.systemPrompt, model);
+        CodingAgentOperations configured = agent(provider);
+        configured.apiKey = shell.apiKey;
+        configured.thinkingLevel =
                 initialThinkingLevel(model, shell.settings.defaultThinkingLevel);
-        configureBuiltInTools(configured, configuredCwd, shell.cli.systemPrompt);
-        configured.state.tools.addAll(mcpTools(shell.mcp));
+        configureBuiltInTools(configured, configuredCwd, shell.systemPrompt);
+        configured.tools.addAll(mcpTools(shell));
         subscribe(configured, event -> {
             switch ((AgentEvent) event) {
                 case AgentEvent.AgentStart ignored -> setShellActivity(
@@ -11338,21 +11310,21 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 case AgentEvent.AgentEnd ignored -> setShellActivity(shell, readyActivity(System.nanoTime()));
                 case AgentEvent.InstructionLoaded loaded -> {
                     finishShellStreamOutput(shell);
-                    println(shell.terminal, instructionLoadedMessage(loaded.path));
+                    println(shell, instructionLoadedMessage(loaded.path));
                 }
                 case AgentEvent.CompactionStart ignored -> setShellActivity(
                         shell, activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
                 case AgentEvent.CompactionEnd end -> {
-                    if (shell.recorder != null) {
+                    if (shell.recordingSession) {
                         try {
-                            appendSessionCompaction(shell.recorder, end.result);
+                            appendSessionCompaction(shell, end.result);
                         } catch (IOException error) {
                             // The live agent state has already been compacted. Keep the turn usable,
                             // but make the loss of the resume boundary visible to the user.
-                            println(shell.terminal, "Warning: compacted context could not be saved for resume: " + error.getMessage());
+                            println(shell, "Warning: compacted context could not be saved for resume: " + error.getMessage());
                         }
                     }
-                    if (shell.agent != null && shell.agent.state.isStreaming) {
+                    if (shell.agentConfigured && shell.isStreaming) {
                         setShellActivity(
                                 shell, activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
                     } else {
@@ -11387,12 +11359,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             // End events retain the current phase until another block or AgentEnd.
                         }
                     }
-                    Theme theme = terminalTheme(shell.terminal);
+                    Theme theme = terminalTheme(shell);
                     switch (update.providerEvent) {
                         case AssistantMessageEvent.ThinkingStart ignored -> {
                             if (!shell.hideThinkingBlock) {
                                 finishShellStreamOutput(shell);
-                                print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+                                print(shell, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
                                 shell.streamOutput = StreamOutput.THINKING;
                                 shell.streamedThinkingCharacters = 0;
                             }
@@ -11400,11 +11372,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         case AssistantMessageEvent.ThinkingDelta delta -> {
                             if (!shell.hideThinkingBlock) {
                                 if (shell.streamOutput != StreamOutput.THINKING) {
-                                    print(shell.terminal, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+                                    print(shell, "\n" + theme.muted + "Thinking:" + theme.reset + "\n");
                                     shell.streamOutput = StreamOutput.THINKING;
                                     shell.streamedThinkingCharacters = 0;
                                 }
-                                print(shell.terminal, theme.muted + delta.delta + theme.reset);
+                                print(shell, theme.muted + delta.delta + theme.reset);
                                 shell.streamedThinkingCharacters += delta.delta.length();
                             }
                         }
@@ -11412,7 +11384,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             if (!shell.hideThinkingBlock
                                     && shell.streamOutput == StreamOutput.THINKING) {
                                 if (shell.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-                                    print(shell.terminal, theme.muted + end.content + theme.reset);
+                                    print(shell, theme.muted + end.content + theme.reset);
                                 }
                                 finishShellStreamOutput(shell);
                             }
@@ -11426,7 +11398,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                 finishShellStreamOutput(shell);
                                 shell.streamOutput = StreamOutput.TEXT;
                             }
-                            print(shell.terminal, delta.delta);
+                            print(shell, delta.delta);
                             shell.emittedText = true;
                         }
                         case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput(shell);
@@ -11453,7 +11425,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     } else {
                         result = String.format(Locale.ROOT, "%.1fs", retry.delayMs / 1_000.0);
                     }
-                    println(shell.terminal, "\nTransient provider error; retrying in "
+                    println(shell, "\nTransient provider error; retrying in "
                             + result
                             + " (" + retry.attempt + "/" + retry.maxAttempts + "): "
                             + retry.errorMessage);
@@ -11462,12 +11434,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     setShellActivity(shell, activeActivity(
                             ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
                     finishShellStreamOutput(shell);
-                    println(shell.terminal, "\n[" + start.toolName + "] "
+                    println(shell, "\n[" + start.toolName + "] "
                             + toolCallDescription(start.toolName, start.arguments));
                 }
                 case AgentEvent.ToolExecutionEnd end -> {
                     String label = end.result.isError ? "Error" : "Done";
-                    println(shell.terminal, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
+                    println(shell, "  " + label + ": " + toolResultSummary(end.toolName, end.result));
                 }
                 default -> {
                     // Turn-end and low-level update events do not change the presentation phase.
@@ -11475,8 +11447,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             }
         });
         shell.cwd = configuredCwd.toAbsolutePath().normalize();
-        shell.agent = configured;
-        shell.recorder = nextRecorder;
+        shell.agentConfigured = true;
+        shell.recordingSession = nextRecorder != null;
         shell.sessionName = nextSessionName;
         if (shell.activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
             setShellActivity(shell, readyActivity(System.nanoTime()));
@@ -11492,19 +11464,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         shell.statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), shell.cwd)
                 + (branch == null ? "" : " [" + branch + "]")
                 + (shell.sessionName == null ? "" : " \u2022 " + shell.sessionName);
-        shell.statusModel = shell.agent == null
+        shell.statusModel = !shell.agentConfigured
                 ? ""
                 : modelStatus(
-                shell.agent.state.selectedModel,
-                shell.agent.state.thinkingLevel,
-                contextTokens(shell.agent.state.messages));
+                shell.selectedModel,
+                shell.thinkingLevel,
+                contextTokens(shell.messages));
         renderShellStatus(shell);
     }
 
     private static void renderShellStatus(CodingAgentOperations shell) {
         ActivityStatus current = shell.activity;
         setStatus(
-                shell.terminal,
+                shell,
                 activityLabel(current, System.nanoTime()),
                 activityAccent(current),
                 shell.statusLocation,
@@ -11615,18 +11587,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private static void syncShellMcpTools(CodingAgentOperations shell) {
-        if (shell.agent == null || shell.agent.state.isStreaming) return;
-        shell.agent.state.tools.removeIf(McpAgentTool.class::isInstance);
-        shell.agent.state.tools.addAll(mcpTools(shell.mcp));
+        if (!shell.agentConfigured || shell.isStreaming) return;
+        shell.tools.removeIf(McpAgentTool.class::isInstance);
+        shell.tools.addAll(mcpTools(shell));
     }
 
     private static CodingAgentOperations shellCopilotProvider(CodingAgentOperations shell) {
         return (CodingAgentOperations)
-                requireCoreProvider(shell.providers, GITHUB_COPILOT_PROVIDER_ID);
+                requireCoreProvider(shell, GITHUB_COPILOT_PROVIDER_ID);
     }
 
     private static CodingAgentOperations shellChatGptProvider(CodingAgentOperations shell) {
-        return (CodingAgentOperations) requireCoreProvider(shell.providers, CHATGPT_PROVIDER_ID);
+        return (CodingAgentOperations) requireCoreProvider(shell, CHATGPT_PROVIDER_ID);
     }
 
     private static void restoreShellModel(CodingAgentOperations shell) throws IOException {
@@ -11635,13 +11607,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         if (settings.defaultProvider != null && settings.defaultModel != null) {
             try {
                 model = findModelIn(
-                        providerModels(requireCoreProvider(shell.providers, settings.defaultProvider)),
+                        providerModels(requireCoreProvider(shell, settings.defaultProvider)),
                         settings.defaultProvider,
                         settings.defaultModel);
             } catch (IllegalArgumentException ignored) {
             }
             if (model == null) {
-                println(shell.terminal, "Saved model " + settings.defaultProvider + "/" + settings.defaultModel
+                println(shell, "Saved model " + settings.defaultProvider + "/" + settings.defaultModel
                         + " is unavailable; selecting a fallback.");
             } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                 CodingAgentOperations copilot = shellCopilotProvider(shell);
@@ -11650,11 +11622,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             ? findModelIn(gitHubCopilotAvailableModels(copilot), model.provider, model.id)
                             : null;
                     if (model == null) {
-                        println(shell.terminal,
+                        println(shell,
                                 "Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
                     }
                 } catch (IOException error) {
-                    println(shell.terminal,
+                    println(shell,
                             "Could not restore the saved GitHub Copilot model: " + error.getMessage());
                     model = null;
                 }
@@ -11662,7 +11634,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 try {
                     if (!chatGptHasCredential(shellChatGptProvider(shell))) model = null;
                 } catch (IOException error) {
-                    println(shell.terminal, "Could not restore the saved ChatGPT model: " + error.getMessage());
+                    println(shell, "Could not restore the saved ChatGPT model: " + error.getMessage());
                     model = null;
                 }
             }
@@ -11679,20 +11651,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return;
             }
         } catch (IOException error) {
-            println(shell.terminal, "ChatGPT login needs attention: " + error.getMessage());
+            println(shell, "ChatGPT login needs attention: " + error.getMessage());
         }
         CodingAgentOperations copilot = shellCopilotProvider(shell);
         try {
             if (!gitHubCopilotHasCredential(copilot)) return;
             Model fallback = preferredCopilotModel(gitHubCopilotAvailableModels(copilot));
             if (fallback == null) {
-                println(shell.terminal,
+                println(shell,
                         "GitHub Copilot has no enabled coding models. Run /login to refresh access.");
             } else {
                 configureShellModel(shell, fallback, true);
             }
         } catch (IOException error) {
-            println(shell.terminal, "GitHub Copilot login needs attention: " + error.getMessage());
+            println(shell, "GitHub Copilot login needs attention: " + error.getMessage());
         }
     }
 
@@ -11740,19 +11712,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     private static void showShellTurnDetails(CodingAgentOperations shell, boolean lineEditorActive) {
-        if (shell.agent == null) {
+        if (!shell.agentConfigured) {
             showShellShortcutStatus(shell, "No model is configured.", lineEditorActive);
             return;
         }
         TurnDetailsComponent details =
-                turnDetailsForLatestTurn(shell.agent.state.messages, shell.hideThinkingBlock);
+                turnDetailsForLatestTurn(shell.messages, shell.hideThinkingBlock);
         if (details == null) {
             showShellShortcutStatus(
                     shell, "The latest turn has no reasoning or tool details.", lineEditorActive);
             return;
         }
         try {
-            boolean hiddenAfter = runComponent(shell.terminal, new TuiComponent<>(
+            boolean hiddenAfter = runComponent(shell, new TuiComponent<>(
                     frame -> renderTurnDetails(details, frame.width, frame.height, frame.theme),
                     input -> handleTurnDetailsInput(details, input),
                     () -> details.complete,
@@ -11777,7 +11749,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 hidden);
         String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
         try {
-            modifySettings(shell.settingsStore, root -> root.put("hideThinkingBlock", hidden));
+            modifySettings(shell, root -> root.put("hideThinkingBlock", hidden));
         } catch (IOException error) {
             status += " (could not save: " + error.getMessage() + ")";
         }
@@ -11786,13 +11758,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private static void showShellShortcutStatus(
             CodingAgentOperations shell, String status, boolean lineEditorActive) {
-        if (lineEditorActive) printAbove(shell.terminal, status);
-        else println(shell.terminal, status);
+        if (lineEditorActive) printAbove(shell, status);
+        else println(shell, status);
     }
 
     private static void finishShellStreamOutput(CodingAgentOperations shell) {
         if (shell.streamOutput != StreamOutput.NONE) {
-            println(shell.terminal, "");
+            println(shell, "");
             shell.streamOutput = StreamOutput.NONE;
         }
     }
@@ -11935,12 +11907,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private static void resetRpcAgent(RpcServer server, Model model) throws IOException {
         Provider provider = requireCoreProvider(server.providers, model.provider);
-        server.agent = agent(
-                agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model),
-                provider);
+        agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model);
+        server.agent = agent(provider);
         server.agent.apiKey = server.arguments.apiKey;
         configureBuiltInTools(server.agent, Path.of("."), server.arguments.systemPrompt);
-        server.agent.state.tools.addAll(mcpTools(server.mcp));
+        server.agent.tools.addAll(mcpTools(server.mcp));
         subscribe(server.agent, event -> {
             if (event instanceof AgentEvent.CompactionEnd end) {
                 if (server.recorder != null) {
@@ -12388,9 +12359,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     // --------------------------------------------------------- session recorder
 
     public static CodingAgentOperations sessionRecorder(
-            CodingAgentOperations store, String sessionId) {
-        CodingAgentOperations recorder = INSTANCE;
-        recorder.sessionStore = store;
+            CodingAgentOperations recorder, String sessionId) {
         recorder.sessionId = sessionId;
         return recorder;
     }
@@ -12516,7 +12485,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     encodeSessionUserContent(content, result.content);
                 }
             }
-            appendSessionEntry(recorder.sessionStore, recorder.sessionId, "message", node);
+            appendSessionEntry(recorder, recorder.sessionId, "message", node);
         }
     }
 
@@ -12534,7 +12503,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         checkpoint.put("summary", result.summary);
         checkpoint.put("tokensBefore", result.tokensBefore);
         checkpoint.put("estimatedTokensAfter", result.estimatedTokensAfter);
-        appendSessionEntry(recorder.sessionStore, recorder.sessionId, "compaction", checkpoint);
+        appendSessionEntry(recorder, recorder.sessionId, "compaction", checkpoint);
     }
 
     // ------------------------------------------------------------ session store
