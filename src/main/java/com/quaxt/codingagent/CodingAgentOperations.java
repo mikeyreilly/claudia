@@ -9517,7 +9517,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     /**
      * Process entry point for the shaded jar and the native executable.
      */
-    public void main(String[] args) {
+    public static void main(String[] args) {
         System.exit(INSTANCE.cliRun(args));
     }
 
@@ -9526,27 +9526,26 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public int cliRun(String[] args) {
         try {
-            CodingAgentOperations cli = INSTANCE;
             List<String> messageParts = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
                 switch (arg) {
-                    case "-h", "--help" -> cli.help = true;
-                    case "-v", "--version" -> cli.version = true;
+                    case "-h", "--help" -> INSTANCE.help = true;
+                    case "-v", "--version" -> INSTANCE.version = true;
                     case "--list-models" -> {
-                        cli.listModels = true;
+                        INSTANCE.listModels = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
-                            cli.modelSearch = args[++i];
+                            INSTANCE.modelSearch = args[++i];
                         }
                     }
-                    case "--provider" -> cli.provider = cliArgumentValue(args, ++i, arg);
-                    case "--model" -> cli.model = cliArgumentValue(args, ++i, arg);
-                    case "--api-key" -> cli.apiKey = cliArgumentValue(args, ++i, arg);
-                    case "--system-prompt" -> cli.systemPrompt = cliArgumentValue(args, ++i, arg);
-                    case "--no-session" -> cli.noSession = true;
-                    case "--mode" -> cli.mode = cliArgumentValue(args, ++i, arg);
+                    case "--provider" -> INSTANCE.provider = cliArgumentValue(args, ++i, arg);
+                    case "--model" -> INSTANCE.model = cliArgumentValue(args, ++i, arg);
+                    case "--api-key" -> INSTANCE.apiKey = cliArgumentValue(args, ++i, arg);
+                    case "--system-prompt" -> INSTANCE.systemPrompt = cliArgumentValue(args, ++i, arg);
+                    case "--no-session" -> INSTANCE.noSession = true;
+                    case "--mode" -> INSTANCE.mode = cliArgumentValue(args, ++i, arg);
                     case "-p", "--print" -> {
-                        cli.print = true;
+                        INSTANCE.print = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
                             messageParts.add(args[++i]);
                         }
@@ -9559,15 +9558,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     }
                 }
             }
-            cli.message = String.join(" ", messageParts);
-            if (!cli.mode.equals("print") && !cli.mode.equals("json") && !cli.mode.equals("rpc")) {
+            INSTANCE.message = String.join(" ", messageParts);
+            if (!INSTANCE.mode.equals("print") && !INSTANCE.mode.equals("json") && !INSTANCE.mode.equals("rpc")) {
                 throw new IllegalArgumentException("--mode must be print, json, or rpc");
             }
-            if (cli.version) {
+            if (INSTANCE.version) {
                 System.out.println(VERSION);
                 return 0;
             }
-            if (cli.help) {
+            if (INSTANCE.help) {
                 System.out.println("""
                         %s - coding agent (Java port)
                         
@@ -9596,15 +9595,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return 0;
             }
             loadBundledModelCatalog();
-            CodingAgentOperations catalog = INSTANCE;
-                    CodingAgentOperations credentials = defaultCredentialStore();
+            CodingAgentOperations credentials = defaultCredentialStore();
             Map<String, Provider> providers1 = new LinkedHashMap<>();
             providers1.put(
                     "anthropic",
                     new AnthropicProvider(
                             "anthropic",
                             "Anthropic",
-                            catalog.catalogModelsForProvider("anthropic").stream()
+                            INSTANCE.catalogModelsForProvider("anthropic").stream()
                                     .filter(model1 -> model1.api.equals("anthropic-messages"))
                                     .toList(),
                             List.of(
@@ -9617,14 +9615,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     new OpenAiResponsesProvider(
                             "openai",
                             "OpenAI",
-                            List.copyOf(catalog.catalogModelsForProvider("openai").stream()
+                            List.copyOf(INSTANCE.catalogModelsForProvider("openai").stream()
                                     .filter(model -> model.api.equals("openai-responses"))
                                     .toList()),
                             List.of("OPENAI_API_KEY"),
                             credentials,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
             INSTANCE.chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
-            List<Model> models = catalog.catalogModelsForProvider("openai").stream()
+            List<Model> models = INSTANCE.catalogModelsForProvider("openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
                     .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
                     .map(source -> {
@@ -9644,7 +9642,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     List.of(),
                                     null,
                                     OpenAiResponsesProvider.RequestProfile.CODEX)));
-            googleProvider(List.copyOf(catalog.catalogModelsForProvider("google").stream()
+            googleProvider(List.copyOf(INSTANCE.catalogModelsForProvider("google").stream()
                     .filter(model -> model.api.equals(GOOGLE_API))
                     .toList()));
             providers1.put("google",INSTANCE);
@@ -9655,12 +9653,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
             providers1.put(
                     "github-copilot",
-                    INSTANCE.newGitHubCopilotProvider(catalog.catalogModelsForProvider("github-copilot")));
+                    INSTANCE.newGitHubCopilotProvider(INSTANCE.catalogModelsForProvider("github-copilot")));
              coreProviders(Map.copyOf(providers1));
-            CodingAgentOperations providers = INSTANCE;
-            if (cli.listModels) {
-                String needle = cli.modelSearch == null ? "" : cli.modelSearch.toLowerCase();
-                for (Provider provider : List.copyOf(providers.coreProviders.values())) {
+            if (INSTANCE.listModels) {
+                String needle = INSTANCE.modelSearch == null ? "" : INSTANCE.modelSearch.toLowerCase();
+                for (Provider provider : List.copyOf(INSTANCE.coreProviders.values())) {
                     for (Model model : providerModels(provider)) {
                         String id = model.provider + "/" + model.id;
                         if (needle.isEmpty() || id.toLowerCase().contains(needle) || model.name.toLowerCase().contains(needle)) {
@@ -9670,25 +9667,25 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
                 return 0;
             }
-            if (cli.mode.equals("rpc")) {
+            if (INSTANCE.mode.equals("rpc")) {
                 RpcServer server = new RpcServer();
-                server.providers = providers;
-                server.arguments = cli;
+                server.providers = INSTANCE;
+                server.arguments = INSTANCE;
                 Model initialModel;
-                if (cli.model == null) {
+                if (INSTANCE.model == null) {
                     throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                 }
-                if (cli.model.contains("/")) {
-                    String[] parts = cli.model.split("/", 2);
-                    if (cli.provider != null && !cli.provider.equals(parts[0])) {
+                if (INSTANCE.model.contains("/")) {
+                    String[] parts = INSTANCE.model.split("/", 2);
+                    if (INSTANCE.provider != null && !INSTANCE.provider.equals(parts[0])) {
                         throw new IllegalArgumentException("--provider conflicts with the provider in --model");
                     }
-                    initialModel = providers.requireCatalogModel(parts[0], parts[1]);
+                    initialModel = INSTANCE.requireCatalogModel(parts[0], parts[1]);
                 } else {
-                    if (cli.provider == null) {
+                    if (INSTANCE.provider == null) {
                         throw new IllegalArgumentException("--mode rpc requires --model <provider/model>");
                     }
-                    initialModel = providers.requireCatalogModel(cli.provider, cli.model);
+                    initialModel = INSTANCE.requireCatalogModel(INSTANCE.provider, INSTANCE.model);
                 }
                 server.mcp =INSTANCE;
                 mcpLoadDefaultManager(Path.of(".").toAbsolutePath().normalize());
@@ -9801,52 +9798,50 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 }
                 return 0;
             }
-            if (cli.print) {
-                if (cli.message.isBlank()) {
+            if (INSTANCE.print) {
+                if (INSTANCE.message.isBlank()) {
                     throw new IllegalArgumentException("--print requires a prompt");
                 }
-                Model model = providers.resolveCliModel(cli.provider, cli.model);
-                Provider provider = providers.requireCoreProvider(model.provider);
+                Model model = INSTANCE.resolveCliModel(INSTANCE.provider, INSTANCE.model);
+                Provider provider = INSTANCE.requireCoreProvider(model.provider);
                 Path cwd = Path.of(".").toAbsolutePath().normalize();
-                CodingAgentOperations mcp = INSTANCE;
                 mcpLoadDefaultManager(cwd);
                 try {
-                    mcp.mcpAwaitReady();
-                    agentState(cli.systemPrompt == null ? "" : cli.systemPrompt, model);
+                    INSTANCE.mcpAwaitReady();
+                    agentState(INSTANCE.systemPrompt == null ? "" : INSTANCE.systemPrompt, model);
                     agent(provider);
-                    CodingAgentOperations agent = INSTANCE;
-                    agent.apiKey = cli.apiKey;
-                    agent.configureBuiltInTools(cwd, cli.systemPrompt);
-                    agent.tools.addAll(mcp.mcpTools());
-                    if (cli.mode.equals("json")) {
-                        agent.subscribe(event -> {
+                    INSTANCE.apiKey = INSTANCE.apiKey;
+                    INSTANCE.configureBuiltInTools(cwd, INSTANCE.systemPrompt);
+                    INSTANCE.tools.addAll(INSTANCE.mcpTools());
+                    if (INSTANCE.mode.equals("json")) {
+                        INSTANCE.subscribe(event -> {
                             ObjectNode node = encodeAgentEvent(event, false);
                             if (node != null) System.out.println(node);
                         });
                     } else {
-                        agent.subscribe(event -> {
+                        INSTANCE.subscribe(event -> {
                             if (event instanceof AgentEvent.InstructionLoaded loaded) {
                                 System.err.println(instructionLoadedMessage(loaded.path));
                             }
                         });
                     }
                     CodingAgentOperations recorder;
-                    if (cli.noSession) recorder = null;
+                    if (INSTANCE.noSession) recorder = null;
                     else {
                         recorder = INSTANCE;
                         defaultSessionStore();
                         createSessionRecorder(cwd, model.provider, model.id);
                     }
-                    List<Message> messages = agent.prompt(cli.message);
+                    List<Message> messages = INSTANCE.prompt(INSTANCE.message);
                     if (recorder != null) {
                         recorder.appendSessionMessages(messages);
                     }
-                    if (agent.messages.getLast() instanceof AssistantMessage response) {
+                    if (INSTANCE.messages.getLast() instanceof AssistantMessage response) {
                         if (response.errorMessage != null) {
                             System.err.println("Error: " + response.errorMessage);
                             return 1;
                         }
-                        if (!cli.mode.equals("json")) {
+                        if (!INSTANCE.mode.equals("json")) {
                             System.out.println(text(response));
                         }
                         return 0;
@@ -9854,7 +9849,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
                     throw new IllegalStateException("Agent ended without an assistant response");
                 } finally {
-                    mcp.mcpCloseManager();
+                    INSTANCE.mcpCloseManager();
                 }
             }
             Path resolved = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json").toAbsolutePath().normalize();
@@ -9882,7 +9877,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             Settings settings = new Settings(
                     provider, model2, thinkingLevel, theme, value != null && value.asBoolean(false));
             Path workspace = Path.of(".").toAbsolutePath().normalize();
-            CodingAgentOperations mcp = INSTANCE;
             mcpLoadDefaultManager(workspace);
             try {
                 CodingAgentOperations terminal =INSTANCE;
@@ -9919,13 +9913,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         if (INSTANCE.settings.theme != null) {
                             INSTANCE.setTheme(namedTheme(INSTANCE.settings.theme));
                         }
-                        if (cli.model != null) {
+                        if (INSTANCE.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
-                            INSTANCE.configureShellModel(providers.resolveCliModel(cli.provider, cli.model), false);
-                        } else if (cli.provider != null) {
-                            List<Model> models1 = providerModels(providers.requireCoreProvider(cli.provider));
+                            INSTANCE.configureShellModel(INSTANCE.resolveCliModel(INSTANCE.provider, INSTANCE.model), false);
+                        } else if (INSTANCE.provider != null) {
+                            List<Model> models1 = providerModels(INSTANCE.requireCoreProvider(INSTANCE.provider));
                             if (models1.isEmpty()) {
-                                throw new IllegalArgumentException("No bundled models for provider: " + cli.provider);
+                                throw new IllegalArgumentException("No bundled models for provider: " + INSTANCE.provider);
                             }
                             List<SelectItem<Model>> items =
                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
@@ -10576,7 +10570,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     terminal.closeTerminal();
                 }
             } finally {
-                mcp.mcpCloseManager();
+                INSTANCE.mcpCloseManager();
             }
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
@@ -10626,16 +10620,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 break;
             }
         }
-        CodingAgentOperations instructions = INSTANCE;
         agentInstructions(
                 repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
-        instructions.refreshAgentInstructionsIn(directory);
+        INSTANCE.refreshAgentInstructionsIn(directory);
         Set<Path> announcedSources = new LinkedHashSet<>();
-        this.systemPrompt = instructions.systemPrompt;
+        this.systemPrompt = INSTANCE.systemPrompt;
         subscribe(event -> {
             if (event instanceof AgentEvent.AgentStart) {
-                synchronized (instructions) {
-                    instructions.refreshAgentInstructionsIn(instructions.currentDirectory);
+                synchronized (INSTANCE) {
+                    INSTANCE.refreshAgentInstructionsIn(INSTANCE.currentDirectory);
                 }
                 applyAgentInstructions(announcedSources);
             }
@@ -10643,14 +10636,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         gitIgnore("git");
         this.tools.addAll(INSTANCE.builtInTools(cwd, path -> {
             boolean result;
-            synchronized (instructions) {
+            synchronized (INSTANCE) {
                 Path directory1 = instructionDirectory(path);
                 if (directory1 == null
-                        || !directory1.startsWith(instructions.repositoryRoot)
-                        || !directory1.startsWith(instructions.currentDirectory)) {
+                        || !directory1.startsWith(INSTANCE.repositoryRoot)
+                        || !directory1.startsWith(INSTANCE.currentDirectory)) {
                     result = false;
                 } else {
-                    result = instructions.refreshAgentInstructionsIn(directory1);
+                    result = INSTANCE.refreshAgentInstructionsIn(directory1);
                 }
             }
             if (result) {
@@ -11767,9 +11760,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     private void resetRpcAgent(RpcServer server, Model model) throws IOException {
         server.providers.requireCoreProvider(model.provider);
-        Provider provider = INSTANCE;
         agentState(server.arguments.systemPrompt == null ? "" : server.arguments.systemPrompt, model);
-        agent(provider);
+        agent(INSTANCE);
         server.agent = INSTANCE;
         server.agent.apiKey = server.arguments.apiKey;
         server.agent.configureBuiltInTools(Path.of("."), server.arguments.systemPrompt);
