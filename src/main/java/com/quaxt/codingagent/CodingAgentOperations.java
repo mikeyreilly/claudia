@@ -169,7 +169,6 @@ import org.jline.terminal.Attributes;
 import org.jline.terminal.Size;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
-import org.jline.terminal.impl.jni.JniTerminalProvider;
 import org.jline.utils.AttributedString;
 import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
@@ -210,7 +209,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public static final long CHATGPT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
     public static final long CHATGPT_DEVICE_CODE_LIFETIME_MS = 15 * 60 * 1000L;
     public static final String CHATGPT_PROVIDER_NAME = "ChatGPT Plus/Pro";
-    public static final String CHATGPT_API = "openai-responses";
     public static final Set<String> CHATGPT_CODEX_MODEL_IDS = Set.of(
             "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
@@ -228,7 +226,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     public static final Pattern GITHUB_COPILOT_PROXY_ENDPOINT = Pattern.compile("(?:^|;)proxy-ep=([^;]+)");
     public static final long GITHUB_COPILOT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
     public static final String GITHUB_COPILOT_PROVIDER_NAME = "GitHub Copilot";
-    public static final String GITHUB_COPILOT_API = "github-copilot";
     public static final String GITHUB_COPILOT_COMPLETIONS_BASE_URL =
             "https://api.individual.githubcopilot.com";
 
@@ -919,7 +916,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private static long lastTimestamp = Long.MIN_VALUE;
     private static long sequence;
 
-    private static Object uuidv7Lock = new Object();
+    private static final Object uuidv7Lock = new Object();
     private static final byte[] hexdigits = {
             '0', '1', '2', '3', '4', '5',
             '6', '7', '8', '9', 'a', 'b',
@@ -2977,9 +2974,6 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
     }
 
-    // ---------------------------------------------------------------- google
-
-    /** Creates a Google Generative AI provider with an unmodifiable model list. */
     // ------------------------------------------------- openai chat completions
 
     /**
