@@ -1893,12 +1893,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
-        CodingAgentOperations auth = INSTANCE;
-        auth.credentials = credentials;
-        auth.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
-        auth.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
-        auth.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
-        return auth;
+        INSTANCE.credentials = credentials;
+        INSTANCE.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
+        INSTANCE.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
+        INSTANCE.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
+        return INSTANCE;
     }
 
     /**
@@ -2362,10 +2361,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         for (Map.Entry<String, List<Model>> entry : providers.entrySet()) {
             immutableByProvider.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
-        CodingAgentOperations catalog = INSTANCE;
-        catalog.byProviderAndId = Map.copyOf(models);
-        catalog.byProvider = Map.copyOf(immutableByProvider);
-        return catalog;
+        INSTANCE.byProviderAndId = Map.copyOf(models);
+        INSTANCE.byProvider = Map.copyOf(immutableByProvider);
+        return INSTANCE;
     }
 
     /**
@@ -2416,9 +2414,8 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     // -------------------------------------------------------- core providers
 
     public static CodingAgentOperations coreProviders(Map<String, Provider> providers) {
-        CodingAgentOperations core = INSTANCE;
-        core.coreProviders = providers;
-        return core;
+        INSTANCE.coreProviders = providers;
+        return INSTANCE;
     }
 
     public CodingAgentOperations chatGptProvider(List<Model> models, OpenAiResponsesProvider responses) {
@@ -2429,10 +2426,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations googleProvider(List<Model> models) {
-        CodingAgentOperations provider = INSTANCE;
-        provider.providerKind = ProviderKind.GOOGLE;
-        provider.models = models;
-        return provider;
+        INSTANCE.providerKind = ProviderKind.GOOGLE;
+        INSTANCE.models = models;
+        return INSTANCE;
     }
 
     public Provider requireCoreProvider(String id) {
@@ -2995,13 +2991,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations openAiCompatibleProvider(
             String id, String name, String baseUrl, List<Model> models) {
-        CodingAgentOperations provider = INSTANCE;
-        provider.providerKind = ProviderKind.OPENAI_COMPATIBLE;
-        provider.id = requireNonBlank(id, "id");
-        provider.name = requireNonBlank(name, "name");
-        provider.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
-        provider.models = List.copyOf(models);
-        return provider;
+        INSTANCE.providerKind = ProviderKind.OPENAI_COMPATIBLE;
+        INSTANCE.id = requireNonBlank(id, "id");
+        INSTANCE.name = requireNonBlank(name, "name");
+        INSTANCE.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
+        INSTANCE.models = List.copyOf(models);
+        return INSTANCE;
     }
 
     public AssistantMessageEventStream openAiCompatibleStream(Model model, Context context, StreamOptions options) {
@@ -4180,17 +4175,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
     /** Creates the folded mutable state for one agent. */
     public static CodingAgentOperations agentState(String systemPrompt, Model model) {
-        CodingAgentOperations state = INSTANCE;
-        state.systemPrompt = systemPrompt;
-        state.selectedModel = model;
-        return state;
+        INSTANCE.systemPrompt = systemPrompt;
+        INSTANCE.selectedModel = model;
+        return INSTANCE;
     }
 
     /** Configures the singleton as the active agent. */
     public static CodingAgentOperations agent(Provider provider) {
-        CodingAgentOperations agent = INSTANCE;
-        agent.agentProvider = provider;
-        return agent;
+        INSTANCE.agentProvider = provider;
+        return INSTANCE;
     }
 
     /**
@@ -6615,11 +6608,10 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations mcpOAuthStore(
             Path path, Path lockPath, List<Path> importPaths) {
-        CodingAgentOperations store = INSTANCE;
-        store.path = path;
-        store.lockPath = lockPath;
-        store.importPaths = importPaths;
-        return store;
+        INSTANCE.path = path;
+        INSTANCE.lockPath = lockPath;
+        INSTANCE.importPaths = importPaths;
+        return INSTANCE;
     }
 
     public CodingAgentOperations mcpOAuthClient(HttpClient http, Predicate<URI> browser, Duration callbackTimeout) {
@@ -6630,12 +6622,11 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations mcpCreateManager(McpConfiguration configuration, Path workspace) {
-        CodingAgentOperations manager = INSTANCE;
-        if (!manager.closed && !manager.servers.isEmpty()) {
-            manager.mcpCloseManager();
+        if (!INSTANCE.closed && !INSTANCE.servers.isEmpty()) {
+            INSTANCE.mcpCloseManager();
         }
-        manager.servers = new LinkedHashMap<>();
-        manager.closed = false;
+        INSTANCE.servers = new LinkedHashMap<>();
+        INSTANCE.closed = false;
         HttpClient http = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(15))
@@ -6653,7 +6644,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         .stream()
                         .map(value -> value.toAbsolutePath().normalize())
                         .toList());
-        manager.mcpOAuthClient(Objects.requireNonNull(http, "http"), Objects.requireNonNull(uri -> {
+        INSTANCE.mcpOAuthClient(Objects.requireNonNull(http, "http"), Objects.requireNonNull(uri -> {
                     String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
                     List<String> command;
                     if (os.contains("mac")) command = List.of("open", uri.toString());
@@ -6670,7 +6661,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         return false;
                     }
                 }, "browser"), Objects.requireNonNull(MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT, "callbackTimeout"));
-        manager.workspace = workspace.toAbsolutePath().normalize();
+        INSTANCE.workspace = workspace.toAbsolutePath().normalize();
         configuration.servers.forEach((name, config) -> {
             McpRuntime runtime = new McpRuntime(name, config);
             runtime.disabledTools.addAll(switch ((McpServerConfig) config) {
@@ -6679,13 +6670,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             });
             runtime.enabled = mcpConfigEnabled(config);
             runtime.state = runtime.enabled ? McpState.CONNECTING : McpState.DISABLED;
-            manager.servers.put(name, runtime);
+            INSTANCE.servers.put(name, runtime);
         });
-        for (McpRuntime runtime : manager.servers.values()) {
+        for (McpRuntime runtime : INSTANCE.servers.values()) {
             // Startup may refresh an existing token, but never opens a browser unexpectedly.
-            if (mcpConfigEnabled(runtime.config)) manager.mcpStartConnect(runtime, false);
+            if (mcpConfigEnabled(runtime.config)) INSTANCE.mcpStartConnect(runtime, false);
         }
-        return manager;
+        return INSTANCE;
     }
 
     /**
@@ -6898,14 +6889,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         : "MCP server \"" + runtime.name + "\" requires OAuth authentication; press Enter to authorize");
                                     }
                                     McpHttpException challenge = mcpFindHttpException(error);
-                                    CodingAgentOperations client = INSTANCE;
                                     McpOAuthChallenge challenge1 = mcpOAuthChallenge(challenge);
                                     if (challenge1 == null) throw challenge;
-                                    client.interactiveLock.lockInterruptibly();
+                                    INSTANCE.interactiveLock.lockInterruptibly();
                                     try {
-                                        McpOAuthDiscovery discovery = client.mcpOAuthDiscover(oauthSession.config, challenge1);
-                                        String state = client.mcpRandomUrlToken(32);
-                                        String verifier = client.mcpRandomUrlToken(64);
+                                        McpOAuthDiscovery discovery = INSTANCE.mcpOAuthDiscover(oauthSession.config, challenge1);
+                                        String state = INSTANCE.mcpRandomUrlToken(32);
+                                        String verifier = INSTANCE.mcpRandomUrlToken(64);
                                         byte[] result1;
                                         try {
                                             result1 = MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII));
@@ -7062,12 +7052,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             String separator = discovery.metadata.authorizationEndpoint.getRawQuery() == null ? "?" : "&";
                                             URI authorizationUrl = URI.create(value + separator + mcpFormEncode(parameters));
                                             authorizationListener.accept(authorizationUrl);
-                                            client.browser.test(authorizationUrl);
+                                            INSTANCE.browser.test(authorizationUrl);
                                             String code;
                                             try {
-                                                code = callback.code.get(client.callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
+                                                code = callback.code.get(INSTANCE.callbackTimeout.toMillis(), TimeUnit.MILLISECONDS);
                                             } catch (TimeoutException error1) {
-                                                throw new IOException("OAuth authorization timed out after " + client.callbackTimeout.toMinutes() + " minutes", error1);
+                                                throw new IOException("OAuth authorization timed out after " + INSTANCE.callbackTimeout.toMinutes() + " minutes", error1);
                                             } catch (ExecutionException error1) {
                                                 Throwable cause = error1.getCause();
                                                 if (cause instanceof IOException io) throw io;
@@ -7079,14 +7069,14 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             parameters1.put("code_verifier", verifier);
                                             parameters1.put("redirect_uri", redirectUri.toString());
                                             McpOAuthTokens tokens =
-                                                    client.mcpOAuthRequestTokens(discovery, clientInfo, parameters1, null, Map.of());
+                                                    INSTANCE.mcpOAuthRequestTokens(discovery, clientInfo, parameters1, null, Map.of());
                                             if (tokens.scope == null && scope != null) {
                                                 tokens = new McpOAuthTokens(
                                                         tokens.accessToken, tokens.refreshToken, tokens.expiresAt, scope);
                                             }
                                             McpOAuthEntry saved = new McpOAuthEntry(
                                                     tokens, oauthSession.settings.clientId == null ? clientInfo : null);
-                                            client.mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), saved);
+                                            INSTANCE.mcpOAuthWrite(oauthSession.name, oauthSession.config.url.toString(), saved);
                                             oauthSession.entry = saved;
                                             oauthSession.loaded = true;
                                         } finally {
@@ -7094,7 +7084,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                             callback.executor.shutdownNow();
                                         }
                                     } finally {
-                                        client.interactiveLock.unlock();
+                                        INSTANCE.interactiveLock.unlock();
                                     }
                                     try {
                                         candidate = mcpConnectRemote(remote, this.workspace, timeout, oauthSession);
@@ -7266,8 +7256,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     private static McpOAuthEntry mcpOAuthRefresh(
             McpOAuthSession session, McpOAuthEntry current, McpOAuthChallenge challenge)
             throws Exception {
-        CodingAgentOperations client = INSTANCE;
-        McpOAuthDiscovery discovery = client.mcpOAuthDiscover(session.config, challenge);
+        McpOAuthDiscovery discovery = INSTANCE.mcpOAuthDiscover(session.config, challenge);
         McpOAuthClientInfo clientInfo;
         URI redirectUri = mcpOAuthRedirectUri(session.settings);
         if (session.settings.clientId != null) {
@@ -7290,9 +7279,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         parameters.put("grant_type", "refresh_token");
         parameters.put("refresh_token", current.tokens.refreshToken);
         McpOAuthTokens refreshed =
-                client.mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
+                INSTANCE.mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
         McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
-        client.mcpOAuthWrite(session.name, session.config.url.toString(), updated);
+        INSTANCE.mcpOAuthWrite(session.name, session.config.url.toString(), updated);
         session.entry = updated;
         session.loaded = true;
         return updated;
@@ -8772,21 +8761,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
-        CodingAgentOperations interactive = INSTANCE;
-        interactive.screenDocument = new StringBuilder();
-        interactive.statusBar = null;
-        interactive.statusActivity = null;
-        interactive.statusAccent = StatusAccent.NONE;
-        interactive.statusLeft = null;
-        interactive.statusRight = null;
-        interactive.fullScreenResumeAttributes = null;
-        interactive.managedSuspend = false;
-        interactive.suspendedBuffer = null;
-        interactive.suspendedCursor = -1;
-        interactive.restoreCursor = -1;
-        interactive.commandSuggestionsActive = false;
-        interactive.dynamicPost = null;
-        interactive.jlineTerminal = terminal;
+        INSTANCE.screenDocument = new StringBuilder();
+        INSTANCE.statusBar = null;
+        INSTANCE.statusActivity = null;
+        INSTANCE.statusAccent = StatusAccent.NONE;
+        INSTANCE.statusLeft = null;
+        INSTANCE.statusRight = null;
+        INSTANCE.fullScreenResumeAttributes = null;
+        INSTANCE.managedSuspend = false;
+        INSTANCE.suspendedBuffer = null;
+        INSTANCE.suspendedCursor = -1;
+        INSTANCE.restoreCursor = -1;
+        INSTANCE.commandSuggestionsActive = false;
+        INSTANCE.dynamicPost = null;
+        INSTANCE.jlineTerminal = terminal;
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
         if (columns <= 0 || rows <= 0) {
@@ -8794,16 +8782,16 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     columns > 0 ? columns : DEFAULT_COLUMNS,
                     rows > 0 ? rows : DEFAULT_ROWS));
         }
-        interactive.suspendAction = suspendAction;
-        interactive.supportsSuspend = supportsSuspend;
-        interactive.shellAttributes = new Attributes(terminal.getAttributes());
-        interactive.reader = new LineReaderImpl(interactive.jlineTerminal, interactive.jlineTerminal.getName(), null) {
+        INSTANCE.suspendAction = suspendAction;
+        INSTANCE.supportsSuspend = supportsSuspend;
+        INSTANCE.shellAttributes = new Attributes(terminal.getAttributes());
+        INSTANCE.reader = new LineReaderImpl(INSTANCE.jlineTerminal, INSTANCE.jlineTerminal.getName(), null) {
             @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
-                if (interactive.dynamicPost == null || post != null) {
+                if (INSTANCE.dynamicPost == null || post != null) {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
                 }
-                AttributedString rendered = interactive.dynamicPost.get();
+                AttributedString rendered = INSTANCE.dynamicPost.get();
                 if (rendered == null || rendered.isEmpty()) {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
                 }
@@ -8818,17 +8806,17 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
             @Override
             protected void doCleanup(boolean newline) {
-                Supplier<AttributedString> previousDynamicPost = interactive.dynamicPost;
-                interactive.dynamicPost = null;
+                Supplier<AttributedString> previousDynamicPost = INSTANCE.dynamicPost;
+                INSTANCE.dynamicPost = null;
                 try {
                     super.doCleanup(newline);
                 } finally {
-                    interactive.dynamicPost = previousDynamicPost;
+                    INSTANCE.dynamicPost = previousDynamicPost;
                 }
             }
         };
-        interactive.reader.setHistory(new DefaultHistory());
-        LineReaderImpl reader = interactive.reader;
+        INSTANCE.reader.setHistory(new DefaultHistory());
+        LineReaderImpl reader = INSTANCE.reader;
         String newlineWidgetName = "codingagent-insert-newline";
         reader.getWidgets().put(newlineWidgetName, () -> {
             reader.getBuffer().write('\n');
@@ -8839,7 +8827,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
 
         String submitWidgetName = "codingagent-submit-or-insert-pasted-newline";
         reader.getWidgets().put(submitWidgetName, () -> {
-            LineReaderImpl reader1 = interactive.reader;
+            LineReaderImpl reader1 = INSTANCE.reader;
             int next = reader1.peekCharacter(PASTE_LOOKAHEAD_MILLIS);
             // Preserve multiline paste detection even when the pasted first line
             // happens to look like a slash command. A queued CR is instead treated
@@ -8850,18 +8838,18 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                 return true;
             }
             boolean result = false;
-            if (interactive.commandSuggestionsActive) {
+            if (INSTANCE.commandSuggestionsActive) {
                 String command = null;
-                String buffer = interactive.reader.getBuffer().toString();
-                interactive.synchronizeCommandSuggestions(buffer);
-                if (!interactive.matches.isEmpty()) {
-                    String selected = interactive.matches.get(interactive.selectedIndex);
-                    interactive.dismissedBuffer = selected;
+                String buffer = INSTANCE.reader.getBuffer().toString();
+                INSTANCE.synchronizeCommandSuggestions(buffer);
+                if (!INSTANCE.matches.isEmpty()) {
+                    String selected = INSTANCE.matches.get(INSTANCE.selectedIndex);
+                    INSTANCE.dismissedBuffer = selected;
                     command = selected;
                 }
                 if (command != null) {
-                    interactive.reader.getBuffer().clear();
-                    interactive.reader.getBuffer().write(command);
+                    INSTANCE.reader.getBuffer().clear();
+                    INSTANCE.reader.getBuffer().write(command);
                     result = true;
                 }
             }
@@ -8879,20 +8867,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
         String suggestionUpWidgetName = "codingagent-previous-command-suggestion";
         reader.getWidgets().put(
                 suggestionUpWidgetName,
-                () -> interactive.moveSuggestionOrFallback(-1, LineReader.UP_LINE_OR_SEARCH));
+                () -> INSTANCE.moveSuggestionOrFallback(-1, LineReader.UP_LINE_OR_SEARCH));
         Reference suggestionUp = new Reference(suggestionUpWidgetName);
         String suggestionDownWidgetName = "codingagent-next-command-suggestion";
         reader.getWidgets().put(
                 suggestionDownWidgetName,
-                () -> interactive.moveSuggestionOrFallback(1, LineReader.DOWN_LINE_OR_SEARCH));
+                () -> INSTANCE.moveSuggestionOrFallback(1, LineReader.DOWN_LINE_OR_SEARCH));
         Reference suggestionDown = new Reference(suggestionDownWidgetName);
-        String terminalUp = KeyMap.key(interactive.jlineTerminal, Capability.key_up);
-        String terminalDown = KeyMap.key(interactive.jlineTerminal, Capability.key_down);
+        String terminalUp = KeyMap.key(INSTANCE.jlineTerminal, Capability.key_up);
+        String terminalDown = KeyMap.key(INSTANCE.jlineTerminal, Capability.key_down);
 
         reader.getWidgets().put(LineReader.BEGIN_PASTE, () -> {
             StringBuilder content = new StringBuilder();
             while (true) {
-                int value = interactive.reader.readCharacter();
+                int value = INSTANCE.reader.readCharacter();
                 if (value < 0) break;
                 content.append((char) value);
                 boolean result = true;
@@ -8912,7 +8900,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     break;
                 }
             }
-            interactive.reader.getBuffer().write(content.toString().replace("\r\n", "\n").replace('\r', '\n'));
+            INSTANCE.reader.getBuffer().write(content.toString().replace("\r\n", "\n").replace('\r', '\n'));
             return true;
         });
         for (var keyMap1 : reader.getKeyMaps().values()) {
@@ -8921,56 +8909,56 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
             bindNavigationKey(keyMap1, suggestionUp, terminalUp, "\u001b[A", "\u001bOA");
             bindNavigationKey(keyMap1, suggestionDown, terminalDown, "\u001b[B", "\u001bOB");
         }
-        interactive.previousContinueHandler = supportsSuspend
+        INSTANCE.previousContinueHandler = supportsSuspend
                 ? terminal.handle(Terminal.Signal.CONT, signal -> {
             try {
-                if (interactive.previousContinueHandler != null
-                    && interactive.previousContinueHandler != Terminal.SignalHandler.SIG_DFL
-                    && interactive.previousContinueHandler != Terminal.SignalHandler.SIG_IGN) {
-                    interactive.previousContinueHandler.handle(signal);
+                if (INSTANCE.previousContinueHandler != null
+                    && INSTANCE.previousContinueHandler != Terminal.SignalHandler.SIG_DFL
+                    && INSTANCE.previousContinueHandler != Terminal.SignalHandler.SIG_IGN) {
+                    INSTANCE.previousContinueHandler.handle(signal);
                 }
             } finally {
-                if (!interactive.managedSuspend) interactive.repaintScreen();
+                if (!INSTANCE.managedSuspend) INSTANCE.repaintScreen();
             }
         })
                 : null;
-        interactive.previousResizeHandler =
+        INSTANCE.previousResizeHandler =
                 terminal.handle(Terminal.Signal.WINCH, signal -> {
-                    if (interactive.previousResizeHandler != null
-                            && interactive.previousResizeHandler != Terminal.SignalHandler.SIG_DFL
-                            && interactive.previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
-                        interactive.previousResizeHandler.handle(signal);
+                    if (INSTANCE.previousResizeHandler != null
+                            && INSTANCE.previousResizeHandler != Terminal.SignalHandler.SIG_DFL
+                            && INSTANCE.previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
+                        INSTANCE.previousResizeHandler.handle(signal);
                     }
-                    synchronized (interactive) {
-                        if (interactive.statusBar != null) {
-                            interactive.statusBar.resize();
-                            interactive.renderStatusBar();
+                    synchronized (INSTANCE) {
+                        if (INSTANCE.statusBar != null) {
+                            INSTANCE.statusBar.resize();
+                            INSTANCE.renderStatusBar();
                         }
                     }
                 });
         if (supportsSuspend) {
-            interactive.reader.getWidgets().compute(LineReader.CALLBACK_INIT, (_, previousInit) -> () -> {
+            INSTANCE.reader.getWidgets().compute(LineReader.CALLBACK_INIT, (_, previousInit) -> () -> {
                 boolean initialized = previousInit == null || previousInit.apply();
-                if (interactive.restoreCursor >= 0) {
-                    interactive.reader
+                if (INSTANCE.restoreCursor >= 0) {
+                    INSTANCE.reader
                             .getBuffer()
-                            .cursor(Math.min(interactive.restoreCursor, interactive.reader.getBuffer().length()));
-                    interactive.restoreCursor = -1;
+                            .cursor(Math.min(INSTANCE.restoreCursor, INSTANCE.reader.getBuffer().length()));
+                    INSTANCE.restoreCursor = -1;
                 }
                 return initialized;
             });
-            interactive.reader.getWidgets().put("suspend-process", () -> {
-                interactive.suspendedBuffer = interactive.reader.getBuffer().toString();
-                interactive.suspendedCursor = interactive.reader.getBuffer().cursor();
+            INSTANCE.reader.getWidgets().put("suspend-process", () -> {
+                INSTANCE.suspendedBuffer = INSTANCE.reader.getBuffer().toString();
+                INSTANCE.suspendedCursor = INSTANCE.reader.getBuffer().cursor();
                 throw SUSPEND_REQUESTED;
             });
             Reference suspend = new Reference("suspend-process");
-            for (var keyMap : interactive.reader.getKeyMaps().values()) {
+            for (var keyMap : INSTANCE.reader.getKeyMaps().values()) {
                 keyMap.bind(suspend, appKeySequence("suspend"));
             }
         }
-        interactive.theme = Theme.DARK;
-        return interactive;
+        INSTANCE.theme = Theme.DARK;
+        return INSTANCE;
     }
 
     private static void bindNavigationKey(
@@ -9016,14 +9004,13 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations commandSuggestions(List<String> commands) {
-        CodingAgentOperations suggestions = INSTANCE;
-        suggestions.commands = commands;
-        suggestions.query = null;
-        suggestions.dismissedBuffer = null;
-        suggestions.matches = List.of();
-        suggestions.selectedIndex = 0;
-        suggestions.visibleStart = 0;
-        return suggestions;
+        INSTANCE.commands = commands;
+        INSTANCE.query = null;
+        INSTANCE.dismissedBuffer = null;
+        INSTANCE.matches = List.of();
+        INSTANCE.selectedIndex = 0;
+        INSTANCE.visibleStart = 0;
+        return INSTANCE;
     }
 
     /**
@@ -9647,8 +9634,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                             List.of("OPENAI_API_KEY"),
                             credentials,
                             OpenAiResponsesProvider.RequestProfile.STANDARD));
-            CodingAgentOperations auth = INSTANCE;
-            auth.chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+            INSTANCE.chatGptAuth(credentials, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
             List<Model> models = catalog.catalogModelsForProvider("openai").stream()
                     .filter(model2 -> model2.api.equals("openai-responses"))
                     .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
@@ -9662,7 +9648,7 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                     .toList();
             providers1.put(
                     CHATGPT_PROVIDER_ID,
-                    auth.chatGptProvider(models, new OpenAiResponsesProvider(
+                    INSTANCE.chatGptProvider(models, new OpenAiResponsesProvider(
                                     CHATGPT_PROVIDER_ID,
                                     CHATGPT_PROVIDER_NAME,
                                     List.copyOf(models),
@@ -9920,23 +9906,22 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                         },
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
-                    CodingAgentOperations shell = INSTANCE;
-                    shell.settings = settings;
-                    shell.agentConfigured = false;
-                    shell.recordingSession = false;
-                    shell.hideThinkingBlock = settings.hideThinkingBlock;
-                    shell.activity = noModelActivity(System.nanoTime());
-                    shell.statusTicker = Executors.newSingleThreadScheduledExecutor(
+                    INSTANCE.settings = settings;
+                    INSTANCE.agentConfigured = false;
+                    INSTANCE.recordingSession = false;
+                    INSTANCE.hideThinkingBlock = settings.hideThinkingBlock;
+                    INSTANCE.activity = noModelActivity(System.nanoTime());
+                    INSTANCE.statusTicker = Executors.newSingleThreadScheduledExecutor(
                             Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
-                    terminal.bindAppAction("expandTools", () -> shell.showShellTurnDetails(true));
-                    terminal.bindAppAction("toggleThinking", () -> shell.setShellHideThinkingBlock(!shell.hideThinkingBlock, true));
+                    terminal.bindAppAction("expandTools", () -> INSTANCE.showShellTurnDetails(true));
+                    terminal.bindAppAction("toggleThinking", () -> INSTANCE.setShellHideThinkingBlock(!INSTANCE.hideThinkingBlock, true));
                     try {
-                        if (shell.settings.theme != null) {
-                            shell.setTheme(namedTheme(shell.settings.theme));
+                        if (INSTANCE.settings.theme != null) {
+                            INSTANCE.setTheme(namedTheme(INSTANCE.settings.theme));
                         }
                         if (cli.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
-                            shell.configureShellModel(providers.resolveCliModel(cli.provider, cli.model), false);
+                            INSTANCE.configureShellModel(providers.resolveCliModel(cli.provider, cli.model), false);
                         } else if (cli.provider != null) {
                             List<Model> models1 = providerModels(providers.requireCoreProvider(cli.provider));
                             if (models1.isEmpty()) {
@@ -9946,223 +9931,223 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
                             Model model = terminal.select("Select a model", items, -1, true);
                             if (model == null) return 0;
-                            shell.configureShellModel(model, true);
+                            INSTANCE.configureShellModel(model, true);
                         } else {
-                            shell.restoreShellModel();
+                            INSTANCE.restoreShellModel();
                         }
-                        shell.print(sessionScreenHeader(!shell.agentConfigured ? null : shell.selectedModel));
-                        shell.refreshShellStatus();
-                        shell.statusTicker.scheduleWithFixedDelay(() -> {
-                            if (!isDynamicActivity(shell.activity)) return;
+                        INSTANCE.print(sessionScreenHeader(!INSTANCE.agentConfigured ? null : INSTANCE.selectedModel));
+                        INSTANCE.refreshShellStatus();
+                        INSTANCE.statusTicker.scheduleWithFixedDelay(() -> {
+                            if (!isDynamicActivity(INSTANCE.activity)) return;
                             try {
-                                shell.renderShellStatus();
+                                INSTANCE.renderShellStatus();
                             } catch (RuntimeException ignored) {
                                 // A best-effort repaint must not terminate the shell's status ticker.
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                         while (true) {
-                            String input = shell.readLine("\n> ", SLASH_COMMANDS);
+                            String input = INSTANCE.readLine("\n> ", SLASH_COMMANDS);
                             if (input == null) {
-                                shell.println("");
+                                INSTANCE.println("");
                                 return 0;
                             }
                             if (input.isBlank()) continue;
                             if (input.startsWith("/")) {
                                 String trimmed = input.trim();
                                 boolean exit = trimmed.equals("/exit") || trimmed.equals("/quit");
-                                shell.setShellActivity(activeActivity(
+                                INSTANCE.setShellActivity(activeActivity(
                                         ActivityStatus.Phase.RUNNING_COMMAND, trimmed.split("\\s+", 2)[0], System.nanoTime()));
                                 try {
                                     if (!exit) switch (trimmed) {
                                         case "/help" ->
-                                                shell.println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
-                                        case "/details" -> shell.showShellTurnDetails(false);
+                                                INSTANCE.println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                        case "/details" -> INSTANCE.showShellTurnDetails(false);
                                         case "/fork" -> {
-                                            if (!shell.agentConfigured) {
-                                                shell.println("No model is configured.");
+                                            if (!INSTANCE.agentConfigured) {
+                                                INSTANCE.println("No model is configured.");
                                                 break;
                                             }
-                                            String name = shell.readLine("Fork session name: ", forkName(shell.sessionName));
+                                            String name = INSTANCE.readLine("Fork session name: ", forkName(INSTANCE.sessionName));
                                             if (name == null || name.isBlank()) {
-                                                shell.println("Fork cancelled.");
+                                                INSTANCE.println("Fork cancelled.");
                                                 break;
                                             }
                                             name = name.strip();
-                                            Model model = shell.selectedModel;
-                                            List<Message> forkMessages = resumableMessages(shell.messages);
+                                            Model model = INSTANCE.selectedModel;
+                                            List<Message> forkMessages = resumableMessages(INSTANCE.messages);
                                             boolean recordingEnabled = false;
-                                            if (!shell.noSession) {
+                                            if (!INSTANCE.noSession) {
                                                 try {
                                                     defaultSessionStore().forkSessionRecorder(
-                                                            shell.cwd, model.provider, model.id, name, forkMessages);
+                                                            INSTANCE.cwd, model.provider, model.id, name, forkMessages);
                                                     recordingEnabled = true;
                                                 } catch (IOException error) {
-                                                    shell.println("Failed to fork session: " + error.getMessage());
+                                                    INSTANCE.println("Failed to fork session: " + error.getMessage());
                                                     break;
                                                 }
                                             }
-                                            shell.configureShellAgent(model, shell.cwd, recordingEnabled, name);
-                                            shell.messages.addAll(forkMessages);
-                                            shell.refreshShellStatus();
-                                            shell.println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
+                                            INSTANCE.configureShellAgent(model, INSTANCE.cwd, recordingEnabled, name);
+                                            INSTANCE.messages.addAll(forkMessages);
+                                            INSTANCE.refreshShellStatus();
+                                            INSTANCE.println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
                                         }
-                                        case "/resume" -> shell.resumeShellSession();
+                                        case "/resume" -> INSTANCE.resumeShellSession();
                                         case "/login" -> {
-                                            shell.println("Log in to a provider:");
-                                            shell.println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
-                                            shell.println("  2. OpenAI API key — use separately billed Platform API credits");
-                                            shell.println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
-                                            String choice = shell.readLine("Select provider [1-3]: ");
+                                            INSTANCE.println("Log in to a provider:");
+                                            INSTANCE.println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+                                            INSTANCE.println("  2. OpenAI API key — use separately billed Platform API credits");
+                                            INSTANCE.println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+                                            String choice = INSTANCE.readLine("Select provider [1-3]: ");
                                             if (choice == null || choice.isBlank()) {
-                                                shell.println("Login cancelled.");
+                                                INSTANCE.println("Login cancelled.");
                                             } else {
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
-                                                        CodingAgentOperations copilot = shell.shellCopilotProvider();
+                                                        CodingAgentOperations copilot = INSTANCE.shellCopilotProvider();
                                                         GitHubCopilotDeviceCode device = copilot.gitHubCopilotBeginLogin();
-                                                        shell.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        shell.println("Waiting for GitHub authorization...");
+                                                        INSTANCE.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        INSTANCE.println("Waiting for GitHub authorization...");
                                                         copilot.gitHubCopilotCompleteLogin(device);
-                                                        shell.println("Enabling GitHub Copilot models...");
+                                                        INSTANCE.println("Enabling GitHub Copilot models...");
                                                         CopilotModelAccess access = copilot.gitHubCopilotEnableAndRefreshModels();
                                                         if (access.policiesEnabled < copilot.models.size()) {
-                                                            shell.println("Some GitHub Copilot models are unavailable for this account.");
+                                                            INSTANCE.println("Some GitHub Copilot models are unavailable for this account.");
                                                         }
                                                         List<Model> models1 = access.models;
-                                                        Model model = shell.shellSavedModelIn(models1);
+                                                        Model model = INSTANCE.shellSavedModelIn(models1);
                                                         if (model == null) model = preferredCopilotModel(models1);
                                                         if (model == null) {
-                                                            shell.println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
+                                                            INSTANCE.println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
                                                         } else {
-                                                            shell.configureShellModel(model, true);
-                                                            shell.println("GitHub Copilot is ready with " + model + ".");
+                                                            INSTANCE.configureShellModel(model, true);
+                                                            INSTANCE.println("GitHub Copilot is ready with " + model + ".");
                                                         }
                                                     }
                                                     case "2", "openai", "open ai", "openai api", "openai api key" -> {
-                                                        String apiKey = shell.readLineInternal("OpenAI API key: ", null, '*', false);
+                                                        String apiKey = INSTANCE.readLineInternal("OpenAI API key: ", null, '*', false);
                                                         if (apiKey == null || apiKey.isBlank()) {
-                                                            shell.println("OpenAI login cancelled.");
+                                                            INSTANCE.println("OpenAI login cancelled.");
                                                         } else {
                                                             modifyCredential(
                                                                     defaultCredentialStore(),
                                                                     "openai",
                                                                     ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
-                                                            List<Model> models1 = providerModels(shell.requireCoreProvider("openai"));
-                                                            Model model = shell.shellSavedModelIn(models1);
+                                                            List<Model> models1 = providerModels(INSTANCE.requireCoreProvider("openai"));
+                                                            Model model = INSTANCE.shellSavedModelIn(models1);
                                                             if (model == null) {
-                                                                model = shell.select("Select an OpenAI model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
+                                                                model = INSTANCE.select("Select an OpenAI model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
                                                             }
                                                             if (model == null) {
-                                                                shell.println("OpenAI API key saved. Run /models when you are ready to select a model.");
+                                                                INSTANCE.println("OpenAI API key saved. Run /models when you are ready to select a model.");
                                                             } else {
-                                                                shell.configureShellModel(model, true);
-                                                                shell.println("OpenAI is ready with " + model + ".");
+                                                                INSTANCE.configureShellModel(model, true);
+                                                                INSTANCE.println("OpenAI is ready with " + model + ".");
                                                             }
                                                         }
                                                     }
                                                     case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
                                                          "chatgpt plus/pro" -> {
-                                                        CodingAgentOperations chatGpt = shell.shellChatGptProvider();
+                                                        CodingAgentOperations chatGpt = INSTANCE.shellChatGptProvider();
                                                         ChatGptDeviceCode device = chatGpt.chatGptBeginLogin();
-                                                        shell.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        shell.println("Waiting for ChatGPT authorization...");
+                                                        INSTANCE.println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                                        INSTANCE.println("Waiting for ChatGPT authorization...");
                                                         chatGpt.chatGptCompleteLogin(device);
                                                         List<Model> models1 = chatGpt.models;
-                                                        Model model = shell.shellSavedModelIn(models1);
+                                                        Model model = INSTANCE.shellSavedModelIn(models1);
                                                         if (model == null) {
-                                                            model = shell.select("Select a ChatGPT model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
+                                                            model = INSTANCE.select("Select a ChatGPT model", models1.stream().map(CodingAgentOperations::shellModelItem).toList(), -1, true);
                                                         }
                                                         if (model == null) {
-                                                            shell.println("ChatGPT login saved. Run /models when you are ready to select a model.");
+                                                            INSTANCE.println("ChatGPT login saved. Run /models when you are ready to select a model.");
                                                         } else {
-                                                            shell.configureShellModel(model, true);
-                                                            shell.println("ChatGPT Plus/Pro is ready with " + model + ".");
+                                                            INSTANCE.configureShellModel(model, true);
+                                                            INSTANCE.println("ChatGPT Plus/Pro is ready with " + model + ".");
                                                         }
                                                     }
                                                     default ->
-                                                            shell.println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+                                                            INSTANCE.println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
                                                 }
                                             }
                                         }
                                         case "/logout" -> {
                                             try {
-                                                if (shell.agentConfigured && shell.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
-                                                    shell.shellChatGptProvider().chatGptLogout();
-                                                    shell.agentConfigured = false;
-                                                    shell.println("ChatGPT credentials removed. Run /login or /resume to continue.");
-                                                } else if (shell.agentConfigured && shell.selectedModel.provider.equals("openai")) {
+                                                if (INSTANCE.agentConfigured && INSTANCE.selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
+                                                    INSTANCE.shellChatGptProvider().chatGptLogout();
+                                                    INSTANCE.agentConfigured = false;
+                                                    INSTANCE.println("ChatGPT credentials removed. Run /login or /resume to continue.");
+                                                } else if (INSTANCE.agentConfigured && INSTANCE.selectedModel.provider.equals("openai")) {
                                                     deleteCredential(defaultCredentialStore(), "openai");
-                                                    shell.agentConfigured = false;
-                                                    shell.println("OpenAI API key removed. Run /login or /resume to continue.");
+                                                    INSTANCE.agentConfigured = false;
+                                                    INSTANCE.println("OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
-                                                    shell.shellCopilotProvider().gitHubCopilotLogout();
-                                                    if (shell.agentConfigured
-                                                            && shell.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        shell.agentConfigured = false;
-                                                        shell.println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
+                                                    INSTANCE.shellCopilotProvider().gitHubCopilotLogout();
+                                                    if (INSTANCE.agentConfigured
+                                                            && INSTANCE.selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                                        INSTANCE.agentConfigured = false;
+                                                        INSTANCE.println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
                                                     } else {
-                                                        shell.println("GitHub Copilot credentials removed.");
+                                                        INSTANCE.println("GitHub Copilot credentials removed.");
                                                     }
                                                 }
                                             } finally {
-                                                shell.refreshShellStatus();
+                                                INSTANCE.refreshShellStatus();
                                             }
                                         }
                                         case "/models" -> {
                                             List<Model> models2 = new ArrayList<>();
-                                            for (Model model1 : shell.allCatalogModels()) {
+                                            for (Model model1 : INSTANCE.allCatalogModels()) {
                                                 if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                     models2.add(model1);
                                                 }
                                             }
-                                            CodingAgentOperations copilot = shell.shellCopilotProvider();
+                                            CodingAgentOperations copilot = INSTANCE.shellCopilotProvider();
                                             try {
                                                 if (copilot.gitHubCopilotHasCredential()) {
-                                                    shell.println("Refreshing GitHub Copilot models...");
+                                                    INSTANCE.println("Refreshing GitHub Copilot models...");
                                                     models2.addAll(copilot.gitHubCopilotEnableAndRefreshModels().models);
                                                 } else {
                                                     models2.addAll(copilot.models);
                                                 }
                                             } catch (IOException error) {
-                                                shell.println("Could not refresh GitHub Copilot model access: " + error.getMessage());
+                                                INSTANCE.println("Could not refresh GitHub Copilot model access: " + error.getMessage());
                                                 models2.addAll(copilot.models);
                                             }
-                                            models2.addAll(shell.shellChatGptProvider().models);
+                                            models2.addAll(INSTANCE.shellChatGptProvider().models);
                                             List<Model> models1 = List.copyOf(models2);
                                             List<SelectItem<Model>> items =
                                                     models1.stream().map(CodingAgentOperations::shellModelItem).toList();
                                             int currentIndex;
-                                            if (!shell.agentConfigured) {
+                                            if (!INSTANCE.agentConfigured) {
                                                 currentIndex = -1;
                                             } else {
                                                 int result1 = -1;
                                                 for (int index = 0; index < models1.size(); index++) {
                                                     Model model = models1.get(index);
-                                                    if (model.provider.equals(shell.selectedModel.provider) && model.id.equals(shell.selectedModel.id)) {
+                                                    if (model.provider.equals(INSTANCE.selectedModel.provider) && model.id.equals(INSTANCE.selectedModel.id)) {
                                                         result1 = index;
                                                         break;
                                                     }
                                                 }
                                                 currentIndex = result1;
                                             }
-                                            Model model = shell.select("Select a model", items, currentIndex, true);
+                                            Model model = INSTANCE.select("Select a model", items, currentIndex, true);
                                             if (model != null) {
-                                                shell.configureShellModel(model, true);
-                                                shell.println("Using " + model + " in a new agent session.");
+                                                INSTANCE.configureShellModel(model, true);
+                                                INSTANCE.println("Using " + model + " in a new agent session.");
                                             }
                                         }
                                         case "/mcp" -> {
-                                            if (shell.servers.isEmpty()) {
-                                                shell.println("No MCP servers configured in ~/.codingagent/settings.json.");
+                                            if (INSTANCE.servers.isEmpty()) {
+                                                INSTANCE.println("No MCP servers configured in ~/.codingagent/settings.json.");
                                             } else {
                                                 McpSelector selector1 = new McpSelector();
-                                                selector1.manager = shell;
+                                                selector1.manager = INSTANCE;
                                                 selector1.onChange = change -> {
                                                     try {
                                                         if (change.toolName != null) {
                                                             requireSettingsValue(change.serverName, "serverName");
                                                             requireSettingsValue(change.toolName, "toolName");
-                                                            shell.modifySettings(root1 -> {
+                                                            INSTANCE.modifySettings(root1 -> {
                                                                 ObjectNode server = settingsMcpServer(root1, change.serverName);
                                                                 ArrayNode disabledTools = null;
                                                                 JsonNode value1 = server.get("disabledTools");
@@ -10199,20 +10184,20 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                             });
                                                         } else {
                                                             requireSettingsValue(change.serverName, "serverName");
-                                                            shell.modifySettings(root1 -> settingsMcpServer(root1, change.serverName).put("enabled", change.enabled));
+                                                            INSTANCE.modifySettings(root1 -> settingsMcpServer(root1, change.serverName).put("enabled", change.enabled));
                                                         }
                                                     } catch (IOException error) {
                                                         throw new UncheckedIOException(error);
                                                     } finally {
-                                                        shell.syncShellMcpTools();
+                                                        INSTANCE.syncShellMcpTools();
                                                     }
                                                 };
-                                                selector1.names = shell.servers.values().stream()
+                                                selector1.names = INSTANCE.servers.values().stream()
                                                         .sorted(Comparator.comparing(runtime -> runtime.name))
                                                         .map(CodingAgentOperations::mcpSnapshot)
                                                         .toList().stream().map(status -> status.name).toList();
                                                 selector1.filtered = selector1.names;
-                                                shell.runComponent(new TuiComponent<>(
+                                                INSTANCE.runComponent(new TuiComponent<>(
                                                         frame -> {
                                                             if (selector1.view == McpSelector.View.TOOLS)
                                                                 refreshMcpSelectorTools(selector1);
@@ -10459,19 +10444,19 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                         },
                                                         () -> selector1.complete,
                                                         () -> null));// An OAuth connection may finish asynchronously while the selector is open.
-                                                shell.syncShellMcpTools();
+                                                INSTANCE.syncShellMcpTools();
                                             }
                                         }
                                         case "/settings" -> {
-                                            if (!shell.agentConfigured) {
-                                                shell.println("No model is configured.");
+                                            if (!INSTANCE.agentConfigured) {
+                                                INSTANCE.println("No model is configured.");
                                             } else {
-                                                shell.select("Settings", List.of(new SelectItem<>(
+                                                INSTANCE.select("Settings", List.of(new SelectItem<>(
                                                                 "thinking",
                                                                 "Thinking level",
-                                                                shell.thinkingLevel.wire,
-                                                                "Thinking level " + shell.thinkingLevel.wire)), 0, false);
-                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(shell.selectedModel);
+                                                                INSTANCE.thinkingLevel.wire,
+                                                                "Thinking level " + INSTANCE.thinkingLevel.wire)), 0, false);
+                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(INSTANCE.selectedModel);
                                                 List<SelectItem<ThinkingLevel>> items = levels.stream()
                                                         .map(level -> {
                                                             String description = switch (level) {
@@ -10487,101 +10472,101 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
                                                                     level, level.wire, description, level.wire + " " + description);
                                                         })
                                                         .toList();
-                                                int currentIndex = Math.max(0, levels.indexOf(shell.thinkingLevel));
-                                                ThinkingLevel level = shell.select("Thinking level", items, currentIndex, false);
+                                                int currentIndex = Math.max(0, levels.indexOf(INSTANCE.thinkingLevel));
+                                                ThinkingLevel level = INSTANCE.select("Thinking level", items, currentIndex, false);
                                                 if (level != null) {
-                                                    shell.thinkingLevel = level;
-                                                    shell.refreshShellStatus();
-                                                    shell.settings = new Settings(
-                                                            shell.settings.defaultProvider, shell.settings.defaultModel, level, shell.settings.theme, shell.settings.hideThinkingBlock);
+                                                    INSTANCE.thinkingLevel = level;
+                                                    INSTANCE.refreshShellStatus();
+                                                    INSTANCE.settings = new Settings(
+                                                            INSTANCE.settings.defaultProvider, INSTANCE.settings.defaultModel, level, INSTANCE.settings.theme, INSTANCE.settings.hideThinkingBlock);
                                                     try {
-                                                        shell.modifySettings(root1 -> root1.put("defaultThinkingLevel", level.wire));
-                                                        shell.println("Thinking level: " + level.wire);
+                                                        INSTANCE.modifySettings(root1 -> root1.put("defaultThinkingLevel", level.wire));
+                                                        INSTANCE.println("Thinking level: " + level.wire);
                                                     } catch (IOException error) {
-                                                        shell.println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
+                                                        INSTANCE.println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
                                                     }
                                                 }
                                             }
                                         }
                                         case "/compact" -> {
-                                            if (!shell.agentConfigured) {
-                                                shell.println("No model is configured.");
+                                            if (!INSTANCE.agentConfigured) {
+                                                INSTANCE.println("No model is configured.");
                                                 break;
                                             }
                                             try {
-                                                CompactionResult result1 = shell.compact(null);
-                                                shell.println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
-                                                shell.refreshShellStatus();
+                                                CompactionResult result1 = INSTANCE.compact(null);
+                                                INSTANCE.println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
+                                                INSTANCE.refreshShellStatus();
                                             } catch (IllegalStateException error) {
-                                                shell.println("Error: " + error.getMessage());
+                                                INSTANCE.println("Error: " + error.getMessage());
                                             }
                                         }
                                         default -> {
                                             if (input.startsWith("/theme ")) {
                                                 Theme theme1 = namedTheme(input.substring("/theme ".length()).trim());
-                                                shell.setTheme(theme1);
-                                                shell.refreshShellStatus();
-                                                shell.settings = new Settings(
-                                                        shell.settings.defaultProvider,
-                                                        shell.settings.defaultModel,
-                                                        shell.settings.defaultThinkingLevel,
+                                                INSTANCE.setTheme(theme1);
+                                                INSTANCE.refreshShellStatus();
+                                                INSTANCE.settings = new Settings(
+                                                        INSTANCE.settings.defaultProvider,
+                                                        INSTANCE.settings.defaultModel,
+                                                        INSTANCE.settings.defaultThinkingLevel,
                                                         theme1.name1,
-                                                        shell.settings.hideThinkingBlock);
+                                                        INSTANCE.settings.hideThinkingBlock);
                                                 try {
                                                     requireSettingsValue(theme1.name1, "theme");
-                                                    shell.modifySettings(root1 -> root1.put("theme", theme1.name1));
-                                                    shell.println("Theme: " + shell.terminalTheme().name1);
+                                                    INSTANCE.modifySettings(root1 -> root1.put("theme", theme1.name1));
+                                                    INSTANCE.println("Theme: " + INSTANCE.terminalTheme().name1);
                                                 } catch (IOException error) {
-                                                    shell.println("Theme changed for this session, but could not be saved: " + error.getMessage());
+                                                    INSTANCE.println("Theme changed for this session, but could not be saved: " + error.getMessage());
                                                 }
-                                            } else shell.println("Unknown command: " + input);
+                                            } else INSTANCE.println("Unknown command: " + input);
                                         }
                                     }
                                 } finally {
-                                    shell.setShellActivity(!shell.agentConfigured
+                                    INSTANCE.setShellActivity(!INSTANCE.agentConfigured
                                             ? noModelActivity(System.nanoTime())
                                             : readyActivity(System.nanoTime()));
-                                    shell.refreshShellStatus();
+                                    INSTANCE.refreshShellStatus();
                                 }
                                 if (exit) return 0;
                                 continue;
                             }
-                            if (!shell.agentConfigured) {
-                                shell.println("No model configured. Run /login to choose a provider.");
+                            if (!INSTANCE.agentConfigured) {
+                                INSTANCE.println("No model configured. Run /login to choose a provider.");
                                 continue;
                             }
-                            shell.setShellActivity(activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
-                            shell.mcpAwaitReady();
-                            shell.syncShellMcpTools();
-                            shell.emittedText = false;
-                            shell.streamOutput = StreamOutput.NONE;
-                            shell.streamedThinkingCharacters = 0;
+                            INSTANCE.setShellActivity(activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
+                            INSTANCE.mcpAwaitReady();
+                            INSTANCE.syncShellMcpTools();
+                            INSTANCE.emittedText = false;
+                            INSTANCE.streamOutput = StreamOutput.NONE;
+                            INSTANCE.streamedThinkingCharacters = 0;
                             AtomicBoolean interrupted = new AtomicBoolean();
-                            List<Message> messages = shell.runInterruptibly(() -> shell.prompt(input), () -> {
+                            List<Message> messages = INSTANCE.runInterruptibly(() -> INSTANCE.prompt(input), () -> {
                                         interrupted.set(true);
-                                        shell.setShellActivity(activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
-                                        shell.abort();
+                                        INSTANCE.setShellActivity(activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
+                                        INSTANCE.abort();
                                     });
-                            if (shell.recordingSession) shell.appendSessionMessages(messages);
+                            if (INSTANCE.recordingSession) INSTANCE.appendSessionMessages(messages);
                             if (interrupted.get()) {
-                                shell.finishShellStreamOutput();
-                                shell.println("Interrupted.");
-                            } else if (shell.messages.getLast() instanceof AssistantMessage response) {
-                                String finalOutput = finalAssistantOutput(response, shell.emittedText);
+                                INSTANCE.finishShellStreamOutput();
+                                INSTANCE.println("Interrupted.");
+                            } else if (INSTANCE.messages.getLast() instanceof AssistantMessage response) {
+                                String finalOutput = finalAssistantOutput(response, INSTANCE.emittedText);
                                 if (finalOutput != null) {
-                                    shell.finishShellStreamOutput();
-                                    shell.println(finalOutput);
+                                    INSTANCE.finishShellStreamOutput();
+                                    INSTANCE.println(finalOutput);
                                 }
                             }
 // AgentEnd normally performs this transition. Reassert it here to close
 // the small race where Escape arrives after AgentEnd but before the task returns.
-                            shell.setShellActivity(readyActivity(System.nanoTime()));
-                            shell.refreshShellStatus();
+                            INSTANCE.setShellActivity(readyActivity(System.nanoTime()));
+                            INSTANCE.refreshShellStatus();
                         }
                     } finally {
-                        shell.statusTicker.shutdownNow();
+                        INSTANCE.statusTicker.shutdownNow();
                         try {
-                            shell.statusTicker.awaitTermination(1, TimeUnit.SECONDS);
+                            INSTANCE.statusTicker.awaitTermination(1, TimeUnit.SECONDS);
                         } catch (InterruptedException interrupted) {
                             Thread.currentThread().interrupt();
                         }
@@ -10619,17 +10604,15 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations agentInstructions(
             Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
-        CodingAgentOperations instructions = INSTANCE;
-        instructions.repositoryRoot = repositoryRoot;
-        instructions.currentDirectory = currentDirectory;
-        instructions.baseSystemPrompt = baseSystemPrompt;
-        return instructions;
+        INSTANCE.repositoryRoot = repositoryRoot;
+        INSTANCE.currentDirectory = currentDirectory;
+        INSTANCE.baseSystemPrompt = baseSystemPrompt;
+        return INSTANCE;
     }
 
     public static CodingAgentOperations gitIgnore(String executable) {
-        CodingAgentOperations gitIgnore = INSTANCE;
-        gitIgnore.executable = executable;
-        return gitIgnore;
+        INSTANCE.executable = executable;
+        return INSTANCE;
     }
 
     public void configureBuiltInTools(Path cwd, String baseSystemPrompt) {
@@ -12238,10 +12221,9 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
     }
 
     public static CodingAgentOperations settingsStore(Path settingsPath, Path lockPath) {
-        CodingAgentOperations store = INSTANCE;
-        store.settingsPath = settingsPath;
-        store.lockPath = lockPath;
-        return store;
+        INSTANCE.settingsPath = settingsPath;
+        INSTANCE.lockPath = lockPath;
+        return INSTANCE;
     }
 
     public CodingAgentOperations createSessionRecorder(Path cwd, String provider, String model) throws IOException {
@@ -12378,13 +12360,12 @@ public enum CodingAgentOperations  implements Provider, CredentialStore {
      */
     public static CodingAgentOperations sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
-        CodingAgentOperations store = INSTANCE;
-        store.directory = resolved;
-        store.legacyDirectories = legacyDirectories.stream()
+        INSTANCE.directory = resolved;
+        INSTANCE.legacyDirectories = legacyDirectories.stream()
                 .map(path -> path.toAbsolutePath().normalize())
                 .filter(path -> !path.equals(resolved))
                 .toList();
-        return store;
+        return INSTANCE;
     }
 
     public static CodingAgentOperations defaultSessionStore() {
