@@ -25,7 +25,7 @@ class BuiltInToolsTest {
 
 	@Test
 	void readsWritesAndEditsFiles() throws Exception {
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 		ObjectNode write = CodingAgentOperations.jsonObject().put("path", "nested/example.txt").put("content", "before\nsecond\n");
 		assertTrue(run(tools, "write", write).contains("Successfully wrote"));
 
@@ -44,7 +44,7 @@ class BuiltInToolsTest {
 		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", "example.txt");
 		edit.putArray("edits").addObject().put("oldText", "duplicate").put("newText", "changed");
 		assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.executeTool(
-				tool(CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {}), "edit"), "id", edit, new AbortSignal(), ignored -> {}));
+				tool(CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {}), "edit"), "id", edit, new AbortSignal(), ignored -> {}));
 	}
 
 	@Test
@@ -53,7 +53,7 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve("src/example.java"), "class Example {\n  String value = \"needle\";\n}\n");
 		Files.writeString(tempDir.resolve("README.md"), "documentation");
 
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 		assertEquals("src/example.java", run(tools, "find", CodingAgentOperations.jsonObject().put("pattern", "**/*.java")));
 		assertTrue(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("src/example.java:2:"));
 		String listing = run(tools, "ls", CodingAgentOperations.jsonObject());
@@ -69,7 +69,7 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve("src/nested/Nested.java"), "needle");
 		Files.writeString(tempDir.resolve("src/nested/notes.txt"), "needle");
 
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 		String byFileName = run(
 				tools,
 				"grep",
@@ -93,7 +93,7 @@ class BuiltInToolsTest {
 		IllegalArgumentException error = assertThrows(
 				IllegalArgumentException.class,
 				() -> CodingAgentOperations.executeTool(
-						tool(CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {}), "grep"),
+						tool(CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {}), "grep"),
 						"id",
 						arguments,
 						new AbortSignal(),
@@ -114,7 +114,7 @@ class BuiltInToolsTest {
 		String originalHome = System.getProperty("user.home");
 		try {
 			System.setProperty("user.home", home.toString());
-			List<AgentTool> tools = CodingAgentOperations.builtInTools(cwd, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+			List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(cwd, ignored -> {});
 			assertEquals("home content", run(tools, "read", CodingAgentOperations.jsonObject().put("path", "~/from-home.txt")));
 			assertTrue(run(tools, "ls", CodingAgentOperations.jsonObject().put("path", "~")).contains("from-home.txt"));
 			assertEquals("literal tilde", run(tools, "read", CodingAgentOperations.jsonObject().put("path", "./~")));
@@ -134,7 +134,7 @@ class BuiltInToolsTest {
 		Files.createDirectories(tempDir.resolve("bases/example/src"));
 		Files.writeString(tempDir.resolve("bases/example/src/core.clj"), "(ns example.core)");
 		Files.writeString(tempDir.resolve("README.md"), "documentation");
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 
 		String wrongPrefix = run(
 				tools,
@@ -161,7 +161,7 @@ class BuiltInToolsTest {
 			addZipEntry(zip, "pkg/a.clj", "first\nsecond\nthird");
 			addZipEntry(zip, "pkg/b.txt", "other");
 		}
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 		String archivePath = archive + "!";
 
 		assertEquals("first\nsecond\nthird", run(
@@ -208,7 +208,7 @@ class BuiltInToolsTest {
 		Files.writeString(tempDir.resolve(".gitignore"), "logs/\n");
 		Files.createDirectories(tempDir.resolve("logs"));
 		Files.writeString(tempDir.resolve("logs/ignored.log"), "secret needle");
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 
 		assertFalse(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("ignored.log"));
 		assertTrue(run(
@@ -228,15 +228,14 @@ class BuiltInToolsTest {
 		initializeGitRepository(tempDir);
 		Files.writeString(tempDir.resolve(".gitignore"), "ignored.txt\n");
 		Files.writeString(tempDir.resolve("ignored.txt"), "fallback needle");
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(
-				tempDir, CodingAgentOperations.gitIgnore(tempDir.resolve("missing-git-executable").toString()), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore(tempDir.resolve("missing-git-executable").toString()).builtInTools(tempDir, ignored -> {});
 
 		assertTrue(run(tools, "grep", CodingAgentOperations.jsonObject().put("pattern", "needle")).contains("ignored.txt"));
 	}
 
 	@Test
 	void schemasDescribeRequiredInputs() {
-		List<AgentTool> tools = CodingAgentOperations.builtInTools(tempDir, CodingAgentOperations.gitIgnore("git"), ignored -> {});
+		List<AgentTool> tools = CodingAgentOperations.gitIgnore("git").builtInTools(tempDir, ignored -> {});
 		ObjectNode write = CodingAgentOperations.toolParameters(tool(tools, "write"));
 		assertTrue(write.path("required").toString().contains("\"path\""));
 		assertTrue(write.path("required").toString().contains("\"content\""));

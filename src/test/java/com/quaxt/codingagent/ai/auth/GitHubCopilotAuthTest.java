@@ -59,15 +59,15 @@ class GitHubCopilotAuthTest {
 			CodingAgentOperations store = CodingAgentOperations.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			CodingAgentOperations auth = CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 
-			CodingAgentOperations.GitHubCopilotDeviceCode device = CodingAgentOperations.gitHubCopilotBeginLogin(auth);
+			CodingAgentOperations.GitHubCopilotDeviceCode device = auth.gitHubCopilotBeginLogin();
 			assertEquals("ABCD-EFGH", device.userCode);
-			Credential.OAuthCredential credential = CodingAgentOperations.gitHubCopilotCompleteLogin(auth, device);
+			Credential.OAuthCredential credential = auth.gitHubCopilotCompleteLogin(device);
 
 			assertEquals("copilot-token", credential.access);
 			assertEquals(java.util.List.of("gpt-5.4"), credential.availableModelIds);
-			assertEquals(1, CodingAgentOperations.gitHubCopilotEnableModels(auth, java.util.List.of("gpt-5.4")));
-			assertEquals(java.util.List.of("gpt-5.4"), CodingAgentOperations.gitHubCopilotRefreshAvailableModels(auth).availableModelIds);
-			assertEquals("copilot-token", CodingAgentOperations.gitHubCopilotResolveToken(auth).accessToken);
+			assertEquals(1, auth.gitHubCopilotEnableModels(java.util.List.of("gpt-5.4")));
+			assertEquals(java.util.List.of("gpt-5.4"), auth.gitHubCopilotRefreshAvailableModels().availableModelIds);
+			assertEquals("copilot-token", auth.gitHubCopilotResolveToken().accessToken);
 			assertEquals(1, tokenRequests.get());
 			assertEquals(1, policyRequests.get());
 		} finally {
@@ -97,7 +97,7 @@ class GitHubCopilotAuthTest {
 			CodingAgentOperations auth =
 					CodingAgentOperations.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
 
-			IOException error = assertThrows(IOException.class, () -> CodingAgentOperations.gitHubCopilotResolveToken(auth));
+			IOException error = assertThrows(IOException.class, () -> auth.gitHubCopilotResolveToken());
 
 			assertTrue(error.getMessage().startsWith("502:"));
 		} finally {
