@@ -38,7 +38,7 @@ class OpenAiCompatibleProviderTest {
 
 	private static CodingAgentOperations openAiCompatibleProvider(
 			String id, String name, String baseUrl, List<Model> models) {
-		CodingAgentOperations.INSTANCE.openAiCompatibleProvider(id, name, baseUrl, models);
+		CodingAgentOperations.INSTANCE.openAiCompatibleProvider( models);
 		return CodingAgentOperations.INSTANCE;
 	}
 
