@@ -83,7 +83,7 @@ class InteractiveTerminalTest {
 	}
 
 	@Test
-	void darkThemeFillsThePromptLineWithADarkGreyBackground() throws Exception {
+	void fillsThePromptLineWithADarkGreyBackground() throws Exception {
 		TerminalFixture fixture = terminal();
 
 		CodingAgentOperations interactive = newInteractiveTerminal(
@@ -437,27 +437,27 @@ class InteractiveTerminalTest {
 	void alignsStatusBarSegmentsToTheFullTerminalWidth() {
 		String line = CodingAgentOperations.statusBarLine(
 				"", CodingAgentOperations.StatusAccent.NONE,
-				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60, Theme.PLAIN);
+				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60);
 
-		assertEquals(60, line.length());
-		assertTrue(line.startsWith("~/xa/coding-agent [main]"));
-		assertTrue(line.endsWith("GPT-5.6 Sol Max (0%)"));
+		assertEquals(60, CodingAgentOperations.visibleWidth(line));
+		assertTrue(CodingAgentOperations.stripAnsi(line).startsWith("~/xa/coding-agent [main]"));
+		assertTrue(CodingAgentOperations.stripAnsi(line).endsWith("GPT-5.6 Sol Max (0%)"));
 
 		String styled = CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "left", "right", 20, Theme.DARK);
-		assertTrue(styled.startsWith(Theme.DARK.muted));
-		assertTrue(styled.endsWith(Theme.DARK.reset));
+				"", CodingAgentOperations.StatusAccent.NONE, "left", "right", 20);
+		assertTrue(styled.startsWith(TerminalStyle.MUTED));
+		assertTrue(styled.endsWith(TerminalStyle.RESET));
 
 		String narrow = CodingAgentOperations.statusBarLine(
 				"", CodingAgentOperations.StatusAccent.NONE,
-				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30, Theme.PLAIN);
+				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30);
 		assertTrue(CodingAgentOperations.visibleWidth(narrow) <= 30);
-		assertTrue(narrow.endsWith("GPT-5.6 Sol Max (0%)"));
+		assertTrue(CodingAgentOperations.stripAnsi(narrow).endsWith("GPT-5.6 Sol Max (0%)"));
 
-		assertEquals("left only", CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "left only", "", 20, Theme.PLAIN));
+		assertEquals("left only", CodingAgentOperations.stripAnsi(CodingAgentOperations.statusBarLine(
+				"", CodingAgentOperations.StatusAccent.NONE, "left only", "", 20)));
 		assertEquals("", CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "", "", 20, Theme.PLAIN));
+				"", CodingAgentOperations.StatusAccent.NONE, "", "", 20));
 	}
 
 	@Test
@@ -467,30 +467,18 @@ class InteractiveTerminalTest {
 				CodingAgentOperations.StatusAccent.READY,
 				"~/xa/coding-agent [main]",
 				"GPT-5.6 Sol Max (24%)",
-				80,
-				Theme.DARK);
+				80);
 		String waiting = CodingAgentOperations.statusBarLine(
 				"◐ Waiting for model · 12s",
 				CodingAgentOperations.StatusAccent.ACTIVE,
 				"~/xa/coding-agent [main]",
 				"GPT-5.6 Sol Max (24%)",
-				80,
-				Theme.DARK);
+				80);
 
-		assertTrue(ready.startsWith(CodingAgentOperations.readyStatus(Theme.DARK) + "● Ready"));
-		assertTrue(ready.contains(Theme.DARK.reset + Theme.DARK.muted + " │ "));
-		assertTrue(waiting.startsWith(CodingAgentOperations.activeStatus(
-				Theme.DARK) + "◐ Waiting for model"));
-		assertFalse(waiting.contains(CodingAgentOperations.readyStatus(Theme.DARK)));
-		String lightReady = CodingAgentOperations.statusBarLine(
-				"● Ready", CodingAgentOperations.StatusAccent.READY, "path", "model", 30, Theme.LIGHT);
-		String lightWaiting = CodingAgentOperations.statusBarLine(
-				"Waiting", CodingAgentOperations.StatusAccent.ACTIVE, "path", "model", 30, Theme.LIGHT);
-		assertTrue(lightReady.startsWith(CodingAgentOperations.readyStatus(Theme.LIGHT) + "● Ready"));
-		assertFalse(lightWaiting.contains(CodingAgentOperations.readyStatus(Theme.LIGHT)));
-		String plainReady = CodingAgentOperations.statusBarLine(
-				"● Ready", CodingAgentOperations.StatusAccent.READY, "path", "model", 30, Theme.PLAIN);
-		assertFalse(plainReady.contains("\u001b"));
+		assertTrue(ready.startsWith(CodingAgentOperations.readyStatus() + "● Ready"));
+		assertTrue(ready.contains(TerminalStyle.RESET + TerminalStyle.MUTED + " │ "));
+		assertTrue(waiting.startsWith(CodingAgentOperations.activeStatus() + "◐ Waiting for model"));
+		assertFalse(waiting.contains(CodingAgentOperations.readyStatus()));
 		assertEquals(80, CodingAgentOperations.visibleWidth(ready));
 		assertEquals(80, CodingAgentOperations.visibleWidth(waiting));
 
@@ -500,8 +488,8 @@ class InteractiveTerminalTest {
 				CodingAgentOperations.StatusAccent.TOOL,
 				CodingAgentOperations.StatusAccent.WARNING)) {
 			String line = CodingAgentOperations.statusBarLine(
-					"Busy", accent, "path", "model", 30, Theme.DARK);
-			assertFalse(line.contains(CodingAgentOperations.readyStatus(Theme.DARK)), accent.toString());
+					"Busy", accent, "path", "model", 30);
+			assertFalse(line.contains(CodingAgentOperations.readyStatus()), accent.toString());
 		}
 	}
 
@@ -512,10 +500,9 @@ class InteractiveTerminalTest {
 				CodingAgentOperations.StatusAccent.ACTIVE,
 				"~/a/very/long/working/directory",
 				"GPT-5.6 Sol Max (24%)",
-				20,
-				Theme.PLAIN);
+				20);
 
-		assertEquals("◐ Waiting for mod...", line);
+		assertEquals("◐ Waiting for mod...", CodingAgentOperations.stripAnsi(line));
 		assertFalse(line.contains("GPT"));
 		assertFalse(line.contains("~/"));
 		assertEquals(20, CodingAgentOperations.visibleWidth(line));

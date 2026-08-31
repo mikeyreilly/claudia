@@ -152,7 +152,7 @@ import com.quaxt.codingagent.tui.FuzzyMatcher;
 import com.quaxt.codingagent.tui.FuzzySelector;
 import com.quaxt.codingagent.tui.Keybindings;
 import com.quaxt.codingagent.tui.SelectItem;
-import com.quaxt.codingagent.tui.Theme;
+import com.quaxt.codingagent.tui.TerminalStyle;
 import com.quaxt.codingagent.tui.TuiComponent;
 import com.quaxt.codingagent.tui.TuiFrame;
 import com.quaxt.codingagent.tui.TuiInput;
@@ -446,19 +446,16 @@ public enum CodingAgentOperations implements CredentialStore {
         private String defaultProvider;
         private String defaultModel;
         private ThinkingLevel defaultThinkingLevel;
-        private String theme;
         private boolean hideThinkingBlock;
 
         private Settings(
                 String defaultProvider,
                 String defaultModel,
                 ThinkingLevel defaultThinkingLevel,
-                String theme,
                 boolean hideThinkingBlock) {
             this.defaultProvider = defaultProvider;
             this.defaultModel = defaultModel;
             this.defaultThinkingLevel = defaultThinkingLevel;
-            this.theme = theme;
             this.hideThinkingBlock = hideThinkingBlock;
         }
 
@@ -468,13 +465,12 @@ public enum CodingAgentOperations implements CredentialStore {
                     && Objects.equals(defaultProvider, that.defaultProvider)
                     && Objects.equals(defaultModel, that.defaultModel)
                     && defaultThinkingLevel == that.defaultThinkingLevel
-                    && Objects.equals(theme, that.theme)
                     && hideThinkingBlock == that.hideThinkingBlock;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(defaultProvider, defaultModel, defaultThinkingLevel, theme, hideThinkingBlock);
+            return Objects.hash(defaultProvider, defaultModel, defaultThinkingLevel, hideThinkingBlock);
         }
 
         @Override
@@ -482,7 +478,6 @@ public enum CodingAgentOperations implements CredentialStore {
             return "Settings[defaultProvider=" + defaultProvider
                     + ", defaultModel=" + defaultModel
                     + ", defaultThinkingLevel=" + defaultThinkingLevel
-                    + ", theme=" + theme
                     + ", hideThinkingBlock=" + hideThinkingBlock + "]";
         }
     }
@@ -776,7 +771,7 @@ public enum CodingAgentOperations implements CredentialStore {
     // Interactive shell and terminal
     private static final List<String> SLASH_COMMANDS = List.of(
             "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
-            "/mcp", "/models", "/quit", "/resume", "/settings", "/theme");
+            "/mcp", "/models", "/quit", "/resume", "/settings");
     private static final int VISIBLE_COMMANDS = 4;
     private static final int DEFAULT_COLUMNS = 80;
     private static final int DEFAULT_ROWS = 24;
@@ -833,7 +828,6 @@ public enum CodingAgentOperations implements CredentialStore {
     private String statusRight;
     private Attributes fullScreenResumeAttributes;
     private volatile boolean managedSuspend;
-    private volatile Theme theme = Theme.DARK;
     private String suspendedBuffer;
     private int suspendedCursor = -1;
     private int restoreCursor = -1;
@@ -7996,74 +7990,39 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
 
-    // ----------------------------------------------------------------- theme
+    // ------------------------------------------------------------ styling
 
-    private static Theme namedTheme(String name) {
-        return switch (name.toLowerCase(Locale.ROOT)) {
-            case "dark" -> Theme.DARK;
-            case "light" -> Theme.LIGHT;
-            case "plain" -> Theme.PLAIN;
-            default -> throw new IllegalArgumentException(
-                    "Unknown theme: " + name + " (expected dark, light, or plain)");
-        };
+    /** Bold green is reserved for the Ready activity so idle is recognizable at a glance. */
+    public static String readyStatus() {
+        return TerminalStyle.READY;
     }
 
-    /**
-     * Bold green is reserved for the Ready activity so idle is recognizable at a glance.
-     */
-    public static String readyStatus(Theme theme) {
-        return theme==Theme.PLAIN ? "" : "\u001b[1;92m";
+    /** Active model and shell work; deliberately never green. */
+    public static String activeStatus() {
+        return TerminalStyle.ACTIVE;
     }
 
-    /**
-     * Active model and shell work; deliberately never green.
-     */
-    public static String activeStatus(Theme theme) {
-        return switch (theme) {
-            case DARK -> "\u001b[1;96m";
-            case LIGHT -> "\u001b[1;34m";
-            default -> "";
-        };
+    /** Retry, cancellation, and configuration attention; deliberately never green. */
+    private static String warningStatus() {
+        return TerminalStyle.WARNING;
     }
 
-    /**
-     * Retry, cancellation, and configuration attention; deliberately never green.
-     */
-    private static String warningStatus(Theme theme) {
-        return theme==Theme.PLAIN ? "" : "\u001b[1;93m";
-    }
-
-    /**
-     * Background used to visually separate the editable prompt from chat output.
-     */
-    private static String promptBackground(Theme theme) {
-        return switch (theme) {
-            case DARK -> Theme.DARK_PROMPT_BACKGROUND;
-            case LIGHT -> Theme.LIGHT_PROMPT_BACKGROUND;
-            default -> "";
-        };
-    }
-
-    /**
-     * Styles every line as a full-width prompt area.
-     */
-    private static String promptArea(Theme theme, String value) {
-        String background = promptBackground(theme);
-        if (background.isEmpty()) return value;
+    /** Styles every line as a full-width prompt area. */
+    private static String promptArea(String value) {
         StringBuilder styled = new StringBuilder(value.length() + 32);
-        styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
+        styled.append(TerminalStyle.PROMPT_BACKGROUND).append(TerminalStyle.CLEAR_TO_END_OF_LINE);
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
             if (character == '\n') {
-                styled.append(theme.reset).append(character);
+                styled.append(TerminalStyle.RESET).append(character);
                 if (index + 1 < value.length()) {
-                    styled.append(background).append(Theme.CLEAR_TO_END_OF_LINE);
+                    styled.append(TerminalStyle.PROMPT_BACKGROUND).append(TerminalStyle.CLEAR_TO_END_OF_LINE);
                 }
             } else {
                 styled.append(character);
             }
         }
-        if (value.isEmpty() || value.charAt(value.length() - 1) != '\n') styled.append(theme.reset);
+        if (value.isEmpty() || value.charAt(value.length() - 1) != '\n') styled.append(TerminalStyle.RESET);
         return styled.toString();
     }
 
@@ -8442,8 +8401,8 @@ public enum CodingAgentOperations implements CredentialStore {
                 commands.stream().filter(command -> command.startsWith(value)).toList();
     }
 
-    private static String styleMuted(String value, Theme theme) {
-        return theme.muted.isEmpty() ? value : theme.muted + value + theme.reset;
+    private static String styleMuted(String value) {
+        return TerminalStyle.MUTED + value + TerminalStyle.RESET;
     }
 
     // --------------------------------------------------------- tui components
@@ -8455,6 +8414,11 @@ public enum CodingAgentOperations implements CredentialStore {
         component.handle.accept(input);
     }
 
+
+    static int mcpSelectorVisibleStart(int itemCount, int visibleCount, int selectedIndex) {
+        if (itemCount <= visibleCount) return 0;
+        return Math.clamp(selectedIndex - visibleCount / 2, 0, itemCount - visibleCount);
+    }
 
     // ---------------------------------------------------------- fuzzy selector
 
@@ -8482,16 +8446,16 @@ public enum CodingAgentOperations implements CredentialStore {
      */
     public static <T> TuiComponent<T> fuzzySelectorComponent(FuzzySelector<T> selector) {
         return new TuiComponent<>(
-                frame -> renderFuzzySelector(selector, frame.width, frame.height, frame.theme),
+                frame -> renderFuzzySelector(selector, frame.width, frame.height),
                 input -> handleFuzzySelectorInput(selector, input),
                 () -> selector.complete,
                 () -> selector.result);
     }
 
     public static <T> List<String> renderFuzzySelector(
-            FuzzySelector<T> selector, int width, int height, Theme theme) {
+            FuzzySelector<T> selector, int width, int height) {
         List<String> lines = new ArrayList<>();
-        lines.add(theme.heading + truncatePlain(selector.title, width) + theme.reset);
+        lines.add(TerminalStyle.HEADING + truncatePlain(selector.title, width) + TerminalStyle.RESET);
         lines.add("");
         if (selector.searchable) {
             String beforeCursor = selector.query.substring(0, selector.queryCursor);
@@ -8514,7 +8478,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 Math.min(selector.filteredItems.size(), selector.visibleStart + selector.visibleCount);
 
         if (selector.filteredItems.isEmpty()) {
-            lines.add(theme.muted + "  No matching options" + theme.reset);
+            lines.add(TerminalStyle.MUTED + "  No matching options" + TerminalStyle.RESET);
         } else {
             for (int index = selector.visibleStart; index < visibleEnd; index++) {
                 SelectItem<T> item = selector.filteredItems.get(index);
@@ -8524,15 +8488,15 @@ public enum CodingAgentOperations implements CredentialStore {
                 String description = item.description.isBlank() ? "" : "  " + item.description;
                 String row = (selected ? "> " : "  ") + item.label + suffix + description;
                 row = truncatePlain(row, width);
-                lines.add(selected ? theme.heading + row + theme.reset : row);
+                lines.add(selected ? TerminalStyle.HEADING + row + TerminalStyle.RESET : row);
             }
             if (selector.visibleStart > 0 || visibleEnd < selector.filteredItems.size()) {
-                lines.add(theme.muted
+                lines.add(TerminalStyle.MUTED
                         + "  "
                         + (selector.selectedIndex + 1)
                         + "/"
                         + selector.filteredItems.size()
-                        + theme.reset);
+                        + TerminalStyle.RESET);
             }
         }
         lines.add("");
@@ -8541,7 +8505,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 ? "Type to filter  Up/Down move  Enter select  Esc cancel"
                 : "Up/Down move  Enter select  Esc cancel")
                 + currentHint;
-        lines.add(theme.muted + truncatePlain(hint, width) + theme.reset);
+        lines.add(TerminalStyle.MUTED + truncatePlain(hint, width) + TerminalStyle.RESET);
         return lines;
     }
 
@@ -8740,7 +8704,7 @@ public enum CodingAgentOperations implements CredentialStore {
             TuiRuntime runtime, TuiComponent<?> component, int width, int height) {
         int safeWidth = Math.max(20, width);
         int safeHeight = Math.max(5, height);
-        List<String> lines = component.render.apply(new TuiFrame(safeWidth, safeHeight, runtime.theme));
+        List<String> lines = component.render.apply(new TuiFrame(safeWidth, safeHeight));
         if (lines.size() > safeHeight) {
             lines = lines.subList(0, safeHeight);
         }
@@ -8988,7 +8952,6 @@ public enum CodingAgentOperations implements CredentialStore {
                 keyMap.bind(suspend, appKeySequence("suspend"));
             }
         }
-        theme = Theme.DARK;
     }
 
     private void bindNavigationKey(
@@ -9069,15 +9032,14 @@ public enum CodingAgentOperations implements CredentialStore {
 
     private String readLineInternal(String prompt, String initialBuffer, Character mask, boolean suggestionsEnabled) {
         while (true) {
-            Theme promptTheme = theme;
             try {
                 String result;
-                String background = promptBackground(promptTheme);
+                String background = TerminalStyle.PROMPT_BACKGROUND;
                 reader.setVariable(
                         LineReader.SECONDARY_PROMPT_PATTERN,
                         background.isEmpty()
                                 ? SECONDARY_PROMPT
-                                : hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
+                                : hiddenForJLine(background + TerminalStyle.CLEAR_TO_END_OF_LINE)
                                   + SECONDARY_PROMPT);
                 String editorPrompt;
                 if (background.isEmpty()) {
@@ -9085,7 +9047,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 } else {
                     int activeLineOffset = activePromptLineOffset(prompt);
                     editorPrompt = prompt.substring(0, activeLineOffset)
-                            + hiddenForJLine(background + Theme.CLEAR_TO_END_OF_LINE)
+                            + hiddenForJLine(background + TerminalStyle.CLEAR_TO_END_OF_LINE)
                             + prompt.substring(activeLineOffset);
                 }
                 commandSuggestionsActive = suggestionsEnabled;
@@ -9110,18 +9072,18 @@ public enum CodingAgentOperations implements CredentialStore {
                                 int innerWidth = Math.max(1, Math.clamp(columns - 2, 1, longestCommand + 2));
                                 String border = "─".repeat(innerWidth);
                                 List<String> lines1 = new ArrayList<>(visible.size() + 2);
-                                lines1.add(styleMuted("╭" + border + "╮", promptTheme));
+                                lines1.add(styleMuted("╭" + border + "╮"));
                                 for (int index = visibleStart; index < visibleEnd; index++) {
                                     boolean selected = index == selectedIndex;
                                     String content = (selected ? "› " : "  ") + matches.get(index);
                                     content = truncatePlain(content, innerWidth);
                                     content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
-                                    String styledContent = selected && !promptTheme.heading.isEmpty()
-                                            ? promptTheme.heading + content + promptTheme.reset
+                                    String styledContent = selected
+                                            ? TerminalStyle.HEADING + content + TerminalStyle.RESET
                                             : content;
-                                    lines1.add(styleMuted("│", promptTheme) + styledContent + styleMuted("│", promptTheme));
+                                    lines1.add(styleMuted("│") + styledContent + styleMuted("│"));
                                 }
-                                lines1.add(styleMuted("╰" + border + "╯", promptTheme));
+                                lines1.add(styleMuted("╰" + border + "╯"));
                                 lines = lines1;
                             }
 
@@ -9134,11 +9096,11 @@ public enum CodingAgentOperations implements CredentialStore {
                 } finally {
                     dynamicPost = null;
                     commandSuggestionsActive = false;
-                    resetPromptBackground(promptTheme);
+                    resetPromptBackground();
                 }
                 String line =
                         result;
-                rememberCompletedLine(prompt, line, mask, promptTheme);
+                rememberCompletedLine(prompt, line, mask);
                 return line;
             } catch (CancellationException signal) {
                 if (signal != SUSPEND_REQUESTED) {
@@ -9148,13 +9110,13 @@ public enum CodingAgentOperations implements CredentialStore {
                 restoreCursor = suspendedCursor;
                 suspendInteractive(null);
             } catch (UserInterruptException ignored) {
-                rememberCompletedLine(prompt, "", mask, promptTheme);
+                rememberCompletedLine(prompt, "", mask);
                 return "";
             } catch (EndOfFileException ignored) {
                 synchronized (this) {
                     int activeLineOffset = activePromptLineOffset(prompt);
                     remember(prompt.substring(0, activeLineOffset));
-                    remember(promptArea(promptTheme, prompt.substring(activeLineOffset)));
+                    remember(promptArea(prompt.substring(activeLineOffset)));
                 }
                 return null;
             }
@@ -9174,14 +9136,13 @@ public enum CodingAgentOperations implements CredentialStore {
      */
     public <T> T runComponent(TuiComponent<T> component)
             throws IOException {
-        if (reader.isReading()) resetPromptBackground(theme);
+        if (reader.isReading()) resetPromptBackground();
         synchronized (this) {
             if (statusBar != null) statusBar.suspend();
         }
         try {
             TuiRuntime runtime = new TuiRuntime(
                     jlineTerminal,
-                    theme,
                     supportsSuspend
                             ? () -> {
                         fullScreenResumeAttributes =
@@ -9345,7 +9306,7 @@ public enum CodingAgentOperations implements CredentialStore {
         Objects.requireNonNull(handler, "handler");
         String widgetName = "codingagent-" + action;
         reader.getWidgets().put(widgetName, () -> {
-            resetPromptBackground(theme);
+            resetPromptBackground();
             try {
                 handler.run();
             } finally {
@@ -9364,7 +9325,7 @@ public enum CodingAgentOperations implements CredentialStore {
      */
     public void printAbove(String text) {
         synchronized (this) {
-            if (reader.isReading()) resetPromptBackground(theme);
+            if (reader.isReading()) resetPromptBackground();
             reader.printAbove(text);
             remember(text + System.lineSeparator());
         }
@@ -9399,22 +9360,11 @@ public enum CodingAgentOperations implements CredentialStore {
         }
     }
 
-    private Theme terminalTheme() {
-        return theme;
-    }
-
-    private void setTheme(Theme theme) {
-        this.theme = theme;
-    }
-
-    /**
-     * Shows activity first so it remains visible when workspace/model details need truncation.
-     */
+    /** Shows activity first so it remains visible when metadata must be truncated. */
     public void setStatus(String activity, StatusAccent accent, String left, String right) {
         synchronized (this) {
             statusActivity = activity == null ? "" : activity;
-            statusAccent =
-                    accent == null ? StatusAccent.NONE : accent;
+            statusAccent = accent == null ? StatusAccent.NONE : accent;
             statusLeft = left == null ? "" : left;
             statusRight = right == null ? "" : right;
             renderStatusBar();
@@ -9423,19 +9373,12 @@ public enum CodingAgentOperations implements CredentialStore {
 
     private void renderStatusBar() {
         if (statusLeft == null && statusRight == null) return;
-        if (statusBar == null) {
-            statusBar = Status.getStatus(jlineTerminal);
-        }
+        if (statusBar == null) statusBar = Status.getStatus(jlineTerminal);
         if (statusBar == null) return;
         int columns = jlineTerminal.getColumns();
         int width = columns > 0 ? columns : DEFAULT_COLUMNS;
         statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
-                statusActivity,
-                statusAccent,
-                statusLeft,
-                statusRight,
-                width,
-                theme))));
+                statusActivity, statusAccent, statusLeft, statusRight, width))));
     }
 
     /**
@@ -9443,12 +9386,7 @@ public enum CodingAgentOperations implements CredentialStore {
      * narrow, metadata is discarded before the activity text is truncated.
      */
     public static String statusBarLine(
-            String activity,
-            StatusAccent accent,
-            String left,
-            String right,
-            int width,
-            Theme theme) {
+            String activity, StatusAccent accent, String left, String right, int width) {
         int safeWidth = Math.max(0, width);
         String activityText = truncatePlain(activity == null ? "" : activity, safeWidth);
         int activityWidth = visibleWidth(activityText);
@@ -9459,21 +9397,15 @@ public enum CodingAgentOperations implements CredentialStore {
             String details = alignedStatusDetails(left, right, remaining - 3);
             if (!details.isEmpty()) separatorAndDetails = " │ " + details;
         }
-
-        if (activityText.isEmpty()) {
-            String details = alignedStatusDetails(left, right, safeWidth);
-            return mutedStatus(details, theme);
-        }
+        if (activityText.isEmpty()) return mutedStatus(alignedStatusDetails(left, right, safeWidth));
         String activityStyle = switch (accent == null ? StatusAccent.NONE : accent) {
-            case NONE -> theme.muted;
-            case READY -> readyStatus(theme);
-            case ACTIVE -> activeStatus(theme);
-            case TOOL -> theme == Theme.PLAIN ? "" : "\u001b[1;95m";
-            case WARNING -> warningStatus(theme);
+            case NONE -> TerminalStyle.MUTED;
+            case READY -> readyStatus();
+            case ACTIVE -> activeStatus();
+            case TOOL -> TerminalStyle.TOOL;
+            case WARNING -> warningStatus();
         };
-        String styledActivity =
-                activityStyle.isEmpty() ? activityText : activityStyle + activityText + theme.reset;
-        return styledActivity + mutedStatus(separatorAndDetails, theme);
+        return activityStyle + activityText + TerminalStyle.RESET + mutedStatus(separatorAndDetails);
     }
 
     private static String alignedStatusDetails(String left, String right, int width) {
@@ -9487,11 +9419,11 @@ public enum CodingAgentOperations implements CredentialStore {
         return rightWidth == 0 ? leftText : leftText + " ".repeat(padding) + rightText;
     }
 
-    private static String mutedStatus(String text, Theme theme) {
-        return theme.muted.isEmpty() || text.isEmpty() ? text : theme.muted + text + theme.reset;
+    private static String mutedStatus(String text) {
+        return text.isEmpty() ? text : TerminalStyle.MUTED + text + TerminalStyle.RESET;
     }
 
-    private void rememberCompletedLine(String prompt, String line, Character mask, Theme promptTheme) {
+    private void rememberCompletedLine(String prompt, String line, Character mask) {
         synchronized (this) {
             String displayedLine = line;
             if (mask != null) {
@@ -9500,7 +9432,7 @@ public enum CodingAgentOperations implements CredentialStore {
             }
             int activeLineOffset = activePromptLineOffset(prompt);
             remember(prompt.substring(0, activeLineOffset));
-            remember(promptArea(promptTheme, prompt.substring(activeLineOffset) + displayedLine));
+            remember(promptArea(prompt.substring(activeLineOffset) + displayedLine));
             remember(System.lineSeparator());
         }
     }
@@ -9518,15 +9450,14 @@ public enum CodingAgentOperations implements CredentialStore {
         }
     }
 
-    private void resetPromptBackground(Theme promptTheme) {
-        if (promptBackground(promptTheme).isEmpty()) return;
-        jlineTerminal.writer().print(promptTheme.reset);
+    private void resetPromptBackground() {
+        jlineTerminal.writer().print(TerminalStyle.RESET);
         jlineTerminal.writer().flush();
     }
 
     private void repaintScreen() {
         synchronized (this) {
-            jlineTerminal.writer().print(theme.reset);
+            jlineTerminal.writer().print(TerminalStyle.RESET);
             jlineTerminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
             boolean redrawStatusBar = statusBar != null && statusBar.size() > 0;
             // Release the status rows so the redrawn document starts on a clean screen.
@@ -9829,7 +9760,6 @@ public enum CodingAgentOperations implements CredentialStore {
             ObjectNode root = readSettingsObject();
             String provider = optionalSettingsText(root, "defaultProvider");
             String model2 = optionalSettingsText(root, "defaultModel");
-            String theme = optionalSettingsText(root, "theme");
             String thinking = optionalSettingsText(root, "defaultThinkingLevel");
             ThinkingLevel thinkingLevel = null;
             if (thinking != null) {
@@ -9845,7 +9775,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 throw new IOException("Invalid setting hideThinkingBlock: expected a boolean");
             }
             Settings settings = new Settings(
-                    provider, model2, thinkingLevel, theme, value != null && value.asBoolean(false));
+                    provider, model2, thinkingLevel, value != null && value.asBoolean(false));
             Path workspace = Path.of(".").toAbsolutePath().normalize();
             mcpLoadDefaultManager(workspace);
             try {
@@ -9879,9 +9809,6 @@ public enum CodingAgentOperations implements CredentialStore {
                     bindAppAction("expandTools", () -> showShellTurnDetails(true));
                     bindAppAction("toggleThinking", () -> setShellHideThinkingBlock(!hideThinkingBlock, true));
                     try {
-                        if (this.settings.theme != null) {
-                            setTheme(namedTheme(this.settings.theme));
-                        }
                         if (this.model != null) {
                             // An explicit CLI model overrides the saved default for this session only.
                             configureShellModel(resolveCliModel(this.provider, this.model), false);
@@ -9991,7 +9918,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                 try {
                                     if (!exit) switch (trimmed) {
                                         case "/help" ->
-                                                println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /theme <dark|light|plain>, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                                println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
                                         case "/details" -> showShellTurnDetails(false);
                                         case "/fork" -> {
                                             if (!agentConfigured) {
@@ -10165,8 +10092,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                                     replaceScreen(renderSessionScreen(
                                                             model,
                                                             selected.transcriptMessages,
-                                                            hideThinkingBlock,
-                                                            terminalTheme()));
+                                                            hideThinkingBlock));
                                                     try {
                                                         setSettingsDefaultModelAndProvider(model.provider, model.id);
                                                     } catch (IOException error) {
@@ -10402,7 +10328,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                                             String title = selector1.view == McpSelector.View.SERVERS
                                                                     ? "MCP Servers"
                                                                     : "MCP Tools: " + selector1.toolServer;
-                                                            lines.add(frame.theme.heading + truncatePlain(title, frame.width) + frame.theme.reset);
+                                                            lines.add(TerminalStyle.HEADING + truncatePlain(title, frame.width) + TerminalStyle.RESET);
                                                             lines.add("");
                                                             String before = selector1.query.substring(0, selector1.queryCursor);
                                                             String after = selector1.query.substring(selector1.queryCursor);
@@ -10418,7 +10344,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                                                 String empty = selector1.view == McpSelector.View.SERVERS
                                                                         ? "  No matching servers"
                                                                         : "  No tools available";
-                                                                lines.add(frame.theme.muted + empty + frame.theme.reset);
+                                                                lines.add(TerminalStyle.MUTED + empty + TerminalStyle.RESET);
                                                             } else {
                                                                 for (int index = selector1.visibleStart; index < end; index++) {
                                                                     McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
@@ -10447,10 +10373,10 @@ public enum CodingAgentOperations implements CredentialStore {
                                                                     }
                                                                             : (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled"));
                                                                     row = truncatePlain(row, frame.width);
-                                                                    lines.add(index == selector1.selectedIndex ? frame.theme.heading + row + frame.theme.reset : row);
+                                                                    lines.add(index == selector1.selectedIndex ? TerminalStyle.HEADING + row + TerminalStyle.RESET : row);
                                                                 }
                                                                 if (selector1.visibleStart > 0 || end < itemCount) {
-                                                                    lines.add(frame.theme.muted + "  " + (selector1.selectedIndex + 1) + "/" + itemCount + frame.theme.reset);
+                                                                    lines.add(TerminalStyle.MUTED + "  " + (selector1.selectedIndex + 1) + "/" + itemCount + TerminalStyle.RESET);
                                                                 }
                                                             }
                                                             lines.add("");
@@ -10472,8 +10398,8 @@ public enum CodingAgentOperations implements CredentialStore {
                                                                 detail = selector1.changeError;
                                                             }
                                                             if (detail != null) {
-                                                                String style = selector1.changeError == null ? frame.theme.muted : warningStatus(frame.theme);
-                                                                lines.add(style + truncatePlain("  " + detail, frame.width) + frame.theme.reset);
+                                                                String style = selector1.changeError == null ? TerminalStyle.MUTED : warningStatus();
+                                                                lines.add(style + truncatePlain("  " + detail, frame.width) + TerminalStyle.RESET);
                                                             }
                                                             if (selector1.view == McpSelector.View.SERVERS && !selector1.filtered.isEmpty()) {
                                                                 McpServerStatus selected =
@@ -10482,13 +10408,13 @@ public enum CodingAgentOperations implements CredentialStore {
                                                                     String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, frame.width - 2));
                                                                     String safeUrl = selected.authorizationUrl.replace("\u001b", "").replace("\u0007", "");
                                                                     String link = "\u001b]8;;" + safeUrl + "\u001b\\" + label + "\u001b]8;;\u001b\\";
-                                                                    lines.add(frame.theme.muted + "  " + link + frame.theme.reset);
+                                                                    lines.add(TerminalStyle.MUTED + "  " + link + TerminalStyle.RESET);
                                                                 }
                                                             }
                                                             String hint = selector1.view == McpSelector.View.SERVERS
                                                                     ? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
                                                                     : "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
-                                                            lines.add(frame.theme.muted + truncatePlain(hint, frame.width) + frame.theme.reset);
+                                                            lines.add(TerminalStyle.MUTED + truncatePlain(hint, frame.width) + TerminalStyle.RESET);
                                                             return lines;
                                                         },
                                                         input1 -> {
@@ -10674,7 +10600,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                                     this.thinkingLevel = level;
                                                     refreshShellStatus();
                                                     this.settings = new Settings(
-                                                            this.settings.defaultProvider, this.settings.defaultModel, level, this.settings.theme, this.settings.hideThinkingBlock);
+                                                            this.settings.defaultProvider, this.settings.defaultModel, level, this.settings.hideThinkingBlock);
                                                     try {
                                                         this.modifySettings(root1 -> root1.put("defaultThinkingLevel", level.wire));
                                                         println("Thinking level: " + level.wire);
@@ -10697,26 +10623,7 @@ public enum CodingAgentOperations implements CredentialStore {
                                                 println("Error: " + error.getMessage());
                                             }
                                         }
-                                        default -> {
-                                            if (input.startsWith("/theme ")) {
-                                                Theme theme1 = namedTheme(input.substring("/theme ".length()).trim());
-                                                setTheme(theme1);
-                                                refreshShellStatus();
-                                                this.settings = new Settings(
-                                                        this.settings.defaultProvider,
-                                                        this.settings.defaultModel,
-                                                        this.settings.defaultThinkingLevel,
-                                                        theme1.name1,
-                                                        this.settings.hideThinkingBlock);
-                                                try {
-                                                    requireSettingsValue(theme1.name1, "theme");
-                                                    this.modifySettings(root1 -> root1.put("theme", theme1.name1));
-                                                    println("Theme: " + terminalTheme().name1);
-                                                } catch (IOException error) {
-                                                    println("Theme changed for this session, but could not be saved: " + error.getMessage());
-                                                }
-                                            } else println("Unknown command: " + input);
-                                        }
+                                        default -> println("Unknown command: " + input);
                                     }
                                 } finally {
                                     setShellActivity(!agentConfigured
@@ -11071,7 +10978,7 @@ public enum CodingAgentOperations implements CredentialStore {
      * Rebuilds the visible transcript for a resumed session.
      */
     public String renderSessionScreen(
-            Model model, List<Message> messages, boolean hideThinking, Theme theme) {
+            Model model, List<Message> messages, boolean hideThinking) {
         StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
         Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
         for (Message message : messages) {
@@ -11081,14 +10988,14 @@ public enum CodingAgentOperations implements CredentialStore {
         for (Message message : messages) {
             switch (message) {
                 case UserMessage user -> screen.append('\n')
-                        .append(promptArea(theme, "> " + text(user)))
+                        .append(promptArea("> " + text(user)))
                         .append('\n');
                 case AssistantMessage assistant -> {
                     for (AssistantContent content : assistant.content) {
                         if (content instanceof ThinkingContent thinking) {
                             if (!hideThinking && !thinking.thinking.isBlank()) {
-                                screen.append("\n").append(theme.muted).append("Thinking:").append(theme.reset).append('\n');
-                                screen.append(theme.muted).append(thinking.thinking).append(theme.reset).append('\n');
+                                screen.append("\n").append(TerminalStyle.MUTED).append("Thinking:").append(TerminalStyle.RESET).append('\n');
+                                screen.append(TerminalStyle.MUTED).append(thinking.thinking).append(TerminalStyle.RESET).append('\n');
                             }
                         } else if (content instanceof TextContent text) {
                             screen.append(text.text).append('\n');
@@ -11123,7 +11030,7 @@ public enum CodingAgentOperations implements CredentialStore {
         header.append('\n');
         header.append(model == null
                 ? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /theme <dark|light|plain>, /exit");
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }
@@ -11267,12 +11174,11 @@ public enum CodingAgentOperations implements CredentialStore {
                             // End events retain the current phase until another block or AgentEnd.
                         }
                     }
-                    Theme theme = terminalTheme();
                     switch (update.providerEvent) {
                         case AssistantMessageEvent.ThinkingStart ignored -> {
                             if (!this.hideThinkingBlock) {
                                 finishShellStreamOutput();
-                                print("\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+                                print("\n" + TerminalStyle.MUTED + "Thinking:" + TerminalStyle.RESET + "\n");
                                 this.streamOutput = StreamOutput.THINKING;
                                 this.streamedThinkingCharacters = 0;
                             }
@@ -11280,11 +11186,11 @@ public enum CodingAgentOperations implements CredentialStore {
                         case AssistantMessageEvent.ThinkingDelta delta -> {
                             if (!this.hideThinkingBlock) {
                                 if (this.streamOutput != StreamOutput.THINKING) {
-                                    print("\n" + theme.muted + "Thinking:" + theme.reset + "\n");
+                                    print("\n" + TerminalStyle.MUTED + "Thinking:" + TerminalStyle.RESET + "\n");
                                     this.streamOutput = StreamOutput.THINKING;
                                     this.streamedThinkingCharacters = 0;
                                 }
-                                print(theme.muted + delta.delta + theme.reset);
+                                print(TerminalStyle.MUTED + delta.delta + TerminalStyle.RESET);
                                 this.streamedThinkingCharacters += delta.delta.length();
                             }
                         }
@@ -11292,7 +11198,7 @@ public enum CodingAgentOperations implements CredentialStore {
                             if (!this.hideThinkingBlock
                                     && this.streamOutput == StreamOutput.THINKING) {
                                 if (this.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-                                    print(theme.muted + end.content + theme.reset);
+                                    print(TerminalStyle.MUTED + end.content + TerminalStyle.RESET);
                                 }
                                 finishShellStreamOutput();
                             }
@@ -11551,7 +11457,7 @@ public enum CodingAgentOperations implements CredentialStore {
         }
         try {
             boolean hiddenAfter = runComponent(new TuiComponent<>(
-                    frame -> renderTurnDetails(details, frame.width, frame.height, frame.theme),
+                    frame -> renderTurnDetails(details, frame.width, frame.height),
                     input -> handleTurnDetailsInput(details, input),
                     () -> details.complete,
                     () -> details.thinkingHidden));
@@ -11569,7 +11475,6 @@ public enum CodingAgentOperations implements CredentialStore {
                 settings.defaultProvider,
                 settings.defaultModel,
                 settings.defaultThinkingLevel,
-                settings.theme,
                 hidden);
         String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
         try {
@@ -11946,7 +11851,7 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     public static List<String> renderTurnDetails(
-            TurnDetailsComponent details, int width, int height, Theme theme) {
+            TurnDetailsComponent details, int width, int height) {
         int safeWidth = Math.max(20, width);
         details.viewportHeight = Math.max(
                 1, height - TurnDetailsComponent.HEADER_LINES - TurnDetailsComponent.FOOTER_LINES);
@@ -11956,8 +11861,8 @@ public enum CodingAgentOperations implements CredentialStore {
             String marker = section.expanded ? "▼ " : "▶ ";
             String suffix = section.expanded || section.summary.isBlank() ? "" : " — " + section.summary;
             String heading = truncatePlain(marker + section.title + suffix, safeWidth);
-            if (index1 == details.selectedIndex) heading = theme.heading + heading + theme.reset;
-            else heading = theme.strong + heading + theme.reset;
+            if (index1 == details.selectedIndex) heading = TerminalStyle.HEADING + heading + TerminalStyle.RESET;
+            else heading = TerminalStyle.STRONG + heading + TerminalStyle.RESET;
             lines1.add(new TurnDetailsComponent.RenderedLine(heading, index1, true));
             if (section.expanded) {
                 List<String> result;
@@ -11991,7 +11896,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 for (String bodyLine : result) {
                     String rendered = "   " + bodyLine;
                     if (section.kind == TurnDetailsComponent.Kind.THINKING) {
-                        rendered = theme.muted + rendered + theme.reset;
+                        rendered = TerminalStyle.MUTED + rendered + TerminalStyle.RESET;
                     }
                     lines1.add(new TurnDetailsComponent.RenderedLine(rendered, index1, false));
                 }
@@ -12019,7 +11924,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 0, Math.clamp(lines1.size() - details.viewportHeight, 0, details.scrollTop));
 
         List<String> lines = new ArrayList<>();
-        lines.add(theme.heading + "Turn details" + theme.reset);
+        lines.add(TerminalStyle.HEADING + "Turn details" + TerminalStyle.RESET);
         lines.add("");
         details.visibleSectionsByRow.clear();
         int visibleEnd = Math.min(lines1.size(), details.scrollTop + details.viewportHeight);
@@ -12029,7 +11934,7 @@ public enum CodingAgentOperations implements CredentialStore {
             lines.add(line.text);
         }
         String hint = "Up/Down select  Enter expand/collapse  PgUp/PgDn scroll  Ctrl-T thinking  Ctrl-O tools  Esc close";
-        lines.add(theme.muted + truncatePlain(hint, safeWidth) + theme.reset);
+        lines.add(TerminalStyle.MUTED + truncatePlain(hint, safeWidth) + TerminalStyle.RESET);
         return lines;
     }
 
@@ -12611,7 +12516,7 @@ public enum CodingAgentOperations implements CredentialStore {
     private static Settings withSettingsDefaultModel(
             Settings settings, String provider, String model) {
         return new Settings(
-                provider, model, settings.defaultThinkingLevel, settings.theme, settings.hideThinkingBlock);
+                provider, model, settings.defaultThinkingLevel, settings.hideThinkingBlock);
     }
 
     private void setSettingsDefaultModelAndProvider(String provider, String model)
