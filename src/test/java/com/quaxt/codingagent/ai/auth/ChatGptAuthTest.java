@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quaxt.codingagent.CodingAgentOperations;
+import com.quaxt.codingagent.ai.providers.ProviderState;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -41,19 +42,23 @@ class ChatGptAuthTest {
 
             CodingAgentOperations.INSTANCE.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-            CodingAgentOperations.INSTANCE.chatGptAuth(CodingAgentOperations.INSTANCE, base, "test-client");
-			CodingAgentOperations.ChatGptDeviceCode device = CodingAgentOperations.INSTANCE.chatGptBeginLogin();
+			ProviderState state = ProviderState.CHATGPT_OPERATIONS;
+			CodingAgentOperations.INSTANCE.chatGptAuth(
+					state, CodingAgentOperations.INSTANCE, base, "test-client");
+			CodingAgentOperations.ChatGptDeviceCode device =
+					CodingAgentOperations.INSTANCE.chatGptBeginLogin(state);
 			assertEquals("ABCD-EFGH", device.userCode);
-			CodingAgentOperations.INSTANCE.chatGptCompleteLogin(device);
-			assertTrue(CodingAgentOperations.INSTANCE.chatGptHasCredential());
+			CodingAgentOperations.INSTANCE.chatGptCompleteLogin(state, device);
+			assertTrue(CodingAgentOperations.INSTANCE.chatGptHasCredential(state));
 
-			CodingAgentOperations.ChatGptToken refreshed = CodingAgentOperations.INSTANCE.chatGptResolveToken();
+			CodingAgentOperations.ChatGptToken refreshed =
+					CodingAgentOperations.INSTANCE.chatGptResolveToken(state);
 			assertEquals("access-2", refreshed.accessToken);
 			assertEquals("account-123", refreshed.accountId);
 			assertEquals(2, tokenExchanges.get());
 
-			CodingAgentOperations.INSTANCE.chatGptLogout();
-			assertFalse(CodingAgentOperations.INSTANCE.chatGptHasCredential());
+			CodingAgentOperations.INSTANCE.chatGptLogout(state);
+			assertFalse(CodingAgentOperations.INSTANCE.chatGptHasCredential(state));
 		} finally {
 			server.stop(0);
 		}
