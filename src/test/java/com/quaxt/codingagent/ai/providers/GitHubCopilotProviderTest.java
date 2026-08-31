@@ -92,9 +92,11 @@ class GitHubCopilotProviderTest {
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
+			ProviderState provider = ProviderState.GITHUB_COPILOT_OPERATIONS;
 			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
-					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
-			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(models);
+					provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(provider, models);
+			assertEquals(models, provider.models);
 
 			assertEquals("anthropic", CodingAgentOperations.text(
 					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(0), new Context(), new StreamOptions()))));
@@ -145,9 +147,10 @@ class GitHubCopilotProviderTest {
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
+			ProviderState provider = ProviderState.GITHUB_COPILOT_OPERATIONS;
 			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
-					store, URI.create(base), URI.create(base + "/token"), URI.create(base));
-			CodingAgentOperations provider = CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(List.of(opus));
+					provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(provider, List.of(opus));
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("Use adaptive thinking"));
 

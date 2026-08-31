@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import com.quaxt.codingagent.CodingAgentOperations;
+import com.quaxt.codingagent.ai.providers.ProviderState;
 
 class GitHubCopilotAuthTest {
 	@TempDir Path tempDir;
@@ -58,18 +59,22 @@ class GitHubCopilotAuthTest {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
 			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
 			store.fileCredentialStore(tempDir.resolve("auth.json"), null);
-			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
+			ProviderState state = ProviderState.GITHUB_COPILOT_OPERATIONS;
 			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
+			auth.gitHubCopilotAuth(
+					state, store, base, base.resolve("/copilot_internal/v2/token"), base);
 
-			CodingAgentOperations.GitHubCopilotDeviceCode device = auth.gitHubCopilotBeginLogin();
+			CodingAgentOperations.GitHubCopilotDeviceCode device = auth.gitHubCopilotBeginLogin(state);
 			assertEquals("ABCD-EFGH", device.userCode);
-			Credential.OAuthCredential credential = auth.gitHubCopilotCompleteLogin(device);
+			Credential.OAuthCredential credential = auth.gitHubCopilotCompleteLogin(state, device);
 
 			assertEquals("copilot-token", credential.access);
 			assertEquals(java.util.List.of("gpt-5.4"), credential.availableModelIds);
-			assertEquals(1, auth.gitHubCopilotEnableModels(java.util.List.of("gpt-5.4")));
-			assertEquals(java.util.List.of("gpt-5.4"), auth.gitHubCopilotRefreshAvailableModels().availableModelIds);
-			assertEquals("copilot-token", auth.gitHubCopilotResolveToken().accessToken);
+			assertEquals(1, auth.gitHubCopilotEnableModels(state, java.util.List.of("gpt-5.4")));
+			assertEquals(
+					java.util.List.of("gpt-5.4"),
+					auth.gitHubCopilotRefreshAvailableModels(state).availableModelIds);
+			assertEquals("copilot-token", auth.gitHubCopilotResolveToken(state).accessToken);
 			assertEquals(1, tokenRequests.get());
 			assertEquals(1, policyRequests.get());
 		} finally {
@@ -97,10 +102,12 @@ class GitHubCopilotAuthTest {
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"expired-token", "github-token", 0, null, Map.of()));
-			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(store, base, base.resolve("/copilot_internal/v2/token"), base);
+			ProviderState state = ProviderState.GITHUB_COPILOT_OPERATIONS;
 			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
+			auth.gitHubCopilotAuth(
+					state, store, base, base.resolve("/copilot_internal/v2/token"), base);
 
-			IOException error = assertThrows(IOException.class, () -> auth.gitHubCopilotResolveToken());
+			IOException error = assertThrows(IOException.class, () -> auth.gitHubCopilotResolveToken(state));
 
 			assertTrue(error.getMessage().startsWith("502:"));
 		} finally {

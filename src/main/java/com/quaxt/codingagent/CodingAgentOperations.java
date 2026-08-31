@@ -105,6 +105,7 @@ import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.AnthropicProvider;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
 import com.quaxt.codingagent.ai.providers.OpenAiResponsesProvider;
+import com.quaxt.codingagent.ai.providers.ProviderState;
 import com.quaxt.codingagent.ai.stream.AssistantMessageEventStream;
 import com.quaxt.codingagent.ai.stream.EventStream;
 import com.quaxt.codingagent.ai.types.AssistantContent;
@@ -175,13 +176,13 @@ import org.jline.utils.Status;
 import org.jline.utils.WCWidth;
 
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
+import static com.quaxt.codingagent.ai.providers.ProviderState.CHATGPT_OPERATIONS;
+import static com.quaxt.codingagent.ai.providers.ProviderState.GITHUB_COPILOT_OPERATIONS;
+import static com.quaxt.codingagent.ai.providers.ProviderState.GOOGLE_OPERATIONS;
 
 /** Main class. Should contain all application logic to the greatest extent that is reasonable.*/
-public enum CodingAgentOperations implements Provider, CredentialStore {
-    INSTANCE,
-    CHATGPT_OPERATIONS,
-    GOOGLE_OPERATIONS,
-    GITHUB_COPILOT_OPERATIONS;
+public enum CodingAgentOperations implements CredentialStore {
+    INSTANCE;
     private static final String APP_NAME = "codingagent";
     private static final String VERSION = "0.1.0-java";
 
@@ -227,19 +228,8 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private static final Pattern GITHUB_COPILOT_PROXY_ENDPOINT = Pattern.compile("(?:^|;)proxy-ep=([^;]+)");
     private static final long GITHUB_COPILOT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
     private static final String GITHUB_COPILOT_PROVIDER_NAME = "GitHub Copilot";
-    private static final String GITHUB_COPILOT_COMPLETIONS_BASE_URL =
-            "https://api.individual.githubcopilot.com";
-
     private static final String GOOGLE_API = "google-generative-ai";
     private static final String OPENAI_COMPATIBLE_API = "openai-completions";
-
-    /** Identifies which folded provider role an operations carrier represents. */
-    private enum ProviderKind {
-        CHATGPT,
-        GITHUB_COPILOT,
-        GOOGLE,
-        OPENAI_COMPATIBLE
-    }
 
     /** Pending ChatGPT device authorization presented to the user. */
     public static final class ChatGptDeviceCode {
@@ -412,24 +402,10 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private Map<String, List<Model>> byProvider;
     private Map<String, Provider> coreProviders;
 
-    // Folded file credential store and provider-authentication state
+    // Folded file credential store state
     private Path authPath;
     private Path lockPath;
     private Path fallbackAuthPath;
-    private CredentialStore credentials;
-    private URI authBaseUrl;
-    private String clientId;
-    private URI githubBaseUrl;
-    private URI copilotTokenUrl;
-    private URI defaultCopilotBaseUrl;
-
-    // Folded provider state. Each provider remains a distinct operations carrier.
-    private ProviderKind providerKind;
-    private String id;
-    private List<Model> models;
-
-    private AnthropicProvider anthropic;
-    private OpenAiResponsesProvider responses;
 
     // Folded Agent and AgentState state
     private Provider agentProvider;
@@ -1670,22 +1646,22 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Validates the authorization endpoint and client id before binding them to the carrier.
      */
-    public void chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
+    public void chatGptAuth(ProviderState state, CredentialStore credentials, URI authBaseUrl, String clientId) {
         URI validatedBaseUrl = requireAbsoluteHttpUri(authBaseUrl, "authBaseUrl");
         if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("clientId must not be blank");
 
-        this.credentials = credentials;
-        this.authBaseUrl = validatedBaseUrl;
-        this.clientId = clientId;
+        state.credentials = credentials;
+        state.authBaseUrl = validatedBaseUrl;
+        state.clientId = clientId;
     }
 
     /**
      * Starts the Codex device flow. Display the URI and code before completing it.
      */
-    public ChatGptDeviceCode chatGptBeginLogin() throws IOException {
-        ObjectNode request = jsonObject().put("client_id", clientId);
+    public ChatGptDeviceCode chatGptBeginLogin(ProviderState state) throws IOException {
+        ObjectNode request = jsonObject().put("client_id", state.clientId);
         JsonNode response = authPost(
-                authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
+                state.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
                 Map.of("Accept", "application/json"),
                 Json.MAPPER.writeValueAsBytes(request),
                 false);
@@ -1704,7 +1680,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return new ChatGptDeviceCode(
                 deviceAuthId,
                 userCode,
-                authBaseUrl.resolve("/codex/device"),
+                state.authBaseUrl.resolve("/codex/device"),
                 interval,
                 System.currentTimeMillis() + CHATGPT_DEVICE_CODE_LIFETIME_MS);
     }
@@ -1712,7 +1688,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Waits for browser authorization, exchanges the code, and saves refreshable tokens.
      */
-    public Credential.OAuthCredential chatGptCompleteLogin(ChatGptDeviceCode device)
+    public Credential.OAuthCredential chatGptCompleteLogin(ProviderState state, ChatGptDeviceCode device)
             throws IOException, InterruptedException {
         JsonNode authorization = null;
         ObjectNode request = jsonObject()
@@ -1721,7 +1697,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         while (System.currentTimeMillis() < device.expiresAtMs) {
             try {
                 authorization = authPost(
-                        authBaseUrl.resolve("/api/accounts/deviceauth/token"),
+                        state.authBaseUrl.resolve("/api/accounts/deviceauth/token"),
                         Map.of("Accept", "application/json"),
                         Json.MAPPER.writeValueAsBytes(request),
                         false);
@@ -1740,23 +1716,23 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         form.put("grant_type", "authorization_code");
         form.put("code", requiredAuthText(authorization, "authorization_code", "OpenAI"));
         form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
-        form.put("client_id", clientId);
+        form.put("client_id", state.clientId);
         form.put("code_verifier", requiredAuthText(authorization, "code_verifier", "OpenAI"));
         Credential.OAuthCredential credential =
                 chatGptCredentialFromTokenResponse(authPost(
-                        authBaseUrl.resolve("/oauth/token"),
+                        state.authBaseUrl.resolve("/oauth/token"),
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), null);
-        modifyCredential(credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
+        modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
         return credential;
     }
 
     /**
      * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
      */
-    public ChatGptToken chatGptResolveToken() throws IOException {
-        Credential credential = readCredential(credentials, CHATGPT_PROVIDER_ID)
+    public ChatGptToken chatGptResolveToken(ProviderState state) throws IOException {
+        Credential credential = readCredential(state.credentials, CHATGPT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
@@ -1767,23 +1743,23 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         Map<String, String> form = new LinkedHashMap<>();
         form.put("grant_type", "refresh_token");
         form.put("refresh_token", oauth.refresh);
-        form.put("client_id", clientId);
+        form.put("client_id", state.clientId);
         Credential.OAuthCredential refreshed =
                 chatGptCredentialFromTokenResponse(authPost(
-                        authBaseUrl.resolve("/oauth/token"),
+                        state.authBaseUrl.resolve("/oauth/token"),
                         Map.of("Accept", "application/json"),
                         mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
                         true), oauth);
-        modifyCredential(credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
+        modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
         return chatGptToken(refreshed);
     }
 
-    public boolean chatGptHasCredential() throws IOException {
-        return hasRefreshCredential(credentials, CHATGPT_PROVIDER_ID);
+    public boolean chatGptHasCredential(ProviderState state) throws IOException {
+        return hasRefreshCredential(state.credentials, CHATGPT_PROVIDER_ID);
     }
 
-    public void chatGptLogout() throws IOException {
-        deleteCredential(credentials, CHATGPT_PROVIDER_ID);
+    public void chatGptLogout(ProviderState state) throws IOException {
+        deleteCredential(state.credentials, CHATGPT_PROVIDER_ID);
     }
 
     private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
@@ -1878,19 +1854,23 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Validates every endpoint before binding it to the carrier. Visible for deterministic HTTP tests.
      */
     public void gitHubCopilotAuth(
-            CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
-        this.credentials = credentials;
-        this.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
-        this.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
-        this.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
+            ProviderState state,
+            CredentialStore credentials,
+            URI githubBaseUrl,
+            URI copilotTokenUrl,
+            URI defaultCopilotBaseUrl) {
+        state.credentials = credentials;
+        state.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
+        state.copilotTokenUrl = requireAbsoluteHttpUri(copilotTokenUrl, "copilotTokenUrl");
+        state.defaultCopilotBaseUrl = requireAbsoluteHttpUri(defaultCopilotBaseUrl, "defaultCopilotBaseUrl");
     }
 
     /**
      * Starts the device flow. Display the resulting URI and code before completing the login.
      */
-    public GitHubCopilotDeviceCode gitHubCopilotBeginLogin() throws IOException {
+    public GitHubCopilotDeviceCode gitHubCopilotBeginLogin(ProviderState state) throws IOException {
         JsonNode response = authPost(
-                githubBaseUrl.resolve("/login/device/code"),
+                state.githubBaseUrl.resolve("/login/device/code"),
                 Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                 mcpFormEncode(Map.of("client_id", GITHUB_COPILOT_CLIENT_ID, "scope", "read:user"))
                         .getBytes(StandardCharsets.UTF_8),
@@ -1911,12 +1891,13 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Polls GitHub, exchanges the durable GitHub token for a Copilot token, and saves the credential.
      */
-    public Credential.OAuthCredential gitHubCopilotCompleteLogin(GitHubCopilotDeviceCode device) throws IOException, InterruptedException {
+    public Credential.OAuthCredential gitHubCopilotCompleteLogin(
+            ProviderState state, GitHubCopilotDeviceCode device) throws IOException, InterruptedException {
         String githubAccessToken = null;
         int intervalSeconds = device.intervalSeconds;
         while (System.currentTimeMillis() < device.expiresAtMs) {
             JsonNode response = authPost(
-                    githubBaseUrl.resolve("/login/oauth/access_token"),
+                    state.githubBaseUrl.resolve("/login/oauth/access_token"),
                     Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                     mcpFormEncode(Map.of(
                             "client_id", GITHUB_COPILOT_CLIENT_ID,
@@ -1945,56 +1926,56 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         if (githubAccessToken == null) {
             throw new IOException("GitHub device authorization expired before completion");
         }
-        Credential.OAuthCredential credential = createCopilotCredential(githubAccessToken, null);
+        Credential.OAuthCredential credential = createCopilotCredential(state, githubAccessToken, null);
         try {
-            credential = withCopilotAvailableModels(credential);
+            credential = withCopilotAvailableModels(state, credential);
         } catch (IOException ignored) {
             // The Copilot token is valid even if its optional model catalog is transiently unavailable.
         }
         Credential.OAuthCredential saved = credential;
-        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
+        modifyCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
         return credential;
     }
 
     /**
      * Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary.
      */
-    public CopilotToken gitHubCopilotResolveToken() throws IOException {
-        Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
+    public CopilotToken gitHubCopilotResolveToken(ProviderState state) throws IOException {
+        Credential credential = readCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
         }
         if (!(oauth.expires <= System.currentTimeMillis()) && !oauth.access.isBlank()) {
-            return copilotToken(oauth);
+            return copilotToken(state, oauth);
         }
-        Credential.OAuthCredential refreshed = createCopilotCredential(oauth.refresh, oauth.availableModelIds);
+        Credential.OAuthCredential refreshed = createCopilotCredential(state, oauth.refresh, oauth.availableModelIds);
         try {
-            refreshed = withCopilotAvailableModels(refreshed);
+            refreshed = withCopilotAvailableModels(state, refreshed);
         } catch (IOException ignored) {
             // Retain the last known entitlement list if model discovery cannot be refreshed.
         }
         Credential.OAuthCredential saved = refreshed;
-        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
-        return copilotToken(refreshed);
+        modifyCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
+        return copilotToken(state, refreshed);
     }
 
     /**
      * Reports whether a saved GitHub OAuth credential can be refreshed.
      */
-    private boolean gitHubCopilotHasCredential() throws IOException {
-        return hasRefreshCredential(credentials, GITHUB_COPILOT_PROVIDER_ID);
+    private boolean gitHubCopilotHasCredential(ProviderState state) throws IOException {
+        return hasRefreshCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
-    private void gitHubCopilotLogout() throws IOException {
-        deleteCredential(credentials, GITHUB_COPILOT_PROVIDER_ID);
+    private void gitHubCopilotLogout(ProviderState state) throws IOException {
+        deleteCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID);
     }
 
     /**
      * Enables the listed Copilot model policies and reports how many policy requests GitHub accepted.
      */
-    public int gitHubCopilotEnableModels(List<String> modelIds) throws IOException {
-        CopilotToken token = gitHubCopilotResolveToken();
+    public int gitHubCopilotEnableModels(ProviderState state, List<String> modelIds) throws IOException {
+        CopilotToken token = gitHubCopilotResolveToken(state);
         int enabled = 0;
         for (String modelId : modelIds) {
             URI policyUrl = token.baseUrl.resolve("/models/" + encodeUrlPathSegment(modelId) + "/policy");
@@ -2020,10 +2001,10 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Re-fetches and persists the enabled-model list without minting a new Copilot API token.
      */
-    public CopilotToken gitHubCopilotRefreshAvailableModels()
+    public CopilotToken gitHubCopilotRefreshAvailableModels(ProviderState state)
             throws IOException {
-        CopilotToken current = gitHubCopilotResolveToken();
-        Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
+        CopilotToken current = gitHubCopilotResolveToken(state);
+        Credential credential = readCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
             throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
@@ -2032,19 +2013,20 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 oauth.access,
                 oauth.refresh,
                 oauth.expires,
-                List.copyOf(fetchCopilotAvailableModelIds(current.accessToken)),
+                List.copyOf(fetchCopilotAvailableModelIds(state, current.accessToken)),
                 Map.of());
-        modifyCredential(credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> refreshed);
-        return copilotToken(refreshed);
+        modifyCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> refreshed);
+        return copilotToken(state, refreshed);
     }
 
-    private Credential.OAuthCredential createCopilotCredential(String githubAccessToken, List<String> availableModelIds) throws IOException {
+    private Credential.OAuthCredential createCopilotCredential(
+            ProviderState state, String githubAccessToken, List<String> availableModelIds) throws IOException {
         if (githubAccessToken == null || githubAccessToken.isBlank()) {
             throw new IOException("GitHub returned an empty access token");
         }
         JsonNode response;
         HttpTransport.Response http = httpGet(
-                copilotTokenUrl.toString(), copilotHeaders("token " + githubAccessToken), null, null);
+                state.copilotTokenUrl.toString(), copilotHeaders("token " + githubAccessToken), null, null);
         try {
             response = Json.MAPPER.readTree(http.body);
         } finally {
@@ -2062,15 +2044,16 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 Map.of());
     }
 
-    private Credential.OAuthCredential withCopilotAvailableModels(Credential.OAuthCredential credential) throws IOException {
-        List<String> available = fetchCopilotAvailableModelIds(credential.access);
+    private Credential.OAuthCredential withCopilotAvailableModels(
+            ProviderState state, Credential.OAuthCredential credential) throws IOException {
+        List<String> available = fetchCopilotAvailableModelIds(state, credential.access);
         return new Credential.OAuthCredential(
                 credential.access, credential.refresh, credential.expires, List.copyOf(available), Map.of());
     }
 
-    private List<String> fetchCopilotAvailableModelIds(String copilotToken)
+    private List<String> fetchCopilotAvailableModelIds(ProviderState state, String copilotToken)
             throws IOException {
-        URI modelsUrl = copilotBaseUrlFromToken(copilotToken).resolve("/models");
+        URI modelsUrl = copilotBaseUrlFromToken(state, copilotToken).resolve("/models");
         JsonNode response;
         HttpTransport.Response http = httpGet(modelsUrl.toString(), copilotModelHeaders(copilotToken), 5_000, null);
         try {
@@ -2099,29 +2082,29 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             }
         }
         return pickerEnabled.isEmpty()
-                && copilotBaseUrlFromToken(copilotToken)
+                && copilotBaseUrlFromToken(state, copilotToken)
                 .toString()
                 .equals(GITHUB_COPILOT_DEFAULT_BASE_URL)
                 ? List.copyOf(policyEnabled)
                 : List.copyOf(pickerEnabled);
     }
 
-    private CopilotToken copilotToken(Credential.OAuthCredential credential) {
+    private CopilotToken copilotToken(ProviderState state, Credential.OAuthCredential credential) {
         List<String> availableModelIds = credential.availableModelIds;
         return new CopilotToken(
                 credential.access,
-                copilotBaseUrlFromToken(credential.access),
+                copilotBaseUrlFromToken(state, credential.access),
                 availableModelIds == null ? null : List.copyOf(availableModelIds));
     }
 
-    private URI copilotBaseUrlFromToken(String token) {
+    private URI copilotBaseUrlFromToken(ProviderState state, String token) {
         Matcher match = GITHUB_COPILOT_PROXY_ENDPOINT.matcher(token);
         if (!match.find()) {
-            return defaultCopilotBaseUrl;
+            return state.defaultCopilotBaseUrl;
         }
         String host = match.group(1);
         if (!host.matches("[A-Za-z0-9.-]+")) {
-            return defaultCopilotBaseUrl;
+            return state.defaultCopilotBaseUrl;
         }
         return URI.create("https://" + host.replaceFirst("^proxy\\.", "api."));
     }
@@ -2419,16 +2402,18 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 .toList();
     }
 
-    private CodingAgentOperations chatGptProvider(List<Model> models, OpenAiResponsesProvider responses) {
-        providerKind = ProviderKind.CHATGPT;
-        this.models = models;
-        this.responses = responses;
-        return this;
+    private ProviderState chatGptProvider(
+            ProviderState state, List<Model> models, OpenAiResponsesProvider responses) {
+        state.id = CHATGPT_PROVIDER_ID;
+        state.models = List.copyOf(models);
+        state.responses = responses;
+        return state;
     }
 
-    public void googleProvider(List<Model> models) {
-        providerKind = ProviderKind.GOOGLE;
-        this.models = models;
+    public ProviderState googleProvider(ProviderState state, List<Model> models) {
+        state.id = "google";
+        state.models = List.copyOf(models);
+        return state;
     }
 
     private Provider requireCoreProvider(String id) {
@@ -2445,8 +2430,8 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /**
-     * Builds the core-provider registry with an independent operations carrier
-     * for every folded provider implementation.
+     * Builds the core-provider registry with independent state for each provider
+     * implementation hosted by this operations enum.
      */
     public void initializeCoreProviders() {
         loadBundledModelCatalog();
@@ -2478,10 +2463,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                         OpenAiResponsesProvider.RequestProfile.STANDARD));
 
         List<Model> chatGptModels = chatGptSubscriptionModels();
-        CHATGPT_OPERATIONS.chatGptAuth(this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+        chatGptAuth(CHATGPT_OPERATIONS, this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
         providers.put(
                 CHATGPT_PROVIDER_ID,
-                CHATGPT_OPERATIONS.chatGptProvider(
+                chatGptProvider(
+                        CHATGPT_OPERATIONS,
                         chatGptModels,
                         new OpenAiResponsesProvider(
                                 CHATGPT_PROVIDER_ID,
@@ -2491,19 +2477,24 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                 null,
                                 OpenAiResponsesProvider.RequestProfile.CODEX)));
 
-        GOOGLE_OPERATIONS.googleProvider(List.copyOf(catalogModelsForProvider("google").stream()
-                .filter(model -> model.api.equals(GOOGLE_API))
-                .toList()));
-        providers.put("google", GOOGLE_OPERATIONS);
+        providers.put(
+                "google",
+                googleProvider(
+                        GOOGLE_OPERATIONS,
+                        catalogModelsForProvider("google").stream()
+                                .filter(model -> model.api.equals(GOOGLE_API))
+                                .toList()));
 
-        GITHUB_COPILOT_OPERATIONS.gitHubCopilotAuth(
+        gitHubCopilotAuth(
+                GITHUB_COPILOT_OPERATIONS,
                 this,
                 URI.create("https://github.com"),
                 URI.create("https://api.github.com/copilot_internal/v2/token"),
                 URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
         providers.put(
                 GITHUB_COPILOT_PROVIDER_ID,
-                GITHUB_COPILOT_OPERATIONS.newGitHubCopilotProvider(
+                newGitHubCopilotProvider(
+                        GITHUB_COPILOT_OPERATIONS,
                         catalogModelsForProvider(GITHUB_COPILOT_PROVIDER_ID)));
         coreProviders(Map.copyOf(providers));
     }
@@ -3053,18 +3044,17 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     // ------------------------------------------------- openai chat completions
 
     /**
-     * Validates the identity and endpoint of a Chat Completions-compatible service.
+     * Configures the identity and models of a Chat Completions-compatible service.
      */
-    public void openAiCompatibleProvider(
-            List<Model> models) {
-        providerKind = ProviderKind.OPENAI_COMPATIBLE;
-        this.id = requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "id");
-        requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_NAME, "name");
-        trimTrailingSlash(requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_COMPLETIONS_BASE_URL, "baseUrl"));
-        this.models = List.copyOf(models);
+    public ProviderState openAiCompatibleProvider(
+            ProviderState state, String id, List<Model> models) {
+        state.id = requireNonBlank(id, "id");
+        state.models = List.copyOf(models);
+        return state;
     }
 
-    private AssistantMessageEventStream openAiCompatibleStream(Model model, Context context, StreamOptions options) {
+    private AssistantMessageEventStream openAiCompatibleStream(
+            ProviderState state, Model model, Context context, StreamOptions options) {
         if (!model.api.equals(OPENAI_COMPATIBLE_API)) {
             throw new IllegalArgumentException("Model " + model + " is not a Chat Completions model");
         }
@@ -3073,11 +3063,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             headers.putAll(requestOptions.headers);
             String key = requestOptions.apiKey;
             if (key == null || key.isBlank()) {
-                key = resolveSystemApiKey(this.id).orElse(null);
+                key = resolveSystemApiKey(state.id).orElse(null);
             }
             if (!headers.containsKey("Authorization") && !headers.containsKey("authorization")) {
                 if (key == null || key.isBlank()) {
-                    throw new IllegalStateException("No API key for provider: " + this.id);
+                    throw new IllegalStateException("No API key for provider: " + state.id);
                 }
                 headers.put("Authorization", "Bearer " + key);
             }
@@ -3775,28 +3765,31 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Builds the GitHub Copilot router provider over its catalog slice.
      */
-    public CodingAgentOperations newGitHubCopilotProvider(List<Model> models) {
+    public ProviderState newGitHubCopilotProvider(ProviderState state, List<Model> models) {
         List<Model> all = List.copyOf(models);
         List<Model> models1 = copilotModelsFor(all, OpenAiResponsesProvider.API);
-        this.models = all;
+        state.id = GITHUB_COPILOT_PROVIDER_ID;
+        state.models = all;
 
-        anthropic = new AnthropicProvider(
+        state.anthropic = new AnthropicProvider(
                         GITHUB_COPILOT_PROVIDER_ID,
                         GITHUB_COPILOT_PROVIDER_NAME,
                         List.copyOf(copilotModelsFor(all, AnthropicProvider.API)),
                         List.of(),
                         true);
         openAiCompatibleProvider(
+                state,
+                GITHUB_COPILOT_PROVIDER_ID,
                 copilotModelsFor(all, OPENAI_COMPATIBLE_API));
-        responses = new OpenAiResponsesProvider(
+        state.responses = new OpenAiResponsesProvider(
                         GITHUB_COPILOT_PROVIDER_ID,
                         GITHUB_COPILOT_PROVIDER_NAME,
                         List.copyOf(models1),
                         List.of(),
                         null,
                         OpenAiResponsesProvider.RequestProfile.STANDARD);
-        providerKind = ProviderKind.GITHUB_COPILOT;
-        return this;
+        state.models = all;
+        return state;
     }
 
     private static List<Model> copilotModelsFor(List<Model> models, String api) {
@@ -3806,26 +3799,27 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Filters the catalog to models GitHub reports as enabled for the signed-in account.
      */
-    private List<Model> gitHubCopilotAvailableModels() throws IOException {
-        List<String> enabled = gitHubCopilotResolveToken().availableModelIds;
-        return filterEnabledCopilotModels(enabled);
+    private List<Model> gitHubCopilotAvailableModels(ProviderState state) throws IOException {
+        List<String> enabled = gitHubCopilotResolveToken(state).availableModelIds;
+        return filterEnabledCopilotModels(state, enabled);
     }
 
     /**
      * Enables catalog model policies, then refreshes the account's enabled-model list.
      */
-    private CopilotModelAccess gitHubCopilotEnableAndRefreshModels() throws IOException {
+    private CopilotModelAccess gitHubCopilotEnableAndRefreshModels(ProviderState state) throws IOException {
         int policiesEnabled =
-                gitHubCopilotEnableModels(models.stream().map(model -> model.id).toList());
-        List<Model> available = filterEnabledCopilotModels(gitHubCopilotRefreshAvailableModels().availableModelIds);
+                gitHubCopilotEnableModels(state, state.models.stream().map(model -> model.id).toList());
+        List<Model> available =
+                filterEnabledCopilotModels(state, gitHubCopilotRefreshAvailableModels(state).availableModelIds);
         return new CopilotModelAccess(policiesEnabled, List.copyOf(available));
     }
 
-    private List<Model> filterEnabledCopilotModels(List<String> enabled) {
+    private List<Model> filterEnabledCopilotModels(ProviderState state, List<String> enabled) {
         if (enabled == null) {
-            return models;
+            return state.models;
         }
-        return models.stream().filter(model -> enabled.contains(model.id)).toList();
+        return state.models.stream().filter(model -> enabled.contains(model.id)).toList();
     }
 
     private static List<String> fauxChunks(String value) {
@@ -3851,7 +3845,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private static List<Model> providerModels(Provider provider) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropic.models;
-            case CodingAgentOperations folded -> folded.models;
+            case ProviderState state -> state.models;
             case FauxProvider faux -> faux.models;
             case OpenAiResponsesProvider responses -> responses.models;
             default -> throw unknownProvider(provider);
@@ -3867,13 +3861,13 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             Provider provider, Model model, Context context, StreamOptions options) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
-            case CodingAgentOperations chatGpt when chatGpt.providerKind == ProviderKind.CHATGPT -> {
+            case ProviderState chatGpt when chatGpt == CHATGPT_OPERATIONS -> {
                 if (!model.provider.equals(CHATGPT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a ChatGPT subscription model");
                 }
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
                 try {
-                    configureCodexRequest(requestOptions, chatGpt.chatGptResolveToken());
+                    configureCodexRequest(requestOptions, chatGptResolveToken(chatGpt));
                 } catch (IOException error) {
                     yield providerErrorStream(model, error);
                 }
@@ -4001,14 +3995,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 });
                 yield stream;
             }
-            case CodingAgentOperations copilot when copilot.providerKind == ProviderKind.GITHUB_COPILOT -> {
+            case ProviderState copilot when copilot == GITHUB_COPILOT_OPERATIONS -> {
                 if (!model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a GitHub Copilot model");
                 }
                 StreamOptions requestOptions = options == null ? new StreamOptions() : copyStreamOptions(options);
                 if (requestOptions.apiKey == null || requestOptions.apiKey.isBlank()) {
                     try {
-                        CopilotToken token = copilot.gitHubCopilotResolveToken();
+                        CopilotToken token = gitHubCopilotResolveToken(copilot);
                         requestOptions.apiKey = token.accessToken;
                         requestOptions.baseUrl = token.baseUrl.toString();
                     } catch (IOException error) {
@@ -4018,12 +4012,12 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 yield switch (model.api) {
                     case "anthropic-messages" -> anthropicStream(copilot.anthropic, model, context, requestOptions);
                     case "openai-completions" ->
-                            copilot.openAiCompatibleStream(model, context, requestOptions);
+                            openAiCompatibleStream(copilot, model, context, requestOptions);
                     case "openai-responses" -> openAiResponsesStream(copilot.responses, model, context, requestOptions);
                     default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
                 };
             }
-            case CodingAgentOperations google when google.providerKind == ProviderKind.GOOGLE -> {
+            case ProviderState google when google == GOOGLE_OPERATIONS -> {
                 if (!model.api.equals(GOOGLE_API)) {
                     throw new IllegalArgumentException("Model " + model + " is not a Google Generative AI model");
                 }
@@ -4217,8 +4211,8 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                     });
                 });
             }
-            case CodingAgentOperations compatible when compatible.providerKind == ProviderKind.OPENAI_COMPATIBLE ->
-                    compatible.openAiCompatibleStream(model, context, options);
+            case ProviderState compatible when compatible == ProviderState.OPENAI_COMPATIBLE_OPERATIONS ->
+                    openAiCompatibleStream(compatible, model, context, options);
             case OpenAiResponsesProvider responses -> openAiResponsesStream(responses, model, context, options);
             default -> throw unknownProvider(provider);
         };
@@ -9912,11 +9906,12 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                         println("Saved model " + savedSettings.defaultProvider + "/" + savedSettings.defaultModel
                                                 + " is unavailable; selecting a fallback.");
                                     } else if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                        ProviderState copilot = (ProviderState)
                                                 requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                         try {
-                                            model = copilot.gitHubCopilotHasCredential()
-                                                    ? findModelIn(copilot.gitHubCopilotAvailableModels(), model.provider, model.id)
+                                            model = gitHubCopilotHasCredential(copilot)
+                                                    ? findModelIn(
+                                                            gitHubCopilotAvailableModels(copilot), model.provider, model.id)
                                                     : null;
                                             if (model == null) {
                                                 println("Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
@@ -9927,8 +9922,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                         }
                                     } else if (model.provider.equals(CHATGPT_PROVIDER_ID)) {
                                         try {
-                                            if (!((CodingAgentOperations) requireCoreProvider(CHATGPT_PROVIDER_ID))
-                                                    .chatGptHasCredential()) model = null;
+                                            ProviderState chatGpt =
+                                                    (ProviderState) requireCoreProvider(CHATGPT_PROVIDER_ID);
+                                            if (!chatGptHasCredential(chatGpt)) model = null;
                                         } catch (IOException error) {
                                             println("Could not restore the saved ChatGPT model: " + error.getMessage());
                                             model = null;
@@ -9940,21 +9936,21 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                     break restore;
                                 }
 
-                                CodingAgentOperations chatGpt = (CodingAgentOperations)
+                                ProviderState chatGpt = (ProviderState)
                                         requireCoreProvider(CHATGPT_PROVIDER_ID);
                                 try {
-                                    if (chatGpt.chatGptHasCredential() && !chatGpt.models.isEmpty()) {
+                                    if (chatGptHasCredential(chatGpt) && !chatGpt.models.isEmpty()) {
                                         configureShellModel(preferredChatGptModel(chatGpt.models), true);
                                         break restore;
                                     }
                                 } catch (IOException error) {
                                     println("ChatGPT login needs attention: " + error.getMessage());
                                 }
-                                CodingAgentOperations copilot = (CodingAgentOperations)
+                                ProviderState copilot = (ProviderState)
                                         requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                 try {
-                                    if (!copilot.gitHubCopilotHasCredential()) break restore;
-                                    Model fallback = preferredCopilotModel(copilot.gitHubCopilotAvailableModels());
+                                    if (!gitHubCopilotHasCredential(copilot)) break restore;
+                                    Model fallback = preferredCopilotModel(gitHubCopilotAvailableModels(copilot));
                                     if (fallback == null) {
                                         println("GitHub Copilot has no enabled coding models. Run /login to refresh access.");
                                     } else {
@@ -10127,13 +10123,13 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                                                 + ". Using " + model + ".");
                                                     }
                                                     if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                                        ProviderState copilot = (ProviderState)
                                                                 requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                                         Model enabled = null;
                                                         try {
-                                                            if (copilot.gitHubCopilotHasCredential()) {
+                                                            if (gitHubCopilotHasCredential(copilot)) {
                                                                 enabled = findModelIn(
-                                                                        copilot.gitHubCopilotAvailableModels(),
+                                                                        gitHubCopilotAvailableModels(copilot),
                                                                         model.provider,
                                                                         model.id);
                                                             }
@@ -10190,14 +10186,15 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                             } else {
                                                 switch (choice.trim().toLowerCase(Locale.ROOT)) {
                                                     case "1", "github", "github copilot", "copilot" -> {
-                                                        CodingAgentOperations copilot = (CodingAgentOperations)
+                                                        ProviderState copilot = (ProviderState)
                                                                 requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-                                                        GitHubCopilotDeviceCode device = copilot.gitHubCopilotBeginLogin();
+                                                        GitHubCopilotDeviceCode device = gitHubCopilotBeginLogin(copilot);
                                                         println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println("Waiting for GitHub authorization...");
-                                                        copilot.gitHubCopilotCompleteLogin(device);
+                                                        gitHubCopilotCompleteLogin(copilot, device);
                                                         println("Enabling GitHub Copilot models...");
-                                                        CopilotModelAccess access = copilot.gitHubCopilotEnableAndRefreshModels();
+                                                        CopilotModelAccess access =
+                                                                gitHubCopilotEnableAndRefreshModels(copilot);
                                                         if (access.policiesEnabled < copilot.models.size()) {
                                                             println("Some GitHub Copilot models are unavailable for this account.");
                                                         }
@@ -10235,12 +10232,12 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                                     }
                                                     case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
                                                          "chatgpt plus/pro" -> {
-                                                        CodingAgentOperations chatGpt = (CodingAgentOperations)
+                                                        ProviderState chatGpt = (ProviderState)
                                                                 requireCoreProvider(CHATGPT_PROVIDER_ID);
-                                                        ChatGptDeviceCode device = chatGpt.chatGptBeginLogin();
+                                                        ChatGptDeviceCode device = chatGptBeginLogin(chatGpt);
                                                         println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                                         println("Waiting for ChatGPT authorization...");
-                                                        chatGpt.chatGptCompleteLogin(device);
+                                                        chatGptCompleteLogin(chatGpt, device);
                                                         List<Model> models1 = chatGpt.models;
                                                         Model model = shellSavedModelIn(models1);
                                                         if (model == null) {
@@ -10261,8 +10258,8 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                         case "/logout" -> {
                                             try {
                                                 if (agentConfigured && selectedModel.provider.equals(CHATGPT_PROVIDER_ID)) {
-                                                    ((CodingAgentOperations) requireCoreProvider(CHATGPT_PROVIDER_ID))
-                                                            .chatGptLogout();
+                                                    chatGptLogout(
+                                                            (ProviderState) requireCoreProvider(CHATGPT_PROVIDER_ID));
                                                     agentConfigured = false;
                                                     println("ChatGPT credentials removed. Run /login or /resume to continue.");
                                                 } else if (agentConfigured && selectedModel.provider.equals("openai")) {
@@ -10270,8 +10267,8 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                                     agentConfigured = false;
                                                     println("OpenAI API key removed. Run /login or /resume to continue.");
                                                 } else {
-                                                    ((CodingAgentOperations) requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID))
-                                                            .gitHubCopilotLogout();
+                                                    gitHubCopilotLogout((ProviderState)
+                                                            requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID));
                                                     if (agentConfigured
                                                             && selectedModel.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                                                         agentConfigured = false;
@@ -10291,12 +10288,13 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                                     models2.add(model1);
                                                 }
                                             }
-                                            CodingAgentOperations copilot = (CodingAgentOperations)
+                                            ProviderState copilot = (ProviderState)
                                                     requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                             try {
-                                                if (copilot.gitHubCopilotHasCredential()) {
+                                                if (gitHubCopilotHasCredential(copilot)) {
                                                     println("Refreshing GitHub Copilot models...");
-                                                    models2.addAll(copilot.gitHubCopilotEnableAndRefreshModels().models);
+                                                    models2.addAll(
+                                                            gitHubCopilotEnableAndRefreshModels(copilot).models);
                                                 } else {
                                                     models2.addAll(copilot.models);
                                                 }
@@ -10304,7 +10302,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                                                 println("Could not refresh GitHub Copilot model access: " + error.getMessage());
                                                 models2.addAll(copilot.models);
                                             }
-                                            models2.addAll(((CodingAgentOperations)
+                                            models2.addAll(((ProviderState)
                                                     requireCoreProvider(CHATGPT_PROVIDER_ID)).models);
                                             List<Model> models1 = List.copyOf(models2);
                                             List<SelectItem<Model>> items =
@@ -11726,9 +11724,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     // ------------------------------------------------------------- rpc server
 
     private void resetRpcAgent(Model model) throws IOException {
-        requireCoreProvider(model.provider);
+        Provider provider = requireCoreProvider(model.provider);
         agentState(systemPrompt == null ? "" : systemPrompt, model);
-        agent(this);
+        agent(provider);
         configureBuiltInTools(Path.of("."), systemPrompt);
         tools.addAll(mcpTools());
         subscribe(event -> {

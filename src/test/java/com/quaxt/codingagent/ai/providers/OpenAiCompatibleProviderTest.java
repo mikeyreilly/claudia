@@ -36,10 +36,10 @@ class OpenAiCompatibleProviderTest {
 		return options;
 	}
 
-	private static CodingAgentOperations openAiCompatibleProvider(
+	private static ProviderState openAiCompatibleProvider(
 			String id, String name, String baseUrl, List<Model> models) {
-		CodingAgentOperations.INSTANCE.openAiCompatibleProvider( models);
-		return CodingAgentOperations.INSTANCE;
+		return CodingAgentOperations.INSTANCE.openAiCompatibleProvider(
+				ProviderState.OPENAI_COMPATIBLE_OPERATIONS, id, models);
 	}
 
 	@Test
@@ -61,7 +61,7 @@ class OpenAiCompatibleProviderTest {
 		});
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 			Context context = new Context("system instructions");
 			context.messages.add(CodingAgentOperations.userMessage("hello"));
 
@@ -103,7 +103,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
 					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
@@ -128,7 +128,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
 					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
@@ -155,7 +155,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessageEventStream stream =
 					CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key"));
@@ -190,7 +190,7 @@ class OpenAiCompatibleProviderTest {
 				"""));
 		try {
 			Model model = model(url(server));
-			CodingAgentOperations provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", url(server), List.of(model));
 
 			AssistantMessage result =
 					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), options("test-key")));
