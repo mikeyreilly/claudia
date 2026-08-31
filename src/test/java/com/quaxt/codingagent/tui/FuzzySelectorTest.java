@@ -51,6 +51,24 @@ class FuzzySelectorTest {
 	}
 
 	@Test
+	void restoresFirstSelectionWhenBackspaceClearsSearchWithoutCurrentItem() {
+		List<SelectItem<String>> items = List.of(
+				new SelectItem<>("one", "One", "", "One"),
+				new SelectItem<>("two", "Two", "", "Two"));
+		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Options", items, -1, true);
+
+		CodingAgentOperations.handleFuzzySelectorInput(
+				selector, new TuiInput.Key(TuiInput.KeyType.CHARACTER, "o"));
+		CodingAgentOperations.handleFuzzySelectorInput(
+				selector, CodingAgentOperations.key(TuiInput.KeyType.BACKSPACE));
+
+		assertEquals("", selector.query.toString());
+		assertEquals(items, selector.filteredItems);
+		assertEquals(0, selector.selectedIndex);
+		assertNull(selector.currentItem);
+	}
+
+	@Test
 	void rendersAWindowedListWithCurrentAndNavigationHints() {
 		List<SelectItem<Integer>> items = java.util.stream.IntStream.range(0, 20)
 				.mapToObj(index -> new SelectItem<>(index, "Model " + index, "Description " + index,

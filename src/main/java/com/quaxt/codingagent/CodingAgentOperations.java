@@ -8625,7 +8625,9 @@ public enum CodingAgentOperations implements CredentialStore {
                                 selector.filteredItems = fuzzyFilter(
                                         selector.items, selector.query.toString(), item -> item.searchText);
                                 if (selector.query.isEmpty()) {
-                                    int currentIndex = selector.filteredItems.indexOf(selector.currentItem);
+                                    int currentIndex = selector.currentItem == null
+                                            ? -1
+                                            : selector.filteredItems.indexOf(selector.currentItem);
                                     selector.selectedIndex = Math.max(currentIndex, 0);
                                 } else {
                                     selector.selectedIndex = 0;
