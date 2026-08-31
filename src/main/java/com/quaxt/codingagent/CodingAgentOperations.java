@@ -198,7 +198,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
 
     // ChatGPT authentication and provider
     private static final String CHATGPT_PROVIDER_ID = "chatgpt";
-    private static final URI CHATGPT_CODEX_API_BASE_URL = URI.create("https://chatgpt.com/backend-api/codex");
+    public static final URI CHATGPT_CODEX_API_BASE_URL = URI.create("https://chatgpt.com/backend-api/codex");
     private static final String CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
     private static final String CHATGPT_ACCOUNT_ID = "accountId";
     private static final long CHATGPT_REFRESH_SKEW_MS = 5 * 60 * 1000L;
@@ -214,7 +214,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             "gpt-5.6-terra");
 
     // GitHub Copilot authentication and provider
-    private static final String GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+    public static final String GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
     private static final String GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
     private static final String GITHUB_COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
     private static final String GITHUB_COPILOT_DEFAULT_BASE_URL = "https://api.individual.githubcopilot.com";
@@ -236,9 +236,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /** Pending ChatGPT device authorization presented to the user. */
-    private static final class ChatGptDeviceCode {
+    public static final class ChatGptDeviceCode {
         private String deviceAuthId;
-        private String userCode;
+        public String userCode;
         private URI verificationUri;
         private int intervalSeconds;
         private long expiresAtMs;
@@ -276,11 +276,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /** A current ChatGPT bearer token plus the subscription account id. */
-    private static final class ChatGptToken {
-        private String accessToken;
-        private String accountId;
+    public static final class ChatGptToken {
+        public String accessToken;
+        public String accountId;
 
-        private ChatGptToken(String accessToken, String accountId) {
+        public ChatGptToken(String accessToken, String accountId) {
             this.accessToken = accessToken;
             this.accountId = accountId;
         }
@@ -304,9 +304,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /** Pending GitHub device authorization presented to the user. */
-    private static final class GitHubCopilotDeviceCode {
+    public static final class GitHubCopilotDeviceCode {
         private String deviceCode;
-        private String userCode;
+        public String userCode;
         private URI verificationUri;
         private int intervalSeconds;
         private long expiresAtMs;
@@ -344,10 +344,10 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /** A current derived Copilot bearer token plus its API endpoint. */
-    private static final class CopilotToken {
-        private String accessToken;
+    public static final class CopilotToken {
+        public String accessToken;
         private URI baseUrl;
-        private List<String> availableModelIds;
+        public List<String> availableModelIds;
 
         private CopilotToken(String accessToken, URI baseUrl, List<String> availableModelIds) {
             this.accessToken = accessToken;
@@ -420,8 +420,6 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     // Folded provider state. Each provider remains a distinct operations carrier.
     private ProviderKind providerKind;
     private String id;
-    private String name;
-    private String baseUrl;
     private List<Model> models;
 
     private AnthropicProvider anthropic;
@@ -442,7 +440,6 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private boolean isCompacting;
     private boolean autoCompactionEnabled = true;
     private int compactionReserveTokens = 16_384;
-    private String compactionSummary;
 
     // Repository instructions, sessions, settings, and git-ignore filtering
     private static final String AGENTS_FILE = "AGENTS.md";
@@ -450,10 +447,10 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
 
     /** One complete append-only JSONL session record. */
-    private static final class SessionEntry {
+    public static final class SessionEntry {
         private long timestamp;
-        private String type;
-        private JsonNode payload;
+        public String type;
+        public JsonNode payload;
 
         private SessionEntry(long timestamp, String type, JsonNode payload) {
             this.timestamp = timestamp;
@@ -512,11 +509,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private String baseSystemPrompt;
     private Path currentDirectory;
     private List<Path> sources = List.of();
-    private String sessionId;
+    public String sessionId;
     private Path directory;
     private List<Path> legacyDirectories;
     private Path settingsPath;
-    private String executable;
+    public String executable;
 
     // MCP manager and OAuth
     private static final int MCP_OAUTH_DEFAULT_CALLBACK_PORT = 19_876;
@@ -528,7 +525,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private static final Pattern MCP_OAUTH_AUTH_PARAMETER = Pattern.compile(
             "(?i)(?:^|[,\\s])([a-z][a-z0-9_-]*)\\s*=\\s*(?:\"([^\"]*)\"|([^,\\s]+))");
 
-    private enum McpState {
+    public enum McpState {
         CONNECTING,
         AUTHENTICATING,
         AUTH_REQUIRED,
@@ -538,9 +535,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     }
 
     /** Snapshot of one configured MCP server. */
-    private static final class McpServerStatus {
+    public static final class McpServerStatus {
         private String name;
-        private McpState state;
+        public McpState state;
         private String message;
         private int toolCount;
         private int enabledToolCount;
@@ -814,7 +811,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         TEXT
     }
 
-    private enum StatusAccent {
+    public enum StatusAccent {
         NONE,
         READY,
         ACTIVE,
@@ -893,7 +890,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Creates an empty mutable JSON object node on the shared mapper.
      */
-    private static ObjectNode jsonObject() {
+    public static ObjectNode jsonObject() {
         return Json.MAPPER.createObjectNode();
     }
 
@@ -911,7 +908,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Generates a time-ordered UUIDv7 string.
      */
-    private static String uuidv7() {
+    public static String uuidv7() {
         byte[] random = new byte[16];
         RANDOM.nextBytes(random);
         long timestampMs;
@@ -967,7 +964,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Marks the signal aborted and runs (once) every registered listener.
      */
-    private void abort(AbortSignal signal) {
+    public void abort(AbortSignal signal) {
         List<Runnable> toRun;
         synchronized (signal) {
             if (signal.aborted) {
@@ -1009,7 +1006,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Pushes an event. Ignored after the stream is done.
      */
-    private static <T, R> void push(EventStream<T, R> stream, T event) {
+    public static <T, R> void push(EventStream<T, R> stream, T event) {
         synchronized (stream) {
             if (stream.done) {
                 return;
@@ -1032,7 +1029,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Blocks until the terminal event arrives and returns the extracted result.
      */
-    private static <T, R> R result(EventStream<T, R> stream) throws InterruptedException {
+    public static <T, R> R result(EventStream<T, R> stream) throws InterruptedException {
         try {
             return stream.finalResult.get();
         } catch (ExecutionException e) {
@@ -1044,7 +1041,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Single-consumer blocking iterator. hasNext() blocks until an event is
      * available or the stream is exhausted (done and queue drained).
      */
-    private static <T, R> Iterator<T> iterator(EventStream<T, R> stream) {
+    public static <T, R> Iterator<T> iterator(EventStream<T, R> stream) {
         return new Iterator<>() {
             @Override
             public boolean hasNext() {
@@ -1076,7 +1073,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Blocking for-each view over the stream's events.
      */
-    private static <T, R> Iterable<T> events(EventStream<T, R> stream) {
+    public static <T, R> Iterable<T> events(EventStream<T, R> stream) {
         return () -> iterator(stream);
     }
 
@@ -1094,7 +1091,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Unix timestamp in milliseconds.
      */
-    private static long timestamp(Message message) {
+    public static long timestamp(Message message) {
         return switch (message) {
             case UserMessage user -> user.timestamp;
             case AssistantMessage assistant -> assistant.timestamp;
@@ -1105,14 +1102,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Concatenated text of all text blocks.
      */
-    private static String text(AssistantMessage message) {
+    public static String text(AssistantMessage message) {
         return contentText(message.content);
     }
 
     /**
      * Concatenated text of all thinking blocks.
      */
-    private static String thinking(AssistantMessage message) {
+    public static String thinking(AssistantMessage message) {
         StringBuilder sb = new StringBuilder();
         for (AssistantContent block : message.content) {
             if (block instanceof ThinkingContent thinkingContent) {
@@ -1122,7 +1119,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return sb.toString();
     }
 
-    private static List<ToolCall> toolCalls(AssistantMessage message) {
+    public static List<ToolCall> toolCalls(AssistantMessage message) {
         List<ToolCall> calls = new ArrayList<>();
         for (AssistantContent block : message.content) {
             if (block instanceof ToolCall call) {
@@ -1135,7 +1132,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Concatenated text of all text blocks.
      */
-    private static String text(UserMessage message) {
+    public static String text(UserMessage message) {
         return contentText(message.content);
     }
 
@@ -1146,7 +1143,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return contentText(message.content);
     }
 
-    private static UserMessage userMessage(String text) {
+    public static UserMessage userMessage(String text) {
         return new UserMessage(List.of(new TextContent(text, null)), System.currentTimeMillis());
     }
 
@@ -1165,7 +1162,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Copy of a model with its mutable collections duplicated.
      */
-    private static Model copyModel(Model source) {
+    public static Model copyModel(Model source) {
         Model copy = new Model();
         copy.id = source.id;
         copy.name = source.name;
@@ -1344,7 +1341,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Wraps a byte stream in the UTF-8 buffered reader the SSE parser reads from.
      */
-    private static SseReader sseReader(InputStream stream) {
+    public static SseReader sseReader(InputStream stream) {
         return new SseReader(new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8)));
     }
 
@@ -1354,7 +1351,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * spec. Multiple data lines are joined with newlines; comment lines
      * (leading ':') are ignored.
      */
-    private static SseReader.SseEvent nextSseEvent(SseReader source) throws IOException {
+    public static SseReader.SseEvent nextSseEvent(SseReader source) throws IOException {
         String event = null;
         StringBuilder data = null;
         String id = null;
@@ -1399,7 +1396,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Releases an SSE reader; failures are ignored.
      */
-    private void closeSseReader(SseReader source) {
+    public void closeSseReader(SseReader source) {
         if (source == null) {
             return;
         }
@@ -1414,7 +1411,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns configured key environment-variable names in provider priority order.
      */
-    private static List<String> findApiKeyEnvVars(String provider, Map<String, String> environment) {
+    public static List<String> findApiKeyEnvVars(String provider, Map<String, String> environment) {
         List<String> names = EnvApiKeys.API_KEY_ENV_VARS.get(provider);
         if (names == null) {
             return List.of();
@@ -1432,7 +1429,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * ANTHROPIC_AUTH_TOKEN is intentionally omitted because it requires bearer
      * authorization rather than x-api-key; its provider adapter handles it.
      */
-    private static Optional<String> resolveApiKey(String provider, Map<String, String> environment) {
+    public static Optional<String> resolveApiKey(String provider, Map<String, String> environment) {
         for (String name : findApiKeyEnvVars(provider, environment)) {
             if (provider.equals("anthropic") && name.equals(EnvApiKeys.ANTHROPIC_AUTH_TOKEN_ENV)) {
                 continue;
@@ -1451,7 +1448,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Resolves the credential file, its sibling lock file, and the optional legacy file.
      */
-    private void fileCredentialStore(Path authPath, Path fallbackAuthPath) {
+    public void fileCredentialStore(Path authPath, Path fallbackAuthPath) {
         Path resolved = authPath.toAbsolutePath().normalize();
 
         this.authPath = resolved;
@@ -1489,7 +1486,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Atomically applies a mutation to a provider credential. Returning null
      * removes the credential.
      */
-    private void modifyCredential(
+    public void modifyCredential(
             CredentialStore store, String providerId, UnaryOperator<Credential> operation) throws IOException {
         switch (store) {
             case CodingAgentOperations file -> {
@@ -1667,7 +1664,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Validates the authorization endpoint and client id before binding them to the carrier.
      */
-    private void chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
+    public void chatGptAuth(CredentialStore credentials, URI authBaseUrl, String clientId) {
         URI validatedBaseUrl = requireAbsoluteHttpUri(authBaseUrl, "authBaseUrl");
         if (clientId == null || clientId.isBlank()) throw new IllegalArgumentException("clientId must not be blank");
 
@@ -1679,7 +1676,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Starts the Codex device flow. Display the URI and code before completing it.
      */
-    private ChatGptDeviceCode chatGptBeginLogin() throws IOException {
+    public ChatGptDeviceCode chatGptBeginLogin() throws IOException {
         ObjectNode request = jsonObject().put("client_id", clientId);
         JsonNode response = authPost(
                 authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
@@ -1709,7 +1706,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Waits for browser authorization, exchanges the code, and saves refreshable tokens.
      */
-    private Credential.OAuthCredential chatGptCompleteLogin(ChatGptDeviceCode device)
+    public Credential.OAuthCredential chatGptCompleteLogin(ChatGptDeviceCode device)
             throws IOException, InterruptedException {
         JsonNode authorization = null;
         ObjectNode request = jsonObject()
@@ -1752,7 +1749,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
      */
-    private ChatGptToken chatGptResolveToken() throws IOException {
+    public ChatGptToken chatGptResolveToken() throws IOException {
         Credential credential = readCredential(credentials, CHATGPT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
@@ -1775,11 +1772,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return chatGptToken(refreshed);
     }
 
-    private boolean chatGptHasCredential() throws IOException {
+    public boolean chatGptHasCredential() throws IOException {
         return hasRefreshCredential(credentials, CHATGPT_PROVIDER_ID);
     }
 
-    private void chatGptLogout() throws IOException {
+    public void chatGptLogout() throws IOException {
         deleteCredential(credentials, CHATGPT_PROVIDER_ID);
     }
 
@@ -1874,7 +1871,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Validates every endpoint before binding it to the carrier. Visible for deterministic HTTP tests.
      */
-    private void gitHubCopilotAuth(
+    public void gitHubCopilotAuth(
             CredentialStore credentials, URI githubBaseUrl, URI copilotTokenUrl, URI defaultCopilotBaseUrl) {
         this.credentials = credentials;
         this.githubBaseUrl = requireAbsoluteHttpUri(githubBaseUrl, "githubBaseUrl");
@@ -1885,7 +1882,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Starts the device flow. Display the resulting URI and code before completing the login.
      */
-    private GitHubCopilotDeviceCode gitHubCopilotBeginLogin() throws IOException {
+    public GitHubCopilotDeviceCode gitHubCopilotBeginLogin() throws IOException {
         JsonNode response = authPost(
                 githubBaseUrl.resolve("/login/device/code"),
                 Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
@@ -1908,7 +1905,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Polls GitHub, exchanges the durable GitHub token for a Copilot token, and saves the credential.
      */
-    private Credential.OAuthCredential gitHubCopilotCompleteLogin(GitHubCopilotDeviceCode device) throws IOException, InterruptedException {
+    public Credential.OAuthCredential gitHubCopilotCompleteLogin(GitHubCopilotDeviceCode device) throws IOException, InterruptedException {
         String githubAccessToken = null;
         int intervalSeconds = device.intervalSeconds;
         while (System.currentTimeMillis() < device.expiresAtMs) {
@@ -1956,7 +1953,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary.
      */
-    private CopilotToken gitHubCopilotResolveToken() throws IOException {
+    public CopilotToken gitHubCopilotResolveToken() throws IOException {
         Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
                 .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
         if (!(credential instanceof Credential.OAuthCredential oauth)) {
@@ -1990,7 +1987,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Enables the listed Copilot model policies and reports how many policy requests GitHub accepted.
      */
-    private int gitHubCopilotEnableModels(List<String> modelIds) throws IOException {
+    public int gitHubCopilotEnableModels(List<String> modelIds) throws IOException {
         CopilotToken token = gitHubCopilotResolveToken();
         int enabled = 0;
         for (String modelId : modelIds) {
@@ -2017,7 +2014,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Re-fetches and persists the enabled-model list without minting a new Copilot API token.
      */
-    private CopilotToken gitHubCopilotRefreshAvailableModels()
+    public CopilotToken gitHubCopilotRefreshAvailableModels()
             throws IOException {
         CopilotToken current = gitHubCopilotResolveToken();
         Credential credential = readCredential(credentials, GITHUB_COPILOT_PROVIDER_ID)
@@ -2156,7 +2153,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Computes and stores cost on usage.cost, returning it.
      */
-    private static Usage.Cost calculateCost(Model model, Usage usage) {
+    public static Usage.Cost calculateCost(Model model, Usage usage) {
         long inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
         double rateInput = model.cost.input;
         double rateOutput = model.cost.output;
@@ -2184,7 +2181,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return usage.cost;
     }
 
-    private static List<ThinkingLevel> getSupportedThinkingLevels(Model model) {
+    public static List<ThinkingLevel> getSupportedThinkingLevels(Model model) {
         if (!model.reasoning) {
             return List.of(ThinkingLevel.OFF);
         }
@@ -2205,7 +2202,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return supported;
     }
 
-    private static ThinkingLevel clampThinkingLevel(Model model, ThinkingLevel level) {
+    public static ThinkingLevel clampThinkingLevel(Model model, ThinkingLevel level) {
         List<ThinkingLevel> available = getSupportedThinkingLevels(model);
         if (available.contains(level)) {
             return level;
@@ -2228,7 +2225,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Resolves a requested thinking level to the provider's wire value. Null
      * disables reasoning after model-specific clamping.
      */
-    private static String providerThinkingLevel(Model model, ThinkingLevel level) {
+    public static String providerThinkingLevel(Model model, ThinkingLevel level) {
         if (level == null || level == ThinkingLevel.OFF) {
             return null;
         }
@@ -2247,7 +2244,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Loads the bundled provider model snapshots.
      */
-    private void loadBundledModelCatalog() {
+    public void loadBundledModelCatalog() {
         Map<String, Model> models = new LinkedHashMap<>();
         Map<String, List<Model>> providers = new LinkedHashMap<>();
         for (String resourceName : MODEL_CATALOG_RESOURCE_NAMES) {
@@ -2351,14 +2348,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Finds a model by its provider and id, returning null if it is absent. Use
      * {@link #requireCatalogModel} when absence is a user-facing error.
      */
-    private Model findCatalogModel(String provider, String id) {
+    public Model findCatalogModel(String provider, String id) {
         return byProviderAndId.get(modelCatalogKey(provider, id));
     }
 
     /**
      * Finds a model or throws a clear error that includes the provider/id pair.
      */
-    private Model requireCatalogModel(String provider, String id) {
+    public Model requireCatalogModel(String provider, String id) {
         Model model = findCatalogModel(provider, id);
         if (model == null) {
             throw new IllegalArgumentException("Unknown model: " + provider + "/" + id);
@@ -2369,14 +2366,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns every bundled model from a provider, preserving source-file order.
      */
-    private List<Model> catalogModelsForProvider(String provider) {
+    public List<Model> catalogModelsForProvider(String provider) {
         return byProvider.getOrDefault(provider, List.of());
     }
 
     /**
      * Returns every bundled model, preserving resource and source-file order.
      */
-    private List<Model> allCatalogModels() {
+    public List<Model> allCatalogModels() {
         return List.copyOf(byProviderAndId.values());
     }
 
@@ -2405,7 +2402,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return this;
     }
 
-    private void googleProvider(List<Model> models) {
+    public void googleProvider(List<Model> models) {
         providerKind = ProviderKind.GOOGLE;
         this.models = models;
     }
@@ -2451,7 +2448,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Classifies whether a failed assistant message looks like a transient
      * provider/transport error.
      */
-    private static boolean isRetryableAssistantError(AssistantMessage message) {
+    public static boolean isRetryableAssistantError(AssistantMessage message) {
         if (message.stopReason != StopReason.ERROR || message.errorMessage == null) {
             return false;
         }
@@ -2466,7 +2463,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * errors. Aborts are terminal and never retried; aborts during backoff are
      * normalized to an aborted AssistantMessage.
      */
-    private AssistantMessage retryAssistantCall(
+    public AssistantMessage retryAssistantCall(
             Callable<AssistantMessage> produce, Retry.Policy policy, AbortSignal signal, Retry.Callbacks callbacks)
             throws InterruptedException {
         int maxAttempts = policy != null && policy.enabled ? policy.maxRetries : 0;
@@ -2965,12 +2962,12 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Validates the identity and endpoint of a Chat Completions-compatible service.
      */
-    private void openAiCompatibleProvider(
-            String id, String name, String baseUrl, List<Model> models) {
+    public void openAiCompatibleProvider(
+            List<Model> models) {
         providerKind = ProviderKind.OPENAI_COMPATIBLE;
-        this.id = requireNonBlank(id, "id");
-        this.name = requireNonBlank(name, "name");
-        this.baseUrl = trimTrailingSlash(requireNonBlank(baseUrl, "baseUrl"));
+        this.id = requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "id");
+        requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_PROVIDER_NAME, "name");
+        trimTrailingSlash(requireNonBlank(CodingAgentOperations.GITHUB_COPILOT_COMPLETIONS_BASE_URL, "baseUrl"));
         this.models = List.copyOf(models);
     }
 
@@ -3658,7 +3655,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
 
     // ------------------------------------------------------ chatgpt provider
 
-    private void configureCodexRequest(StreamOptions options, ChatGptToken token) {
+    public void configureCodexRequest(StreamOptions options, ChatGptToken token) {
         options.apiKey = token.accessToken;
         options.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
         options.headers.put("ChatGPT-Account-Id", token.accountId);
@@ -3685,7 +3682,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Builds the GitHub Copilot router provider over its catalog slice.
      */
-    private CodingAgentOperations newGitHubCopilotProvider(List<Model> models) {
+    public CodingAgentOperations newGitHubCopilotProvider(List<Model> models) {
         List<Model> all = List.copyOf(models);
         List<Model> models1 = copilotModelsFor(all, OpenAiResponsesProvider.API);
         this.models = all;
@@ -3697,10 +3694,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                         List.of(),
                         true);
         openAiCompatibleProvider(
-                        GITHUB_COPILOT_PROVIDER_ID,
-                        GITHUB_COPILOT_PROVIDER_NAME,
-                        GITHUB_COPILOT_COMPLETIONS_BASE_URL,
-                        copilotModelsFor(all, OPENAI_COMPATIBLE_API));
+                copilotModelsFor(all, OPENAI_COMPATIBLE_API));
         responses = new OpenAiResponsesProvider(
                         GITHUB_COPILOT_PROVIDER_ID,
                         GITHUB_COPILOT_PROVIDER_NAME,
@@ -3776,7 +3770,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * returned stream (Error event with stopReason ERROR/ABORTED) rather than
      * thrown, except for argument validation.
      */
-    private AssistantMessageEventStream stream(
+    public AssistantMessageEventStream stream(
             Provider provider, Model model, Context context, StreamOptions options) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
@@ -4251,7 +4245,6 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             throw new IllegalStateException((automatic ? "Automatic compaction failed: " : "Compaction failed: ") + detail);
         }
         messages.clear();
-        compactionSummary = summary;
         messages.add(userMessage("[Conversation checkpoint]\n" + summary));
         CompactionResult result = new CompactionResult(summary, tokensBefore, estimateMessageTokens(messages));
         emit(new AgentEvent.CompactionEnd(result));
@@ -4450,7 +4443,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
 
     // -------------------------------------------------------- tool dispatch
 
-    private static String toolName(AgentTool tool) {
+    public static String toolName(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.name;
             case LocalTool local -> local.name;
@@ -4459,7 +4452,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         };
     }
 
-    private static String toolDescription(AgentTool tool) {
+    public static String toolDescription(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.description;
             case LocalTool local -> local.description;
@@ -4471,7 +4464,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Model-visible JSON schema of the tool's arguments.
      */
-    private static ObjectNode toolParameters(AgentTool tool) {
+    public static ObjectNode toolParameters(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.parameters;
             case LocalTool local -> local.parameters;
@@ -4484,7 +4477,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Runs one tool call. Partial results are reported to {@code onUpdate} by
      * tools that produce them; failures are thrown for the caller to surface.
      */
-    private AgentTool.ToolResult executeTool(
+    public AgentTool.ToolResult executeTool(
             AgentTool tool,
             String toolCallId,
             ObjectNode arguments,
@@ -4923,7 +4916,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         };
     }
 
-    private static AgentTool.ToolResult toolResultText(String text) {
+    public static AgentTool.ToolResult toolResultText(String text) {
         return new AgentTool.ToolResult(List.of(new TextContent(text, null)), null, false);
     }
 
@@ -4937,7 +4930,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns tools that filter search results with the given git-ignore configuration.
      */
-    private List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
+    public List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
         Path resolvedCwd = cwd.toAbsolutePath().normalize();
         Consumer<Path> observer = Objects.requireNonNull(onPathAccess, "onPathAccess");
         BuiltInTools.Shell shell = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
@@ -5420,7 +5413,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Loads configured MCP servers, or an empty configuration when settings do not exist.
      */
-    private static McpConfiguration mcpLoadConfiguration(McpConfigLoader loader) throws IOException {
+    public static McpConfiguration mcpLoadConfiguration(McpConfigLoader loader) throws IOException {
         Path settingsPath = loader.settingsPath;
         if (!Files.exists(settingsPath)) return new McpConfiguration(new LinkedHashMap<>(), List.of());
         if (!Files.isRegularFile(settingsPath)) {
@@ -6582,7 +6575,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         this.callbackTimeout = callbackTimeout;
     }
 
-    private void mcpCreateManager(McpConfiguration configuration, Path workspace) {
+    public void mcpCreateManager(McpConfiguration configuration, Path workspace) {
         if (!closed && !servers.isEmpty()) {
             mcpCloseManager();
         }
@@ -6642,14 +6635,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Snapshots one configured server.
      */
-    private McpServerStatus mcpStatus(String name) {
+    public McpServerStatus mcpStatus(String name) {
         return mcpSnapshot(mcpRequireRuntime(name));
     }
 
     /**
      * Waits for all currently-starting configured servers.
      */
-    private void mcpAwaitReady() throws InterruptedException {
+    public void mcpAwaitReady() throws InterruptedException {
         while (true) {
             List<Thread> connecting = new ArrayList<>();
             for (McpRuntime runtime : servers.values()) {
@@ -6666,7 +6659,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns the current model-visible tool adapters, with OpenCode-compatible names.
      */
-    private List<AgentTool> mcpTools() {
+    public List<AgentTool> mcpTools() {
         LinkedHashMap<String, AgentTool> result = new LinkedHashMap<>();
         for (McpRuntime runtime : servers.values()) {
             McpClient client;
@@ -6699,7 +6692,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Disconnects every server and releases the manager's sessions.
      */
-    private void mcpCloseManager() {
+    public void mcpCloseManager() {
         if (closed) return;
         closed = true;
         servers.values().forEach(runtime -> {
@@ -7870,7 +7863,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Terminal cell width of a string, ignoring ANSI escapes.
      */
-    private static int visibleWidth(String value) {
+    public static int visibleWidth(String value) {
         String plain = stripAnsi(value);
         int width = 0;
         for (int index = 0; index < plain.length(); ) {
@@ -7908,7 +7901,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return output + ellipsis;
     }
 
-    private static String stripAnsi(String value) {
+    public static String stripAnsi(String value) {
         return TERMINAL_ANSI.matcher(value).replaceAll("");
     }
 
@@ -7928,14 +7921,14 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Bold green is reserved for the Ready activity so idle is recognizable at a glance.
      */
-    private static String readyStatus(Theme theme) {
+    public static String readyStatus(Theme theme) {
         return theme==Theme.PLAIN ? "" : "\u001b[1;92m";
     }
 
     /**
      * Active model and shell work; deliberately never green.
      */
-    private static String activeStatus(Theme theme) {
+    public static String activeStatus(Theme theme) {
         return switch (theme) {
             case DARK -> "\u001b[1;96m";
             case LIGHT -> "\u001b[1;34m";
@@ -8151,7 +8144,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Creates a key event without associated text.
      */
-    private static TuiInput.Key key(TuiInput.KeyType type) {
+    public static TuiInput.Key key(TuiInput.KeyType type) {
         return new TuiInput.Key(type, "");
     }
 
@@ -8223,7 +8216,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Normalizes an already-buffered terminal sequence.
      */
-    private static TuiInput parseInputSequence(String sequence) {
+    public static TuiInput parseInputSequence(String sequence) {
         if (sequence == null || sequence.isEmpty()) {
             return key(TuiInput.KeyType.UNKNOWN);
         }
@@ -8378,7 +8371,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Creates selector state over at least one option, clamping the initial selection.
      */
-    private static <T> FuzzySelector<T> fuzzySelector(
+    public static <T> FuzzySelector<T> fuzzySelector(
             String title, List<SelectItem<T>> items, int initialIndex, boolean searchable) {
         if (items.isEmpty()) {
             throw new IllegalArgumentException("items must not be empty");
@@ -8397,7 +8390,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Binds a selector carrier to the full-screen host.
      */
-    private static <T> TuiComponent<T> fuzzySelectorComponent(FuzzySelector<T> selector) {
+    public static <T> TuiComponent<T> fuzzySelectorComponent(FuzzySelector<T> selector) {
         return new TuiComponent<>(
                 frame -> renderFuzzySelector(selector, frame.width, frame.height, frame.theme),
                 input -> handleFuzzySelectorInput(selector, input),
@@ -8405,7 +8398,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 () -> selector.result);
     }
 
-    private static <T> List<String> renderFuzzySelector(
+    public static <T> List<String> renderFuzzySelector(
             FuzzySelector<T> selector, int width, int height, Theme theme) {
         List<String> lines = new ArrayList<>();
         lines.add(theme.heading + truncatePlain(selector.title, width) + theme.reset);
@@ -8510,7 +8503,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Applies one normalized input event to a fuzzy selector.
      */
-    private static <T> void handleFuzzySelectorInput(FuzzySelector<T> selector, TuiInput input) {
+    public static <T> void handleFuzzySelectorInput(FuzzySelector<T> selector, TuiInput input) {
         switch (input) {
             case TuiInput.Key key -> {
                 switch (key.type) {
@@ -8705,7 +8698,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Wires the line editor, signal handlers, and keybindings onto an existing terminal.
      */
-    private void newInteractiveTerminal(
+    public void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
         screenDocument = new StringBuilder();
         statusBar = null;
@@ -8944,7 +8937,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Returns null on EOF and an empty string after Ctrl-C.
      */
-    private String readLine(String prompt) {
+    public String readLine(String prompt) {
         return readLineInternal(prompt, null, null, false);
     }
 
@@ -8960,7 +8953,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Reads a line with an alphabetized slash-command panel below the prompt.
      */
-    private String readLine(String prompt, List<String> slashCommands) {
+    public String readLine(String prompt, List<String> slashCommands) {
         boolean suggestionsEnabled = slashCommands != null && !slashCommands.isEmpty();
         if (suggestionsEnabled) {
             Objects.requireNonNull(slashCommands, "commands");
@@ -8978,7 +8971,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Reads a line whose editable buffer starts with {@code initialValue}.
      */
-    private String readLine(String prompt, String initialValue) {
+    public String readLine(String prompt, String initialValue) {
         return readLineInternal(prompt, initialValue, null, false);
     }
 
@@ -9087,7 +9080,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Hosts a component on the alternate screen, restoring the line editor afterwards.
      */
-    private <T> T runComponent(TuiComponent<T> component)
+    public <T> T runComponent(TuiComponent<T> component)
             throws IOException {
         if (reader.isReading()) resetPromptBackground(theme);
         synchronized (this) {
@@ -9195,7 +9188,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * a virtual thread so Escape can be read even while it is blocked on a model
      * response or tool. Ctrl-C remains an interrupt alias outside the line editor.
      */
-    private <T> T runInterruptibly(Callable<T> operation, Runnable interruptHandler)
+    public <T> T runInterruptibly(Callable<T> operation, Runnable interruptHandler)
             throws IOException, InterruptedException {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(interruptHandler, "interruptHandler");
@@ -9256,7 +9249,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Binds a configured application action while the line editor is active.
      */
-    private void bindAppAction(String action, Runnable handler) {
+    public void bindAppAction(String action, Runnable handler) {
         Objects.requireNonNull(handler, "handler");
         String widgetName = "codingagent-" + action;
         reader.getWidgets().put(widgetName, () -> {
@@ -9277,7 +9270,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Prints a status line without losing the active line-editor buffer.
      */
-    private void printAbove(String text) {
+    public void printAbove(String text) {
         synchronized (this) {
             if (reader.isReading()) resetPromptBackground(theme);
             reader.printAbove(text);
@@ -9294,7 +9287,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         }
     }
 
-    private void println(String text) {
+    public void println(String text) {
         synchronized (this) {
             String value = String.valueOf(text);
             jlineTerminal.writer().println(value);
@@ -9306,7 +9299,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Replaces the main-screen document and redraws it from the top.
      */
-    private void replaceScreen(String document) {
+    public void replaceScreen(String document) {
         synchronized (this) {
             screenDocument.setLength(0);
             screenDocument.append(document == null ? "" : document);
@@ -9325,7 +9318,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Shows activity first so it remains visible when workspace/model details need truncation.
      */
-    private void setStatus(String activity, StatusAccent accent, String left, String right) {
+    public void setStatus(String activity, StatusAccent accent, String left, String right) {
         synchronized (this) {
             statusActivity = activity == null ? "" : activity;
             statusAccent =
@@ -9357,7 +9350,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Keeps activity ahead of workspace/model metadata. When the terminal is
      * narrow, metadata is discarded before the activity text is truncated.
      */
-    private static String statusBarLine(
+    public static String statusBarLine(
             String activity,
             StatusAccent accent,
             String left,
@@ -9458,7 +9451,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Restores the signal handlers this terminal replaced and closes JLine.
      */
-    private void closeTerminal() throws IOException {
+    public void closeTerminal() throws IOException {
         if (previousContinueHandler != null) {
             jlineTerminal.handle(Terminal.Signal.CONT, previousContinueHandler);
         }
@@ -9480,7 +9473,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Parses the command line, runs the selected mode, and returns the exit code.
      */
-    private int cliRun(String[] args) {
+    public int cliRun(String[] args) {
         try {
             List<String> messageParts = new ArrayList<>();
             for (int i = 0; i < args.length; i++) {
@@ -10858,23 +10851,23 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
 
     // -------------------------------------------------------- activity status
 
-    private static ActivityStatus noModelActivity(long nowNanos) {
+    public static ActivityStatus noModelActivity(long nowNanos) {
         return new ActivityStatus(ActivityStatus.Phase.NO_MODEL, "", 0, 0, nowNanos, 0);
     }
 
-    private static ActivityStatus readyActivity(long nowNanos) {
+    public static ActivityStatus readyActivity(long nowNanos) {
         return new ActivityStatus(ActivityStatus.Phase.READY, "", 0, 0, nowNanos, 0);
     }
 
-    private static ActivityStatus activeActivity(ActivityStatus.Phase phase, long nowNanos) {
+    public static ActivityStatus activeActivity(ActivityStatus.Phase phase, long nowNanos) {
         return activeActivity(phase, "", nowNanos);
     }
 
-    private static ActivityStatus activeActivity(ActivityStatus.Phase phase, String detail, long nowNanos) {
+    public static ActivityStatus activeActivity(ActivityStatus.Phase phase, String detail, long nowNanos) {
         return new ActivityStatus(phase, detail, 0, 0, nowNanos, 0);
     }
 
-    private static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
+    public static ActivityStatus retryingActivity(int attempt, int maxAttempts, long delayMs, long nowNanos) {
         long delayNanos;
         try {
             delayNanos = Math.multiplyExact(Math.max(0, delayMs), 1_000_000L);
@@ -10888,7 +10881,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Whether a repeated event describes the same phase and should retain its elapsed timer.
      */
-    private static boolean sameActivity(ActivityStatus status, ActivityStatus other) {
+    public static boolean sameActivity(ActivityStatus status, ActivityStatus other) {
         return other != null
                 && status.phase == other.phase
                 && status.detail.equals(other.detail)
@@ -10897,12 +10890,12 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                 && status.retryDelayNanos == other.retryDelayNanos;
     }
 
-    private static boolean isDynamicActivity(ActivityStatus status) {
+    public static boolean isDynamicActivity(ActivityStatus status) {
         return status.phase != ActivityStatus.Phase.NO_MODEL
                 && status.phase != ActivityStatus.Phase.READY;
     }
 
-    private static String activityLabel(ActivityStatus status, long nowNanos) {
+    public static String activityLabel(ActivityStatus status, long nowNanos) {
         return switch (status.phase) {
             case NO_MODEL -> "○ No model";
             case READY -> "● Ready";
@@ -10937,7 +10930,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         };
     }
 
-    private static StatusAccent activityAccent(ActivityStatus status) {
+    public static StatusAccent activityAccent(ActivityStatus status) {
         return switch (status.phase) {
             case READY -> StatusAccent.READY;
             case NO_MODEL, RETRYING, STOPPING -> StatusAccent.WARNING;
@@ -11032,7 +11025,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
 
     // ------------------------------------------------------- interactive shell
 
-    private static String forkName(String currentSessionName) {
+    public static String forkName(String currentSessionName) {
         return currentSessionName == null || currentSessionName.isBlank()
                 ? "fork"
                 : currentSessionName.strip() + " fork";
@@ -11041,7 +11034,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Rebuilds the visible transcript for a resumed session.
      */
-    private String renderSessionScreen(
+    public String renderSessionScreen(
             Model model, List<Message> messages, boolean hideThinking, Theme theme) {
         StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
         Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
@@ -11110,7 +11103,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Drops failed turns and synthesizes results for tool calls that never completed.
      */
-    private List<Message> resumableMessages(List<Message> messages) {
+    public List<Message> resumableMessages(List<Message> messages) {
         List<Message> result = new ArrayList<>();
         Map<String, String> pendingToolCalls = new LinkedHashMap<>();
         for (Message message : messages) {
@@ -11151,7 +11144,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * The text to print after a turn, or null when it was already streamed.
      */
-    private static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
+    public static String finalAssistantOutput(AssistantMessage response, boolean emittedText) {
         if (response.errorMessage != null) return "Error: " + response.errorMessage;
         return emittedText ? null : text(response);
     }
@@ -11375,7 +11368,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Formats the model segment, e.g. {@code GPT-5.6 Sol Max (0%)}.
      */
-    private static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
+    public static String modelStatus(Model model, ThinkingLevel level, long contextTokens) {
         StringBuilder status = new StringBuilder(model.name);
         if (level != null && level != ThinkingLevel.OFF) {
             status.append(' ').append(switch (level) {
@@ -11397,7 +11390,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Context tokens consumed by the most recent successful assistant response.
      */
-    private static long contextTokens(List<Message> messages) {
+    public static long contextTokens(List<Message> messages) {
         for (int index = messages.size() - 1; index >= 0; index--) {
             if (messages.get(index) instanceof AssistantMessage assistant
                     && assistant.stopReason != StopReason.ERROR
@@ -11415,7 +11408,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Abbreviates the home directory to {@code ~}, e.g. {@code ~/xa/coding-agent}.
      */
-    private static String displayPath(Path home, Path cwd) {
+    public static String displayPath(Path home, Path cwd) {
         Path absolute = cwd.toAbsolutePath().normalize();
         if (home != null && !home.toString().isEmpty()) {
             Path absoluteHome = home.toAbsolutePath().normalize();
@@ -11430,7 +11423,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Reads the checked-out branch (or short detached commit) without spawning git.
      */
-    private static String gitBranch(Path directory) {
+    public static String gitBranch(Path directory) {
         try {
             for (Path current = directory.toAbsolutePath().normalize(); current != null; current = current.getParent()) {
                 Path gitPath = current.resolve(".git");
@@ -11474,11 +11467,11 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Clamps the configured (or default) thinking level to what the model supports.
      */
-    private static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
+    public static ThinkingLevel initialThinkingLevel(Model model, ThinkingLevel configuredLevel) {
         return clampThinkingLevel(model, configuredLevel == null ? ThinkingLevel.MEDIUM : configuredLevel);
     }
 
-    private static Model preferredCopilotModel(List<Model> models) {
+    public static Model preferredCopilotModel(List<Model> models) {
         for (Model model : models) {
             if (model.id.equals("gpt-5.4")) {
                 return model;
@@ -11487,7 +11480,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return models.isEmpty() ? null : models.getFirst();
     }
 
-    private static Model preferredChatGptModel(List<Model> models) {
+    public static Model preferredChatGptModel(List<Model> models) {
         for (String preferred : List.of("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.4")) {
             for (Model model : models) {
                 if (model.id.equals(preferred)) return model;
@@ -11566,7 +11559,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * One-line description of the work a tool call is about to perform.
      */
-    private static String toolCallDescription(String toolName, ObjectNode arguments) {
+    public static String toolCallDescription(String toolName, ObjectNode arguments) {
         return switch (toolName) {
             case "read" -> {
                 int offset = arguments.path("offset").asInt(1);
@@ -11591,7 +11584,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * One-line summary of a completed tool result.
      */
-    private static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
+    public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
         StringBuilder text = new StringBuilder();
         for (UserContent block : result.content) {
             if (block instanceof TextContent value) {
@@ -11839,7 +11832,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * Builds the inspector for the reasoning and tool steps that follow the
      * latest user message, or null when that turn has none.
      */
-    private static TurnDetailsComponent turnDetailsForLatestTurn(
+    public static TurnDetailsComponent turnDetailsForLatestTurn(
             List<Message> messages, boolean thinkingHidden) {
         int start = 0;
         for (int index = messages.size() - 1; index >= 0; index--) {
@@ -11916,7 +11909,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return details;
     }
 
-    private static List<String> renderTurnDetails(
+    public static List<String> renderTurnDetails(
             TurnDetailsComponent details, int width, int height, Theme theme) {
         int safeWidth = Math.max(20, width);
         details.viewportHeight = Math.max(
@@ -12004,7 +11997,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         return lines;
     }
 
-    private void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
+    public void handleTurnDetailsInput(TurnDetailsComponent details, TuiInput input) {
         switch (input) {
             case TuiInput.Key key -> {
                 switch (key.type) {
@@ -12162,7 +12155,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         this.lockPath = lockPath;
     }
 
-    private void createSessionRecorder(Path cwd, String provider, String model) throws IOException {
+    public void createSessionRecorder(Path cwd, String provider, String model) throws IOException {
         createSessionRecorder(cwd, provider, model, null);
     }
 
@@ -12189,7 +12182,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Creates a named child session containing a copy of the supplied conversation.
      */
-    private void forkSessionRecorder(Path cwd, String provider, String model, String sessionName, List<Message> messages)
+    public void forkSessionRecorder(Path cwd, String provider, String model, String sessionName, List<Message> messages)
             throws IOException {
         createSessionRecorder(cwd, provider, model, sessionName);
         appendSessionMessages(messages);
@@ -12198,7 +12191,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Opens an existing session so future messages continue in the same JSONL file.
      */
-    private void resumeSessionRecorder(String sessionId) throws IOException {
+    public void resumeSessionRecorder(String sessionId) throws IOException {
         sessionSnapshot(sessionId);
         sessionRecorder(sessionId);
     }
@@ -12206,7 +12199,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Appends finished agent messages in chronological order.
      */
-    private void appendSessionMessages(List<Message> messages) throws IOException {
+    public void appendSessionMessages(List<Message> messages) throws IOException {
         for (Message message : messages) {
             ObjectNode node = jsonObject();
             node.put("role", role(message));
@@ -12276,7 +12269,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
      * resume, the latest boundary rebuilds the active model context from that
      * checkpoint and later messages only.
      */
-    private void appendSessionCompaction(CompactionResult result) throws IOException {
+    public void appendSessionCompaction(CompactionResult result) throws IOException {
         Objects.requireNonNull(result, "result");
         if (result.summary == null || result.summary.isBlank()) {
             throw new IllegalArgumentException("Compaction summary must not be blank");
@@ -12293,7 +12286,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Resolves the session directory, dropping legacy directories that duplicate it.
      */
-    private void sessionStore(Path directory, List<Path> legacyDirectories) {
+    public void sessionStore(Path directory, List<Path> legacyDirectories) {
         Path resolved = directory.toAbsolutePath().normalize();
         this.directory = resolved;
         this.legacyDirectories = legacyDirectories.stream()
@@ -12339,7 +12332,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Reads and validates all complete entries in file order.
      */
-    private List<SessionEntry> readSession(String sessionId) throws IOException {
+    public List<SessionEntry> readSession(String sessionId) throws IOException {
         validateSessionId(sessionId);
         Path file = existingSessionPath(sessionId);
         if (file == null) {
@@ -12377,7 +12370,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     /**
      * Loads metadata, the complete transcript, and compaction-aware continuation context.
      */
-    private SessionSnapshot sessionSnapshot(String sessionId) throws IOException {
+    public SessionSnapshot sessionSnapshot(String sessionId) throws IOException {
         List<SessionEntry> entries = readSession(sessionId);
         if (entries.isEmpty() || !entries.getFirst().type.equals("session_start")) {
             throw new IOException("Session has no session_start entry: " + sessionId);
