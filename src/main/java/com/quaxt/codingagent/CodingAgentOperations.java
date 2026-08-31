@@ -4235,9 +4235,12 @@ public enum CodingAgentOperations implements CredentialStore {
         selectedModel = model;
     }
 
-    /** Configures the singleton as the active agent. */
+    /** Configures the singleton as a fresh active agent. */
     private void agent(Provider provider) {
         agentProvider = provider;
+        listeners = new CopyOnWriteArrayList<>();
+        activeSignal = null;
+        retryPolicy = Retry.Policy.DEFAULT;
     }
 
     /**

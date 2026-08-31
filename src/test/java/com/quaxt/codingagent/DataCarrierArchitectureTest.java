@@ -6,8 +6,10 @@ import com.quaxt.codingagent.ai.providers.ProviderState;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URI;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -20,6 +22,26 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DataCarrierArchitectureTest {
+    @Test
+    void reconfiguringTheFoldedAgentDiscardsPriorEventListeners() throws Exception {
+        CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+        Method configureAgent = CodingAgentOperations.class.getDeclaredMethod("agent", Provider.class);
+        configureAgent.setAccessible(true);
+        Field listenersField = CodingAgentOperations.class.getDeclaredField("listeners");
+        listenersField.setAccessible(true);
+
+        configureAgent.invoke(operations, new Object[] {null});
+        @SuppressWarnings("unchecked")
+        List<Object> previousListeners = (List<Object>) listenersField.get(operations);
+        previousListeners.add(new Object());
+
+        configureAgent.invoke(operations, new Object[] {null});
+        List<?> configuredListeners = (List<?>) listenersField.get(operations);
+
+        assertNotSame(previousListeners, configuredListeners);
+        assertTrue(configuredListeners.isEmpty());
+    }
+
     @Test
     void separatesApplicationOperationsFromTheFourProviderRoles() throws Exception {
         assertArrayEquals(
