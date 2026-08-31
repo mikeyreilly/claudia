@@ -51,7 +51,7 @@ otherwise it selects the first enabled coding model. Credentials are stored in
 Use `/models` to open the searchable model selector; type to fuzzy-filter
 models and use Up/Down and Enter to select. Enabled Copilot models are filtered
 to the signed-in account.
-Model, thinking-level, and theme selections are saved in
+Model and thinking-level selections are saved in
 `~/.codingagent/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
 model through the interactive selector, including one opened by `--provider`,
@@ -71,8 +71,7 @@ current conversation into a new session: the name prompt starts with the
 current session name followed by ` fork` (or `fork` for an unnamed session),
 and the shell switches to the new session after you submit the name.
 
-The shell supports `/theme dark`, `/theme light`, and `/theme plain`. Typing
-`/` opens a four-row, alphabetized command panel below the prompt; continue
+Typing `/` opens a four-row, alphabetized command panel below the prompt; continue
 typing to prefix-filter it, use Up/Down to navigate, and press Enter to insert
 the selected command. JLine provides standard line editing: Enter submits,
 Shift-Enter inserts a newline, Ctrl-C cancels input, Escape interrupts an active
@@ -83,9 +82,7 @@ followed by the working directory (with the home directory abbreviated to `~`),
 the checked-out Git branch, the current named session when present, and the
 model, thinking level, and context-window use. For example:
 `● Ready │ ~/xa/coding-agent [main]  GPT-5.6 Sol Max (0%)`.
-In the dark and light themes, `Ready` is the only green activity, making it
-clear when the current turn has settled and the shell can accept another
-prompt; the plain theme keeps the same labels without color. Slash commands
+`Ready` is the only green activity, making it clear when the current turn has settled and the shell can accept another prompt. Slash commands
 are identified while they run. During an agent turn, the status distinguishes
 preparing tools, waiting for the model, reasoning, responding, preparing or
 running a tool, retrying, compacting, and stopping;
@@ -249,7 +246,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Manual and automatic context compaction | Implemented |
 | JSON event mode and core JSONL RPC automation | Implemented |
 | Interactive JLine prompt shell and streamed output | Implemented |
-| Differential rendering, fuzzy selectors, mouse input, OSC 8 link primitives, themes, keybinding defaults | Implemented |
+| Differential rendering, fuzzy selectors, mouse input, OSC 8 link primitives, fixed terminal styling, keybinding defaults | Implemented |
 
 Extensions, Node-compatible data formats, non-core providers, and the Node
 extension package manager are intentionally unsupported.

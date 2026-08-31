@@ -77,7 +77,7 @@ class FuzzySelectorTest {
 		FuzzySelector<Integer> selector = CodingAgentOperations.fuzzySelector("Models", items, 12, true);
 
 		String frame = String.join("\n", CodingAgentOperations.renderFuzzySelector(
-				selector, 80, 12, Theme.PLAIN));
+				selector, 80, 12));
 
 		assertTrue(frame.contains("Models"));
 		assertTrue(frame.contains("Model 12 *"));

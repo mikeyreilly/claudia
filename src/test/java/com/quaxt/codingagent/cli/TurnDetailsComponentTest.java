@@ -14,7 +14,6 @@ import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
-import com.quaxt.codingagent.tui.Theme;
 import com.quaxt.codingagent.tui.TuiInput;
 
 class TurnDetailsComponentTest {
@@ -22,7 +21,7 @@ class TurnDetailsComponentTest {
 	void rendersThinkingAndKeepsToolResultsCollapsedInitially() {
 		TurnDetailsComponent component = details(false);
 
-		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN));
+		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 100, 30));
 
 		assertEquals(3, component.sections.size());
 		assertEquals(TurnDetailsComponent.Kind.THINKING, component.sections.get(0).kind);
@@ -36,13 +35,13 @@ class TurnDetailsComponentTest {
 	@Test
 	void expandsOneSelectedStepAndTogglesKindsGlobally() {
 		TurnDetailsComponent component = details(false);
-		CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN);
+		CodingAgentOperations.renderTurnDetails(component, 100, 30);
 
 		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.DOWN));
 		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
 		assertTrue(component.sections.get(1).expanded);
 		assertFalse(component.sections.get(2).expanded);
-		assertTrue(plain(CodingAgentOperations.renderTurnDetails(component, 100, 30, Theme.PLAIN)).contains("secret read output"));
+		assertTrue(plain(CodingAgentOperations.renderTurnDetails(component, 100, 30)).contains("secret read output"));
 
 		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS));
 		assertTrue(component.sections.get(1).expanded);
@@ -65,9 +64,9 @@ class TurnDetailsComponentTest {
 		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(
 				List.of(CodingAgentOperations.userMessage("inspect"), assistant), false);
 
-		String firstPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
+		String firstPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8));
 		CodingAgentOperations.INSTANCE.handleTurnDetailsInput(component, CodingAgentOperations.key(TuiInput.KeyType.PAGE_DOWN));
-		String secondPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8, Theme.PLAIN));
+		String secondPage = plain(CodingAgentOperations.renderTurnDetails(component, 60, 8));
 
 		assertTrue(firstPage.contains("reasoning line 0"));
 		assertFalse(secondPage.contains("reasoning line 0"));
@@ -83,7 +82,7 @@ class TurnDetailsComponentTest {
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("old"), old, CodingAgentOperations.userMessage("new"), latest);
 
 		TurnDetailsComponent component = CodingAgentOperations.turnDetailsForLatestTurn(messages, false);
-		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 80, 20, Theme.PLAIN));
+		String rendered = plain(CodingAgentOperations.renderTurnDetails(component, 80, 20));
 
 		assertEquals(1, component.sections.size());
 		assertTrue(rendered.contains("new thought"));

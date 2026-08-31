@@ -22,7 +22,6 @@ import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.Usage;
-import com.quaxt.codingagent.tui.Theme;
 
 class InteractiveShellTest {
 	@Test
@@ -113,18 +112,18 @@ class InteractiveShellTest {
 						System.currentTimeMillis()),
 				answer);
 
-		String visible = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, false, Theme.PLAIN);
-		String hidden = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true, Theme.PLAIN);
-		String dark = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true, Theme.DARK);
+		String visible = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, false);
+		String hidden = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true);
+		String styled = CodingAgentOperations.INSTANCE.renderSessionScreen(model, messages, true);
 
 		assertTrue(visible.startsWith("codingagent "));
-		assertTrue(visible.contains("\n> Check the project\n"));
-		assertTrue(visible.contains("Thinking:\nInspect the project"));
+		assertTrue(CodingAgentOperations.stripAnsi(visible).contains("\n> Check the project\n"));
+		assertTrue(CodingAgentOperations.stripAnsi(visible).contains("Thinking:\nInspect the project"));
 		assertTrue(visible.contains("[read] Reading README.md"));
 		assertTrue(visible.contains("Done: Read 2 line(s)."));
 		assertTrue(visible.contains("The project is ready."));
 		assertFalse(hidden.contains("Inspect the project"));
-		assertTrue(dark.contains("\u001b[48;5;236m\u001b[K> Check the project\u001b[0m"));
+		assertTrue(styled.contains("\u001b[48;5;236m\u001b[K> Check the project\u001b[0m"));
 	}
 
 	@Test
@@ -155,7 +154,7 @@ class InteractiveShellTest {
 		failed.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
-		String screen = CodingAgentOperations.INSTANCE.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false, Theme.PLAIN);
+		String screen = CodingAgentOperations.INSTANCE.renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false);
 
 		assertTrue(screen.contains("Checking the source."));
 		assertTrue(screen.contains("[read] Reading README.md"));
