@@ -256,7 +256,7 @@ class BuiltInToolsTest {
 	}
 
 	private static List<AgentTool> builtInTools(String gitExecutable, Path cwd) {
-		CodingAgentOperations.INSTANCE.executable="git";
+		CodingAgentOperations.INSTANCE.executable=gitExecutable;
 		return CodingAgentOperations.INSTANCE.builtInTools(cwd, ignored -> {});
 	}
 
