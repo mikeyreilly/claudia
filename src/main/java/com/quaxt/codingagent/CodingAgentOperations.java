@@ -178,7 +178,10 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 /** Main class. Should contain all application logic to the greatest extent that is reasonable.*/
 public enum CodingAgentOperations implements Provider, CredentialStore {
-    INSTANCE;
+    INSTANCE,
+    CHATGPT_OPERATIONS,
+    GOOGLE_OPERATIONS,
+    GITHUB_COPILOT_OPERATIONS;
     private static final String APP_NAME = "codingagent";
     private static final String VERSION = "0.1.0-java";
 
@@ -205,6 +208,9 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
     private static final long CHATGPT_DEVICE_CODE_LIFETIME_MS = 15 * 60 * 1000L;
     private static final String CHATGPT_PROVIDER_NAME = "ChatGPT Plus/Pro";
     private static final Set<String> CHATGPT_CODEX_MODEL_IDS = Set.of(
+            "gpt-5-chat-latest",
+            "gpt-5.2-chat-latest",
+            "gpt-5.3-chat-latest",
             "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
             "gpt-5.4",
@@ -2395,6 +2401,24 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
         coreProviders = providers;
     }
 
+    /**
+     * Builds the models served through a ChatGPT subscription from the bundled
+     * OpenAI Responses catalog.
+     */
+    public List<Model> chatGptSubscriptionModels() {
+        return catalogModelsForProvider("openai").stream()
+                .filter(model -> model.api.equals("openai-responses"))
+                .filter(model -> CHATGPT_CODEX_MODEL_IDS.contains(model.id))
+                .map(source -> {
+                    Model model = copyModel(source);
+                    model.provider = CHATGPT_PROVIDER_ID;
+                    model.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
+                    model.cost = ModelCost.FREE;
+                    return model;
+                })
+                .toList();
+    }
+
     private CodingAgentOperations chatGptProvider(List<Model> models, OpenAiResponsesProvider responses) {
         providerKind = ProviderKind.CHATGPT;
         this.models = models;
@@ -2413,6 +2437,75 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
             throw new IllegalArgumentException("Unknown core provider: " + id);
         }
         return provider;
+    }
+
+    /** Returns the initialized model list for one core provider. */
+    public List<Model> coreProviderModels(String id) {
+        return providerModels(requireCoreProvider(id));
+    }
+
+    /**
+     * Builds the core-provider registry with an independent operations carrier
+     * for every folded provider implementation.
+     */
+    public void initializeCoreProviders() {
+        loadBundledModelCatalog();
+        defaultCredentialStore();
+        Map<String, Provider> providers = new LinkedHashMap<>();
+        providers.put(
+                "anthropic",
+                new AnthropicProvider(
+                        "anthropic",
+                        "Anthropic",
+                        catalogModelsForProvider("anthropic").stream()
+                                .filter(model -> model.api.equals("anthropic-messages"))
+                                .toList(),
+                        List.of(
+                                EnvApiKeys.ANTHROPIC_AUTH_TOKEN_ENV,
+                                EnvApiKeys.ANTHROPIC_OAUTH_TOKEN_ENV,
+                                EnvApiKeys.ANTHROPIC_API_KEY_ENV),
+                        false));
+        providers.put(
+                "openai",
+                new OpenAiResponsesProvider(
+                        "openai",
+                        "OpenAI",
+                        List.copyOf(catalogModelsForProvider("openai").stream()
+                                .filter(model -> model.api.equals("openai-responses"))
+                                .toList()),
+                        List.of("OPENAI_API_KEY"),
+                        this,
+                        OpenAiResponsesProvider.RequestProfile.STANDARD));
+
+        List<Model> chatGptModels = chatGptSubscriptionModels();
+        CHATGPT_OPERATIONS.chatGptAuth(this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+        providers.put(
+                CHATGPT_PROVIDER_ID,
+                CHATGPT_OPERATIONS.chatGptProvider(
+                        chatGptModels,
+                        new OpenAiResponsesProvider(
+                                CHATGPT_PROVIDER_ID,
+                                CHATGPT_PROVIDER_NAME,
+                                List.copyOf(chatGptModels),
+                                List.of(),
+                                null,
+                                OpenAiResponsesProvider.RequestProfile.CODEX)));
+
+        GOOGLE_OPERATIONS.googleProvider(List.copyOf(catalogModelsForProvider("google").stream()
+                .filter(model -> model.api.equals(GOOGLE_API))
+                .toList()));
+        providers.put("google", GOOGLE_OPERATIONS);
+
+        GITHUB_COPILOT_OPERATIONS.gitHubCopilotAuth(
+                this,
+                URI.create("https://github.com"),
+                URI.create("https://api.github.com/copilot_internal/v2/token"),
+                URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
+        providers.put(
+                GITHUB_COPILOT_PROVIDER_ID,
+                GITHUB_COPILOT_OPERATIONS.newGitHubCopilotProvider(
+                        catalogModelsForProvider(GITHUB_COPILOT_PROVIDER_ID)));
+        coreProviders(Map.copyOf(providers));
     }
 
     // -------------------------------------------------------- stream options
@@ -9543,67 +9636,7 @@ public enum CodingAgentOperations implements Provider, CredentialStore {
                         """.formatted(APP_NAME, APP_NAME));
                 return 0;
             }
-            loadBundledModelCatalog();
-            defaultCredentialStore();
-            Map<String, Provider> providers1 = new LinkedHashMap<>();
-            providers1.put(
-                    "anthropic",
-                    new AnthropicProvider(
-                            "anthropic",
-                            "Anthropic",
-                            catalogModelsForProvider("anthropic").stream()
-                                    .filter(model1 -> model1.api.equals("anthropic-messages"))
-                                    .toList(),
-                            List.of(
-                                    EnvApiKeys.ANTHROPIC_AUTH_TOKEN_ENV,
-                                    EnvApiKeys.ANTHROPIC_OAUTH_TOKEN_ENV,
-                                    EnvApiKeys.ANTHROPIC_API_KEY_ENV),
-                            false));
-            providers1.put(
-                    "openai",
-                    new OpenAiResponsesProvider(
-                            "openai",
-                            "OpenAI",
-                            List.copyOf(catalogModelsForProvider("openai").stream()
-                                    .filter(model -> model.api.equals("openai-responses"))
-                                    .toList()),
-                            List.of("OPENAI_API_KEY"),
-                            this,
-                            OpenAiResponsesProvider.RequestProfile.STANDARD));
-            chatGptAuth(this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
-            List<Model> models = catalogModelsForProvider("openai").stream()
-                    .filter(model2 -> model2.api.equals("openai-responses"))
-                    .filter(model1 -> CHATGPT_CODEX_MODEL_IDS.contains(model1.id))
-                    .map(source -> {
-                        Model model1 = copyModel(source);
-                        model1.provider = CHATGPT_PROVIDER_ID;
-                        model1.baseUrl = CHATGPT_CODEX_API_BASE_URL.toString();
-                        model1.cost = ModelCost.FREE;
-                        return model1;
-                    })
-                    .toList();
-            providers1.put(
-                    CHATGPT_PROVIDER_ID,
-                    chatGptProvider(models, new OpenAiResponsesProvider(
-                                    CHATGPT_PROVIDER_ID,
-                                    CHATGPT_PROVIDER_NAME,
-                                    List.copyOf(models),
-                                    List.of(),
-                                    null,
-                                    OpenAiResponsesProvider.RequestProfile.CODEX)));
-            googleProvider(List.copyOf(catalogModelsForProvider("google").stream()
-                    .filter(model -> model.api.equals(GOOGLE_API))
-                    .toList()));
-            providers1.put("google", this);
-            gitHubCopilotAuth(
-                    this,
-                    URI.create("https://github.com"),
-                    URI.create("https://api.github.com/copilot_internal/v2/token"),
-                    URI.create(GITHUB_COPILOT_DEFAULT_BASE_URL));
-            providers1.put(
-                    "github-copilot",
-                    newGitHubCopilotProvider(catalogModelsForProvider("github-copilot")));
-            coreProviders(Map.copyOf(providers1));
+            initializeCoreProviders();
             if (listModels) {
                 String needle = modelSearch == null ? "" : modelSearch.toLowerCase();
                 for (Provider provider : List.copyOf(coreProviders.values())) {

@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import com.quaxt.codingagent.CodingAgentOperations;
 import com.quaxt.codingagent.ai.types.Compat;
+import com.quaxt.codingagent.ai.types.ModelCost;
 import com.quaxt.codingagent.ai.types.Model;
 
 class ModelCatalogTest {
@@ -35,6 +37,39 @@ class ModelCatalogTest {
 		assertEquals("openai-responses", catalog.requireCatalogModel("github-copilot", "gpt-5.6-terra").api);
 		assertEquals("openai-completions", catalog.requireCatalogModel("github-copilot", "gemini-3.6-flash").api);
 		assertEquals("anthropic-messages", catalog.requireCatalogModel("github-copilot", "claude-opus-5").api);
+	}
+
+	@Test
+	void includesChatModelsForChatGptSubscriptions() {
+		CodingAgentOperations catalog = loadBundledModelCatalog();
+
+		List<Model> models = catalog.chatGptSubscriptionModels();
+		List<String> ids = models.stream().map(model -> model.id).toList();
+		assertTrue(ids.containsAll(List.of(
+				"gpt-5-chat-latest",
+				"gpt-5.2-chat-latest",
+				"gpt-5.3-chat-latest")));
+		assertTrue(models.stream().allMatch(model -> model.provider.equals("chatgpt")));
+		assertTrue(models.stream().allMatch(model -> model.baseUrl.equals(
+				CodingAgentOperations.CHATGPT_CODEX_API_BASE_URL.toString())));
+		assertTrue(models.stream().allMatch(model -> model.cost == ModelCost.FREE));
+	}
+
+	@Test
+	void coreProviderInitializationKeepsChatGptModelsIsolated() {
+		CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+
+		operations.initializeCoreProviders();
+
+		List<String> chatGptIds = operations.coreProviderModels("chatgpt").stream()
+				.map(model -> model.id)
+				.toList();
+		assertTrue(chatGptIds.contains("gpt-5.6-terra"));
+		assertTrue(chatGptIds.contains("gpt-5.3-chat-latest"));
+		assertTrue(operations.coreProviderModels("google").stream()
+				.allMatch(model -> model.provider.equals("google")));
+		assertTrue(operations.coreProviderModels("github-copilot").stream()
+				.allMatch(model -> model.provider.equals("github-copilot")));
 	}
 
 	@Test
