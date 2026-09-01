@@ -109,7 +109,7 @@ class GitHubCopilotAuthTest {
 
 			IOException error = assertThrows(IOException.class, () -> auth.gitHubCopilotResolveToken(state));
 
-			assertTrue(error.getMessage().startsWith("502:"));
+			assertTrue(error.getMessage().startsWith("502 from "));
 		} finally {
 			server.stop(0);
 		}

@@ -1275,8 +1275,13 @@ public enum CodingAgentOperations implements CredentialStore {
 
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             String errorBody;
-            try (InputStream stream = response.body()) {
-                errorBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            InputStream stream = response.body();
+            if (stream == null) {
+                errorBody = "";
+            } else {
+                try (stream) {
+                    errorBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+                }
             }
             int status = response.statusCode();
             String trimmed = errorBody.trim();
@@ -1284,10 +1289,16 @@ public enum CodingAgentOperations implements CredentialStore {
                     ? trimmed
                     : trimmed.substring(0, HttpException.MAX_ERROR_BODY_CHARS) + "... [truncated "
                       + (trimmed.length() - HttpException.MAX_ERROR_BODY_CHARS) + " chars]";
+            String target = request.uri().toString();
+            String prefix = status + " from " + target;
             throw new HttpException(
-                    status, errorBody, trimmed.isEmpty() ? status + " status code (no body)" : status + ": " + detail);
+                    status, errorBody, trimmed.isEmpty() ? prefix + " (no body)" : prefix + ": " + detail);
         }
         InputStream bodyStream = response.body();
+        if (bodyStream == null) {
+            throw new IOException("No response body from " + request.uri().getHost()
+                    + " (status " + response.statusCode() + "). The request may have been blocked by a sandbox or proxy.");
+        }
         if (signal != null) {
             onAbort(signal, () -> {
                 try {
@@ -5100,9 +5111,22 @@ public enum CodingAgentOperations implements CredentialStore {
             throws IOException {
         requireNotAborted(signal);
         if (!Files.isRegularFile(file)) {
-            throw new IOException("Not a readable file: " + file);
+            if (Files.exists(file)) {
+                throw new IOException("Not a regular file: " + file);
+            }
+            try {
+                file.getParent().toFile().canRead();
+            } catch (SecurityException ignored) {
+                throw new IOException("Access denied: " + file + " (the file may be outside the sandbox)");
+            }
+            throw new IOException("File not found: " + file);
         }
-        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (java.nio.file.AccessDeniedException denied) {
+            throw new IOException("Access denied: " + file + " (the file may be outside the sandbox)");
+        }
         int offset = positiveToolIntOrDefault(arguments, "offset", 1);
         int start = offset - 1;
         if (start >= lines.size()) {
