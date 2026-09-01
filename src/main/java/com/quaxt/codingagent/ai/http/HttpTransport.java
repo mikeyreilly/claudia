@@ -2,6 +2,7 @@ package com.quaxt.codingagent.ai.http;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Authenticator;
 import java.net.InetSocketAddress;
 import java.net.ProxySelector;
 import java.net.URI;
@@ -40,11 +41,15 @@ public final class HttpTransport {
 				proxy = ProxySelector.getDefault();
 			}
 		}
-		CLIENT = HttpClient.newBuilder()
+		Authenticator auth = Authenticator.getDefault();
+		HttpClient.Builder builder = HttpClient.newBuilder()
 				.followRedirects(HttpClient.Redirect.NORMAL)
 				.connectTimeout(Duration.ofSeconds(30))
-				.proxy(proxy)
-				.build();
+				.proxy(proxy);
+		if (auth != null) {
+			builder.authenticator(auth);
+		}
+		CLIENT = builder.build();
 	}
 
 	public HttpTransport() {}
