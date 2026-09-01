@@ -10361,8 +10361,11 @@ public enum CodingAgentOperations implements CredentialStore {
                                                             selector1.optionStartRow = lines.size();
                                                             selector1.visibleCount = Math.clamp(frame.height - 9, 1, 10);
                                                             int itemCount = mcpSelectorItemCount(selector1);
-                                                            selector1.visibleStart = Math.max(0, Math.clamp(itemCount - selector1.visibleCount, 0,
-                                                                    selector1.selectedIndex - selector1.visibleCount / 2));
+                                                            selector1.visibleStart = Math.max(
+                                                                    0,
+                                                                    Math.min(
+                                                                            selector1.selectedIndex - selector1.visibleCount / 2,
+                                                                            Math.max(0, itemCount - selector1.visibleCount)));
                                                             int end = Math.min(itemCount, selector1.visibleStart + selector1.visibleCount);
                                                             if (itemCount == 0) {
                                                                 String empty = selector1.view == McpSelector.View.SERVERS
