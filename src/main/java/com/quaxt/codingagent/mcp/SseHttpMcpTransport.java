@@ -7,7 +7,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
-import java.time.Duration;
+
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,10 +25,7 @@ public final class SseHttpMcpTransport implements McpTransport {
 	public Map<String, String> headers;
 	public CodingAgentOperations.McpOAuthSession oauth;
 	public Path workspace;
-	public HttpClient client = HttpClient.newBuilder()
-			.followRedirects(HttpClient.Redirect.NORMAL)
-			.connectTimeout(Duration.ofSeconds(15))
-			.build();
+	public HttpClient client = CodingAgentOperations.newHttpClient();
 	public AtomicLong nextId = new AtomicLong(1);
 	public Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 	public CompletableFuture<URI> endpoint = new CompletableFuture<>();

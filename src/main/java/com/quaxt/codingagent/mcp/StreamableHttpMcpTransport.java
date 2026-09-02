@@ -6,7 +6,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
-import java.time.Duration;
+
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -23,10 +23,7 @@ public final class StreamableHttpMcpTransport implements McpTransport {
 	public Map<String, String> headers;
 	public CodingAgentOperations.McpOAuthSession oauth;
 	public Path workspace;
-	public HttpClient client = HttpClient.newBuilder()
-			.followRedirects(HttpClient.Redirect.NORMAL)
-			.connectTimeout(Duration.ofSeconds(15))
-			.build();
+	public HttpClient client = CodingAgentOperations.newHttpClient();
 	public AtomicLong nextId = new AtomicLong(1);
 	public volatile String sessionId;
 	public volatile String protocolVersion;
