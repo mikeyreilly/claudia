@@ -70,6 +70,7 @@ import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
+import java.net.Authenticator;
 import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.net.http.HttpClient;
@@ -6677,6 +6678,15 @@ public enum CodingAgentOperations implements CredentialStore {
         this.importPaths = importPaths;
     }
 
+    public static HttpClient newHttpClient() {
+        HttpClient.Builder builder = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(15));
+        Authenticator auth = Authenticator.getDefault();
+        if (auth != null) builder.authenticator(auth);
+        return builder.build();
+    }
+
     private void mcpOAuthClient(HttpClient http, Predicate<URI> browser, Duration callbackTimeout) {
         this.http = http;
         this.browser = browser;
@@ -6689,10 +6699,7 @@ public enum CodingAgentOperations implements CredentialStore {
         }
         servers = new LinkedHashMap<>();
         closed = false;
-        HttpClient http = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(15))
-                .build();
+        HttpClient http = newHttpClient();
         Path home = Path.of(System.getProperty("user.home"));
         String xdg = System.getenv("XDG_DATA_HOME");
         Path openCodeData = xdg == null || xdg.isBlank()
@@ -10374,31 +10381,34 @@ public enum CodingAgentOperations implements CredentialStore {
                                                                 lines.add(TerminalStyle.MUTED + empty + TerminalStyle.RESET);
                                                             } else {
                                                                 for (int index = selector1.visibleStart; index < end; index++) {
-                                                                    McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
-                                                                    McpToolStatus status1 = selector1.filteredTools.get(index);
-                                                                    String row = (index == selector1.selectedIndex ? "> " : "  ")
-                                                                            + (selector1.view == McpSelector.View.SERVERS
-                                                                            ? switch (status.state) {
-                                                                        case CONNECTING ->
-                                                                                "⋯ " + status.name + "  Connecting";
-                                                                        case AUTHENTICATING ->
-                                                                                "⋯ " + status.name + "  Waiting for OAuth";
-                                                                        case AUTH_REQUIRED ->
-                                                                                "! " + status.name + "  Authentication required";
-                                                                        case CONNECTED -> {
-                                                                            String result1;
-                                                                            if (status.enabledToolCount == status.toolCount) {
-                                                                                result1 = status.toolCount + " tool(s)";
-                                                                            } else {
-                                                                                result1 = status.enabledToolCount + "/" + status.toolCount + " tool(s)";
+                                                                    String detail;
+                                                                    if (selector1.view == McpSelector.View.SERVERS) {
+                                                                        McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
+                                                                        detail = switch (status.state) {
+                                                                            case CONNECTING ->
+                                                                                    "⋯ " + status.name + "  Connecting";
+                                                                            case AUTHENTICATING ->
+                                                                                    "⋯ " + status.name + "  Waiting for OAuth";
+                                                                            case AUTH_REQUIRED ->
+                                                                                    "! " + status.name + "  Authentication required";
+                                                                            case CONNECTED -> {
+                                                                                String result1;
+                                                                                if (status.enabledToolCount == status.toolCount) {
+                                                                                    result1 = status.toolCount + " tool(s)";
+                                                                                } else {
+                                                                                    result1 = status.enabledToolCount + "/" + status.toolCount + " tool(s)";
+                                                                                }
+                                                                                yield "✓ " + status.name + "  Enabled · " + result1;
                                                                             }
-                                                                            yield "✓ " + status.name + "  Enabled · " + result1;
-                                                                        }
-                                                                        case DISABLED ->
-                                                                                "○ " + status.name + "  Disabled";
-                                                                        case FAILED -> "✗ " + status.name + "  Failed";
+                                                                            case DISABLED ->
+                                                                                    "○ " + status.name + "  Disabled";
+                                                                            case FAILED -> "✗ " + status.name + "  Failed";
+                                                                        };
+                                                                    } else {
+                                                                        McpToolStatus status1 = selector1.filteredTools.get(index);
+                                                                        detail = (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled");
                                                                     }
-                                                                            : (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled"));
+                                                                    String row = (index == selector1.selectedIndex ? "> " : "  ") + detail;
                                                                     row = truncatePlain(row, frame.width);
                                                                     lines.add(index == selector1.selectedIndex ? TerminalStyle.HEADING + row + TerminalStyle.RESET : row);
                                                                 }
