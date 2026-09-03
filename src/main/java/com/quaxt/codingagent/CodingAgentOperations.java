@@ -4729,7 +4729,7 @@ public enum CodingAgentOperations implements CredentialStore {
                         timeoutSeconds = value.asDouble();
                     }
                     Process process = new ProcessBuilder(switch (local.shell) {
-                        case BASH -> List.of("/bin/bash", "-lc", command);
+                        case BASH -> List.of("/bin/bash", "-c", command);
                         case POWERSHELL ->
                                 List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command);
                     })
