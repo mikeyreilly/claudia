@@ -1431,6 +1431,33 @@ public enum CodingAgentOperations implements CredentialStore {
         return resolveApiKey(provider, System.getenv());
     }
 
+    /**
+     * Returns the local or hosted Anthropic-compatible endpoint selected by an
+     * Anthropic CLI proxy, or null when the official endpoint should be used.
+     */
+    public static String configuredAnthropicBaseUrl(Map<String, String> environment) {
+        String baseUrl = environment.get("ANTHROPIC_BASE_URL");
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return null;
+        }
+        URI uri;
+        try {
+            uri = URI.create(baseUrl);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("ANTHROPIC_BASE_URL must be an absolute HTTP(S) URL", error);
+        }
+        if (uri.getScheme() == null
+                || uri.getHost() == null
+                || (!uri.getScheme().equalsIgnoreCase("http") && !uri.getScheme().equalsIgnoreCase("https"))) {
+            throw new IllegalArgumentException("ANTHROPIC_BASE_URL must be an absolute HTTP(S) URL");
+        }
+        return trimTrailingSlash(baseUrl);
+    }
+
+    private static boolean isAnthropicProxyConfigured() {
+        return configuredAnthropicBaseUrl(System.getenv()) != null;
+    }
+
     // ----------------------------------------------------------- credentials
 
     /**
@@ -2988,7 +3015,13 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     private static String providerBaseUrl(Model model, StreamOptions options) {
-        return options.baseUrl == null || options.baseUrl.isBlank() ? model.baseUrl : options.baseUrl;
+        if (options.baseUrl != null && !options.baseUrl.isBlank()) {
+            return options.baseUrl;
+        }
+        String configuredBaseUrl = model.provider.equals("anthropic")
+                ? configuredAnthropicBaseUrl(System.getenv())
+                : null;
+        return configuredBaseUrl == null ? model.baseUrl : configuredBaseUrl;
     }
 
     private void anthropicAppendContent(ArrayNode target, List<? extends UserContent> content) {
@@ -10253,7 +10286,10 @@ public enum CodingAgentOperations implements CredentialStore {
                                             ProviderState copilot = (ProviderState)
                                                     requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                             try {
-                                                if (gitHubCopilotHasCredential(copilot)) {
+                                                if (isAnthropicProxyConfigured()) {
+                                                    // Keep proxy streaming isolated from the JDK's prior Copilot HTTP/2 traffic.
+                                                    models2.addAll(copilot.models);
+                                                } else if (gitHubCopilotHasCredential(copilot)) {
                                                     println("Refreshing GitHub Copilot models...");
                                                     models2.addAll(
                                                             gitHubCopilotEnableAndRefreshModels(copilot).models);
