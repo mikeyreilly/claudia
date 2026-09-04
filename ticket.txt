@@ -1,0 +1,55 @@
+SSE streaming body arrives empty after /models command refreshes GitHub Copilot models
+
+Summary
+
+When the /models interactive command is used to select a model, all subsequent Anthropic API streaming requests through the local APIM proxy (cai-claude-apim-proxy at 127.0.0.1:8787) receive HTTP 200 with correct headers (text/event-stream; charset=utf-8, transfer-encoding: chunked) but the response body InputStream is immediately at EOF — zero SSE events are read, producing "Anthropic stream ended before message_stop" on all retry attempts.
+
+Reproduction
+
+1. Start the agent with ANTHROPIC_BASE_URL=http://127.0.0.1:8787 (via cai-claude-apim-proxy)
+2. On startup auto-select, the agent correctly streams from the proxy — works
+3. Run /models in the interactive shell
+4. The command calls gitHubCopilotEnableAndRefreshModels(), which makes multiple HTTPS requests to api.github.com and api.githubcopilot.com via the shared HttpTransport.CLIENT (java.net.http.HttpClient, default HTTP/2 preference)
+5. Select any anthropic model (e.g. claude-opus-4-6)
+6. Send a prompt — fails: response status is 200, headers are correct, but BufferedReader.readLine() on the response body returns null immediately
+
+The agent retries 3 times; all attempts fail identically. The bug persists for the remainder of the session.
+
+Works
+- Startup auto-select (no prior HTTP requests)
+- --model claude-opus-4-6 CLI flag (no prior HTTP requests)
+- curl to the same proxy URL at any time
+- Standalone Java test programs reproducing the same request sequence (HTTPS to GitHub then HTTP to proxy) with the same HttpClient configuration
+
+Does not work
+- Any prompt after /models has run (even if the same model is re-selected)
+
+Debugging performed
+
+- Confirmed the proxy returns 200 with correct headers and transfer-encoding: chunked
+- response.body() is a jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream with available()=1, but read() returns -1
+- Response version is HTTP_1_1 (no HTTP/2 upgrade)
+- AbortSignal is fresh per prompt — not aborted
+- No system proxy (HTTPS_PROXY/HTTP_PROXY) configured
+- Not running in the srt sandbox
+- Tried a dedicated HttpClient with .version(HTTP_1_1) for http:// URLs — no change
+- Tried synchronous client.send() instead of sendAsync().get() — no change
+- The triggering factor is the Copilot HTTPS requests inside gitHubCopilotEnableAndRefreshModels(). These use the same HttpTransport.CLIENT and go to api.github.com (HTTP/2) and api.githubcopilot.com (HTTP/2). The Copilot response bodies are closed via closeHttpResponse() which calls body.close() without draining
+
+Environment
+- OpenJDK 26.0.2+10-55 (macOS, darwin)
+- HttpTransport.CLIENT: default HTTP/2 preference, NORMAL redirects, 30s connect timeout
+- Streaming runs on a virtual thread (Thread.startVirtualThread)
+- HttpClient.sendAsync() with BodyHandlers.ofInputStream(), completed via future.get()
+
+Suspected root cause
+
+A JDK HttpClient internal state issue where HTTP/2 connections established to GitHub/Copilot endpoints corrupt the response-body delivery for subsequent HTTP/1.1 streaming requests to a different host on the same client
+instance. The headers are delivered correctly but the HttpResponseInputStream subscription completta. This may be a JDK bug in the HTTP/2 → HTTP/1.1 mixed-protocol path, or in theBodyHandlers.ofInputStream() subscriber lifecycle when the client has active HTTP/2 connections.
+
+Possible workarounds to investigate
+- Skip gitHubCopilotEnableAndRefreshModels() when ANTHROPIC_BASE_URL is set (avoids the triggering
+- Use a completely separate HttpClient instance for the Copilot refresh requests (isolates HTTP/2 connections from the proxy client)
+- Close and recreate HttpTransport.CLIENT after the Copilot refresh
+- Replace BodyHandlers.ofInputStream() with a custom BodyHandler that buffers chunks through a PipedInputStream / PipedOutputStream pair
+- File a JDK bug report with a minimal reproducer (would need to narrow down the exact HTTP/2 conn it)

@@ -35,6 +35,23 @@ java -jar target/codingagent.jar \
   --no-session
 ```
 
+### Anthropic APIM proxy
+
+`codingagent` honors the standard `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_API_KEY` environment variables. After configuring
+`cai-claude-apim-proxy`, run codingagent in that configured environment:
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 \
+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+java -jar target/codingagent.jar --model anthropic/claude-opus-4-6
+```
+
+The proxy handles its own AAD/APIM authentication; codingagent only sends the
+Anthropic Messages request to the proxy. When `ANTHROPIC_BASE_URL` is set,
+`/models` does not refresh GitHub Copilot entitlements, avoiding a JDK HTTP
+client interaction that can break subsequent proxy streaming responses.
+
 Start the interactive codingagent TUI shell (backed by JLine) with:
 
 ```bash

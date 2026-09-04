@@ -28,4 +28,21 @@ class EnvApiKeysTest {
 		assertEquals("key", CodingAgentOperations.resolveApiKey("anthropic", environment).orElseThrow());
 		assertTrue(CodingAgentOperations.resolveApiKey("unknown", environment).isEmpty());
 	}
+
+	@Test
+	void acceptsAnthropicProxyBaseUrl() {
+		assertEquals(
+				"http://127.0.0.1:8787",
+				CodingAgentOperations.configuredAnthropicBaseUrl(
+						Map.of("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787/")));
+		assertEquals(null, CodingAgentOperations.configuredAnthropicBaseUrl(Map.of()));
+	}
+
+	@Test
+	void rejectsInvalidAnthropicProxyBaseUrl() {
+		org.junit.jupiter.api.Assertions.assertThrows(
+				IllegalArgumentException.class,
+				() -> CodingAgentOperations.configuredAnthropicBaseUrl(
+						Map.of("ANTHROPIC_BASE_URL", "not a URL")));
+	}
 }
