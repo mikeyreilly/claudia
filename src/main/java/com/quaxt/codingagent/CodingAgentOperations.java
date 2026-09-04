@@ -1192,7 +1192,13 @@ public enum CodingAgentOperations implements CredentialStore {
     private HttpTransport.Response httpPostJson(
             String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
             throws IOException {
-        return httpPost(url, "application/json", headers, body, timeoutMs, signal);
+        return httpPostJson(HttpTransport.CLIENT, url, headers, body, timeoutMs, signal);
+    }
+
+    private HttpTransport.Response httpPostJson(
+            HttpClient client, String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
+            throws IOException {
+        return httpPost(client, url, "application/json", headers, body, timeoutMs, signal);
     }
 
     /**
@@ -1201,10 +1207,17 @@ public enum CodingAgentOperations implements CredentialStore {
     private HttpTransport.Response httpPostForm(
             String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
             throws IOException {
-        return httpPost(url, "application/x-www-form-urlencoded", headers, body, timeoutMs, signal);
+        return httpPostForm(HttpTransport.CLIENT, url, headers, body, timeoutMs, signal);
+    }
+
+    private HttpTransport.Response httpPostForm(
+            HttpClient client, String url, Map<String, String> headers, byte[] body, Integer timeoutMs, AbortSignal signal)
+            throws IOException {
+        return httpPost(client, url, "application/x-www-form-urlencoded", headers, body, timeoutMs, signal);
     }
 
     private HttpTransport.Response httpPost(
+            HttpClient client,
             String url,
             String contentType,
             Map<String, String> headers,
@@ -1222,11 +1235,16 @@ public enum CodingAgentOperations implements CredentialStore {
                 builder.header(header.getKey(), header.getValue());
             }
         }
-        return httpSend(builder.build(), signal);
+        return httpSend(client, builder.build(), signal);
     }
 
     private HttpTransport.Response httpGet(
             String url, Map<String, String> headers, Integer timeoutMs, AbortSignal signal) throws IOException {
+        return httpGet(HttpTransport.CLIENT, url, headers, timeoutMs, signal);
+    }
+
+    private HttpTransport.Response httpGet(
+            HttpClient client, String url, Map<String, String> headers, Integer timeoutMs, AbortSignal signal) throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .timeout(Duration.ofMillis(timeoutMs != null ? timeoutMs : HttpTransport.DEFAULT_TIMEOUT_MS))
@@ -1236,15 +1254,15 @@ public enum CodingAgentOperations implements CredentialStore {
                 builder.header(header.getKey(), header.getValue());
             }
         }
-        return httpSend(builder.build(), signal);
+        return httpSend(client, builder.build(), signal);
     }
 
-    private HttpTransport.Response httpSend(HttpRequest request, AbortSignal signal) throws IOException {
+    private HttpTransport.Response httpSend(HttpClient client, HttpRequest request, AbortSignal signal) throws IOException {
         if (signal != null && isAborted(signal)) {
             throw new HttpTransport.AbortedException();
         }
         CompletableFuture<HttpResponse<InputStream>> future =
-                HttpTransport.CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
+                client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
         if (signal != null) {
             onAbort(signal, () -> future.cancel(true));
         }
@@ -1843,9 +1861,14 @@ public enum CodingAgentOperations implements CredentialStore {
 
     private JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
             throws IOException {
+        return authPost(HttpTransport.CLIENT, url, headers, body, form);
+    }
+
+    private JsonNode authPost(HttpClient client, URI url, Map<String, String> headers, byte[] body, boolean form)
+            throws IOException {
         HttpTransport.Response response = form
-                ? httpPostForm(url.toString(), headers, body, null, null)
-                : httpPostJson(url.toString(), headers, body, null, null);
+                ? httpPostForm(client, url.toString(), headers, body, null, null)
+                : httpPostJson(client, url.toString(), headers, body, null, null);
         try {
             return Json.MAPPER.readTree(response.body);
         } finally {
@@ -1903,6 +1926,7 @@ public enum CodingAgentOperations implements CredentialStore {
      */
     public GitHubCopilotDeviceCode gitHubCopilotBeginLogin(ProviderState state) throws IOException {
         JsonNode response = authPost(
+                HttpTransport.COPILOT_CLIENT,
                 state.githubBaseUrl.resolve("/login/device/code"),
                 Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                 mcpFormEncode(Map.of("client_id", GITHUB_COPILOT_CLIENT_ID, "scope", "read:user"))
@@ -1930,6 +1954,7 @@ public enum CodingAgentOperations implements CredentialStore {
         int intervalSeconds = device.intervalSeconds;
         while (System.currentTimeMillis() < device.expiresAtMs) {
             JsonNode response = authPost(
+                    HttpTransport.COPILOT_CLIENT,
                     state.githubBaseUrl.resolve("/login/oauth/access_token"),
                     Map.of("Accept", "application/json", "User-Agent", GITHUB_COPILOT_USER_AGENT),
                     mcpFormEncode(Map.of(
@@ -2017,6 +2042,7 @@ public enum CodingAgentOperations implements CredentialStore {
             headers.put("x-interaction-type", "chat-policy");
             try {
                 HttpTransport.Response response = httpPostJson(
+                        HttpTransport.COPILOT_CLIENT,
                         policyUrl.toString(),
                         headers,
                         "{\"state\":\"enabled\"}".getBytes(StandardCharsets.UTF_8),
@@ -2059,6 +2085,7 @@ public enum CodingAgentOperations implements CredentialStore {
         }
         JsonNode response;
         HttpTransport.Response http = httpGet(
+                HttpTransport.COPILOT_CLIENT,
                 state.copilotTokenUrl.toString(), copilotHeaders("token " + githubAccessToken), null, null);
         try {
             response = Json.MAPPER.readTree(http.body);
@@ -2088,7 +2115,8 @@ public enum CodingAgentOperations implements CredentialStore {
             throws IOException {
         URI modelsUrl = copilotBaseUrlFromToken(state, copilotToken).resolve("/models");
         JsonNode response;
-        HttpTransport.Response http = httpGet(modelsUrl.toString(), copilotModelHeaders(copilotToken), 5_000, null);
+        HttpTransport.Response http = httpGet(
+                HttpTransport.COPILOT_CLIENT, modelsUrl.toString(), copilotModelHeaders(copilotToken), 5_000, null);
         try {
             response = Json.MAPPER.readTree(http.body);
         } finally {
@@ -4272,6 +4300,11 @@ public enum CodingAgentOperations implements CredentialStore {
     private void agentState(String systemPrompt, Model model) {
         this.systemPrompt = systemPrompt;
         selectedModel = model;
+        messages = new ArrayList<>();
+        streamingMessage = null;
+        pendingToolCalls = new LinkedHashSet<>();
+        isStreaming = false;
+        isCompacting = false;
     }
 
     /** Configures the singleton as a fresh active agent. */
@@ -4280,6 +4313,7 @@ public enum CodingAgentOperations implements CredentialStore {
         listeners = new CopyOnWriteArrayList<>();
         activeSignal = null;
         retryPolicy = Retry.Policy.DEFAULT;
+        tools = new ArrayList<>();
     }
 
     /**

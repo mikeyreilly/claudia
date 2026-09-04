@@ -24,8 +24,15 @@ public final class HttpTransport {
 	public static final int DEFAULT_TIMEOUT_MS = 600_000;
 
 	public static final HttpClient CLIENT;
+	/** Keeps GitHub/Copilot HTTP/2 connections separate from provider streams. */
+	public static final HttpClient COPILOT_CLIENT;
 
 	static {
+		CLIENT = newClient();
+		COPILOT_CLIENT = newClient();
+	}
+
+	private static HttpClient newClient() {
 		String httpsProxy = CodingAgentOperations.envAnyCase("https_proxy");
 		String httpProxy = CodingAgentOperations.envAnyCase("http_proxy");
 		ProxySelector proxy;
@@ -49,7 +56,7 @@ public final class HttpTransport {
 		if (auth != null) {
 			builder.authenticator(auth);
 		}
-		CLIENT = builder.build();
+		return builder.build();
 	}
 
 	public HttpTransport() {}
