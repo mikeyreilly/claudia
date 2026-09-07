@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.mcp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,7 +10,6 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +51,19 @@ class McpRemoteTest {
 				AgentTool.ToolResult result = CodingAgentOperations.INSTANCE.executeTool(
 						tool, "id", CodingAgentOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});
 				assertEquals("over http", ((TextContent) result.content.getFirst()).text);
+				assertEquals("remote", manager.mcpStatuses().getFirst().name);
+				assertTrue(manager.mcpToolStatuses("remote").getFirst().enabled);
+				assertFalse(manager.toggleMcpTool("remote", "echo").enabled);
+				assertTrue(manager.mcpTools().isEmpty());
+				assertTrue(manager.toggleMcpTool("remote", "echo").enabled);
+				assertEquals(1, manager.mcpTools().size());
+				assertFalse(manager.toggleMcpServer("remote"));
+				assertEquals(CodingAgentOperations.McpState.DISABLED, manager.mcpStatus("remote").state);
+				assertTrue(manager.mcpTools().isEmpty());
+				assertTrue(manager.toggleMcpServer("remote"));
+				manager.mcpAwaitReady();
+				assertEquals(CodingAgentOperations.McpState.CONNECTED, manager.mcpStatus("remote").state);
+				assertEquals(1, manager.mcpTools().size());
 			} finally {
 				manager.mcpCloseManager();
 			}

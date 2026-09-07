@@ -2,7 +2,7 @@ package com.quaxt.codingagent.cli;
 
 /**
  * A concise presentation state for the interactive shell's status bar.
- * Labels, accents, and the phase transitions live in CodingAgentOperations.
+ * Labels, accents, and the phase transitions live in CodingAgentCli.
  */
 public final class ActivityStatus {
 	public static final String[] SPINNER = {"◐", "◓", "◑", "◒"};

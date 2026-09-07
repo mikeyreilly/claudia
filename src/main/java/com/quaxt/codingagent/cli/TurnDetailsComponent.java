@@ -7,7 +7,7 @@ import java.util.Map;
 /**
  * State of the full-screen inspector for the reasoning and tool steps in the
  * latest user turn. Section building, rendering, and input handling live in
- * CodingAgentOperations.
+ * CodingAgentCli.
  */
 public final class TurnDetailsComponent {
 	public static final int HEADER_LINES = 2;

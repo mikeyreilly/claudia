@@ -1,6 +1,6 @@
 [
   {
-    "name": "com.quaxt.codingagent.CodingAgentOperations",
+    "name": "com.quaxt.codingagent.CodingAgentCli",
     "allDeclaredConstructors": true,
     "allPublicConstructors": true
   }

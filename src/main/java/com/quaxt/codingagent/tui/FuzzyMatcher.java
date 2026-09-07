@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 /**
  * Data for ordered-character fuzzy matching: the digit/letter swap patterns and
  * the score carriers. The gap, boundary, and consecutive-match scoring lives in
- * CodingAgentOperations.
+ * CodingAgentCli.
  */
 public final class FuzzyMatcher {
 	public static final Pattern ALPHA_NUMERIC = Pattern.compile("^([a-z]+)([0-9]+)$");

@@ -1,14 +1,15 @@
 package com.quaxt.codingagent.cli;
 
-import com.quaxt.codingagent.CodingAgentOperations;
+import com.quaxt.codingagent.CodingAgentCli;
 
-import static com.quaxt.codingagent.CodingAgentOperations.activeActivity;
-import static com.quaxt.codingagent.CodingAgentOperations.activityAccent;
-import static com.quaxt.codingagent.CodingAgentOperations.activityLabel;
-import static com.quaxt.codingagent.CodingAgentOperations.isDynamicActivity;
-import static com.quaxt.codingagent.CodingAgentOperations.readyActivity;
-import static com.quaxt.codingagent.CodingAgentOperations.retryingActivity;
-import static com.quaxt.codingagent.CodingAgentOperations.sameActivity;
+
+import static com.quaxt.codingagent.CodingAgentCli.activeActivity;
+import static com.quaxt.codingagent.CodingAgentCli.activityAccent;
+import static com.quaxt.codingagent.CodingAgentCli.activityLabel;
+import static com.quaxt.codingagent.CodingAgentCli.isDynamicActivity;
+import static com.quaxt.codingagent.CodingAgentCli.readyActivity;
+import static com.quaxt.codingagent.CodingAgentCli.retryingActivity;
+import static com.quaxt.codingagent.CodingAgentCli.sameActivity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -23,7 +24,7 @@ class ActivityStatusTest {
 		ActivityStatus ready = readyActivity(0);
 
 		assertEquals("● Ready", activityLabel(ready, 20 * SECOND));
-		assertEquals(CodingAgentOperations.StatusAccent.READY, activityAccent(ready));
+		assertEquals(CodingAgentCli.StatusAccent.READY, activityAccent(ready));
 		assertFalse(isDynamicActivity(ready));
 
 		for (ActivityStatus.Phase phase : ActivityStatus.Phase.values()) {
@@ -31,7 +32,7 @@ class ActivityStatusTest {
 			ActivityStatus status = phase == ActivityStatus.Phase.RETRYING
 					? retryingActivity(1, 3, 2_000, 0)
 					: activeActivity(phase, 0);
-			assertFalse(activityAccent(status) == CodingAgentOperations.StatusAccent.READY, phase.toString());
+			assertFalse(activityAccent(status) == CodingAgentCli.StatusAccent.READY, phase.toString());
 		}
 	}
 
@@ -61,7 +62,7 @@ class ActivityStatusTest {
 		assertEquals("↻ Retry 2/3 in 3s", activityLabel(retry, 10 * SECOND));
 		assertEquals("↻ Retry 2/3 in 1s", activityLabel(retry, 12 * SECOND));
 		assertEquals("↻ Retry 2/3 · waiting for model", activityLabel(retry, 13 * SECOND));
-		assertEquals(CodingAgentOperations.StatusAccent.WARNING, activityAccent(retry));
+		assertEquals(CodingAgentCli.StatusAccent.WARNING, activityAccent(retry));
 	}
 
 	@Test

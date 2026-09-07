@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * Normalized keyboard, mouse, and resize input carriers for Java TUI
- * components. Parsing lives in CodingAgentOperations.
+ * components. Parsing lives in CodingAgentCli.
  */
 public sealed interface TuiInput {
 	enum KeyType {
