@@ -8,7 +8,7 @@ import java.util.function.Consumer;
 /**
  * State of the full-screen MCP server list and its drill-down for toggling
  * individual tools. Rendering, filtering, and input handling live in
- * CodingAgentOperations.
+ * CodingAgentCli.
  */
 public final class McpSelector {
 	/** One persisted enable/disable decision; a null tool name means the server itself. */

@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.jline.terminal.Attributes.LocalFlag;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.impl.DumbTerminal;
-import com.quaxt.codingagent.CodingAgentOperations;
+import com.quaxt.codingagent.CodingAgentCli;
 import org.junit.jupiter.api.Test;
 
 class InteractiveTerminalTest {
@@ -30,7 +30,7 @@ class InteractiveTerminalTest {
 		CountDownLatch interrupted = new CountDownLatch(1);
 		CountDownLatch inputMayFinish = new CountDownLatch(1);
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal, () -> null, false);
 		try {
 			Thread input = Thread.ofVirtual().start(() -> {
@@ -72,7 +72,7 @@ class InteractiveTerminalTest {
 		TerminalFixture fixture = terminal();
 		fixture.terminal().setSize(org.jline.terminal.Size.of(0, 0));
 
-		CodingAgentOperations ignored = newInteractiveTerminal(
+		CodingAgentCli ignored = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			assertEquals(80, fixture.terminal().getColumns());
@@ -86,7 +86,7 @@ class InteractiveTerminalTest {
 	void fillsThePromptLineWithADarkGreyBackground() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write("hello\r".getBytes(StandardCharsets.UTF_8));
@@ -106,7 +106,7 @@ class InteractiveTerminalTest {
 	void submitsAPrepopulatedInputBuffer() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
@@ -126,7 +126,7 @@ class InteractiveTerminalTest {
 	void slashCommandPanelFiltersNavigatesAndInsertsWithoutSubmitting() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write(
@@ -151,7 +151,7 @@ class InteractiveTerminalTest {
 	void shiftEnterVariantsInsertNewlinesAndEnterSubmitsThePrompt() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write(
@@ -170,7 +170,7 @@ class InteractiveTerminalTest {
 	void bracketedPasteKeepsMultilineTextUntilEnter() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write(
@@ -189,7 +189,7 @@ class InteractiveTerminalTest {
 	void unbracketedCrLfPasteDoesNotSubmitAtTheLineBreak() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write("first\r\nsecond\r".getBytes(StandardCharsets.UTF_8));
@@ -207,7 +207,7 @@ class InteractiveTerminalTest {
 	void unbracketedMultilinePasteIsNotMistakenForACommandSelection() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			fixture.input().write("/help\rsecond\r".getBytes(StandardCharsets.UTF_8));
@@ -230,7 +230,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -265,7 +265,7 @@ class InteractiveTerminalTest {
 	void redrawsTheTrackedScreenAfterAnExternalContinueSignal() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, true);
 		try {
 			interactive.println("conversation before external suspend");
@@ -287,7 +287,7 @@ class InteractiveTerminalTest {
 	void replacesTheTrackedMainScreenDocument() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(),
 				() -> {
 					fixture.input().write('\r');
@@ -317,7 +317,7 @@ class InteractiveTerminalTest {
 		TerminalFixture fixture = terminal();
 		AtomicBoolean invoked = new AtomicBoolean();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
 			interactive.bindAppAction("expandTools", () -> {
@@ -349,7 +349,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -365,7 +365,7 @@ class InteractiveTerminalTest {
 			interactive.println("conversation behind nested selector");
 			interactive.bindAppAction("expandTools", () -> {
 				try {
-					interactive.runComponent(CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
+					interactive.runComponent(CodingAgentCli.fuzzySelectorComponent(CodingAgentCli.fuzzySelector(
 									"Details", List.of(new SelectItem<>("done", "Done", "", "Done")), 0, false)));
 				} catch (java.io.IOException error) {
 					throw new AssertionError(error);
@@ -395,7 +395,7 @@ class InteractiveTerminalTest {
 		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
@@ -413,7 +413,7 @@ class InteractiveTerminalTest {
 			fixture.input().flush();
 			String selected = assertTimeoutPreemptively(
 					Duration.ofSeconds(5),
-					() -> interactive.runComponent(CodingAgentOperations.fuzzySelectorComponent(CodingAgentOperations.fuzzySelector(
+					() -> interactive.runComponent(CodingAgentCli.fuzzySelectorComponent(CodingAgentCli.fuzzySelector(
 									"Models",
 									List.of(new SelectItem<>("gpt", "gpt-5.6-terra", "", "gpt-5.6-terra")),
 									0,
@@ -435,87 +435,87 @@ class InteractiveTerminalTest {
 
 	@Test
 	void alignsStatusBarSegmentsToTheFullTerminalWidth() {
-		String line = CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE,
+		String line = CodingAgentCli.statusBarLine(
+				"", CodingAgentCli.StatusAccent.NONE,
 				"~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)", 60);
 
-		assertEquals(60, CodingAgentOperations.visibleWidth(line));
-		assertTrue(CodingAgentOperations.stripAnsi(line).startsWith("~/xa/coding-agent [main]"));
-		assertTrue(CodingAgentOperations.stripAnsi(line).endsWith("GPT-5.6 Sol Max (0%)"));
+		assertEquals(60, CodingAgentCli.visibleWidth(line));
+		assertTrue(CodingAgentCli.stripAnsi(line).startsWith("~/xa/coding-agent [main]"));
+		assertTrue(CodingAgentCli.stripAnsi(line).endsWith("GPT-5.6 Sol Max (0%)"));
 
-		String styled = CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "left", "right", 20);
+		String styled = CodingAgentCli.statusBarLine(
+				"", CodingAgentCli.StatusAccent.NONE, "left", "right", 20);
 		assertTrue(styled.startsWith(TerminalStyle.MUTED));
 		assertTrue(styled.endsWith(TerminalStyle.RESET));
 
-		String narrow = CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE,
+		String narrow = CodingAgentCli.statusBarLine(
+				"", CodingAgentCli.StatusAccent.NONE,
 				"~/a/very/long/working/directory", "GPT-5.6 Sol Max (0%)", 30);
-		assertTrue(CodingAgentOperations.visibleWidth(narrow) <= 30);
-		assertTrue(CodingAgentOperations.stripAnsi(narrow).endsWith("GPT-5.6 Sol Max (0%)"));
+		assertTrue(CodingAgentCli.visibleWidth(narrow) <= 30);
+		assertTrue(CodingAgentCli.stripAnsi(narrow).endsWith("GPT-5.6 Sol Max (0%)"));
 
-		assertEquals("left only", CodingAgentOperations.stripAnsi(CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "left only", "", 20)));
-		assertEquals("", CodingAgentOperations.statusBarLine(
-				"", CodingAgentOperations.StatusAccent.NONE, "", "", 20));
+		assertEquals("left only", CodingAgentCli.stripAnsi(CodingAgentCli.statusBarLine(
+				"", CodingAgentCli.StatusAccent.NONE, "left only", "", 20)));
+		assertEquals("", CodingAgentCli.statusBarLine(
+				"", CodingAgentCli.StatusAccent.NONE, "", "", 20));
 	}
 
 	@Test
 	void activityHasPriorityAndOnlyReadyUsesTheGreenAccent() {
-		String ready = CodingAgentOperations.statusBarLine(
+		String ready = CodingAgentCli.statusBarLine(
 				"● Ready",
-				CodingAgentOperations.StatusAccent.READY,
+				CodingAgentCli.StatusAccent.READY,
 				"~/xa/coding-agent [main]",
 				"GPT-5.6 Sol Max (24%)",
 				80);
-		String waiting = CodingAgentOperations.statusBarLine(
+		String waiting = CodingAgentCli.statusBarLine(
 				"◐ Waiting for model · 12s",
-				CodingAgentOperations.StatusAccent.ACTIVE,
+				CodingAgentCli.StatusAccent.ACTIVE,
 				"~/xa/coding-agent [main]",
 				"GPT-5.6 Sol Max (24%)",
 				80);
 
-		assertTrue(ready.startsWith(CodingAgentOperations.readyStatus() + "● Ready"));
+		assertTrue(ready.startsWith(CodingAgentCli.readyStatus() + "● Ready"));
 		assertTrue(ready.contains(TerminalStyle.RESET + TerminalStyle.MUTED + " │ "));
-		assertTrue(waiting.startsWith(CodingAgentOperations.activeStatus() + "◐ Waiting for model"));
-		assertFalse(waiting.contains(CodingAgentOperations.readyStatus()));
-		assertEquals(80, CodingAgentOperations.visibleWidth(ready));
-		assertEquals(80, CodingAgentOperations.visibleWidth(waiting));
+		assertTrue(waiting.startsWith(CodingAgentCli.activeStatus() + "◐ Waiting for model"));
+		assertFalse(waiting.contains(CodingAgentCli.readyStatus()));
+		assertEquals(80, CodingAgentCli.visibleWidth(ready));
+		assertEquals(80, CodingAgentCli.visibleWidth(waiting));
 
-		for (CodingAgentOperations.StatusAccent accent : List.of(
-				CodingAgentOperations.StatusAccent.NONE,
-				CodingAgentOperations.StatusAccent.ACTIVE,
-				CodingAgentOperations.StatusAccent.TOOL,
-				CodingAgentOperations.StatusAccent.WARNING)) {
-			String line = CodingAgentOperations.statusBarLine(
+		for (CodingAgentCli.StatusAccent accent : List.of(
+				CodingAgentCli.StatusAccent.NONE,
+				CodingAgentCli.StatusAccent.ACTIVE,
+				CodingAgentCli.StatusAccent.TOOL,
+				CodingAgentCli.StatusAccent.WARNING)) {
+			String line = CodingAgentCli.statusBarLine(
 					"Busy", accent, "path", "model", 30);
-			assertFalse(line.contains(CodingAgentOperations.readyStatus()), accent.toString());
+			assertFalse(line.contains(CodingAgentCli.readyStatus()), accent.toString());
 		}
 	}
 
 	@Test
 	void narrowStatusBarsKeepActivityBeforeMetadata() {
-		String line = CodingAgentOperations.statusBarLine(
+		String line = CodingAgentCli.statusBarLine(
 				"◐ Waiting for model · 12s",
-				CodingAgentOperations.StatusAccent.ACTIVE,
+				CodingAgentCli.StatusAccent.ACTIVE,
 				"~/a/very/long/working/directory",
 				"GPT-5.6 Sol Max (24%)",
 				20);
 
-		assertEquals("◐ Waiting for mod...", CodingAgentOperations.stripAnsi(line));
+		assertEquals("◐ Waiting for mod...", CodingAgentCli.stripAnsi(line));
 		assertFalse(line.contains("GPT"));
 		assertFalse(line.contains("~/"));
-		assertEquals(20, CodingAgentOperations.visibleWidth(line));
+		assertEquals(20, CodingAgentCli.visibleWidth(line));
 	}
 
 	@Test
 	void statusBarUpdatesAreIgnoredOnTerminalsWithoutCursorAddressing() throws Exception {
 		TerminalFixture fixture = terminal();
 
-		CodingAgentOperations interactive = newInteractiveTerminal(
+		CodingAgentCli interactive = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
-			interactive.setStatus("", CodingAgentOperations.StatusAccent.NONE, "~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
+			interactive.setStatus("", CodingAgentCli.StatusAccent.NONE, "~/xa/coding-agent [main]", "GPT-5.6 Sol Max (0%)");
 			interactive.println("conversation output");
 
 			assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("conversation output"));
@@ -524,10 +524,11 @@ class InteractiveTerminalTest {
 		}
 	}
 
-	private static CodingAgentOperations newInteractiveTerminal(
+	private static CodingAgentCli newInteractiveTerminal(
 			Terminal terminal, java.util.concurrent.Callable<Void> suspendAction, boolean supportsSuspend) {
-		CodingAgentOperations.INSTANCE.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
-		return CodingAgentOperations.INSTANCE;
+		CodingAgentCli cli = new CodingAgentCli();
+		cli.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
+		return cli;
 	}
 
 	private static TuiComponent<Void> immediateComponent() {

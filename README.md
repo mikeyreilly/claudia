@@ -4,6 +4,12 @@ This repository contains codingagent, a Java/JDK 25 coding-agent CLI. It is a
 single Maven project and can be compiled ahead of time with GraalVM
 native-image. It started out as a java port of pi.
 
+`CodingAgentCli` is the entry point and owns command-line modes, terminal input,
+and presentation. It delegates to `CodingAgentOperations`, which owns agent
+execution, providers, tools, repository instructions, and persistence. The CLI
+reads runtime snapshots and subscribes to `AgentEvent` updates; the runtime can
+execute prompts and record sessions without a terminal.
+
 ## Build and run
 
 Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:

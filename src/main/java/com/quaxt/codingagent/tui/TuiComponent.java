@@ -9,7 +9,7 @@ import java.util.function.Supplier;
 /**
  * Carrier binding one stateful component to the full-screen host. Each field
  * holds a JDK functional value over the component's own state; the host
- * dispatches through the static operations in CodingAgentOperations.
+ * dispatches through the static operations in CodingAgentCli.
  */
 public final class TuiComponent<T> {
 	public Function<TuiFrame, List<String>> render;

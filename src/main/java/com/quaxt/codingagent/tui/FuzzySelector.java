@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * State of the searchable, scrollable selector used for models, settings, and
  * similar menus. Filtering, input handling, and rendering live in
- * CodingAgentOperations.
+ * CodingAgentCli.
  */
 public final class FuzzySelector<T> {
 	public String title;

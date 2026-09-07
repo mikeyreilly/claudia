@@ -8,7 +8,7 @@ import org.jline.terminal.Terminal;
  * State of the alternate-screen host: the terminal it draws on, the optional
  * suspend hook, the main-screen repaint hook, and the diffing renderer. The
  * event loop and the resize, mouse, and suspend/resume lifecycle live in
- * CodingAgentOperations.
+ * CodingAgentCli.
  */
 public final class TuiRuntime {
 	public static final int DEFAULT_COLUMNS = 80;

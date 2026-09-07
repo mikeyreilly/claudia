@@ -1,12 +1,13 @@
 package com.quaxt.codingagent.tui;
 
+import com.quaxt.codingagent.CodingAgentCli;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import com.quaxt.codingagent.CodingAgentOperations;
 import org.junit.jupiter.api.Test;
 
 class FuzzySelectorTest {
@@ -19,14 +20,14 @@ class FuzzySelectorTest {
 						"gpt-5.6-terra [github-copilot] GPT 5.6 Terra"),
 				new SelectItem<>("gpt54", "gpt-5.4", "[github-copilot] GPT 5.4",
 						"gpt-5.4 [github-copilot] GPT 5.4"));
-		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Models", items, 2, true);
+		FuzzySelector<String> selector = CodingAgentCli.fuzzySelector("Models", items, 2, true);
 
-		CodingAgentOperations.handleFuzzySelectorInput(
+		CodingAgentCli.handleFuzzySelectorInput(
 				selector, new TuiInput.Key(TuiInput.KeyType.PASTE, "terra copilot"));
 
 		assertEquals("terra copilot", selector.query.toString());
 		assertEquals(List.of("terra"), selector.filteredItems.stream().map(item -> item.value).toList());
-		CodingAgentOperations.handleFuzzySelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ENTER));
+		CodingAgentCli.handleFuzzySelectorInput(selector, CodingAgentCli.key(TuiInput.KeyType.ENTER));
 		assertTrue(selector.complete);
 		assertEquals("terra", selector.result);
 	}
@@ -37,14 +38,14 @@ class FuzzySelectorTest {
 				new SelectItem<>("one", "One", "", "One"),
 				new SelectItem<>("two", "Two", "", "Two"),
 				new SelectItem<>("three", "Three", "", "Three"));
-		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Options", items, 1, true);
+		FuzzySelector<String> selector = CodingAgentCli.fuzzySelector("Options", items, 1, true);
 
-		CodingAgentOperations.handleFuzzySelectorInput(
+		CodingAgentCli.handleFuzzySelectorInput(
 				selector, new TuiInput.Key(TuiInput.KeyType.CHARACTER, "t"));
 		assertEquals(0, selector.selectedIndex);
-		CodingAgentOperations.handleFuzzySelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.CLEAR));
+		CodingAgentCli.handleFuzzySelectorInput(selector, CodingAgentCli.key(TuiInput.KeyType.CLEAR));
 		assertEquals(1, selector.selectedIndex);
-		CodingAgentOperations.handleFuzzySelectorInput(selector, CodingAgentOperations.key(TuiInput.KeyType.ESCAPE));
+		CodingAgentCli.handleFuzzySelectorInput(selector, CodingAgentCli.key(TuiInput.KeyType.ESCAPE));
 
 		assertTrue(selector.complete);
 		assertNull(selector.result);
@@ -55,12 +56,12 @@ class FuzzySelectorTest {
 		List<SelectItem<String>> items = List.of(
 				new SelectItem<>("one", "One", "", "One"),
 				new SelectItem<>("two", "Two", "", "Two"));
-		FuzzySelector<String> selector = CodingAgentOperations.fuzzySelector("Options", items, -1, true);
+		FuzzySelector<String> selector = CodingAgentCli.fuzzySelector("Options", items, -1, true);
 
-		CodingAgentOperations.handleFuzzySelectorInput(
+		CodingAgentCli.handleFuzzySelectorInput(
 				selector, new TuiInput.Key(TuiInput.KeyType.CHARACTER, "o"));
-		CodingAgentOperations.handleFuzzySelectorInput(
-				selector, CodingAgentOperations.key(TuiInput.KeyType.BACKSPACE));
+		CodingAgentCli.handleFuzzySelectorInput(
+				selector, CodingAgentCli.key(TuiInput.KeyType.BACKSPACE));
 
 		assertEquals("", selector.query.toString());
 		assertEquals(items, selector.filteredItems);
@@ -74,9 +75,9 @@ class FuzzySelectorTest {
 				.mapToObj(index -> new SelectItem<>(index, "Model " + index, "Description " + index,
 						"Model " + index + " Description " + index))
 				.toList();
-		FuzzySelector<Integer> selector = CodingAgentOperations.fuzzySelector("Models", items, 12, true);
+		FuzzySelector<Integer> selector = CodingAgentCli.fuzzySelector("Models", items, 12, true);
 
-		String frame = String.join("\n", CodingAgentOperations.renderFuzzySelector(
+		String frame = String.join("\n", CodingAgentCli.renderFuzzySelector(
 				selector, 80, 12));
 
 		assertTrue(frame.contains("Models"));

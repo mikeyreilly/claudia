@@ -1,8 +1,9 @@
 package com.quaxt.codingagent.tui;
 
+import com.quaxt.codingagent.CodingAgentCli;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.quaxt.codingagent.CodingAgentOperations;
 import org.junit.jupiter.api.Test;
 
 class TuiInputReaderTest {
@@ -10,34 +11,34 @@ class TuiInputReaderTest {
 	void parsesNavigationControlAndMouseSequences() {
 		assertEquals("escape", Keybindings.DEFAULT_APP_KEYBINDINGS.get("interrupt"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.ESCAPE),
-				CodingAgentOperations.parseInputSequence("\u001b"));
+				CodingAgentCli.key(TuiInput.KeyType.ESCAPE),
+				CodingAgentCli.parseInputSequence("\u001b"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.CANCEL),
-				CodingAgentOperations.parseInputSequence("\u0003"));
+				CodingAgentCli.key(TuiInput.KeyType.CANCEL),
+				CodingAgentCli.parseInputSequence("\u0003"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.UP),
-				CodingAgentOperations.parseInputSequence("\u001b[A"));
+				CodingAgentCli.key(TuiInput.KeyType.UP),
+				CodingAgentCli.parseInputSequence("\u001b[A"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.PAGE_DOWN),
-				CodingAgentOperations.parseInputSequence("\u001b[6~"));
+				CodingAgentCli.key(TuiInput.KeyType.PAGE_DOWN),
+				CodingAgentCli.parseInputSequence("\u001b[6~"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.SUSPEND),
-				CodingAgentOperations.parseInputSequence("\u001a"));
+				CodingAgentCli.key(TuiInput.KeyType.SUSPEND),
+				CodingAgentCli.parseInputSequence("\u001a"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.EXPAND_TOOLS),
-				CodingAgentOperations.parseInputSequence("\u000f"));
+				CodingAgentCli.key(TuiInput.KeyType.EXPAND_TOOLS),
+				CodingAgentCli.parseInputSequence("\u000f"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.TOGGLE_THINKING),
-				CodingAgentOperations.parseInputSequence("\u0014"));
+				CodingAgentCli.key(TuiInput.KeyType.TOGGLE_THINKING),
+				CodingAgentCli.parseInputSequence("\u0014"));
 		assertEquals(
-				CodingAgentOperations.key(TuiInput.KeyType.EXIT),
-				CodingAgentOperations.parseInputSequence("\u0004"));
+				CodingAgentCli.key(TuiInput.KeyType.EXIT),
+				CodingAgentCli.parseInputSequence("\u0004"));
 		assertEquals(
 				new TuiInput.Mouse(TuiInput.MouseAction.PRESS, 0, 12, 7),
-				CodingAgentOperations.parseInputSequence("\u001b[<0;12;7M"));
+				CodingAgentCli.parseInputSequence("\u001b[<0;12;7M"));
 		assertEquals(
 				new TuiInput.Mouse(TuiInput.MouseAction.SCROLL_DOWN, 1, 4, 9),
-				CodingAgentOperations.parseInputSequence("\u001b[<65;4;9M"));
+				CodingAgentCli.parseInputSequence("\u001b[<65;4;9M"));
 	}
 }

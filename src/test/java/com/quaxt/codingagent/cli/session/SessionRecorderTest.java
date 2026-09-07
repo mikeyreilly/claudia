@@ -43,7 +43,7 @@ class SessionRecorderTest {
 						false,
 						System.currentTimeMillis())));
 
-		var entries = store.readSession(recorder.sessionId);
+		var entries = store.readSession(recorder.state().sessionId());
 		assertEquals(4, entries.size());
 		assertEquals("session_start", entries.getFirst().type);
 		assertEquals("user", entries.get(1).payload.path("role").asText());
@@ -58,15 +58,15 @@ class SessionRecorderTest {
 		CodingAgentOperations source=CodingAgentOperations.INSTANCE;
 		sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
-		String sourceSessionId = source.sessionId;
+		String sourceSessionId = source.state().sessionId();
 		List<Message> messages = List.of(CodingAgentOperations.userMessage("first prompt"), CodingAgentOperations.userMessage("second prompt"));
 		source.appendSessionMessages(messages);
 
 		store.forkSessionRecorder(tempDir, "faux", "faux-1", "  investigation fork  ", messages);
 		CodingAgentOperations fork = CodingAgentOperations.INSTANCE;
-		SessionSnapshot snapshot = store.sessionSnapshot(fork.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(fork.state().sessionId());
 
-		assertNotEquals(sourceSessionId, fork.sessionId);
+		assertNotEquals(sourceSessionId, fork.state().sessionId());
 		assertEquals("investigation fork", snapshot.name);
 		assertEquals(2, snapshot.messageCount);
 		assertEquals("first prompt", snapshot.firstMessage);
@@ -84,13 +84,13 @@ class SessionRecorderTest {
 		recorder.appendSessionCompaction(new CompactionResult("Saved checkpoint.", 123, 12));
 		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("POST-COMPACTION-SENTINEL")));
 
-		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.state().sessionId());
 
 		// The append-only transcript remains available to render or inspect.
 		assertEquals(3, snapshot.messageCount);
 		assertEquals(3, snapshot.transcriptMessages.size());
 		assertEquals("PRE-COMPACTION-SENTINEL", CodingAgentOperations.text(((UserMessage) snapshot.transcriptMessages.getFirst())));
-		assertEquals("compaction", store.readSession(recorder.sessionId).get(3).type);
+		assertEquals("compaction", store.readSession(recorder.state().sessionId()).get(3).type);
 
 		// Resuming must use the compaction-aware projection, not the old transcript.
 		assertEquals(2, snapshot.messages.size());
@@ -114,7 +114,7 @@ class SessionRecorderTest {
 		recorder.appendSessionCompaction(new CompactionResult("second checkpoint", 100, 10));
 		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("after latest compaction")));
 
-		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.state().sessionId());
 
 		assertEquals(2, snapshot.messages.size());
 		assertEquals("[Conversation checkpoint]\nsecond checkpoint", CodingAgentOperations.text(((UserMessage) snapshot.messages.getFirst())));
@@ -145,7 +145,7 @@ class SessionRecorderTest {
 				5678);
 		recorder.appendSessionMessages(List.of(user, assistant, result));
 
-		SessionSnapshot snapshot = store.sessionSnapshot(recorder.sessionId);
+		SessionSnapshot snapshot = store.sessionSnapshot(recorder.state().sessionId());
 		assertEquals(tempDir.toAbsolutePath().normalize(), snapshot.cwd);
 		assertEquals("faux", snapshot.provider);
 		assertEquals("faux-1", snapshot.model);
@@ -160,9 +160,9 @@ class SessionRecorderTest {
 		ToolResultMessage restoredResult = (ToolResultMessage) snapshot.messages.getLast();
 		assertEquals("README.md", ((Map<?, ?>) restoredResult.details).get("path"));
 
-		store.resumeSessionRecorder(recorder.sessionId);
+		store.resumeSessionRecorder(recorder.state().sessionId());
 		CodingAgentOperations.INSTANCE.appendSessionMessages(List.of(CodingAgentOperations.userMessage("continue")));
-		assertEquals(4, store.sessionSnapshot(recorder.sessionId).messageCount);
+		assertEquals(4, store.sessionSnapshot(recorder.state().sessionId()).messageCount);
 	}
 
 	private static CodingAgentOperations sessionStore(Path directory) {
