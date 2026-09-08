@@ -16912,11 +16912,14 @@ static int sql_tool_authorizer(void *user_data,
  * that fails to prepare or step reports the real SQLite error text instead:
  * advising an agent to re-index over a typo'd table name sends it down a
  * dead end, and stderr is invisible to MCP clients. */
-static char *query_with_open_repo_db(CodeLensDb *db, const char *query)
+static char *query_with_open_repo_db(CodeLensDb *db, const char *query, bool *succeeded)
 {
     char *error = nullptr;
     char *result;
 
+    if (succeeded != nullptr) {
+        *succeeded = false;
+    }
     if ((db == nullptr) || !db->is_open) {
         return nullptr;
     }
@@ -16924,6 +16927,9 @@ static char *query_with_open_repo_db(CodeLensDb *db, const char *query)
     result = db_query_to_string_capture(db, query, &error);
     (void)sqlite3_set_authorizer(db->handle, nullptr, nullptr);
     if (result != nullptr) {
+        if (succeeded != nullptr) {
+            *succeeded = true;
+        }
         return result;
     }
     return error == nullptr ? nullptr : alloc_printf("SQL error: %s\n", error);
@@ -16941,7 +16947,7 @@ static char *query_with_repo_db(const char *repo_name, const char *query)
     if (code_lens_db_open_read(&db, db_path) != 0) {
         return repo_reindex_required_message(repo_name);
     }
-    result = query_with_open_repo_db(&db, query);
+    result = query_with_open_repo_db(&db, query, nullptr);
     code_lens_db_close(&db);
     return result == nullptr ? repo_reindex_required_message(repo_name) : result;
 }
@@ -18066,6 +18072,23 @@ static void mcp_repo_session_close(McpRepoSession *session)
     }
 }
 
+static bool mcp_repo_path_is_absolute(const char *repo)
+{
+    if ((repo == nullptr) || (repo[0] == '\0')) {
+        return false;
+    }
+    if ((repo[0] == '/') ||
+        ((repo[0] == '~') && ((repo[1] == '/') || (repo[1] == '\0')))) {
+        return true;
+    }
+#ifdef _WIN32
+    return (isalpha((unsigned char)repo[0]) && (repo[1] == ':')) ||
+           ((repo[0] == '\\') && (repo[1] == '\\'));
+#else
+    return false;
+#endif
+}
+
 static char *mcp_repo_path_error(const char *repo)
 {
     const char *requested = ((repo == nullptr) || (repo[0] == '\0')) ? "." : repo;
@@ -18073,6 +18096,19 @@ static char *mcp_repo_path_error(const char *repo)
     return alloc_printf(
         "repo \"%s\" is not a file or directory inside a non-bare Git worktree\n",
         requested);
+}
+
+static char *mcp_repo_relative_error(const char *repo)
+{
+    char *server_root = canonical_repo_path(".");
+
+    if (server_root == nullptr) {
+        return alloc_printf("repo \"%s\" is relative; pass an absolute path\n", repo);
+    }
+    return alloc_printf("repo \"%s\" is relative; pass an absolute path "
+                        "(this server resolves relative paths against %s)\n",
+                        repo,
+                        server_root);
 }
 
 static char *mcp_repo_prepare_error(const char *repo)
@@ -18094,6 +18130,9 @@ static char *mcp_repo_session_open(McpRepoSession *session, const char *repo)
         return nullptr;
     }
     (void)memset(session, 0, sizeof(*session));
+    if ((repo != nullptr) && (repo[0] != '\0') && !mcp_repo_path_is_absolute(repo)) {
+        return mcp_repo_relative_error(repo);
+    }
     session->repo_id = mcp_worktree_root(repo);
     if (session->repo_id == nullptr) {
         return mcp_repo_path_error(repo);
@@ -23060,8 +23099,9 @@ static void respond_initialize(const char *id)
         "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
         "when the target is a Java type. It understands Clojure "
         ":as/:refer, Java imports and receiver types, and C linkage and member types. Set "
-        "repo to a repository root or any file or directory inside it; omit repo to use the "
-        "server's current working directory. sql runs read-only structural queries over the "
+        "repo to an absolute repository root or any file or directory inside it; omit repo to "
+        "use the directory where the server was started, which may not be your working "
+        "directory. sql runs read-only structural queries over the "
         "same repository.";
 
     respond_preamble(&out, id);
@@ -23083,11 +23123,13 @@ static void respond_tools_list(const char *id)
         "{\"name\":\"query\",\"description\":\"Ranked prefix search over definitions and"
         " Clojure keywords. Keyword results cover distinct files before repeated uses from"
         " one file. Workspace is the default; scope can opt into resolved dependency"
-        " sources from Maven, Leiningen, or tools.deps projects. repo may be a repository"
-        " root or any path inside it and defaults to the current working directory.\","
+        " sources from Maven, Leiningen, or tools.deps projects. repo may be an absolute"
+        " repository root or any path inside it. When omitted, it defaults to the directory"
+        " the code-lens server was started in, which is not necessarily your working directory.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
-        " inside it. Relative paths resolve from the server's current working directory.\"},"
+        "\"description\":\"Repository root or any file or directory inside it. Must be absolute."
+        " Defaults to the directory the code-lens server was started in, which is not"
+        " necessarily your working directory.\"},"
         "\"query\":{\"type\":\"string\"},\"limit\":{\"type\":\"number\",\"default\":10},"
         "\"excludeTests\":{\"type\":\"boolean\",\"default\":false},"
         "\"kind\":{\"type\":\"string\",\"enum\":[\"function\",\"var\",\"macro\",\"multimethod\","
@@ -23113,12 +23155,14 @@ static void respond_tools_list(const char *id)
         " imports and receiver types, and C"
         " linkage and aggregate members. Dependency definitions are an automatic fallback;"
         " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
-        " package.Type, and ptr->field qualifiers. repo may be a repository root or any path"
-        " inside it and defaults to the current working directory. namespace and path narrow"
-        " candidate definitions and their references.\","
+        " package.Type, and ptr->field qualifiers. repo may be an absolute repository root"
+        " or any path inside it. When omitted, it defaults to the directory the code-lens"
+        " server was started in, which is not necessarily your working directory. namespace"
+        " and path narrow candidate definitions and their references.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
-        " inside it. Relative paths resolve from the server's current working directory.\"},"
+        "\"description\":\"Repository root or any file or directory inside it. Must be absolute."
+        " Defaults to the directory the code-lens server was started in, which is not"
+        " necessarily your working directory.\"},"
         "\"name\":{\"type\":\"string\",\"description\":\"Symbol name, optionally qualified"
         " with a Clojure namespace or alias, Java type or package, or C aggregate.\"},"
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
@@ -23144,11 +23188,13 @@ static void respond_tools_list(const char *id)
         " type, File.namespace is the package, Alias rows are normal imports, and Referred"
         " rows are static imports. For C, global namespaces are empty, static namespaces are"
         " file paths, and field namespaces are aggregate names. Join File via File.rowid ="
-        " fileId. repo may be a repository root or any path inside it and defaults to the"
-        " current working directory.\","
+        " fileId. repo may be an absolute repository root or any path inside it. When"
+        " omitted, it defaults to the directory the code-lens server was started in, which"
+        " is not necessarily your working directory.\","
         "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"repo\":{\"type\":\"string\","
-        "\"default\":\".\",\"description\":\"Repository root or any file or directory"
-        " inside it. Relative paths resolve from the server's current working directory.\"},"
+        "\"description\":\"Repository root or any file or directory inside it. Must be absolute."
+        " Defaults to the directory the code-lens server was started in, which is not"
+        " necessarily your working directory.\"},"
         "\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}";
     StringBuilder out = {0};
 
@@ -23226,11 +23272,19 @@ static char *call_tool(const char *tool_name, const char *args)
         if (error != nullptr) {
             result = error;
         } else {
-            result = query_with_open_repo_db(&session.db, query);
-            result = result == nullptr
-                         ? alloc_printf("failed to execute SQL against repo \"%s\"\n",
-                                        session.repo_id)
-                         : result;
+            bool succeeded = false;
+
+            result = query_with_open_repo_db(&session.db, query, &succeeded);
+            if (result == nullptr) {
+                result = alloc_printf("failed to execute SQL against repo \"%s\"\n",
+                                      session.repo_id);
+            } else if (succeeded) {
+                char *prefixed = alloc_printf("repo: %s\n%s", session.repo_id, result);
+
+                if (prefixed != nullptr) {
+                    result = prefixed;
+                }
+            }
             mcp_repo_session_close(&session);
         }
     }

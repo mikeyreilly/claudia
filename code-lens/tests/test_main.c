@@ -1881,6 +1881,20 @@ static int mcp_rejects_invalid_repo_path(const char *home_dir,
            (mcp_single_index_db_path(home_dir) == nullptr);
 }
 
+static int mcp_rejects_relative_repo_path(void)
+{
+    char server_root[PATH_MAX];
+    char *text;
+
+    if (realpath(".", server_root) == nullptr) {
+        return 0;
+    }
+    text = code_lens_test_mcp_call_tool("query", "{\"repo\":\"src\",\"query\":\"ignored\"}");
+    return (text != nullptr) &&
+           (strstr(text, "repo \"src\" is relative; pass an absolute path") != nullptr) &&
+           (strstr(text, server_root) != nullptr);
+}
+
 static int test_mcp_on_demand_indexing(void)
 {
     char root_template[1024];
@@ -1913,6 +1927,7 @@ static int test_mcp_on_demand_indexing(void)
     char query_args[2048];
     char context_args[2048];
     char sql_args[2048];
+    char expected_sql_text[4096];
     char *text;
     char *db_path;
     int failed = 0;
@@ -2072,10 +2087,23 @@ static int test_mcp_on_demand_indexing(void)
         goto done;
     }
     text = code_lens_test_mcp_call_tool("sql", sql_args);
+    (void)snprintf(expected_sql_text,
+                   sizeof(expected_sql_text),
+                   "repo: %s\nname\nsql-first\n",
+                   sql_repo);
     failed |= mcp_on_demand_assert((text != nullptr) &&
-                                       (strncmp(text, "name\nsql-first\n", 15U) == 0) &&
+                                       (strcmp(text, expected_sql_text) == 0) &&
                                        (mcp_single_index_db_path(sql_home) != nullptr),
-                                   "MCP sql builds an empty-cache Git root on its initiating call");
+                                   "MCP sql names its repo before a row-returning result");
+
+    (void)snprintf(sql_args,
+                   sizeof(sql_args),
+                   "{\"repo\":\"%s\",\"query\":\"SELECT name FROM Symbol WHERE name = 'missing-sql-row'\"}",
+                   sql_repo);
+    text = code_lens_test_mcp_call_tool("sql", sql_args);
+    (void)snprintf(expected_sql_text, sizeof(expected_sql_text), "repo: %s\nname\n", sql_repo);
+    failed |= mcp_on_demand_assert((text != nullptr) && (strcmp(text, expected_sql_text) == 0),
+                                   "MCP sql names its repo before a zero-row result");
 
     if (write_text_file(sql_repo,
                         "sql.clj",
@@ -2088,10 +2116,14 @@ static int test_mcp_on_demand_indexing(void)
                    "{\"repo\":\"%s\",\"query\":\"SELECT name FROM Symbol WHERE name = 'sql-stale'\"}",
                    sql_repo);
     text = code_lens_test_mcp_call_tool("sql", sql_args);
+    (void)snprintf(expected_sql_text,
+                   sizeof(expected_sql_text),
+                   "repo: %s\nname\nsql-stale\n",
+                   sql_repo);
     failed |= mcp_on_demand_assert((text != nullptr) &&
-                                       (strncmp(text, "name\nsql-stale\n", 15U) == 0) &&
+                                       (strcmp(text, expected_sql_text) == 0) &&
                                        (strstr(text, "auto-refreshed") == nullptr),
-                                   "MCP sql refreshes transparently without preceding its header");
+                                   "MCP sql refreshes transparently after naming its repo");
 
     /* An unreadable/corrupt or obsolete database is recovered by the same
      * on-demand path, and the initiating query sees the rebuilt rows. */
@@ -2247,6 +2279,9 @@ static int test_mcp_on_demand_indexing(void)
             (text != nullptr) && (strstr(text, "exact-root|") != nullptr),
             "MCP defaults repo to its current working directory");
     }
+    failed |= mcp_on_demand_assert(
+        mcp_rejects_relative_repo_path(),
+        "MCP rejects relative repo paths and identifies the server root");
     failed |= mcp_on_demand_assert(
         mcp_rejects_invalid_repo_path(invalid_home, plain_repo, "plain-root"),
         "MCP rejects a plain non-Git directory");

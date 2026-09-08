@@ -168,10 +168,11 @@ code-lens mcp
 ```
 
 `code-lens mcp` runs a JSON-RPC 2.0 MCP server on stdio exposing three semantic
-tools: `query`, `context`, and `sql`. Their optional `repo` argument accepts a
-repository root or any file or directory inside a non-bare Git worktree;
-relative paths resolve from the server's working directory, and omitting
-`repo` uses that directory. Code-lens prepares current search data
+tools: `query`, `context`, and `sql`. Their optional `repo` argument accepts an
+absolute repository root or any file or directory inside a non-bare Git
+worktree. When supplied, `repo` must be absolute; omitting it uses the
+directory where the code-lens server was started, which is not necessarily the
+client's working directory. Code-lens prepares current search data
 transparently before each request. Index inventory, freshness, and cache
 maintenance are deliberately absent from the model-facing interface; use the
 `index`, `list`, and `remove` CLI commands for administration. See `USAGE.txt`
