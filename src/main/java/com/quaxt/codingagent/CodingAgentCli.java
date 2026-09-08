@@ -127,7 +127,7 @@ public final class CodingAgentCli {
 
     // Interactive shell and terminal
     private static final List<String> SLASH_COMMANDS = List.of(
-            "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
+            "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
             "/mcp", "/models", "/quit", "/resume", "/settings");
     private static final int VISIBLE_COMMANDS = 4;
     private static final int DEFAULT_COLUMNS = 80;
@@ -168,6 +168,7 @@ public final class CodingAgentCli {
     private volatile ActivityStatus activity;
     private volatile String statusLocation = "";
     private volatile String statusModel = "";
+    private AutoCloseable shellSubscription;
 
     // InteractiveTerminal fields
     private Terminal jlineTerminal;
@@ -2169,7 +2170,29 @@ public final class CodingAgentCli {
                                 try {
                                     if (!exit) switch (trimmed) {
                                         case "/help" ->
-                                                println("Commands: /help, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                                println("Commands: /help, /clear, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
+                                        case "/clear" -> {
+                                            if (!agentConfigured) {
+                                                println("No model is configured.");
+                                                break;
+                                            }
+                                            Model model = runtime.state().model();
+                                            boolean recordingEnabled = false;
+                                            String persistenceWarning = null;
+                                            if (!noSession) {
+                                                try {
+                                                    runtime.defaultSessionStore();
+                                                    runtime.createSessionRecorder(cwd, model.provider, model.id);
+                                                    recordingEnabled = true;
+                                                } catch (IOException error) {
+                                                    persistenceWarning = "New session will not be saved: " + error.getMessage();
+                                                }
+                                            }
+                                            configureShellAgent(model, cwd, recordingEnabled, null);
+                                            replaceScreen(sessionScreenHeader(model));
+                                            println("Started a new session.");
+                                            if (persistenceWarning != null) println(persistenceWarning);
+                                        }
                                         case "/details" -> showShellTurnDetails(false);
                                         case "/fork" -> {
                                             if (!agentConfigured) {
@@ -2804,6 +2827,7 @@ public final class CodingAgentCli {
                         }
                     }
                 } finally {
+                    closeShellSubscription();
                     closeTerminal();
                 }
             } finally {
@@ -3030,7 +3054,7 @@ public final class CodingAgentCli {
         header.append('\n');
         header.append(model == null
                 ? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }
@@ -3081,9 +3105,10 @@ public final class CodingAgentCli {
 
     private void configureShellAgent(Model model, Path configuredCwd, boolean recordingEnabled, String nextSessionName) {
 
+        closeShellSubscription();
         runtime.configureAgent(model, configuredCwd, systemPrompt, apiKey, initialThinkingLevel(model, settings.defaultThinkingLevel));
         runtime.setSessionRecording(recordingEnabled, this::reportCheckpointFailure);
-        runtime.subscribe(event -> {
+        shellSubscription = runtime.subscribe(event -> {
             switch ((AgentEvent) event) {
                 case AgentEvent.AgentStart ignored -> setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
                 case AgentEvent.AgentEnd ignored -> setShellActivity(readyActivity(System.nanoTime()));
@@ -3218,6 +3243,17 @@ public final class CodingAgentCli {
             setShellActivity(readyActivity(System.nanoTime()));
         }
         refreshShellStatus();
+    }
+
+    private void closeShellSubscription() {
+        AutoCloseable subscription = shellSubscription;
+        shellSubscription = null;
+        if (subscription == null) return;
+        try {
+            subscription.close();
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not close shell event subscription", error);
+        }
     }
 
     /**

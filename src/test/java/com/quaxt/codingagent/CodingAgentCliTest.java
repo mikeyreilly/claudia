@@ -221,6 +221,7 @@ class CodingAgentCliTest {
 		String styled = new CodingAgentCli().renderSessionScreen(model, messages, true);
 
 		assertTrue(visible.startsWith("codingagent "));
+		assertTrue(visible.contains("/clear"));
 		assertTrue(CodingAgentCli.stripAnsi(visible).contains("\n> Check the project\n"));
 		assertTrue(CodingAgentCli.stripAnsi(visible).contains("Thinking:\nInspect the project"));
 		assertTrue(visible.contains("[read] Reading README.md"));
