@@ -33,7 +33,7 @@ requests() {
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
     printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
     printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-    # Omitted repo defaults to the server's working directory.
+    # Omitted repo uses the directory where the server was started.
     printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"query","arguments":{"query":"format-greeting"}}}'
     printf '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"context","arguments":{"repo":"%s","name":"format-greeting"}}}\n' "$worktree"
     # A descendant directory resolves to its containing worktree.
@@ -111,6 +111,7 @@ assert_response_contains 13 'Counter|struct|' "C struct query"
 assert_response_contains 14 'counter_add|function|' "C context definition"
 assert_response_contains 14 'src/smoke/c/c_app.c' "C external call site"
 assert_response_contains 15 'counter->value -> Counter' "C member call site"
+assert_response_contains 7 "repo: $worktree\\n" "sql repo disclosure"
 assert_response_contains 7 'COUNT(*)\n16' "mixed-language sql count"
 assert_response_contains 10 'format-greeting|function|smoke.util' "arguments-before-name dispatch"
 

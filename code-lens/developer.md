@@ -347,11 +347,12 @@ Rules:
   (`canonical_repo_path`: `~/` expansion + `realpath`), retain support for
   plain directories, and use `resolve_repo_id` to walk up from an input path
   probing for an existing index, so a path inside an indexed repository
-  resolves to that repository. MCP uses `mcp_worktree_root` to accept a
-  worktree root or any file/directory inside it, walking upward to validate the
-  nearest `.git` directory or gitfile without invoking Git. An omitted `repo`
-  resolves from `.` (the MCP server working directory); standalone plain directories and
-  bare repositories are rejected.
+  resolves to that repository. MCP uses `mcp_worktree_root` to accept an
+  absolute worktree root or any file/directory inside it, walking upward to
+  validate the nearest `.git` directory or gitfile without invoking Git. A
+  supplied MCP `repo` must be absolute; an omitted `repo` resolves from `.`
+  (the directory where the MCP server was started). Standalone plain directories
+  and bare repositories are rejected.
 - `repo_write_lock_acquire`: opens the canonical repo's persistent lock file
   below `<home>/repos/.locks/` and waits for an exclusive whole-file `fcntl`
   lock. `code_lens_index_repository` holds it across the stale recheck,
@@ -973,9 +974,9 @@ reads return stale results with the warning; `sql` skips the check and remains
 raw read-only DB access.
 
 MCP is intentionally different. Its `query`, `context`, and `sql` tools accept
-an optional `repo` naming a worktree root or any path inside it; omission uses
-the server working directory. `mcp_repo_session_open` resolves the canonical
-worktree and transparently prepares a current database through the ordinary
+an optional absolute `repo` naming a worktree root or any path inside it;
+omission uses the directory where the server was started. `mcp_repo_session_open`
+resolves the canonical worktree and transparently prepares a current database through the ordinary
 staging-and-rename path. It never returns a known-stale fallback for workspace
 files: preparation failures become one generic search-availability result.
 A current workspace-only partial generation remains usable when dependency
@@ -1181,9 +1182,9 @@ stdio. Protocol version `2024-11-05`, server name `code-lens`, capabilities
 
 | Tool | Arguments | Internal operation |
 | --- | --- | --- |
-| `query` | `query` (required), `repo` (default `.`), `limit` (default 10), `excludeTests` (default false), `kind`, `path`, `scope`, `dependency` | prepares the worktree, then calls `query_symbols_ex_internal` with its open database |
-| `context` | `name` (required), `repo` (default `.`), `excludeTests` (default false), `namespace`, `path` | prepares the worktree, then calls `context_symbol_ex_internal` with its open database |
-| `sql` | `query` (required), `repo` (default `.`) | prepares the worktree, then calls `query_with_open_repo_db` |
+| `query` | `query` (required), optional absolute `repo` (omitted: server start directory), `limit` (default 10), `excludeTests` (default false), `kind`, `path`, `scope`, `dependency` | prepares the worktree, then calls `query_symbols_ex_internal` with its open database |
+| `context` | `name` (required), optional absolute `repo` (omitted: server start directory), `excludeTests` (default false), `namespace`, `path` | prepares the worktree, then calls `context_symbol_ex_internal` with its open database |
+| `sql` | `query` (required), optional absolute `repo` (omitted: server start directory) | prepares the worktree, then calls `query_with_open_repo_db` and prefixes successful results with the resolved repo |
 
 There are exactly three MCP tools: `query`, `context`, and `sql`. Cache
 inventory and removal are intentionally CLI/public-API concerns. `repo` can be

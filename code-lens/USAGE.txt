@@ -31,11 +31,12 @@ MCP tool surface:
   context(name, repo?, excludeTests?, namespace?, path?)
   sql(query, repo?)
 
-  `repo` accepts a repository root or any file or directory inside a non-bare
-  Git worktree. Relative paths resolve from the server's working directory;
-  omitting it uses that directory. Every request prepares current search data
-  transparently. Repository inventory, freshness, and cache maintenance are
-  available only through the administrative CLI, not as MCP tools or result
+  `repo` accepts an absolute repository root or any file or directory inside a
+  non-bare Git worktree. When supplied, `repo` must be absolute; omitting it
+  uses the directory where the code-lens server was started, which is not
+  necessarily the client's working directory. Every request prepares current
+  search data transparently. Repository inventory, freshness, and cache
+  maintenance are available only through the administrative CLI, not as MCP tools or result
   notes.
 
 Dependency sources:
