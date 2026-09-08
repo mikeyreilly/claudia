@@ -126,9 +126,64 @@ public final class CodingAgentCli {
     private static final String VERSION = "0.1.0-java";
 
     // Interactive shell and terminal
-    private static final List<String> SLASH_COMMANDS = List.of(
-            "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
-            "/mcp", "/models", "/quit", "/resume", "/settings");
+    private enum SlashCommand {
+        CLEAR("/clear"),
+        COMPACT("/compact"),
+        DETAILS("/details"),
+        EXIT("/exit"),
+        FORK("/fork"),
+        HELP("/help"),
+        LOGIN("/login"),
+        LOGOUT("/logout"),
+        MCP("/mcp"),
+        MODELS("/models"),
+        QUIT("/quit", false),
+        RESUME("/resume"),
+        SETTINGS("/settings");
+
+        final String input;
+        final boolean includeInHelp;
+
+        SlashCommand(String input) {
+            this(input, true);
+        }
+
+        SlashCommand(String input, boolean includeInHelp) {
+            this.input = input;
+            this.includeInHelp = includeInHelp;
+        }
+
+        static SlashCommand from(String input) {
+            for (SlashCommand command : values()) {
+                if (command.input.equals(input)) return command;
+            }
+            return null;
+        }
+
+        static List<String> inputs() {
+            return List.of(values()).stream().map(command -> command.input).toList();
+        }
+
+        static List<String> helpInputs() {
+            return List.of(values()).stream()
+                    .filter(command -> command.includeInHelp)
+                    .map(command -> command.input)
+                    .toList();
+        }
+    }
+
+    private static final List<String> SLASH_COMMANDS = SlashCommand.inputs();
+
+    static List<String> slashCommands() {
+        return SLASH_COMMANDS;
+    }
+
+    static String slashCommandHelp() {
+        return "Commands: " + String.join(", ", SlashCommand.helpInputs())
+                + "\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; "
+                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.";
+    }
+
     private static final int VISIBLE_COMMANDS = 4;
     private static final int DEFAULT_COLUMNS = 80;
     private static final int DEFAULT_ROWS = 24;
@@ -2156,634 +2211,14 @@ public final class CodingAgentCli {
                             }
                         }, 1, 1, TimeUnit.SECONDS);
                         while (true) {
-                            String input = readLine("\n> ", SLASH_COMMANDS);
+                            String input = readLine("\n> ", slashCommands());
                             if (input == null) {
                                 println("");
                                 return 0;
                             }
                             if (input.isBlank()) continue;
                             if (input.startsWith("/")) {
-                                String trimmed = input.trim();
-                                boolean exit = trimmed.equals("/exit") || trimmed.equals("/quit");
-                                setShellActivity(activeActivity(
-                                        ActivityStatus.Phase.RUNNING_COMMAND, trimmed.split("\\s+", 2)[0], System.nanoTime()));
-                                try {
-                                    if (!exit) switch (trimmed) {
-                                        case "/help" ->
-                                                println("Commands: /help, /clear, /details, /fork, /resume, /login, /logout, /models, /mcp, /settings, /compact, /exit\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.");
-                                        case "/clear" -> {
-                                            if (!agentConfigured) {
-                                                println("No model is configured.");
-                                                break;
-                                            }
-                                            Model model = runtime.state().model();
-                                            boolean recordingEnabled = false;
-                                            String persistenceWarning = null;
-                                            if (!noSession) {
-                                                try {
-                                                    runtime.defaultSessionStore();
-                                                    runtime.createSessionRecorder(cwd, model.provider, model.id);
-                                                    recordingEnabled = true;
-                                                } catch (IOException error) {
-                                                    persistenceWarning = "New session will not be saved: " + error.getMessage();
-                                                }
-                                            }
-                                            configureShellAgent(model, cwd, recordingEnabled, null);
-                                            replaceScreen(sessionScreenHeader(model));
-                                            println("Started a new session.");
-                                            if (persistenceWarning != null) println(persistenceWarning);
-                                        }
-                                        case "/details" -> showShellTurnDetails(false);
-                                        case "/fork" -> {
-                                            if (!agentConfigured) {
-                                                println("No model is configured.");
-                                                break;
-                                            }
-                                            String name = readLine("Fork session name: ", forkName(sessionName));
-                                            if (name == null || name.isBlank()) {
-                                                println("Fork cancelled.");
-                                                break;
-                                            }
-                                            name = name.strip();
-                                            Model model = runtime.state().model();
-                                            List<Message> forkMessages = runtime.resumableMessages(runtime.state().messages());
-                                            boolean recordingEnabled = false;
-                                            if (!noSession) {
-                                                try {
-                                                    runtime.defaultSessionStore();
-                                                    runtime.forkSessionRecorder(
-                                                            this.cwd, model.provider, model.id, name, forkMessages);
-                                                    recordingEnabled = true;
-                                                } catch (IOException error) {
-                                                    println("Failed to fork session: " + error.getMessage());
-                                                    break;
-                                                }
-                                            }
-                                            configureShellAgent(model, this.cwd, recordingEnabled, name);
-                                            runtime.restoreMessages(forkMessages);
-                                            refreshShellStatus();
-                                            println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
-                                        }
-                                        case "/resume" -> {
-                                            resume: {
-                                                if (noSession) {
-                                                    println("Session persistence is disabled by --no-session.");
-                                                    break resume;
-                                                }
-                                                runtime.defaultSessionStore();
-                                                List<SessionSnapshot> sessions;
-                                                try {
-                                                    sessions = runtime.listSessions(cwd);
-                                                } catch (IOException error) {
-                                                    println("Failed to list saved sessions: " + error.getMessage());
-                                                    break resume;
-                                                }
-                                                if (sessions.isEmpty()) {
-                                                    println("No saved sessions in " + cwd + ".");
-                                                    break resume;
-                                                }
-                                                String currentId = !recordingSession ? null : runtime.state().sessionId();
-                                                List<SelectItem<SessionSnapshot>> items = sessions.stream()
-                                                        .filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
-                                                        .map(session -> {
-                                                            String name = sessionDisplayName(session);
-                                                            String label = abbreviateShellText(
-                                                                    name.replaceAll("[\\p{Cntrl}]", " "), 90);
-                                                            long minutes = Math.max(0, Duration.between(
-                                                                    session.modified, Instant.now()).toMinutes());
-                                                            long hours = minutes / 60;
-                                                            long days = hours / 24;
-                                                            String age = minutes < 1 ? "now"
-                                                                    : minutes < 60 ? minutes + "m"
-                                                                      : hours < 24 ? hours + "h"
-                                                                        : days < 7 ? days + "d"
-                                                                          : days < 30 ? days / 7 + "w"
-                                                                            : days < 365 ? days / 30 + "mo" : days / 365 + "y";
-                                                            String description = session.messageCount + " messages  " + age
-                                                                    + "  [" + session.provider + "/" + session.model + "]";
-                                                            return new SelectItem<>(session, label, description,
-                                                                    session.id + " " + name + " " + session.provider + " "
-                                                                            + session.model + " " + session.firstMessage + " "
-                                                                            + session.allMessagesText);
-                                                        })
-                                                        .toList();
-                                                if (items.isEmpty()) {
-                                                    println("No resumable sessions in " + cwd + ".");
-                                                    break resume;
-                                                }
-                                                SessionSnapshot selected =
-                                                        select("Resume Session (Current Folder)", items, -1, true);
-                                                if (selected == null) break resume;
-                                                try {
-                                                    if (!Files.isDirectory(selected.cwd)) {
-                                                        println("Cannot resume session because its working directory is unavailable: "
-                                                                + selected.cwd);
-                                                        break resume;
-                                                    }
-                                                    Model model;
-                                                    try {
-                                                        model = findModelIn(
-                                                                providerModels(runtime.requireCoreProvider(selected.provider)),
-                                                                selected.provider,
-                                                                selected.model);
-                                                    } catch (IllegalArgumentException ignored) {
-                                                        model = null;
-                                                    }
-                                                    if (model == null) {
-                                                        if (!agentConfigured) {
-                                                            println("Cannot restore model " + selected.provider + "/" + selected.model
-                                                                    + "; configure an available model before resuming this session.");
-                                                            break resume;
-                                                        }
-                                                        model = runtime.state().model();
-                                                        println("Could not restore model " + selected.provider + "/" + selected.model
-                                                                + ". Using " + model + ".");
-                                                    }
-                                                    if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        ProviderState copilot = (ProviderState)
-                                                                runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-                                                        Model enabled = null;
-                                                        try {
-                                                            if (runtime.gitHubCopilotHasCredential(copilot)) {
-                                                                enabled = findModelIn(
-                                                                        runtime.gitHubCopilotAvailableModels(copilot),
-                                                                        model.provider,
-                                                                        model.id);
-                                                            }
-                                                        } catch (IOException error) {
-                                                            println("Could not refresh GitHub Copilot model access: "
-                                                                    + error.getMessage());
-                                                        }
-                                                        if (enabled != null) model = enabled;
-                                                        else if (!agentConfigured
-                                                                || runtime.state().model().provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                            println("Cannot restore GitHub Copilot model " + model.id
-                                                                    + "; log in or configure another model first.");
-                                                            break resume;
-                                                        } else {
-                                                            Model fallback = runtime.state().model();
-                                                            println("Could not restore model " + model + ". Using " + fallback + ".");
-                                                            model = fallback;
-                                                        }
-                                                    }
-                                                    // A session snapshot's messages are compaction-aware, so resuming cannot
-                                                    // resurrect summarized transcript entries into the next model request.
-                                                    List<Message> restored = runtime.resumableMessages(selected.messages);
-                                                    runtime.resumeSessionRecorder(selected.id);
-                                                    configureShellAgent(model, selected.cwd, true, selected.name);
-                                                    settings = withSettingsDefaultModel(settings, model.provider, model.id);
-                                                    runtime.restoreMessages(restored);
-                                                    refreshShellStatus();
-                                                    replaceScreen(renderSessionScreen(
-                                                            model,
-                                                            selected.transcriptMessages,
-                                                            hideThinkingBlock));
-                                                    try {
-                                                        runtime.setSettingsDefaultModelAndProvider(model.provider, model.id);
-                                                    } catch (IOException error) {
-                                                        println("Resumed model could not be saved as the default: "
-                                                                + error.getMessage());
-                                                    }
-                                                    println("Resumed session " + sessionDisplayName(selected) + " with "
-                                                            + restored.size() + " message(s) using " + model + ".");
-                                                } catch (IOException | IllegalArgumentException error) {
-                                                    println("Failed to resume session: " + error.getMessage());
-                                                }
-                                            }
-                                        }
-                                        case "/login" -> {
-                                            println("Log in to a provider:");
-                                            println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
-                                            println("  2. OpenAI API key — use separately billed Platform API credits");
-                                            println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
-                                            String choice = readLine("Select provider [1-3]: ");
-                                            if (choice == null || choice.isBlank()) {
-                                                println("Login cancelled.");
-                                            } else {
-                                                switch (choice.trim().toLowerCase(Locale.ROOT)) {
-                                                    case "1", "github", "github copilot", "copilot" -> {
-                                                        ProviderState copilot = (ProviderState)
-                                                                runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-                                                        GitHubCopilotDeviceCode device = runtime.gitHubCopilotBeginLogin(copilot);
-                                                        println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        println("Waiting for GitHub authorization...");
-                                                        runtime.gitHubCopilotCompleteLogin(copilot, device);
-                                                        println("Enabling GitHub Copilot models...");
-                                                        CopilotModelAccess access =
-                                                                runtime.gitHubCopilotEnableAndRefreshModels(copilot);
-                                                        if (access.policiesEnabled < copilot.models.size()) {
-                                                            println("Some GitHub Copilot models are unavailable for this account.");
-                                                        }
-                                                        List<Model> models1 = access.models;
-                                                        Model model = shellSavedModelIn(models1);
-                                                        if (model == null) model = preferredCopilotModel(models1);
-                                                        if (model == null) {
-                                                            println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
-                                                        } else {
-                                                            configureShellModel(model, true);
-                                                            println("GitHub Copilot is ready with " + model + ".");
-                                                        }
-                                                    }
-                                                    case "2", "openai", "open ai", "openai api", "openai api key" -> {
-                                                        String apiKey = readLineInternal("OpenAI API key: ", null, '*', false);
-                                                        if (apiKey == null || apiKey.isBlank()) {
-                                                            println("OpenAI login cancelled.");
-                                                        } else {
-                                                            runtime.modifyCredential(
-                                                                    runtime.defaultCredentialStore(),
-                                                                    "openai",
-                                                                    ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
-                                                            List<Model> models1 = providerModels(runtime.requireCoreProvider("openai"));
-                                                            Model model = shellSavedModelIn(models1);
-                                                            if (model == null) {
-                                                                model = this.select("Select an OpenAI model", models1.stream().map(CodingAgentCli::shellModelItem).toList(), -1, true);
-                                                            }
-                                                            if (model == null) {
-                                                                println("OpenAI API key saved. Run /models when you are ready to select a model.");
-                                                            } else {
-                                                                configureShellModel(model, true);
-                                                                println("OpenAI is ready with " + model + ".");
-                                                            }
-                                                        }
-                                                    }
-                                                    case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
-                                                         "chatgpt plus/pro" -> {
-                                                        ProviderState chatGpt = (ProviderState)
-                                                                runtime.requireCoreProvider(CHATGPT_PROVIDER_ID);
-                                                        ChatGptDeviceCode device = runtime.chatGptBeginLogin(chatGpt);
-                                                        println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
-                                                        println("Waiting for ChatGPT authorization...");
-                                                        runtime.chatGptCompleteLogin(chatGpt, device);
-                                                        List<Model> models1 = chatGpt.models;
-                                                        Model model = shellSavedModelIn(models1);
-                                                        if (model == null) {
-                                                            model = this.select("Select a ChatGPT model", models1.stream().map(CodingAgentCli::shellModelItem).toList(), -1, true);
-                                                        }
-                                                        if (model == null) {
-                                                            println("ChatGPT login saved. Run /models when you are ready to select a model.");
-                                                        } else {
-                                                            configureShellModel(model, true);
-                                                            println("ChatGPT Plus/Pro is ready with " + model + ".");
-                                                        }
-                                                    }
-                                                    default ->
-                                                            println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
-                                                }
-                                            }
-                                        }
-                                        case "/logout" -> {
-                                            try {
-                                                if (agentConfigured && runtime.state().model().provider.equals(CHATGPT_PROVIDER_ID)) {
-                                                    runtime.chatGptLogout(
-                                                            (ProviderState) runtime.requireCoreProvider(CHATGPT_PROVIDER_ID));
-                                                    agentConfigured = false;
-                                                    println("ChatGPT credentials removed. Run /login or /resume to continue.");
-                                                } else if (agentConfigured && runtime.state().model().provider.equals("openai")) {
-                                                    runtime.deleteCredential(runtime.defaultCredentialStore(), "openai");
-                                                    agentConfigured = false;
-                                                    println("OpenAI API key removed. Run /login or /resume to continue.");
-                                                } else {
-                                                    runtime.gitHubCopilotLogout((ProviderState)
-                                                            runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID));
-                                                    if (agentConfigured
-                                                            && runtime.state().model().provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                        agentConfigured = false;
-                                                        println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
-                                                    } else {
-                                                        println("GitHub Copilot credentials removed.");
-                                                    }
-                                                }
-                                            } finally {
-                                                refreshShellStatus();
-                                            }
-                                        }
-                                        case "/models" -> {
-                                            List<Model> models2 = new ArrayList<>();
-                                            for (Model model1 : runtime.allCatalogModels()) {
-                                                if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                                                    models2.add(model1);
-                                                }
-                                            }
-                                            ProviderState copilot = (ProviderState)
-                                                    runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-                                            try {
-                                                if (isAnthropicProxyConfigured()) {
-                                                    // Keep proxy streaming isolated from the JDK's prior Copilot HTTP/2 traffic.
-                                                    models2.addAll(copilot.models);
-                                                } else if (runtime.gitHubCopilotHasCredential(copilot)) {
-                                                    println("Refreshing GitHub Copilot models...");
-                                                    models2.addAll(
-                                                            runtime.gitHubCopilotEnableAndRefreshModels(copilot).models);
-                                                } else {
-                                                    models2.addAll(copilot.models);
-                                                }
-                                            } catch (IOException error) {
-                                                println("Could not refresh GitHub Copilot model access: " + error.getMessage());
-                                                models2.addAll(copilot.models);
-                                            }
-                                            models2.addAll(((ProviderState)
-                                                    runtime.requireCoreProvider(CHATGPT_PROVIDER_ID)).models);
-                                            List<Model> models1 = List.copyOf(models2);
-                                            List<SelectItem<Model>> items =
-                                                    models1.stream().map(CodingAgentCli::shellModelItem).toList();
-                                            int currentIndex;
-                                            if (!agentConfigured) {
-                                                currentIndex = -1;
-                                            } else {
-                                                int result1 = -1;
-                                                for (int index = 0; index < models1.size(); index++) {
-                                                    Model model = models1.get(index);
-                                                    if (model.provider.equals(runtime.state().model().provider) && model.id.equals(runtime.state().model().id)) {
-                                                        result1 = index;
-                                                        break;
-                                                    }
-                                                }
-                                                currentIndex = result1;
-                                            }
-                                            Model model = select("Select a model", items, currentIndex, true);
-                                            if (model != null) {
-                                                configureShellModel(model, true);
-                                                println("Using " + model + " in a new agent session.");
-                                            }
-                                        }
-                                        case "/mcp" -> {
-                                            if (runtime.mcpStatuses().isEmpty()) {
-                                                println("No MCP servers configured in ~/.codingagent/settings.json.");
-                                            } else {
-                                                McpSelector selector1 = new McpSelector();
-                                                selector1.manager = runtime;
-                                                selector1.onChange = change -> {
-                                                    try {
-                                                        runtime.saveMcpPreference(change.serverName, change.toolName, change.enabled);
-                                                    } catch (IOException error) {
-                                                        throw new UncheckedIOException(error);
-                                                    } finally {
-                                                        syncShellMcpTools();
-                                                    }
-                                                };
-                                                selector1.names = runtime.mcpStatuses().stream().map(status -> status.name).toList();
-                                                selector1.filtered = selector1.names;
-                                                runComponent(new TuiComponent<>(
-                                                        frame -> {
-                                                            if (selector1.view == McpSelector.View.TOOLS)
-                                                                refreshMcpSelectorTools(selector1);
-
-                                                            List<String> lines = new ArrayList<>();
-                                                            String title = selector1.view == McpSelector.View.SERVERS
-                                                                    ? "MCP Servers"
-                                                                    : "MCP Tools: " + selector1.toolServer;
-                                                            lines.add(TerminalStyle.HEADING + truncatePlain(title, frame.width) + TerminalStyle.RESET);
-                                                            lines.add("");
-                                                            String before = selector1.query.substring(0, selector1.queryCursor);
-                                                            String after = selector1.query.substring(selector1.queryCursor);
-                                                            lines.add(truncatePlain("Search: " + before + "|" + after, frame.width));
-                                                            lines.add("");
-                                                            selector1.optionStartRow = lines.size();
-                                                            selector1.visibleCount = Math.clamp(frame.height - 9, 1, 10);
-                                                            int itemCount = mcpSelectorItemCount(selector1);
-                                                            selector1.visibleStart = Math.max(
-                                                                    0,
-                                                                    Math.min(
-                                                                            selector1.selectedIndex - selector1.visibleCount / 2,
-                                                                            Math.max(0, itemCount - selector1.visibleCount)));
-                                                            int end = Math.min(itemCount, selector1.visibleStart + selector1.visibleCount);
-                                                            if (itemCount == 0) {
-                                                                String empty = selector1.view == McpSelector.View.SERVERS
-                                                                        ? "  No matching servers"
-                                                                        : "  No tools available";
-                                                                lines.add(TerminalStyle.MUTED + empty + TerminalStyle.RESET);
-                                                            } else {
-                                                                for (int index = selector1.visibleStart; index < end; index++) {
-                                                                    String detail;
-                                                                    if (selector1.view == McpSelector.View.SERVERS) {
-                                                                        McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
-                                                                        detail = switch (status.state) {
-                                                                            case CONNECTING ->
-                                                                                    "⋯ " + status.name + "  Connecting";
-                                                                            case AUTHENTICATING ->
-                                                                                    "⋯ " + status.name + "  Waiting for OAuth";
-                                                                            case AUTH_REQUIRED ->
-                                                                                    "! " + status.name + "  Authentication required";
-                                                                            case CONNECTED -> {
-                                                                                String result1;
-                                                                                if (status.enabledToolCount == status.toolCount) {
-                                                                                    result1 = status.toolCount + " tool(s)";
-                                                                                } else {
-                                                                                    result1 = status.enabledToolCount + "/" + status.toolCount + " tool(s)";
-                                                                                }
-                                                                                yield "✓ " + status.name + "  Enabled · " + result1;
-                                                                            }
-                                                                            case DISABLED ->
-                                                                                    "○ " + status.name + "  Disabled";
-                                                                            case FAILED -> "✗ " + status.name + "  Failed";
-                                                                        };
-                                                                    } else {
-                                                                        McpToolStatus status1 = selector1.filteredTools.get(index);
-                                                                        detail = (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled");
-                                                                    }
-                                                                    String row = (index == selector1.selectedIndex ? "> " : "  ") + detail;
-                                                                    row = truncatePlain(row, frame.width);
-                                                                    lines.add(index == selector1.selectedIndex ? TerminalStyle.HEADING + row + TerminalStyle.RESET : row);
-                                                                }
-                                                                if (selector1.visibleStart > 0 || end < itemCount) {
-                                                                    lines.add(TerminalStyle.MUTED + "  " + (selector1.selectedIndex + 1) + "/" + itemCount + TerminalStyle.RESET);
-                                                                }
-                                                            }
-                                                            lines.add("");
-                                                            String detail;
-                                                            if (selector1.changeError == null) {
-                                                                String result1 = null;
-                                                                if (selector1.view == McpSelector.View.SERVERS) {
-                                                                    if (!selector1.filtered.isEmpty()) {
-                                                                        McpServerStatus selected =
-                                                                                selector1.manager.mcpStatus(selector1.filtered.get(selector1.selectedIndex));
-                                                                        result1 = selected.message == null ? selected.target : selected.message;
-                                                                    }
-                                                                } else if (!selector1.filteredTools.isEmpty()) {
-                                                                    String description = selector1.filteredTools.get(selector1.selectedIndex).description;
-                                                                    result1 = description.isBlank() ? "No description" : description;
-                                                                }
-                                                                detail = result1;
-                                                            } else {
-                                                                detail = selector1.changeError;
-                                                            }
-                                                            if (detail != null) {
-                                                                String style = selector1.changeError == null ? TerminalStyle.MUTED : warningStatus();
-                                                                lines.add(style + truncatePlain("  " + detail, frame.width) + TerminalStyle.RESET);
-                                                            }
-                                                            if (selector1.view == McpSelector.View.SERVERS && !selector1.filtered.isEmpty()) {
-                                                                McpServerStatus selected =
-                                                                        selector1.manager.mcpStatus(selector1.filtered.get(selector1.selectedIndex));
-                                                                if (selected.authorizationUrl != null) {
-                                                                    String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, frame.width - 2));
-                                                                    String safeUrl = selected.authorizationUrl.replace("\u001b", "").replace("\u0007", "");
-                                                                    String link = "\u001b]8;;" + safeUrl + "\u001b\\" + label + "\u001b]8;;\u001b\\";
-                                                                    lines.add(TerminalStyle.MUTED + "  " + link + TerminalStyle.RESET);
-                                                                }
-                                                            }
-                                                            String hint = selector1.view == McpSelector.View.SERVERS
-                                                                    ? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
-                                                                    : "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
-                                                            lines.add(TerminalStyle.MUTED + truncatePlain(hint, frame.width) + TerminalStyle.RESET);
-                                                            return lines;
-                                                        },
-                                                        input1 -> {
-                                                            switch ((TuiInput) input1) {
-                                                                case TuiInput.Key key -> {
-                                                                    switch (key.type) {
-                                                                        case UP -> moveMcpSelector(selector1, -1);
-                                                                        case DOWN -> moveMcpSelector(selector1, 1);
-                                                                        case PAGE_UP ->
-                                                                                moveMcpSelector(selector1, -Math.max(1, selector1.visibleCount));
-                                                                        case PAGE_DOWN ->
-                                                                                moveMcpSelector(selector1, Math.max(1, selector1.visibleCount));
-                                                                        case ENTER -> {
-                                                                            if (selector1.view == McpSelector.View.SERVERS) {
-                                                                                if (!selector1.filtered.isEmpty()) {
-                                                                                    String name = selector1.filtered.get(selector1.selectedIndex);
-                                                                                    boolean enabled = selector1.manager.toggleMcpServer(name);
-                                                                                    notifyMcpSelectorChange(selector1, new McpSelector.Change(name, null, enabled));
-                                                                                }
-                                                                            } else {
-                                                                                refreshMcpSelectorTools(selector1);
-                                                                                if (!selector1.filteredTools.isEmpty()) {
-                                                                                    try {
-                                                                                        McpToolStatus status = selector1.manager.toggleMcpTool(
-                                                                                                selector1.toolServer, selector1.filteredTools.get(selector1.selectedIndex).name);
-                                                                                        notifyMcpSelectorChange(
-                                                                                                selector1, new McpSelector.Change(status.serverName, status.name, status.enabled));
-                                                                                        refreshMcpSelectorTools(selector1);
-                                                                                    } catch (IllegalStateException |
-                                                                                             IllegalArgumentException ignored) {
-                                                                                        // The server or its catalog may have changed while this selector was open.
-                                                                                        refreshMcpSelectorTools(selector1);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        case TAB -> {
-                                                                            if (selector1.view == McpSelector.View.SERVERS) {
-                                                                                if (!selector1.filtered.isEmpty()) {
-                                                                                    String server = selector1.filtered.get(selector1.selectedIndex);
-                                                                                    if (selector1.manager.mcpStatus(server).state == McpState.CONNECTED) {
-                                                                                        selector1.view = McpSelector.View.TOOLS;
-                                                                                        selector1.toolServer = server;
-                                                                                        clearMcpSelectorQuery(selector1);
-                                                                                        refreshMcpSelectorTools(selector1);
-                                                                                    }
-                                                                                }
-                                                                            } else closeMcpSelectorTools(selector1);
-                                                                        }
-                                                                        case ESCAPE, CANCEL -> {
-                                                                            if (selector1.view == McpSelector.View.TOOLS)
-                                                                                closeMcpSelectorTools(selector1);
-                                                                            else selector1.complete = true;
-                                                                        }
-                                                                        case CHARACTER, PASTE, BACKSPACE, DELETE, LEFT,
-                                                                             RIGHT, HOME, END, CLEAR -> {
-                                                                            int cursor = editQuery(
-                                                                                    selector1.query,
-                                                                                    selector1.queryCursor,
-                                                                                    key,
-                                                                                    () -> filterMcpSelector(selector1));
-                                                                            if (cursor >= 0)
-                                                                                selector1.queryCursor = cursor;
-                                                                        }
-                                                                        default -> {
-                                                                        }
-                                                                    }
-                                                                }
-                                                                case TuiInput.Mouse mouse -> {
-                                                                    switch (mouse.action) {
-                                                                        case SCROLL_UP -> moveMcpSelector(selector1, -1);
-                                                                        case SCROLL_DOWN ->
-                                                                                moveMcpSelector(selector1, 1);
-                                                                        case PRESS -> {
-                                                                            int offset = mouse.y - 1 - selector1.optionStartRow;
-                                                                            int index = selector1.visibleStart + offset;
-                                                                            if (mouse.button == 0
-                                                                                    && offset >= 0
-                                                                                    && offset < selector1.visibleCount
-                                                                                    && index < mcpSelectorItemCount(selector1)) {
-                                                                                selector1.selectedIndex = index;
-                                                                            }
-                                                                        }
-                                                                        default -> {
-                                                                        }
-                                                                    }
-                                                                }
-                                                                case TuiInput.Resize ignored -> {
-                                                                }
-                                                            }
-                                                        },
-                                                        () -> selector1.complete,
-                                                        () -> null));// An OAuth connection may finish asynchronously while the selector is open.
-                                                syncShellMcpTools();
-                                            }
-                                        }
-                                        case "/settings" -> {
-                                            if (!agentConfigured) {
-                                                println("No model is configured.");
-                                            } else {
-                                                this.select("Settings", List.of(new SelectItem<>(
-                                                                "thinking",
-                                                                "Thinking level",
-                                                                runtime.state().thinkingLevel().wire,
-                                                                "Thinking level " + runtime.state().thinkingLevel().wire)), 0, false);
-                                                List<ThinkingLevel> levels = getSupportedThinkingLevels(runtime.state().model());
-                                                List<SelectItem<ThinkingLevel>> items = levels.stream()
-                                                        .map(level -> {
-                                                            String description = switch (level) {
-                                                                case OFF -> "No reasoning";
-                                                                case MINIMAL -> "Very brief reasoning";
-                                                                case LOW -> "Light reasoning";
-                                                                case MEDIUM -> "Moderate reasoning";
-                                                                case HIGH -> "Deep reasoning";
-                                                                case XHIGH -> "Extra-high reasoning";
-                                                                case MAX -> "Maximum reasoning";
-                                                            };
-                                                            return new SelectItem<>(
-                                                                    level, level.wire, description, level.wire + " " + description);
-                                                        })
-                                                        .toList();
-                                                int currentIndex = Math.max(0, levels.indexOf(runtime.state().thinkingLevel()));
-                                                ThinkingLevel level = select("Thinking level", items, currentIndex, false);
-                                                if (level != null) {
-                                                    runtime.setThinkingLevel(level);
-                                                    refreshShellStatus();
-                                                    this.settings = new Settings(
-                                                            this.settings.defaultProvider, this.settings.defaultModel, level, this.settings.hideThinkingBlock);
-                                                    try {
-                                                        runtime.saveThinkingLevel(level);
-                                                        println("Thinking level: " + level.wire);
-                                                    } catch (IOException error) {
-                                                        println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        case "/compact" -> {
-                                            if (!agentConfigured) {
-                                                println("No model is configured.");
-                                                break;
-                                            }
-                                            try {
-                                                CompactionResult result1 = runtime.compact(null);
-                                                println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
-                                                refreshShellStatus();
-                                            } catch (IllegalStateException error) {
-                                                println("Error: " + error.getMessage());
-                                            }
-                                        }
-                                        default -> println("Unknown command: " + input);
-                                    }
-                                } finally {
-                                    setShellActivity(!agentConfigured
-                                            ? noModelActivity(System.nanoTime())
-                                            : readyActivity(System.nanoTime()));
-                                    refreshShellStatus();
-                                }
-                                if (exit) return 0;
+                                if (dispatchSlashCommand(input)) return 0;
                                 continue;
                             }
                             if (!agentConfigured) {
@@ -2844,6 +2279,628 @@ public final class CodingAgentCli {
             System.err.println("Error: " + e.getMessage());
             return 1;
         }
+    }
+
+    /** Dispatches one interactive slash command and returns whether the shell should exit. */
+    private boolean dispatchSlashCommand(String input) throws IOException, InterruptedException {
+        String trimmed = input.trim();
+        SlashCommand command = SlashCommand.from(trimmed);
+        String commandLabel = command == null ? trimmed.split("\\s+", 2)[0] : command.input;
+        setShellActivity(activeActivity(
+                ActivityStatus.Phase.RUNNING_COMMAND, commandLabel, System.nanoTime()));
+        try {
+            if (command == null) {
+                println("Unknown command: " + input);
+                return false;
+            }
+            switch (command) {
+                case EXIT, QUIT -> {
+                    return true;
+                }
+                case HELP -> println(slashCommandHelp());
+                case CLEAR -> {
+                    if (!agentConfigured) {
+                        println("No model is configured.");
+                        break;
+                    }
+                    Model model = runtime.state().model();
+                    IOException persistenceFailure = startFreshShellSession(model, cwd);
+                    replaceScreen(sessionScreenHeader(model));
+                    println("Started a new session.");
+                    if (persistenceFailure != null) {
+                        println("New session will not be saved: " + persistenceFailure.getMessage());
+                    }
+                }
+                case DETAILS -> showShellTurnDetails(false);
+                case FORK -> {
+                    if (!agentConfigured) {
+                        println("No model is configured.");
+                        break;
+                    }
+                    String name = readLine("Fork session name: ", forkName(sessionName));
+                    if (name == null || name.isBlank()) {
+                        println("Fork cancelled.");
+                        break;
+                    }
+                    name = name.strip();
+                    Model model = runtime.state().model();
+                    List<Message> forkMessages = runtime.resumableMessages(runtime.state().messages());
+                    boolean recordingEnabled = false;
+                    if (!noSession) {
+                        try {
+                            runtime.defaultSessionStore();
+                            runtime.forkSessionRecorder(
+                                    this.cwd, model.provider, model.id, name, forkMessages);
+                            recordingEnabled = true;
+                        } catch (IOException error) {
+                            println("Failed to fork session: " + error.getMessage());
+                            break;
+                        }
+                    }
+                    configureShellAgent(model, this.cwd, recordingEnabled, name);
+                    runtime.restoreMessages(forkMessages);
+                    refreshShellStatus();
+                    println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
+                }
+                case RESUME -> {
+                    resume: {
+                        if (noSession) {
+                            println("Session persistence is disabled by --no-session.");
+                            break resume;
+                        }
+                        runtime.defaultSessionStore();
+                        List<SessionSnapshot> sessions;
+                        try {
+                            sessions = runtime.listSessions(cwd);
+                        } catch (IOException error) {
+                            println("Failed to list saved sessions: " + error.getMessage());
+                            break resume;
+                        }
+                        if (sessions.isEmpty()) {
+                            println("No saved sessions in " + cwd + ".");
+                            break resume;
+                        }
+                        String currentId = !recordingSession ? null : runtime.state().sessionId();
+                        List<SelectItem<SessionSnapshot>> items = sessions.stream()
+                                .filter(session -> session.messageCount > 0 && !session.id.equals(currentId))
+                                .map(session -> {
+                                    String name = sessionDisplayName(session);
+                                    String label = abbreviateShellText(
+                                            name.replaceAll("[\\p{Cntrl}]", " "), 90);
+                                    long minutes = Math.max(0, Duration.between(
+                                            session.modified, Instant.now()).toMinutes());
+                                    long hours = minutes / 60;
+                                    long days = hours / 24;
+                                    String age = minutes < 1 ? "now"
+                                            : minutes < 60 ? minutes + "m"
+                                              : hours < 24 ? hours + "h"
+                                                : days < 7 ? days + "d"
+                                                  : days < 30 ? days / 7 + "w"
+                                                    : days < 365 ? days / 30 + "mo" : days / 365 + "y";
+                                    String description = session.messageCount + " messages  " + age
+                                            + "  [" + session.provider + "/" + session.model + "]";
+                                    return new SelectItem<>(session, label, description,
+                                            session.id + " " + name + " " + session.provider + " "
+                                                    + session.model + " " + session.firstMessage + " "
+                                                    + session.allMessagesText);
+                                })
+                                .toList();
+                        if (items.isEmpty()) {
+                            println("No resumable sessions in " + cwd + ".");
+                            break resume;
+                        }
+                        SessionSnapshot selected =
+                                select("Resume Session (Current Folder)", items, -1, true);
+                        if (selected == null) break resume;
+                        try {
+                            if (!Files.isDirectory(selected.cwd)) {
+                                println("Cannot resume session because its working directory is unavailable: "
+                                        + selected.cwd);
+                                break resume;
+                            }
+                            Model model;
+                            try {
+                                model = findModelIn(
+                                        providerModels(runtime.requireCoreProvider(selected.provider)),
+                                        selected.provider,
+                                        selected.model);
+                            } catch (IllegalArgumentException ignored) {
+                                model = null;
+                            }
+                            if (model == null) {
+                                if (!agentConfigured) {
+                                    println("Cannot restore model " + selected.provider + "/" + selected.model
+                                            + "; configure an available model before resuming this session.");
+                                    break resume;
+                                }
+                                model = runtime.state().model();
+                                println("Could not restore model " + selected.provider + "/" + selected.model
+                                        + ". Using " + model + ".");
+                            }
+                            if (model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                ProviderState copilot = (ProviderState)
+                                        runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                                Model enabled = null;
+                                try {
+                                    if (runtime.gitHubCopilotHasCredential(copilot)) {
+                                        enabled = findModelIn(
+                                                runtime.gitHubCopilotAvailableModels(copilot),
+                                                model.provider,
+                                                model.id);
+                                    }
+                                } catch (IOException error) {
+                                    println("Could not refresh GitHub Copilot model access: "
+                                            + error.getMessage());
+                                }
+                                if (enabled != null) model = enabled;
+                                else if (!agentConfigured
+                                        || runtime.state().model().provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                    println("Cannot restore GitHub Copilot model " + model.id
+                                            + "; log in or configure another model first.");
+                                    break resume;
+                                } else {
+                                    Model fallback = runtime.state().model();
+                                    println("Could not restore model " + model + ". Using " + fallback + ".");
+                                    model = fallback;
+                                }
+                            }
+                            // A session snapshot's messages are compaction-aware, so resuming cannot
+                            // resurrect summarized transcript entries into the next model request.
+                            List<Message> restored = runtime.resumableMessages(selected.messages);
+                            runtime.resumeSessionRecorder(selected.id);
+                            configureShellAgent(model, selected.cwd, true, selected.name);
+                            settings = withSettingsDefaultModel(settings, model.provider, model.id);
+                            runtime.restoreMessages(restored);
+                            refreshShellStatus();
+                            replaceScreen(renderSessionScreen(
+                                    model,
+                                    selected.transcriptMessages,
+                                    hideThinkingBlock));
+                            try {
+                                runtime.setSettingsDefaultModelAndProvider(model.provider, model.id);
+                            } catch (IOException error) {
+                                println("Resumed model could not be saved as the default: "
+                                        + error.getMessage());
+                            }
+                            println("Resumed session " + sessionDisplayName(selected) + " with "
+                                    + restored.size() + " message(s) using " + model + ".");
+                        } catch (IOException | IllegalArgumentException error) {
+                            println("Failed to resume session: " + error.getMessage());
+                        }
+                    }
+                }
+                case LOGIN -> {
+                    println("Log in to a provider:");
+                    println("  1. GitHub Copilot — sign in through GitHub's device authorization flow");
+                    println("  2. OpenAI API key — use separately billed Platform API credits");
+                    println("  3. ChatGPT Plus/Pro — use your ChatGPT subscription through Codex");
+                    String choice = readLine("Select provider [1-3]: ");
+                    if (choice == null || choice.isBlank()) {
+                        println("Login cancelled.");
+                    } else {
+                        switch (choice.trim().toLowerCase(Locale.ROOT)) {
+                            case "1", "github", "github copilot", "copilot" -> {
+                                ProviderState copilot = (ProviderState)
+                                        runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                                GitHubCopilotDeviceCode device = runtime.gitHubCopilotBeginLogin(copilot);
+                                println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                println("Waiting for GitHub authorization...");
+                                runtime.gitHubCopilotCompleteLogin(copilot, device);
+                                println("Enabling GitHub Copilot models...");
+                                CopilotModelAccess access =
+                                        runtime.gitHubCopilotEnableAndRefreshModels(copilot);
+                                if (access.policiesEnabled < copilot.models.size()) {
+                                    println("Some GitHub Copilot models are unavailable for this account.");
+                                }
+                                List<Model> models1 = access.models;
+                                Model model = shellSavedModelIn(models1);
+                                if (model == null) model = preferredCopilotModel(models1);
+                                if (model == null) {
+                                    println("GitHub Copilot login succeeded, but no enabled coding model was returned.");
+                                } else {
+                                    configureShellModel(model, true);
+                                    println("GitHub Copilot is ready with " + model + ".");
+                                }
+                            }
+                            case "2", "openai", "open ai", "openai api", "openai api key" -> {
+                                String apiKey = readLineInternal("OpenAI API key: ", null, '*', false);
+                                if (apiKey == null || apiKey.isBlank()) {
+                                    println("OpenAI login cancelled.");
+                                } else {
+                                    runtime.modifyCredential(
+                                            runtime.defaultCredentialStore(),
+                                            "openai",
+                                            ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
+                                    List<Model> models1 = providerModels(runtime.requireCoreProvider("openai"));
+                                    Model model = shellSavedModelIn(models1);
+                                    if (model == null) {
+                                        model = this.select("Select an OpenAI model", models1.stream().map(CodingAgentCli::shellModelItem).toList(), -1, true);
+                                    }
+                                    if (model == null) {
+                                        println("OpenAI API key saved. Run /models when you are ready to select a model.");
+                                    } else {
+                                        configureShellModel(model, true);
+                                        println("OpenAI is ready with " + model + ".");
+                                    }
+                                }
+                            }
+                            case "3", "chatgpt", "chatgpt plus", "chatgpt pro",
+                                 "chatgpt plus/pro" -> {
+                                ProviderState chatGpt = (ProviderState)
+                                        runtime.requireCoreProvider(CHATGPT_PROVIDER_ID);
+                                ChatGptDeviceCode device = runtime.chatGptBeginLogin(chatGpt);
+                                println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
+                                println("Waiting for ChatGPT authorization...");
+                                runtime.chatGptCompleteLogin(chatGpt, device);
+                                List<Model> models1 = chatGpt.models;
+                                Model model = shellSavedModelIn(models1);
+                                if (model == null) {
+                                    model = this.select("Select a ChatGPT model", models1.stream().map(CodingAgentCli::shellModelItem).toList(), -1, true);
+                                }
+                                if (model == null) {
+                                    println("ChatGPT login saved. Run /models when you are ready to select a model.");
+                                } else {
+                                    configureShellModel(model, true);
+                                    println("ChatGPT Plus/Pro is ready with " + model + ".");
+                                }
+                            }
+                            default ->
+                                    println("Unknown provider. Enter 1 for GitHub Copilot, 2 for an OpenAI API key, or 3 for ChatGPT Plus/Pro.");
+                        }
+                    }
+                }
+                case LOGOUT -> {
+                    try {
+                        if (agentConfigured && runtime.state().model().provider.equals(CHATGPT_PROVIDER_ID)) {
+                            runtime.chatGptLogout(
+                                    (ProviderState) runtime.requireCoreProvider(CHATGPT_PROVIDER_ID));
+                            agentConfigured = false;
+                            println("ChatGPT credentials removed. Run /login or /resume to continue.");
+                        } else if (agentConfigured && runtime.state().model().provider.equals("openai")) {
+                            runtime.deleteCredential(runtime.defaultCredentialStore(), "openai");
+                            agentConfigured = false;
+                            println("OpenAI API key removed. Run /login or /resume to continue.");
+                        } else {
+                            runtime.gitHubCopilotLogout((ProviderState)
+                                    runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID));
+                            if (agentConfigured
+                                    && runtime.state().model().provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                                agentConfigured = false;
+                                println("GitHub Copilot credentials removed. Run /login or /resume to continue.");
+                            } else {
+                                println("GitHub Copilot credentials removed.");
+                            }
+                        }
+                    } finally {
+                        refreshShellStatus();
+                    }
+                }
+                case MODELS -> {
+                    List<Model> models2 = new ArrayList<>();
+                    for (Model model1 : runtime.allCatalogModels()) {
+                        if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+                            models2.add(model1);
+                        }
+                    }
+                    ProviderState copilot = (ProviderState)
+                            runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+                    try {
+                        if (isAnthropicProxyConfigured()) {
+                            // Keep proxy streaming isolated from the JDK's prior Copilot HTTP/2 traffic.
+                            models2.addAll(copilot.models);
+                        } else if (runtime.gitHubCopilotHasCredential(copilot)) {
+                            println("Refreshing GitHub Copilot models...");
+                            models2.addAll(
+                                    runtime.gitHubCopilotEnableAndRefreshModels(copilot).models);
+                        } else {
+                            models2.addAll(copilot.models);
+                        }
+                    } catch (IOException error) {
+                        println("Could not refresh GitHub Copilot model access: " + error.getMessage());
+                        models2.addAll(copilot.models);
+                    }
+                    models2.addAll(((ProviderState)
+                            runtime.requireCoreProvider(CHATGPT_PROVIDER_ID)).models);
+                    List<Model> models1 = List.copyOf(models2);
+                    List<SelectItem<Model>> items =
+                            models1.stream().map(CodingAgentCli::shellModelItem).toList();
+                    int currentIndex;
+                    if (!agentConfigured) {
+                        currentIndex = -1;
+                    } else {
+                        int result1 = -1;
+                        for (int index = 0; index < models1.size(); index++) {
+                            Model model = models1.get(index);
+                            if (model.provider.equals(runtime.state().model().provider) && model.id.equals(runtime.state().model().id)) {
+                                result1 = index;
+                                break;
+                            }
+                        }
+                        currentIndex = result1;
+                    }
+                    Model model = select("Select a model", items, currentIndex, true);
+                    if (model != null) {
+                        configureShellModel(model, true);
+                        println("Using " + model + " in a new agent session.");
+                    }
+                }
+                case MCP -> {
+                    if (runtime.mcpStatuses().isEmpty()) {
+                        println("No MCP servers configured in ~/.codingagent/settings.json.");
+                    } else {
+                        McpSelector selector1 = new McpSelector();
+                        selector1.manager = runtime;
+                        selector1.onChange = change -> {
+                            try {
+                                runtime.saveMcpPreference(change.serverName, change.toolName, change.enabled);
+                            } catch (IOException error) {
+                                throw new UncheckedIOException(error);
+                            } finally {
+                                syncShellMcpTools();
+                            }
+                        };
+                        selector1.names = runtime.mcpStatuses().stream().map(status -> status.name).toList();
+                        selector1.filtered = selector1.names;
+                        runComponent(new TuiComponent<>(
+                                frame -> {
+                                    if (selector1.view == McpSelector.View.TOOLS)
+                                        refreshMcpSelectorTools(selector1);
+
+                                    List<String> lines = new ArrayList<>();
+                                    String title = selector1.view == McpSelector.View.SERVERS
+                                            ? "MCP Servers"
+                                            : "MCP Tools: " + selector1.toolServer;
+                                    lines.add(TerminalStyle.HEADING + truncatePlain(title, frame.width) + TerminalStyle.RESET);
+                                    lines.add("");
+                                    String before = selector1.query.substring(0, selector1.queryCursor);
+                                    String after = selector1.query.substring(selector1.queryCursor);
+                                    lines.add(truncatePlain("Search: " + before + "|" + after, frame.width));
+                                    lines.add("");
+                                    selector1.optionStartRow = lines.size();
+                                    selector1.visibleCount = Math.clamp(frame.height - 9, 1, 10);
+                                    int itemCount = mcpSelectorItemCount(selector1);
+                                    selector1.visibleStart = Math.max(
+                                            0,
+                                            Math.min(
+                                                    selector1.selectedIndex - selector1.visibleCount / 2,
+                                                    Math.max(0, itemCount - selector1.visibleCount)));
+                                    int end = Math.min(itemCount, selector1.visibleStart + selector1.visibleCount);
+                                    if (itemCount == 0) {
+                                        String empty = selector1.view == McpSelector.View.SERVERS
+                                                ? "  No matching servers"
+                                                : "  No tools available";
+                                        lines.add(TerminalStyle.MUTED + empty + TerminalStyle.RESET);
+                                    } else {
+                                        for (int index = selector1.visibleStart; index < end; index++) {
+                                            String detail;
+                                            if (selector1.view == McpSelector.View.SERVERS) {
+                                                McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
+                                                detail = switch (status.state) {
+                                                    case CONNECTING ->
+                                                            "⋯ " + status.name + "  Connecting";
+                                                    case AUTHENTICATING ->
+                                                            "⋯ " + status.name + "  Waiting for OAuth";
+                                                    case AUTH_REQUIRED ->
+                                                            "! " + status.name + "  Authentication required";
+                                                    case CONNECTED -> {
+                                                        String result1;
+                                                        if (status.enabledToolCount == status.toolCount) {
+                                                            result1 = status.toolCount + " tool(s)";
+                                                        } else {
+                                                            result1 = status.enabledToolCount + "/" + status.toolCount + " tool(s)";
+                                                        }
+                                                        yield "✓ " + status.name + "  Enabled · " + result1;
+                                                    }
+                                                    case DISABLED ->
+                                                            "○ " + status.name + "  Disabled";
+                                                    case FAILED -> "✗ " + status.name + "  Failed";
+                                                };
+                                            } else {
+                                                McpToolStatus status1 = selector1.filteredTools.get(index);
+                                                detail = (status1.enabled ? "✓ " : "○ ") + status1.name + "  " + (status1.enabled ? "Enabled" : "Disabled");
+                                            }
+                                            String row = (index == selector1.selectedIndex ? "> " : "  ") + detail;
+                                            row = truncatePlain(row, frame.width);
+                                            lines.add(index == selector1.selectedIndex ? TerminalStyle.HEADING + row + TerminalStyle.RESET : row);
+                                        }
+                                        if (selector1.visibleStart > 0 || end < itemCount) {
+                                            lines.add(TerminalStyle.MUTED + "  " + (selector1.selectedIndex + 1) + "/" + itemCount + TerminalStyle.RESET);
+                                        }
+                                    }
+                                    lines.add("");
+                                    String detail;
+                                    if (selector1.changeError == null) {
+                                        String result1 = null;
+                                        if (selector1.view == McpSelector.View.SERVERS) {
+                                            if (!selector1.filtered.isEmpty()) {
+                                                McpServerStatus selected =
+                                                        selector1.manager.mcpStatus(selector1.filtered.get(selector1.selectedIndex));
+                                                result1 = selected.message == null ? selected.target : selected.message;
+                                            }
+                                        } else if (!selector1.filteredTools.isEmpty()) {
+                                            String description = selector1.filteredTools.get(selector1.selectedIndex).description;
+                                            result1 = description.isBlank() ? "No description" : description;
+                                        }
+                                        detail = result1;
+                                    } else {
+                                        detail = selector1.changeError;
+                                    }
+                                    if (detail != null) {
+                                        String style = selector1.changeError == null ? TerminalStyle.MUTED : warningStatus();
+                                        lines.add(style + truncatePlain("  " + detail, frame.width) + TerminalStyle.RESET);
+                                    }
+                                    if (selector1.view == McpSelector.View.SERVERS && !selector1.filtered.isEmpty()) {
+                                        McpServerStatus selected =
+                                                selector1.manager.mcpStatus(selector1.filtered.get(selector1.selectedIndex));
+                                        if (selected.authorizationUrl != null) {
+                                            String label = truncatePlain("Open: " + selected.authorizationUrl, Math.max(1, frame.width - 2));
+                                            String safeUrl = selected.authorizationUrl.replace("\u001b", "").replace("\u0007", "");
+                                            String link = "\u001b]8;;" + safeUrl + "\u001b\\" + label + "\u001b]8;;\u001b\\";
+                                            lines.add(TerminalStyle.MUTED + "  " + link + TerminalStyle.RESET);
+                                        }
+                                    }
+                                    String hint = selector1.view == McpSelector.View.SERVERS
+                                            ? "Type to filter  Up/Down move  Enter toggle/auth/retry  Tab tools  Esc close"
+                                            : "Type to filter  Up/Down move  Enter toggle  Tab/Esc servers";
+                                    lines.add(TerminalStyle.MUTED + truncatePlain(hint, frame.width) + TerminalStyle.RESET);
+                                    return lines;
+                                },
+                                input1 -> {
+                                    switch ((TuiInput) input1) {
+                                        case TuiInput.Key key -> {
+                                            switch (key.type) {
+                                                case UP -> moveMcpSelector(selector1, -1);
+                                                case DOWN -> moveMcpSelector(selector1, 1);
+                                                case PAGE_UP ->
+                                                        moveMcpSelector(selector1, -Math.max(1, selector1.visibleCount));
+                                                case PAGE_DOWN ->
+                                                        moveMcpSelector(selector1, Math.max(1, selector1.visibleCount));
+                                                case ENTER -> {
+                                                    if (selector1.view == McpSelector.View.SERVERS) {
+                                                        if (!selector1.filtered.isEmpty()) {
+                                                            String name = selector1.filtered.get(selector1.selectedIndex);
+                                                            boolean enabled = selector1.manager.toggleMcpServer(name);
+                                                            notifyMcpSelectorChange(selector1, new McpSelector.Change(name, null, enabled));
+                                                        }
+                                                    } else {
+                                                        refreshMcpSelectorTools(selector1);
+                                                        if (!selector1.filteredTools.isEmpty()) {
+                                                            try {
+                                                                McpToolStatus status = selector1.manager.toggleMcpTool(
+                                                                        selector1.toolServer, selector1.filteredTools.get(selector1.selectedIndex).name);
+                                                                notifyMcpSelectorChange(
+                                                                        selector1, new McpSelector.Change(status.serverName, status.name, status.enabled));
+                                                                refreshMcpSelectorTools(selector1);
+                                                            } catch (IllegalStateException |
+                                                                     IllegalArgumentException ignored) {
+                                                                // The server or its catalog may have changed while this selector was open.
+                                                                refreshMcpSelectorTools(selector1);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                case TAB -> {
+                                                    if (selector1.view == McpSelector.View.SERVERS) {
+                                                        if (!selector1.filtered.isEmpty()) {
+                                                            String server = selector1.filtered.get(selector1.selectedIndex);
+                                                            if (selector1.manager.mcpStatus(server).state == McpState.CONNECTED) {
+                                                                selector1.view = McpSelector.View.TOOLS;
+                                                                selector1.toolServer = server;
+                                                                clearMcpSelectorQuery(selector1);
+                                                                refreshMcpSelectorTools(selector1);
+                                                            }
+                                                        }
+                                                    } else closeMcpSelectorTools(selector1);
+                                                }
+                                                case ESCAPE, CANCEL -> {
+                                                    if (selector1.view == McpSelector.View.TOOLS)
+                                                        closeMcpSelectorTools(selector1);
+                                                    else selector1.complete = true;
+                                                }
+                                                case CHARACTER, PASTE, BACKSPACE, DELETE, LEFT,
+                                                     RIGHT, HOME, END, CLEAR -> {
+                                                    int cursor = editQuery(
+                                                            selector1.query,
+                                                            selector1.queryCursor,
+                                                            key,
+                                                            () -> filterMcpSelector(selector1));
+                                                    if (cursor >= 0)
+                                                        selector1.queryCursor = cursor;
+                                                }
+                                                default -> {
+                                                }
+                                            }
+                                        }
+                                        case TuiInput.Mouse mouse -> {
+                                            switch (mouse.action) {
+                                                case SCROLL_UP -> moveMcpSelector(selector1, -1);
+                                                case SCROLL_DOWN ->
+                                                        moveMcpSelector(selector1, 1);
+                                                case PRESS -> {
+                                                    int offset = mouse.y - 1 - selector1.optionStartRow;
+                                                    int index = selector1.visibleStart + offset;
+                                                    if (mouse.button == 0
+                                                            && offset >= 0
+                                                            && offset < selector1.visibleCount
+                                                            && index < mcpSelectorItemCount(selector1)) {
+                                                        selector1.selectedIndex = index;
+                                                    }
+                                                }
+                                                default -> {
+                                                }
+                                            }
+                                        }
+                                        case TuiInput.Resize ignored -> {
+                                        }
+                                    }
+                                },
+                                () -> selector1.complete,
+                                () -> null));// An OAuth connection may finish asynchronously while the selector is open.
+                        syncShellMcpTools();
+                    }
+                }
+                case SETTINGS -> {
+                    if (!agentConfigured) {
+                        println("No model is configured.");
+                    } else {
+                        this.select("Settings", List.of(new SelectItem<>(
+                                        "thinking",
+                                        "Thinking level",
+                                        runtime.state().thinkingLevel().wire,
+                                        "Thinking level " + runtime.state().thinkingLevel().wire)), 0, false);
+                        List<ThinkingLevel> levels = getSupportedThinkingLevels(runtime.state().model());
+                        List<SelectItem<ThinkingLevel>> items = levels.stream()
+                                .map(level -> {
+                                    String description = switch (level) {
+                                        case OFF -> "No reasoning";
+                                        case MINIMAL -> "Very brief reasoning";
+                                        case LOW -> "Light reasoning";
+                                        case MEDIUM -> "Moderate reasoning";
+                                        case HIGH -> "Deep reasoning";
+                                        case XHIGH -> "Extra-high reasoning";
+                                        case MAX -> "Maximum reasoning";
+                                    };
+                                    return new SelectItem<>(
+                                            level, level.wire, description, level.wire + " " + description);
+                                })
+                                .toList();
+                        int currentIndex = Math.max(0, levels.indexOf(runtime.state().thinkingLevel()));
+                        ThinkingLevel level = select("Thinking level", items, currentIndex, false);
+                        if (level != null) {
+                            runtime.setThinkingLevel(level);
+                            refreshShellStatus();
+                            this.settings = new Settings(
+                                    this.settings.defaultProvider, this.settings.defaultModel, level, this.settings.hideThinkingBlock);
+                            try {
+                                runtime.saveThinkingLevel(level);
+                                println("Thinking level: " + level.wire);
+                            } catch (IOException error) {
+                                println("Thinking level changed for this session, but could not be saved: " + error.getMessage());
+                            }
+                        }
+                    }
+                }
+                case COMPACT -> {
+                    if (!agentConfigured) {
+                        println("No model is configured.");
+                        break;
+                    }
+                    try {
+                        CompactionResult result1 = runtime.compact(null);
+                        println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
+                        refreshShellStatus();
+                    } catch (IllegalStateException error) {
+                        println("Error: " + error.getMessage());
+                    }
+                }
+                }
+        } finally {
+            setShellActivity(!agentConfigured
+                    ? noModelActivity(System.nanoTime())
+                    : readyActivity(System.nanoTime()));
+            refreshShellStatus();
+        }
+        return false;
     }
 
     private static String cliArgumentValue(String[] args, int index, String flag) {
@@ -3079,20 +3136,12 @@ public final class CodingAgentCli {
         return emittedText ? null : text(response);
     }
 
-    private void configureShellModel(Model model, boolean persistModel)
-            throws IOException {
+    private void configureShellModel(Model model, boolean persistModel) {
         Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
-        boolean recordingEnabled = false;
-        if (!noSession) {
-            try {
-                runtime.defaultSessionStore();
-                runtime.createSessionRecorder(configuredCwd, model.provider, model.id);
-                recordingEnabled = true;
-            } catch (IOException error) {
-                println("Model configured, but session persistence is unavailable: " + error.getMessage());
-            }
+        IOException persistenceFailure = startFreshShellSession(model, configuredCwd);
+        if (persistenceFailure != null) {
+            println("Model configured, but session persistence is unavailable: " + persistenceFailure.getMessage());
         }
-        configureShellAgent(model, configuredCwd, recordingEnabled, null);
         if (persistModel) {
             settings = withSettingsDefaultModel(settings, model.provider, model.id);
             try {
@@ -3101,6 +3150,26 @@ public final class CodingAgentCli {
                 println("Model changed for this session, but could not be saved: " + error.getMessage());
             }
         }
+    }
+
+    /**
+     * Resets the active conversation and, unless disabled, records it in a new session file.
+     * The returned failure is deliberately non-fatal: callers continue with an in-memory session.
+     */
+    private IOException startFreshShellSession(Model model, Path configuredCwd) {
+        boolean recordingEnabled = false;
+        IOException persistenceFailure = null;
+        if (!noSession) {
+            try {
+                runtime.defaultSessionStore();
+                runtime.createSessionRecorder(configuredCwd, model.provider, model.id);
+                recordingEnabled = true;
+            } catch (IOException error) {
+                persistenceFailure = error;
+            }
+        }
+        configureShellAgent(model, configuredCwd, recordingEnabled, null);
+        return persistenceFailure;
     }
 
     private void configureShellAgent(Model model, Path configuredCwd, boolean recordingEnabled, String nextSessionName) {
