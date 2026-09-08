@@ -164,6 +164,19 @@ class CodingAgentCliTest {
 	}
 
 	@Test
+	void keepsSlashCommandCompletionAndHelpInSync() {
+		assertEquals(List.of(
+				"/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
+				"/mcp", "/models", "/quit", "/resume", "/settings"), CodingAgentCli.slashCommands());
+
+		String help = CodingAgentCli.slashCommandHelp();
+		assertTrue(help.contains("/clear"));
+		assertTrue(help.contains("/compact"));
+		assertTrue(help.contains("/settings"));
+		assertFalse(help.contains("/quit"));
+	}
+
+	@Test
 	void cleansIncompleteTurnsWhenResuming() {
 		AssistantMessage failed = new AssistantMessage("faux", "faux", "faux-1");
 		failed.stopReason = StopReason.ERROR;
