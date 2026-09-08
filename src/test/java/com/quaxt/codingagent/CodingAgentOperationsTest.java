@@ -176,7 +176,50 @@ class CodingAgentOperationsTest {
         assertEquals(1, snapshot.messages().size());
     }
 
+    @Test
+    void tellsTheModelItsWorkingDirectoryAheadOfRepositoryInstructions() throws Exception {
+        Files.writeString(workspace.resolve("AGENTS.md"), "Repository rule: prefer tabs.");
+        FauxProvider provider = configure(100_000);
+
+        assertEquals(
+                "Working directory: " + workspace.toAbsolutePath().normalize() + "\n"
+                        + "Relative paths in tool calls resolve against the working directory. "
+                        + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n"
+                        + "Repository rule: prefer tabs.",
+                promptedSystemPrompt(provider));
+    }
+
+    @Test
+    void namesTheRepositoryRootWhenTheWorkingDirectoryIsBelowIt() throws Exception {
+        Files.createDirectory(workspace.resolve(".git"));
+        Path module = Files.createDirectories(workspace.resolve("module"));
+        FauxProvider provider = configure(100_000, module);
+
+        assertEquals(
+                "Working directory: " + module.toAbsolutePath().normalize() + "\n"
+                        + "Repository root: " + workspace.toAbsolutePath().normalize() + "\n"
+                        + "Relative paths in tool calls resolve against the working directory. "
+                        + "Use an absolute path or a leading ~/ to reach anything outside it.",
+                promptedSystemPrompt(provider));
+    }
+
+    /** Runs one turn and returns the system prompt the provider was asked with. */
+    private String promptedSystemPrompt(FauxProvider provider) throws Exception {
+        List<String> prompts = new ArrayList<>();
+        provider.pendingResponses.add(new FauxProvider.ResponseStep.Factory(request -> {
+            prompts.add(request.context.systemPrompt);
+            return answer("Noted");
+        }));
+        runtime.prompt("Where are you working?");
+        assertEquals(1, prompts.size());
+        return prompts.getFirst();
+    }
+
     private FauxProvider configure(long contextWindow) {
+        return configure(contextWindow, workspace);
+    }
+
+    private FauxProvider configure(long contextWindow, Path cwd) {
         Model model = new Model();
         model.id = "faux-1";
         model.name = "Faux";
@@ -185,7 +228,7 @@ class CodingAgentOperationsTest {
         model.contextWindow = contextWindow;
         model.maxTokens = 4_096;
         FauxProvider provider = new FauxProvider("faux", "faux", List.of(model));
-        runtime.configureAgent(provider, model, workspace, "", null, ThinkingLevel.OFF);
+        runtime.configureAgent(provider, model, cwd, "", null, ThinkingLevel.OFF);
         runtime.setAutoCompaction(true);
         return provider;
     }

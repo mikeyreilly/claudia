@@ -462,6 +462,7 @@ public enum CodingAgentOperations implements CredentialStore {
 
     private Path repositoryRoot;
     private String baseSystemPrompt;
+    private Path workingDirectory;
     private Path currentDirectory;
     private List<Path> sources = List.of();
     private String sessionId;
@@ -8089,6 +8090,10 @@ public enum CodingAgentOperations implements CredentialStore {
     private void agentInstructions(
             Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
         this.repositoryRoot = repositoryRoot;
+        // The instruction scope starts at the working directory and then descends
+        // with path-based tools; the working directory itself is fixed for the
+        // session because it is what LocalTool resolves relative paths against.
+        this.workingDirectory = currentDirectory;
         this.currentDirectory = currentDirectory;
         this.baseSystemPrompt = baseSystemPrompt;
     }
@@ -8148,9 +8153,32 @@ public enum CodingAgentOperations implements CredentialStore {
 
     // ------------------------------------------------------ agent instructions
 
+    /**
+     * States where the agent is running so the model can resolve relative tool
+     * paths without guessing. Reports the working directory rather than {@code
+     * currentDirectory}: the latter only tracks the deepest instruction scope,
+     * while tools keep resolving relative paths against the working directory.
+     */
+    private String agentEnvironmentPrompt() {
+        if (workingDirectory == null) return "";
+        StringBuilder text = new StringBuilder("Working directory: ").append(workingDirectory);
+        if (repositoryRoot != null && !repositoryRoot.equals(workingDirectory)) {
+            text.append("\nRepository root: ").append(repositoryRoot);
+        }
+        return text.append("\nRelative paths in tool calls resolve against the working directory. ")
+                .append("Use an absolute path or a leading ~/ to reach anything outside it.")
+                .toString();
+    }
+
     private boolean refreshAgentInstructionsIn(Path directory) {
         List<Path> nextSources = new ArrayList<>();
         List<String> promptParts = new ArrayList<>();
+        // The environment block leads because it is stable for the whole session,
+        // which keeps the cacheable prefix intact when instructions change scope.
+        String environment = agentEnvironmentPrompt();
+        if (!environment.isEmpty()) {
+            promptParts.add(environment);
+        }
         if (!baseSystemPrompt.isBlank()) {
             promptParts.add(baseSystemPrompt);
         }
