@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * Persistent credential store marker. Mutations are serialized and atomically
- * written by CodingAgentOperations. The application operations singleton
+ * written by CodingAgentOperations. Each application runtime
  * implements this marker for the file credential store.
  */
 public interface CredentialStore {

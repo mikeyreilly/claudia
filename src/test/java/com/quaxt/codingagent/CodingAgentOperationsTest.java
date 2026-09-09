@@ -81,7 +81,12 @@ class CodingAgentOperationsTest {
 	// CodingAgentRuntime
 
     @TempDir Path workspace;
-    private final CodingAgentOperations runtime = CodingAgentOperations.INSTANCE;
+    private final CodingAgentOperations runtime = new CodingAgentOperations();
+
+    @org.junit.jupiter.api.AfterEach
+    void closeRuntime() {
+        runtime.close();
+    }
 
     @Test
     void executesToolsAndRecordsPromptsAndCheckpointsWithoutATerminal() throws Exception {
@@ -421,7 +426,7 @@ class CodingAgentOperationsTest {
 
     @Test
     void reconfiguringTheFoldedAgentDiscardsPriorEventListeners() throws Exception {
-        CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+        CodingAgentOperations operations = runtime;
         Method configureAgent = CodingAgentOperations.class.getDeclaredMethod("agent", Provider.class);
         configureAgent.setAccessible(true);
         Field listenersField = CodingAgentOperations.class.getDeclaredField("listeners");
@@ -441,18 +446,16 @@ class CodingAgentOperationsTest {
 
     @Test
     void separatesApplicationOperationsFromTheFourProviderRoles() throws Exception {
-        assertArrayEquals(
-                new CodingAgentOperations[] {CodingAgentOperations.INSTANCE},
-                CodingAgentOperations.values());
+        assertTrue(AutoCloseable.class.isAssignableFrom(CodingAgentOperations.class));
         assertFalse(Provider.class.isAssignableFrom(CodingAgentOperations.class));
         assertArrayEquals(
-                new ProviderState[] {
-                    ProviderState.CHATGPT_OPERATIONS,
-                    ProviderState.GOOGLE_OPERATIONS,
-                    ProviderState.GITHUB_COPILOT_OPERATIONS,
-                    ProviderState.OPENAI_COMPATIBLE_OPERATIONS
+                new ProviderState.Role[] {
+                    ProviderState.Role.CHATGPT,
+                    ProviderState.Role.GOOGLE,
+                    ProviderState.Role.GITHUB_COPILOT,
+                    ProviderState.Role.OPENAI_COMPATIBLE
                 },
-                ProviderState.values());
+                ProviderState.Role.values());
         assertTrue(Provider.class.isAssignableFrom(ProviderState.class));
 
         for (String name : Set.of(
@@ -474,7 +477,7 @@ class CodingAgentOperationsTest {
 
     @Test
     void coreInitializationRegistersDistinctStateAndRetainsEveryCopilotProtocol() throws Exception {
-        CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+        CodingAgentOperations operations = runtime;
         operations.initializeCoreProviders();
 
         Field field = CodingAgentOperations.class.getDeclaredField("coreProviders");
@@ -482,33 +485,33 @@ class CodingAgentOperationsTest {
         @SuppressWarnings("unchecked")
         Map<String, Provider> providers = (Map<String, Provider>) field.get(operations);
 
-        assertSame(ProviderState.CHATGPT_OPERATIONS, providers.get("chatgpt"));
-        assertSame(ProviderState.GOOGLE_OPERATIONS, providers.get("google"));
-        assertSame(ProviderState.GITHUB_COPILOT_OPERATIONS, providers.get("github-copilot"));
+        assertSame(runtime.providerState(ProviderState.Role.CHATGPT), providers.get("chatgpt"));
+        assertSame(runtime.providerState(ProviderState.Role.GOOGLE), providers.get("google"));
+        assertSame(runtime.providerState(ProviderState.Role.GITHUB_COPILOT), providers.get("github-copilot"));
         assertNotSame(providers.get("chatgpt"), providers.get("google"));
         assertNotSame(providers.get("google"), providers.get("github-copilot"));
 
-        assertTrue(ProviderState.CHATGPT_OPERATIONS.models.stream()
+        assertTrue(runtime.providerState(ProviderState.Role.CHATGPT).models.stream()
                 .allMatch(model -> model.provider.equals("chatgpt")));
-        assertTrue(ProviderState.GOOGLE_OPERATIONS.models.stream()
+        assertTrue(runtime.providerState(ProviderState.Role.GOOGLE).models.stream()
                 .allMatch(model -> model.provider.equals("google")));
-        assertTrue(ProviderState.GITHUB_COPILOT_OPERATIONS.models.stream()
+        assertTrue(runtime.providerState(ProviderState.Role.GITHUB_COPILOT).models.stream()
                 .allMatch(model -> model.provider.equals("github-copilot")));
         assertEquals(
                 Set.of("anthropic-messages", "openai-completions", "openai-responses"),
-                ProviderState.GITHUB_COPILOT_OPERATIONS.models.stream()
+                runtime.providerState(ProviderState.Role.GITHUB_COPILOT).models.stream()
                         .map(model -> model.api)
                         .collect(Collectors.toSet()));
         assertEquals(
                 operations.catalogModelsForProvider("github-copilot").stream()
                         .map(model -> model.id)
                         .toList(),
-                ProviderState.GITHUB_COPILOT_OPERATIONS.models.stream().map(model -> model.id).toList());
+                runtime.providerState(ProviderState.Role.GITHUB_COPILOT).models.stream().map(model -> model.id).toList());
     }
 
     @Test
     void authConfigurationDoesNotBleedBetweenProviderStates() {
-        CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+        CodingAgentOperations operations = runtime;
         CredentialStore chatStore = new CredentialStore() {};
         CredentialStore copilotStore = new CredentialStore() {};
         URI chatBase = URI.create("https://chat-auth.example");
@@ -517,24 +520,24 @@ class CodingAgentOperationsTest {
         URI apiBase = URI.create("https://copilot-api.example");
 
         operations.chatGptAuth(
-                ProviderState.CHATGPT_OPERATIONS, chatStore, chatBase, "chat-client");
+                runtime.providerState(ProviderState.Role.CHATGPT), chatStore, chatBase, "chat-client");
         operations.gitHubCopilotAuth(
-                ProviderState.GITHUB_COPILOT_OPERATIONS,
+                runtime.providerState(ProviderState.Role.GITHUB_COPILOT),
                 copilotStore,
                 githubBase,
                 tokenBase,
                 apiBase);
 
-        assertSame(chatStore, ProviderState.CHATGPT_OPERATIONS.credentials);
-        assertEquals(chatBase, ProviderState.CHATGPT_OPERATIONS.authBaseUrl);
-        assertEquals("chat-client", ProviderState.CHATGPT_OPERATIONS.clientId);
-        assertSame(copilotStore, ProviderState.GITHUB_COPILOT_OPERATIONS.credentials);
-        assertEquals(githubBase, ProviderState.GITHUB_COPILOT_OPERATIONS.githubBaseUrl);
-        assertEquals(tokenBase, ProviderState.GITHUB_COPILOT_OPERATIONS.copilotTokenUrl);
-        assertEquals(apiBase, ProviderState.GITHUB_COPILOT_OPERATIONS.defaultCopilotBaseUrl);
+        assertSame(chatStore, runtime.providerState(ProviderState.Role.CHATGPT).credentials);
+        assertEquals(chatBase, runtime.providerState(ProviderState.Role.CHATGPT).authBaseUrl);
+        assertEquals("chat-client", runtime.providerState(ProviderState.Role.CHATGPT).clientId);
+        assertSame(copilotStore, runtime.providerState(ProviderState.Role.GITHUB_COPILOT).credentials);
+        assertEquals(githubBase, runtime.providerState(ProviderState.Role.GITHUB_COPILOT).githubBaseUrl);
+        assertEquals(tokenBase, runtime.providerState(ProviderState.Role.GITHUB_COPILOT).copilotTokenUrl);
+        assertEquals(apiBase, runtime.providerState(ProviderState.Role.GITHUB_COPILOT).defaultCopilotBaseUrl);
         assertNotSame(
-                ProviderState.CHATGPT_OPERATIONS.credentials,
-                ProviderState.GITHUB_COPILOT_OPERATIONS.credentials);
+                runtime.providerState(ProviderState.Role.CHATGPT).credentials,
+                runtime.providerState(ProviderState.Role.GITHUB_COPILOT).credentials);
     }
 
 	// ModelCatalog
@@ -582,7 +585,7 @@ class CodingAgentOperationsTest {
 
 	@Test
 	void coreProviderInitializationKeepsChatGptModelsIsolated() {
-		CodingAgentOperations operations = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations operations = runtime;
 
 		operations.initializeCoreProviders();
 
@@ -630,9 +633,9 @@ class CodingAgentOperationsTest {
 		assertEquals("Unknown model: openai/does-not-exist", exception.getMessage());
 	}
 
-	private static CodingAgentOperations loadBundledModelCatalog() {
-		CodingAgentOperations.INSTANCE.loadBundledModelCatalog();
-		return CodingAgentOperations.INSTANCE;
+	private CodingAgentOperations loadBundledModelCatalog() {
+		runtime.loadBundledModelCatalog();
+		return runtime;
 	}
 
 	// Models
@@ -764,7 +767,7 @@ class CodingAgentOperationsTest {
 	@Test
 	void retriesUntilSuccess() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
+		AssistantMessage result = runtime.retryAssistantCall(
 				() -> calls.incrementAndGet() < 3
 						? message(StopReason.ERROR, "503 service unavailable")
 						: message(StopReason.STOP, null),
@@ -778,7 +781,7 @@ class CodingAgentOperationsTest {
 	@Test
 	void returnsErrorAfterExhaustingRetries() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
+		AssistantMessage result = runtime.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "500 internal error");
@@ -793,7 +796,7 @@ class CodingAgentOperationsTest {
 	@Test
 	void doesNotRetryNonRetryable() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
+		AssistantMessage result = runtime.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ERROR, "billing problem");
@@ -813,9 +816,9 @@ class CodingAgentOperationsTest {
 				Thread.sleep(30);
 			} catch (InterruptedException ignored) {
 			}
-			CodingAgentOperations.INSTANCE.abort(signal);
+			runtime.abort(signal);
 		});
-		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
+		AssistantMessage result = runtime.retryAssistantCall(
 				() -> message(StopReason.ERROR, "503 service unavailable"),
 				new Retry.Policy(true, 3, 10_000),
 				signal,
@@ -828,7 +831,7 @@ class CodingAgentOperationsTest {
 	@Test
 	void neverRetriesAbortedResponses() throws Exception {
 		AtomicInteger calls = new AtomicInteger();
-		AssistantMessage result = CodingAgentOperations.INSTANCE.retryAssistantCall(
+		AssistantMessage result = runtime.retryAssistantCall(
 				() -> {
 					calls.incrementAndGet();
 					return message(StopReason.ABORTED, null);
@@ -861,25 +864,25 @@ class CodingAgentOperationsTest {
 			});
 			server.start();
 
-            CodingAgentOperations.INSTANCE.fileCredentialStore(tempDir.resolve("auth.json"), null);
+            runtime.fileCredentialStore(tempDir.resolve("auth.json"), null);
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			ProviderState state = ProviderState.CHATGPT_OPERATIONS;
-			CodingAgentOperations.INSTANCE.chatGptAuth(
-					state, CodingAgentOperations.INSTANCE, base, "test-client");
+			ProviderState state = runtime.providerState(ProviderState.Role.CHATGPT);
+			runtime.chatGptAuth(
+					state, runtime, base, "test-client");
 			CodingAgentOperations.ChatGptDeviceCode device =
-					CodingAgentOperations.INSTANCE.chatGptBeginLogin(state);
+					runtime.chatGptBeginLogin(state);
 			assertEquals("ABCD-EFGH", device.userCode);
-			CodingAgentOperations.INSTANCE.chatGptCompleteLogin(state, device);
-			assertTrue(CodingAgentOperations.INSTANCE.chatGptHasCredential(state));
+			runtime.chatGptCompleteLogin(state, device);
+			assertTrue(runtime.chatGptHasCredential(state));
 
 			CodingAgentOperations.ChatGptToken refreshed =
-					CodingAgentOperations.INSTANCE.chatGptResolveToken(state);
+					runtime.chatGptResolveToken(state);
 			assertEquals("access-2", refreshed.accessToken);
 			assertEquals("account-123", refreshed.accountId);
 			assertEquals(2, tokenExchanges.get());
 
-			CodingAgentOperations.INSTANCE.chatGptLogout(state);
-			assertFalse(CodingAgentOperations.INSTANCE.chatGptHasCredential(state));
+			runtime.chatGptLogout(state);
+			assertFalse(runtime.chatGptHasCredential(state));
 		} finally {
 			server.stop(0);
 		}
@@ -980,10 +983,10 @@ class CodingAgentOperationsTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			CodingAgentOperations store = runtime;
 			store.fileCredentialStore(tempDir.resolve("auth.json"), null);
-			ProviderState state = ProviderState.GITHUB_COPILOT_OPERATIONS;
-			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
+			ProviderState state = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			CodingAgentOperations auth = runtime;
 			auth.gitHubCopilotAuth(
 					state, store, base, base.resolve("/copilot_internal/v2/token"), base);
 
@@ -1018,15 +1021,15 @@ class CodingAgentOperationsTest {
 		server.start();
 		try {
 			URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
-			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			CodingAgentOperations store = runtime;
 			store.fileCredentialStore(tempDir.resolve("failing-auth.json"), null);
-			CodingAgentOperations.INSTANCE.modifyCredential(
+			runtime.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"expired-token", "github-token", 0, null, Map.of()));
-			ProviderState state = ProviderState.GITHUB_COPILOT_OPERATIONS;
-			CodingAgentOperations auth = CodingAgentOperations.INSTANCE;
+			ProviderState state = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			CodingAgentOperations auth = runtime;
 			auth.gitHubCopilotAuth(
 					state, store, base, base.resolve("/copilot_internal/v2/token"), base);
 
@@ -1065,7 +1068,7 @@ class CodingAgentOperationsTest {
 			assertEquals("{\"a\":1}", event.data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1075,7 +1078,7 @@ class CodingAgentOperationsTest {
 		try {
 			assertEquals("line1\nline2", next(r).data);
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1085,7 +1088,7 @@ class CodingAgentOperationsTest {
 		try {
 			assertEquals("x", next(r).data);
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1098,7 +1101,7 @@ class CodingAgentOperationsTest {
 			assertEquals("[DONE]", next(r).data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1109,7 +1112,7 @@ class CodingAgentOperationsTest {
 			assertEquals("tail", next(r).data);
 			assertNull(next(r));
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1119,7 +1122,7 @@ class CodingAgentOperationsTest {
 		try {
 			assertEquals(" two spaces", next(r).data);
 		} finally {
-			CodingAgentOperations.INSTANCE.closeSseReader(r);
+			runtime.closeSseReader(r);
 		}
 	}
 
@@ -1130,7 +1133,7 @@ class CodingAgentOperationsTest {
 		StreamOptions options = new StreamOptions();
 		options.sessionId = "session-1";
 
-		CodingAgentOperations.INSTANCE.configureCodexRequest(
+		runtime.configureCodexRequest(
 				options, new CodingAgentOperations.ChatGptToken("access-token", "account-1"));
 
 		assertEquals("access-token", options.apiKey);
@@ -1205,26 +1208,26 @@ class CodingAgentOperationsTest {
 					copilotModel("anthropic", "anthropic-messages", base),
 					copilotModel("completions", "openai-completions", base),
 					copilotModel("responses", "openai-responses", base));
-			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			CodingAgentOperations store = runtime;
 			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
-			CodingAgentOperations.INSTANCE.modifyCredential(
+			runtime.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			ProviderState provider = ProviderState.GITHUB_COPILOT_OPERATIONS;
-			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
+			ProviderState provider = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			runtime.gitHubCopilotAuth(
 					provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
-			CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(provider, models);
+			runtime.newGitHubCopilotProvider(provider, models);
 			assertEquals(models, provider.models);
 
 			assertEquals("anthropic", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(0), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(runtime.stream(provider, models.get(0), new Context(), new StreamOptions()))));
 			assertEquals("completions", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(1), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(runtime.stream(provider, models.get(1), new Context(), new StreamOptions()))));
 			assertEquals("responses", CodingAgentOperations.text(
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, models.get(2), new Context(), new StreamOptions()))));
+					CodingAgentOperations.result(runtime.stream(provider, models.get(2), new Context(), new StreamOptions()))));
 		} finally {
 			server.stop(0);
 		}
@@ -1255,30 +1258,30 @@ class CodingAgentOperationsTest {
 		server.start();
 		try {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
-			CodingAgentOperations.INSTANCE.loadBundledModelCatalog();
-			Model opus = CodingAgentOperations.copyModel(CodingAgentOperations.INSTANCE.requireCatalogModel(
+			runtime.loadBundledModelCatalog();
+			Model opus = CodingAgentOperations.copyModel(runtime.requireCatalogModel(
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID, "claude-opus-5"));
 			opus.baseUrl = base;
 
-			CodingAgentOperations store = CodingAgentOperations.INSTANCE;
+			CodingAgentOperations store = runtime;
 			store.fileCredentialStore(
 					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
-			CodingAgentOperations.INSTANCE.modifyCredential(
+			runtime.modifyCredential(
 					store,
 					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
 					ignored -> new Credential.OAuthCredential(
 							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
-			ProviderState provider = ProviderState.GITHUB_COPILOT_OPERATIONS;
-			CodingAgentOperations.INSTANCE.gitHubCopilotAuth(
+			ProviderState provider = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			runtime.gitHubCopilotAuth(
 					provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
-			CodingAgentOperations.INSTANCE.newGitHubCopilotProvider(provider, List.of(opus));
+			runtime.newGitHubCopilotProvider(provider, List.of(opus));
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("Use adaptive thinking"));
 
 			assertEquals(
 					"adaptive",
 					CodingAgentOperations.text(CodingAgentOperations.result(
-							CodingAgentOperations.INSTANCE.stream(provider, opus, context, copilotOptions(null, ThinkingLevel.MEDIUM)))));
+							runtime.stream(provider, opus, context, copilotOptions(null, ThinkingLevel.MEDIUM)))));
 
 			JsonNode payload = request.get();
 			assertNotNull(payload);
@@ -1348,13 +1351,13 @@ class CodingAgentOperationsTest {
 		});
 		try {
 			Model model = googleModel(googleUrl(server));
-			ProviderState provider = CodingAgentOperations.INSTANCE.googleProvider(
-					ProviderState.GOOGLE_OPERATIONS, List.of(model));
+			ProviderState provider = runtime.googleProvider(
+					runtime.providerState(ProviderState.Role.GOOGLE), List.of(model));
 			Context context = new Context("system");
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, googleOptions("test-key")));
+					CodingAgentOperations.result(runtime.stream(provider, model, context, googleOptions("test-key")));
 
 			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);
@@ -1427,10 +1430,10 @@ class CodingAgentOperationsTest {
 		return options;
 	}
 
-	private static ProviderState openAiCompatibleProvider(
+	private ProviderState openAiCompatibleProvider(
 			String id, String name, String baseUrl, List<Model> models) {
-		return CodingAgentOperations.INSTANCE.openAiCompatibleProvider(
-				ProviderState.OPENAI_COMPATIBLE_OPERATIONS, id, models);
+		return runtime.openAiCompatibleProvider(
+				runtime.providerState(ProviderState.Role.OPENAI_COMPATIBLE), id, models);
 	}
 
 	@Test
@@ -1457,7 +1460,7 @@ class CodingAgentOperationsTest {
 			context.messages.add(CodingAgentOperations.userMessage("hello"));
 
 			AssistantMessageEventStream stream =
-					CodingAgentOperations.INSTANCE.stream(provider, model, context, compatibleOptions("test-key"));
+					runtime.stream(provider, model, context, compatibleOptions("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
 			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
@@ -1497,7 +1500,7 @@ class CodingAgentOperationsTest {
 			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), compatibleOptions("test-key")));
+					CodingAgentOperations.result(runtime.stream(provider, model, new Context(), compatibleOptions("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
 			assertEquals("read", CodingAgentOperations.toolCalls(result).getFirst().name);
@@ -1522,7 +1525,7 @@ class CodingAgentOperationsTest {
 			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), compatibleOptions("test-key")));
+					CodingAgentOperations.result(runtime.stream(provider, model, new Context(), compatibleOptions("test-key")));
 
 			assertEquals(StopReason.TOOL_USE, result.stopReason);
 			assertEquals(1, CodingAgentOperations.toolCalls(result).size());
@@ -1549,7 +1552,7 @@ class CodingAgentOperationsTest {
 			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
 
 			AssistantMessageEventStream stream =
-					CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), compatibleOptions("test-key"));
+					runtime.stream(provider, model, new Context(), compatibleOptions("test-key"));
 			List<AssistantMessageEvent> events = new ArrayList<>();
 			for (AssistantMessageEvent event : CodingAgentOperations.events(stream)) {
 				events.add(event);
@@ -1584,7 +1587,7 @@ class CodingAgentOperationsTest {
 			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, new Context(), compatibleOptions("test-key")));
+					CodingAgentOperations.result(runtime.stream(provider, model, new Context(), compatibleOptions("test-key")));
 
 			assertEquals(StopReason.ERROR, result.stopReason);
 			assertTrue(result.errorMessage.startsWith("OpenAI tool call arguments must be a JSON object"));
@@ -1680,9 +1683,9 @@ class CodingAgentOperationsTest {
 		});
 		try {
 
-			CodingAgentOperations.INSTANCE.fileCredentialStore(tempDir.resolve("auth.json"), null);
-			CodingAgentOperations credentials = CodingAgentOperations.INSTANCE;
-					CodingAgentOperations.INSTANCE.modifyCredential(
+			runtime.fileCredentialStore(tempDir.resolve("auth.json"), null);
+			CodingAgentOperations credentials = runtime;
+					runtime.modifyCredential(
 					credentials,
 					"openai",
 					ignored -> new Credential.ApiKeyCredential("saved-key", Map.of()));
@@ -1693,7 +1696,7 @@ class CodingAgentOperationsTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
-			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, new StreamOptions()));
+			AssistantMessage result = CodingAgentOperations.result(runtime.stream(provider, model, context, new StreamOptions()));
 
 			assertEquals(StopReason.STOP, result.stopReason);
 		} finally {
@@ -1733,7 +1736,7 @@ class CodingAgentOperationsTest {
 			context.messages.add(CodingAgentOperations.userMessage("hi"));
 
 			AssistantMessage result =
-					CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, responsesOptions("test-key")));
+					CodingAgentOperations.result(runtime.stream(provider, model, context, responsesOptions("test-key")));
 
 			assertEquals("hello world", CodingAgentOperations.text(result));
 			assertEquals("resp_1", result.responseId);
@@ -1778,7 +1781,7 @@ class CodingAgentOperationsTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			AssistantMessage result = CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider,
+			AssistantMessage result = CodingAgentOperations.result(runtime.stream(provider,
 					model, context, responsesOptions("test-key", ThinkingLevel.MEDIUM)));
 
 			JsonNode body = Json.MAPPER.readTree(request.get());
@@ -1814,7 +1817,7 @@ class CodingAgentOperationsTest {
 			Context context = new Context();
 			context.messages.add(CodingAgentOperations.userMessage("inspect"));
 
-			CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider,
+			CodingAgentOperations.result(runtime.stream(provider,
 					model,
 					context,
 					sessionOptions("test-key", ThinkingLevel.MEDIUM, "session-1", 4_096)));
@@ -1866,7 +1869,7 @@ class CodingAgentOperationsTest {
 					false,
 					System.currentTimeMillis()));
 
-			CodingAgentOperations.result(CodingAgentOperations.INSTANCE.stream(provider, model, context, responsesOptions("test-key")));
+			CodingAgentOperations.result(runtime.stream(provider, model, context, responsesOptions("test-key")));
 
 			JsonNode input = Json.MAPPER.readTree(request.get()).path("input");
 			assertEquals("reasoning", input.get(0).path("type").asText());
@@ -2027,7 +2030,7 @@ class CodingAgentOperationsTest {
 	void recordsACompleteAgentTranscript() throws Exception {
 		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
-		CodingAgentOperations recorder = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations recorder = runtime;
 		AssistantMessage assistant = new AssistantMessage("faux", "faux", "faux-1");
 		assistant.content.add(new TextContent("I will use a tool.", null));
 		assistant.stopReason = StopReason.TOOL_USE;
@@ -2053,8 +2056,8 @@ class CodingAgentOperationsTest {
 
 	@Test
 	void forksTheTranscriptIntoANamedSession() throws Exception {
-		CodingAgentOperations store=CodingAgentOperations.INSTANCE;
-		CodingAgentOperations source=CodingAgentOperations.INSTANCE;
+		CodingAgentOperations store=runtime;
+		CodingAgentOperations source=runtime;
 		sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
 		String sourceSessionId = source.state().sessionId();
@@ -2062,7 +2065,7 @@ class CodingAgentOperationsTest {
 		source.appendSessionMessages(messages);
 
 		store.forkSessionRecorder(tempDir, "faux", "faux-1", "  investigation fork  ", messages);
-		CodingAgentOperations fork = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations fork = runtime;
 		SessionSnapshot snapshot = store.sessionSnapshot(fork.state().sessionId());
 
 		assertNotEquals(sourceSessionId, fork.state().sessionId());
@@ -2076,7 +2079,7 @@ class CodingAgentOperationsTest {
 	void restoresCompactedSessionsUsingOnlyTheCheckpointAndLaterMessagesAsContext() throws Exception {
 		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
-		CodingAgentOperations recorder = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations recorder = runtime;
 		recorder.appendSessionMessages(List.of(
 				CodingAgentOperations.userMessage("PRE-COMPACTION-SENTINEL"),
 				CodingAgentOperations.userMessage("another message to compact")));
@@ -2106,7 +2109,7 @@ class CodingAgentOperationsTest {
 	void usesTheLatestCompactionBoundaryWhenASessionIsCompactedAgain() throws Exception {
 		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
-		CodingAgentOperations recorder = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations recorder = runtime;
 		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("first history")));
 		recorder.appendSessionCompaction(new CompactionResult("first checkpoint", 100, 10));
 		recorder.appendSessionMessages(List.of(CodingAgentOperations.userMessage("between compactions")));
@@ -2124,7 +2127,7 @@ class CodingAgentOperationsTest {
 	void restoresTypedMessagesAndContinuesTheSameSession() throws Exception {
 		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
-		CodingAgentOperations recorder = CodingAgentOperations.INSTANCE;
+		CodingAgentOperations recorder = runtime;
 		AssistantMessage assistant = new AssistantMessage("faux-api", "faux", "faux-1");
 		assistant.content.add(new ThinkingContent("reasoning", "opaque", false));
 		assistant.content.add(new TextContent("answer", "text-signature"));
@@ -2160,13 +2163,13 @@ class CodingAgentOperationsTest {
 		assertEquals("README.md", ((Map<?, ?>) restoredResult.details).get("path"));
 
 		store.resumeSessionRecorder(recorder.state().sessionId());
-		CodingAgentOperations.INSTANCE.appendSessionMessages(List.of(CodingAgentOperations.userMessage("continue")));
+		runtime.appendSessionMessages(List.of(CodingAgentOperations.userMessage("continue")));
 		assertEquals(4, store.sessionSnapshot(recorder.state().sessionId()).messageCount);
 	}
 
-	private static CodingAgentOperations sessionStore(Path directory) {
-		CodingAgentOperations.INSTANCE.sessionStore(directory, List.of());
-		return CodingAgentOperations.INSTANCE;
+	private CodingAgentOperations sessionStore(Path directory) {
+		runtime.sessionStore(directory, List.of());
+		return runtime;
 	}
 
 	// BuiltInTools
@@ -2191,7 +2194,7 @@ class CodingAgentOperationsTest {
 		Files.writeString(tempDir.resolve("example.txt"), "duplicate duplicate");
 		ObjectNode edit = CodingAgentOperations.jsonObject().put("path", "example.txt");
 		edit.putArray("edits").addObject().put("oldText", "duplicate").put("newText", "changed");
-		assertThrows(IllegalArgumentException.class, () -> CodingAgentOperations.INSTANCE.executeTool(
+		assertThrows(IllegalArgumentException.class, () -> runtime.executeTool(
 				tool(builtInTools("git", tempDir), "edit"), "id", edit, new AbortSignal(), ignored -> {}));
 	}
 
@@ -2240,7 +2243,7 @@ class CodingAgentOperationsTest {
 
 		IllegalArgumentException error = assertThrows(
 				IllegalArgumentException.class,
-				() -> CodingAgentOperations.INSTANCE.executeTool(
+				() -> runtime.executeTool(
 						tool(builtInTools("git", tempDir), "grep"),
 						"id",
 						arguments,
@@ -2403,9 +2406,9 @@ class CodingAgentOperationsTest {
 		assertTrue(CodingAgentOperations.toolDescription(tool(tools, "grep")).contains("code-lens"));
 	}
 
-	private static List<AgentTool> builtInTools(String gitExecutable, Path cwd) {
-		CodingAgentOperations.INSTANCE.executable=gitExecutable;
-		return CodingAgentOperations.INSTANCE.builtInTools(cwd, ignored -> {});
+	private List<AgentTool> builtInTools(String gitExecutable, Path cwd) {
+		runtime.executable=gitExecutable;
+		return runtime.builtInTools(cwd, ignored -> {});
 	}
 
 	private static void addZipEntry(ZipOutputStream zip, String name, String content) throws IOException {
@@ -2430,8 +2433,8 @@ class CodingAgentOperationsTest {
 				.orElseThrow();
 	}
 
-	private static String run(List<AgentTool> tools, String name, ObjectNode arguments) throws Exception {
-		AgentTool.ToolResult result = CodingAgentOperations.INSTANCE.executeTool(
+	private String run(List<AgentTool> tools, String name, ObjectNode arguments) throws Exception {
+		AgentTool.ToolResult result = runtime.executeTool(
 				tool(tools, name), "id", arguments, new AbortSignal(), ignored -> {});
 		return ((TextContent) result.content.getFirst()).text;
 	}
@@ -2561,14 +2564,14 @@ class CodingAgentOperationsTest {
 					5_000L,
 					List.of(),
 					List.of());
-			CodingAgentOperations.INSTANCE.mcpCreateManager(
+			runtime.mcpCreateManager(
 					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
-			CodingAgentOperations manager = CodingAgentOperations.INSTANCE;
+			CodingAgentOperations manager = runtime;
 			try {
 				manager.mcpAwaitReady();
 				assertEquals(CodingAgentOperations.McpState.CONNECTED, manager.mcpStatus("remote").state);
 				AgentTool tool = manager.mcpTools().getFirst();
-				AgentTool.ToolResult result = CodingAgentOperations.INSTANCE.executeTool(
+				AgentTool.ToolResult result = runtime.executeTool(
 						tool, "id", CodingAgentOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});
 				assertEquals("over http", ((TextContent) result.content.getFirst()).text);
 				assertEquals("remote", manager.mcpStatuses().getFirst().name);

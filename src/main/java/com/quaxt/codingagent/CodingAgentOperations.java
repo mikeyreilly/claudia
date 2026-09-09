@@ -143,13 +143,40 @@ import com.quaxt.codingagent.mcp.StdioMcpTransport;
 import com.quaxt.codingagent.mcp.StreamableHttpMcpTransport;
 
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
-import static com.quaxt.codingagent.ai.providers.ProviderState.CHATGPT_OPERATIONS;
-import static com.quaxt.codingagent.ai.providers.ProviderState.GITHUB_COPILOT_OPERATIONS;
-import static com.quaxt.codingagent.ai.providers.ProviderState.GOOGLE_OPERATIONS;
 
 /** Agent execution, providers, tools, instructions, and persistent application state. */
-public enum CodingAgentOperations implements CredentialStore {
-    INSTANCE;
+public final class CodingAgentOperations implements CredentialStore, AutoCloseable {
+    private final Map<ProviderState.Role, ProviderState> providerStates = new EnumMap<>(ProviderState.Role.class);
+    private volatile boolean runtimeClosed;
+
+    public CodingAgentOperations() {
+        for (ProviderState.Role role : ProviderState.Role.values()) providerStates.put(role, new ProviderState(role));
+    }
+
+    ProviderState providerState(ProviderState.Role role) {
+        return providerStates.get(role);
+    }
+
+    private void requireOpen() {
+        if (runtimeClosed) throw new IllegalStateException("Agent runtime is closed");
+    }
+
+    /** Cancels active work and releases this runtime's shell processes, MCP connections, and listeners. */
+    @Override
+    public void close() {
+        if (runtimeClosed) return;
+        runtimeClosed = true;
+        try {
+            abort();
+        } finally {
+            try {
+                mcpCloseManager();
+            } finally {
+                shellSessions.close();
+                listeners.clear();
+            }
+        }
+    }
 
     // Model catalog
     private static final String MODEL_CATALOG_RESOURCE_ROOT = "/quaxt/codingagent/ai/models/";
@@ -2392,9 +2419,10 @@ public enum CodingAgentOperations implements CredentialStore {
 
     /**
      * Builds the core-provider registry with independent state for each provider
-     * implementation hosted by this operations enum.
+     * implementation owned by this runtime.
      */
     public void initializeCoreProviders() {
+        requireOpen();
         loadBundledModelCatalog();
         defaultCredentialStore();
         Map<String, Provider> providers = new LinkedHashMap<>();
@@ -2424,11 +2452,11 @@ public enum CodingAgentOperations implements CredentialStore {
                         OpenAiResponsesProvider.RequestProfile.STANDARD));
 
         List<Model> chatGptModels = chatGptSubscriptionModels();
-        chatGptAuth(CHATGPT_OPERATIONS, this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
+        chatGptAuth(providerState(ProviderState.Role.CHATGPT), this, URI.create("https://auth.openai.com"), CHATGPT_CLIENT_ID);
         providers.put(
                 CHATGPT_PROVIDER_ID,
                 chatGptProvider(
-                        CHATGPT_OPERATIONS,
+                        providerState(ProviderState.Role.CHATGPT),
                         chatGptModels,
                         new OpenAiResponsesProvider(
                                 CHATGPT_PROVIDER_ID,
@@ -2441,13 +2469,13 @@ public enum CodingAgentOperations implements CredentialStore {
         providers.put(
                 "google",
                 googleProvider(
-                        GOOGLE_OPERATIONS,
+                        providerState(ProviderState.Role.GOOGLE),
                         catalogModelsForProvider("google").stream()
                                 .filter(model -> model.api.equals(GOOGLE_API))
                                 .toList()));
 
         gitHubCopilotAuth(
-                GITHUB_COPILOT_OPERATIONS,
+                providerState(ProviderState.Role.GITHUB_COPILOT),
                 this,
                 URI.create("https://github.com"),
                 URI.create("https://api.github.com/copilot_internal/v2/token"),
@@ -2455,7 +2483,7 @@ public enum CodingAgentOperations implements CredentialStore {
         providers.put(
                 GITHUB_COPILOT_PROVIDER_ID,
                 newGitHubCopilotProvider(
-                        GITHUB_COPILOT_OPERATIONS,
+                        providerState(ProviderState.Role.GITHUB_COPILOT),
                         catalogModelsForProvider(GITHUB_COPILOT_PROVIDER_ID)));
         coreProviders(Map.copyOf(providers));
     }
@@ -3827,7 +3855,7 @@ public enum CodingAgentOperations implements CredentialStore {
             Provider provider, Model model, Context context, StreamOptions options) {
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
-            case ProviderState chatGpt when chatGpt == CHATGPT_OPERATIONS -> {
+            case ProviderState chatGpt when chatGpt.role == ProviderState.Role.CHATGPT -> {
                 if (!model.provider.equals(CHATGPT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a ChatGPT subscription model");
                 }
@@ -3961,7 +3989,7 @@ public enum CodingAgentOperations implements CredentialStore {
                 });
                 yield stream;
             }
-            case ProviderState copilot when copilot == GITHUB_COPILOT_OPERATIONS -> {
+            case ProviderState copilot when copilot.role == ProviderState.Role.GITHUB_COPILOT -> {
                 if (!model.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
                     throw new IllegalArgumentException("Model " + model + " is not a GitHub Copilot model");
                 }
@@ -3983,7 +4011,7 @@ public enum CodingAgentOperations implements CredentialStore {
                     default -> throw new IllegalArgumentException("Unsupported GitHub Copilot model API: " + model.api);
                 };
             }
-            case ProviderState google when google == GOOGLE_OPERATIONS -> {
+            case ProviderState google when google.role == ProviderState.Role.GOOGLE -> {
                 if (!model.api.equals(GOOGLE_API)) {
                     throw new IllegalArgumentException("Model " + model + " is not a Google Generative AI model");
                 }
@@ -4177,7 +4205,7 @@ public enum CodingAgentOperations implements CredentialStore {
                     });
                 });
             }
-            case ProviderState compatible when compatible == ProviderState.OPENAI_COMPATIBLE_OPERATIONS ->
+            case ProviderState compatible when compatible.role == ProviderState.Role.OPENAI_COMPATIBLE ->
                     openAiCompatibleStream(compatible, model, context, options);
             case OpenAiResponsesProvider responses -> openAiResponsesStream(responses, model, context, options);
             default -> throw unknownProvider(provider);
@@ -4241,6 +4269,7 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     public List<Message> prompt(String text) throws IOException, InterruptedException {
+        requireOpen();
         List<Message> created = runPrompt(text);
         if (recordingSession) appendSessionMessages(created);
         return created;
@@ -4253,6 +4282,7 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     private void requireIdleAgent() {
+        requireOpen();
         if (isStreaming || isCompacting) throw new IllegalStateException("Agent is already processing");
     }
 
@@ -4271,7 +4301,7 @@ public enum CodingAgentOperations implements CredentialStore {
         isCompacting = false;
     }
 
-    /** Configures the singleton as a fresh active agent. */
+    /** Configures this runtime as a fresh active agent. */
     void agent(Provider provider) {
         agentProvider = provider;
         listeners = new CopyOnWriteArrayList<>();
@@ -4284,6 +4314,7 @@ public enum CodingAgentOperations implements CredentialStore {
      * Registers an agent event listener; closing the result unsubscribes it.
      */
     public AutoCloseable subscribe(Consumer<AgentEvent> listener) {
+        requireOpen();
         listeners.add(listener);
         return () -> listeners.remove(listener);
     }
@@ -4305,6 +4336,7 @@ public enum CodingAgentOperations implements CredentialStore {
      * persisting the original transcript if it needs complete history.
      */
     public CompactionResult compact(String customInstructions) throws InterruptedException {
+        requireOpen();
         if (isStreaming || isCompacting) {
             throw new IllegalStateException("Agent is already processing");
         }
@@ -4619,6 +4651,7 @@ public enum CodingAgentOperations implements CredentialStore {
             AbortSignal signal,
             Consumer<AgentTool.ToolResult> onUpdate)
             throws Exception {
+        requireOpen();
         return switch (tool) {
             case FunctionTool function ->
                     function.execute.apply(new ToolInvocation(toolCallId, arguments, signal, onUpdate));
@@ -6832,9 +6865,8 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     public void mcpCreateManager(McpConfiguration configuration, Path workspace) {
-        if (!closed && !servers.isEmpty()) {
-            mcpCloseManager();
-        }
+        requireOpen();
+        mcpCloseManager();
         servers = new LinkedHashMap<>();
         closed = false;
         HttpClient http = newHttpClient();
@@ -6964,6 +6996,10 @@ public enum CodingAgentOperations implements CredentialStore {
             if (client != null) mcpCloseClient(client);
             mcpSnapshot(runtime);
         });
+        if (http != null) {
+            http.shutdownNow();
+            http = null;
+        }
     }
 
     private void mcpFailConnect(McpRuntime runtime, long generation, McpState state, Exception error) {

@@ -7,12 +7,15 @@ import com.quaxt.codingagent.ai.types.Model;
 import java.net.URI;
 import java.util.List;
 
-/** Passive mutable state for provider implementations hosted by the application operations enum. */
-public enum ProviderState implements Provider {
-    CHATGPT_OPERATIONS,
-    GOOGLE_OPERATIONS,
-    GITHUB_COPILOT_OPERATIONS,
-    OPENAI_COMPATIBLE_OPERATIONS;
+/** Mutable provider configuration owned by one runtime, with an immutable dispatch role. */
+public final class ProviderState implements Provider {
+    public enum Role { CHATGPT, GOOGLE, GITHUB_COPILOT, OPENAI_COMPATIBLE }
+
+    public final Role role;
+
+    public ProviderState(Role role) {
+        this.role = java.util.Objects.requireNonNull(role, "role");
+    }
 
     public String id;
     public List<Model> models = List.of();
