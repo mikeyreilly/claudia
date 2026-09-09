@@ -115,7 +115,7 @@ public final class CodingAgentCli {
     private final CodingAgentOperations runtime;
 
     public CodingAgentCli() {
-        this(CodingAgentOperations.INSTANCE);
+        this(new CodingAgentOperations());
     }
 
     public CodingAgentCli(CodingAgentOperations runtime) {
@@ -2280,7 +2280,7 @@ public final class CodingAgentCli {
             System.err.println("Error: " + e.getMessage());
             return 1;
         } finally {
-            runtime.closeShellSessions();
+            runtime.close();
         }
     }
 

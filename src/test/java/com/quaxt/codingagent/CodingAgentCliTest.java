@@ -222,7 +222,7 @@ class CodingAgentCliTest {
 		toolUse.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
-		var restored = CodingAgentOperations.INSTANCE.resumableMessages(
+		var restored = new CodingAgentOperations().resumableMessages(
 				List.of(user, failed, orphanedResult, toolUse, laterUser, aborted));
 
 		assertEquals(4, restored.size());

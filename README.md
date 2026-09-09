@@ -11,6 +11,11 @@ reads runtime snapshots and subscribes to `AgentEvent` updates; the runtime can
 execute prompts and record sessions without a terminal.
 `ShellSessionManager` owns subprocesses and their I/O independently of the
 agent loop, with explicit cleanup and focused process tests.
+Each `CodingAgentOperations` instance owns its conversation, provider
+configuration, shell sessions, and MCP connections. Embedders should use it in
+try-with-resources; `close()` cancels work and releases those resources. The CLI
+creates and closes its own runtime. Separate runtimes can use different
+`CodingAgentPaths` without sharing credentials or conversation state in memory.
 
 ## Build and run
 
