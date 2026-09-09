@@ -2279,6 +2279,8 @@ public final class CodingAgentCli {
         } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
             return 1;
+        } finally {
+            runtime.closeShellSessions();
         }
     }
 
@@ -3653,6 +3655,10 @@ public final class CodingAgentCli {
             case "edit" ->
                     "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
             case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
+            case "shell_input" -> (arguments.path("terminate").asBoolean() ? "Stopping command "
+                    : arguments.hasNonNull("input") ? "Sending input to command "
+                    : arguments.path("close_stdin").asBoolean() ? "Closing command input " : "Checking command ")
+                    + toolTextArgument(arguments, "session_id", "");
             case "grep" ->
                     "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
             case "find" ->
