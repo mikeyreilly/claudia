@@ -127,6 +127,7 @@ import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
 import com.quaxt.codingagent.cli.tools.LocalTool;
+import com.quaxt.codingagent.shell.ShellSessionManager;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpClient;
 import com.quaxt.codingagent.mcp.McpResultFilter;
@@ -391,22 +392,7 @@ public enum CodingAgentOperations implements CredentialStore {
     private int compactionReserveTokens = 16_384;
     private boolean recordingSession;
     private Consumer<IOException> persistenceFailure = ignored -> {};
-    private final Map<String, BuiltInTools.ShellSession> shellSessions = new java.util.concurrent.ConcurrentHashMap<>();
-    private boolean shellShutdownHookRegistered;
-    // PowerShell's console host bypasses redirected stdout for Read-Host prompts.
-    // Adapt that cmdlet to our pipes; other console-only prompts still fail promptly.
-    private static final String POWERSHELL_STDIN_PREAMBLE = """
-            $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);
-            function global:Read-Host {
-                [CmdletBinding()]
-                param([Parameter(Position=0)][object]$Prompt, [switch]$AsSecureString, [switch]$MaskInput)
-                if ($null -ne $Prompt) { [Console]::Write([string]$Prompt + ': '); [Console]::Out.Flush() }
-                $reply = [Console]::ReadLine()
-                if ($null -eq $reply) { throw 'Command stdin closed while waiting for input' }
-                if ($AsSecureString) { ConvertTo-SecureString -String $reply -AsPlainText -Force } else { $reply }
-            }
-            """;
-
+    private final ShellSessionManager shellSessions = new ShellSessionManager();
     /** Current conversation metadata and a read-only copy of the message list. */
     public record AgentSnapshot(
             Model model,
@@ -4782,8 +4768,8 @@ public enum CodingAgentOperations implements CredentialStore {
                         timeoutSeconds = value.asDouble();
                     }
                     int yieldMs = shellYieldMs(arguments);
-                    BuiltInTools.ShellSession session = startShellSession(local, command, timeoutSeconds, signal);
-                    yield pollShellSession(session, yieldMs, signal);
+                    yield shellSessions.execute(local.cwd, local.shell, command, timeoutSeconds == 0 ? null : timeoutSeconds,
+                            yieldMs, () -> isAborted(signal));
                 }
                 case SHELL_INPUT -> {
                     String id = requiredToolText(arguments, "session_id");
@@ -4797,15 +4783,8 @@ public enum CodingAgentOperations implements CredentialStore {
                     if (terminate && ((input != null && !input.isNull()) || closeStdin)) {
                         throw new IllegalArgumentException("terminate cannot be combined with input or close_stdin");
                     }
-                    requireNotAborted(signal);
-                    BuiltInTools.ShellSession session = shellSessions.get(id);
-                    if (session == null) throw new IllegalArgumentException(
-                            "Unknown shell session: " + id + ". Shell sessions do not survive a reset or restart.");
-                    if (terminate) stopShellSession(session, "Command terminated");
-                    else if ((input != null && !input.isNull()) || closeStdin) {
-                        sendShellInput(session, input == null || input.isNull() ? "" : input.asText(), closeStdin);
-                    }
-                    yield pollShellSession(session, yieldMs, signal);
+                    yield shellSessions.interact(id, input == null || input.isNull() ? null : input.asText(),
+                            closeStdin, terminate, yieldMs, () -> isAborted(signal));
                 }
                 case GREP -> {
                     String patternText = requiredToolText(arguments, "pattern");
@@ -5073,199 +5052,9 @@ public enum CodingAgentOperations implements CredentialStore {
         return value.asInt();
     }
 
-    private BuiltInTools.ShellSession startShellSession(
-            LocalTool local, String command, double timeoutSeconds, AbortSignal signal) throws IOException {
-        BuiltInTools.ShellSession session;
-        synchronized (shellSessions) {
-            requireNotAborted(signal);
-            if (shellSessions.size() >= 32) {
-                throw new IllegalStateException("Too many shell sessions; poll or terminate existing sessions with shell_input first");
-            }
-            if (!shellShutdownHookRegistered) {
-                Runtime.getRuntime().addShutdownHook(new Thread(this::closeShellSessions, "codingagent-shell-cleanup"));
-                shellShutdownHookRegistered = true;
-            }
-            ProcessBuilder builder = new ProcessBuilder(switch (local.shell) {
-                case BASH -> List.of("/bin/bash", "-c", command);
-                case POWERSHELL -> List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                        POWERSHELL_STDIN_PREAMBLE + command);
-            }).directory(local.cwd.toFile()).redirectErrorStream(true);
-            // Python otherwise buffers stdout when attached to a pipe, hiding input prompts.
-            builder.environment().putIfAbsent("PYTHONUNBUFFERED", "1");
-            session = new BuiltInTools.ShellSession(java.util.UUID.randomUUID().toString(), builder.start());
-            shellSessions.put(session.id, session);
-        }
-        Thread.ofVirtual().name("codingagent-shell-output").start(() -> {
-            try (var reader = new InputStreamReader(session.process.getInputStream(), StandardCharsets.UTF_8)) {
-                char[] buffer = new char[4_096];
-                int count;
-                while ((count = reader.read(buffer)) != -1) {
-                    synchronized (session) {
-                        session.output.append(buffer, 0, count);
-                        int excess = session.output.length() - BuiltInTools.MAX_BYTES;
-                        if (excess > 0) {
-                            if (Character.isLowSurrogate(session.output.charAt(excess))) excess++;
-                            session.output.delete(0, excess);
-                            session.truncated = true;
-                        }
-                    }
-                }
-            } catch (IOException error) {
-                if (!session.stopped) stopShellSession(session, "Could not read command output: " + error.getMessage());
-            } finally {
-                session.outputComplete = true;
-            }
-        });
-        if (timeoutSeconds > 0) {
-            long started = System.nanoTime();
-            Thread.ofVirtual().name("codingagent-shell-timeout").start(() -> {
-                try {
-                    while (!session.stopped && (session.process.isAlive() || !session.outputComplete)) {
-                        if (System.nanoTime() - started >= timeoutSeconds * 1_000_000_000d) {
-                            stopShellSession(session, "Command timed out after " + timeoutSeconds + " seconds");
-                            break;
-                        }
-                        Thread.sleep(50);
-                    }
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    stopShellSession(session, "Command aborted");
-                }
-            });
-        }
-        return session;
-    }
-
-    private void sendShellInput(BuiltInTools.ShellSession session, String input, boolean closeStdin) {
-        if (input.length() > BuiltInTools.MAX_BYTES) throw new IllegalArgumentException("input is limited to 51200 characters per call");
-        synchronized (session) {
-            // A process may finish while the user is answering. Return its final output instead of losing it.
-            if (session.stopped || !session.process.isAlive()) return;
-            if (session.inputPending) throw new IllegalStateException("Previous input is still being written; poll before sending more input");
-            if (session.stdinClosed) throw new IllegalStateException("Command stdin is already closed");
-            session.inputPending = true;
-            session.stdinClosed = closeStdin;
-        }
-        // Writing to a full pipe must not block the tool's polling/cancellation loop.
-        Thread.ofVirtual().name("codingagent-shell-input").start(() -> {
-            try {
-                var stdin = session.process.getOutputStream();
-                stdin.write(input.getBytes(StandardCharsets.UTF_8));
-                stdin.flush();
-                if (closeStdin) stdin.close();
-            } catch (IOException error) {
-                stopShellSession(session, "Could not write command input: " + error.getMessage());
-            } finally {
-                session.inputPending = false;
-            }
-        });
-    }
-
-    private AgentTool.ToolResult pollShellSession(BuiltInTools.ShellSession session, int yieldMs, AbortSignal signal)
-            throws InterruptedException {
-        long started = System.nanoTime();
-        try {
-            while (true) {
-                if (isAborted(signal)) {
-                    stopShellSession(session, "Command aborted");
-                    break;
-                }
-                if (shellSessionFinished(session)) break;
-                if (System.nanoTime() - started >= yieldMs * 1_000_000L) break;
-                Thread.sleep(25);
-            }
-        } catch (InterruptedException error) {
-            stopShellSession(session, "Command aborted");
-            shellSessions.remove(session.id, session);
-            throw error;
-        }
-        boolean finished = shellSessionFinished(session);
-        String output;
-        synchronized (session) {
-            output = boundShellOutput(session.output.toString(), session.truncated);
-            session.output.setLength(0);
-            session.truncated = false;
-        }
-        Map<String, Object> details = new LinkedHashMap<>();
-        details.put("session_id", session.id);
-        details.put("status", finished ? "exited" : session.stopped ? "stopping" : "running");
-        details.put("input_pending", session.inputPending);
-        String failure = session.failure;
-        if (finished) {
-            shellSessions.remove(session.id, session);
-            if (!session.process.isAlive()) {
-                int code = session.process.exitValue();
-                details.put("exit_code", code);
-                if (failure == null && code != 0) failure = "Command exited with code " + code;
-            }
-            if (failure != null) output += (output.isBlank() ? "" : "\n\n") + failure;
-        } else if (session.stopped) {
-            output += (output.isBlank() ? "" : "\n\n") + "[Shell session " + session.id
-                    + " is stopping: " + failure + ". Use shell_input to collect its final result.]";
-        } else {
-            output += (output.isBlank() ? "" : "\n\n") + "[Shell session " + session.id
-                    + " is still running. Use shell_input to poll or send input. If the output requests user information,"
-                    + " ask the user and end this turn; after their reply, send it to this session, including a newline to submit it.]";
-        }
-        return new AgentTool.ToolResult(List.of(new TextContent(output.isBlank() ? "(no output)" : output, null)),
-                details, finished && failure != null);
-    }
-
-    private void stopShellSession(BuiltInTools.ShellSession session, String reason) {
-        synchronized (session) {
-            if (session.stopped) return;
-            session.failure = reason;
-            session.stopped = true;
-        }
-        // Terminate children before their shell so ordinary scripts cannot remain orphaned.
-        try {
-            List<ProcessHandle> descendants = session.process.descendants().toList();
-            for (ProcessHandle child : descendants.reversed()) child.destroyForcibly();
-            session.process.destroyForcibly();
-            awaitShellExit(session);
-        } finally {
-            session.terminationComplete = true;
-        }
-    }
-
-    private static boolean shellSessionFinished(BuiltInTools.ShellSession session) {
-        return session.stopped ? session.terminationComplete : !session.process.isAlive() && session.outputComplete;
-    }
-
-    private static void awaitShellExit(BuiltInTools.ShellSession session) {
-        try {
-            session.process.waitFor(2, TimeUnit.SECONDS);
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /** Keep the tail so a prompt following a large log remains visible, including partial lines. */
-    private static String boundShellOutput(String output, boolean truncated) {
-        int start = output.length();
-        int bytes = 0;
-        int lines = 1;
-        while (start > 0) {
-            int codePoint = output.codePointBefore(start);
-            int width = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-            if (bytes + width > BuiltInTools.MAX_BYTES) break;
-            if (codePoint == '\n' && start < output.length() && ++lines > BuiltInTools.MAX_LINES) break;
-            bytes += width;
-            start -= Character.charCount(codePoint);
-        }
-        return (truncated || start > 0 ? "[Earlier command output truncated; showing most recent output]\n" : "")
-                + output.substring(start);
-    }
-
-    /** Releases live processes when cancelling, resetting a conversation, or closing the application. */
+    /** Releases processes retained between conversation turns. */
     public void closeShellSessions() {
-        synchronized (shellSessions) {
-            for (BuiltInTools.ShellSession session : shellSessions.values()) {
-                stopShellSession(session, "Command aborted");
-                awaitShellExit(session);
-            }
-            shellSessions.clear();
-        }
+        shellSessions.closeSessions();
     }
 
     /**

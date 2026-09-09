@@ -9,6 +9,8 @@ and presentation. It delegates to `CodingAgentOperations`, which owns agent
 execution, providers, tools, repository instructions, and persistence. The CLI
 reads runtime snapshots and subscribes to `AgentEvent` updates; the runtime can
 execute prompts and record sessions without a terminal.
+`ShellSessionManager` owns subprocesses and their I/O independently of the
+agent loop, with explicit cleanup and focused process tests.
 
 ## Build and run
 

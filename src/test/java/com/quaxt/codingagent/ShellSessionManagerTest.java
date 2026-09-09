@@ -3,7 +3,9 @@ package com.quaxt.codingagent;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.types.TextContent;
-import com.quaxt.codingagent.ai.util.AbortSignal;
+import com.quaxt.codingagent.shell.ShellSessionManager;
+import com.quaxt.codingagent.cli.tools.BuiltInTools;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -18,13 +20,13 @@ import static com.quaxt.codingagent.CodingAgentOperations.jsonObject;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(30)
-class ShellSessionTest {
+class ShellSessionManagerTest {
     @TempDir Path cwd;
-    private final CodingAgentOperations runtime = CodingAgentOperations.INSTANCE;
+    private final ShellSessionManager manager = new ShellSessionManager();
 
     @AfterEach
     void cleanup() {
-        runtime.closeShellSessions();
+        manager.close();
     }
 
     @Test
@@ -79,20 +81,20 @@ class ShellSessionTest {
     }
 
     @Test
-    void abortAndCloseKillScriptsWaitingBetweenTurns() throws Exception {
+    void clearingSessionsKillsScriptsAndAllowsNewCommands() throws Exception {
         AgentTool.ToolResult initial = start("wait");
-        runtime.abort();
+        manager.closeSessions();
         awaitDead(pid(initial));
         assertThrows(IllegalArgumentException.class, () -> run("shell_input", jsonObject().put("session_id", id(initial))));
         AgentTool.ToolResult next = start("wait");
-        runtime.closeShellSessions();
+        manager.closeSessions();
         awaitDead(pid(next));
     }
 
     @Test
     void abortSignalInterruptsAPoll() throws Exception {
         AgentTool.ToolResult initial = start("wait");
-        AbortSignal signal = new AbortSignal();
+        AtomicBoolean signal = new AtomicBoolean();
         CompletableFuture<AgentTool.ToolResult> polling = new CompletableFuture<>();
         Thread worker = Thread.ofVirtual().start(() -> {
             try {
@@ -104,7 +106,7 @@ class ShellSessionTest {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (worker.getState() != Thread.State.TIMED_WAITING && !polling.isDone() && System.nanoTime() < deadline) Thread.sleep(10);
         assertEquals(Thread.State.TIMED_WAITING, worker.getState());
-        runtime.abort(signal);
+        signal.set(true);
         assertTrue(polling.get(5, TimeUnit.SECONDS).isError);
         awaitDead(pid(initial));
     }
@@ -158,18 +160,39 @@ class ShellSessionTest {
         awaitDead(pid(initial));
     }
 
+    @Test
+    void managersOwnSeparateSessionsAndClosingOneDoesNotAffectTheOther() throws Exception {
+        AgentTool.ToolResult initial = start("wait");
+        try (ShellSessionManager other = new ShellSessionManager()) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> other.interact(id(initial), null, false, false, 0, () -> false));
+        }
+        assertEquals("running", details(run("shell_input", jsonObject().put("session_id", id(initial)).put("yield_ms", 0))).get("status"));
+        manager.close();
+        awaitDead(pid(initial));
+        assertThrows(IllegalStateException.class, () -> start("wait"));
+    }
+
     private AgentTool.ToolResult start(String mode) throws Exception {
         return run("shell", jsonObject().put("command", ShellStdioFixture.command(mode)).put("yield_ms", 2000));
     }
 
     private AgentTool.ToolResult run(String name, ObjectNode arguments) throws Exception {
-        return run(name, arguments, new AbortSignal());
+        return run(name, arguments, new AtomicBoolean());
     }
 
-    private AgentTool.ToolResult run(String name, ObjectNode arguments, AbortSignal signal) throws Exception {
-        AgentTool tool = runtime.builtInTools(cwd, ignored -> {}).stream()
-                .filter(candidate -> CodingAgentOperations.toolName(candidate).equals(name)).findFirst().orElseThrow();
-        return runtime.executeTool(tool, "test", arguments, signal, ignored -> {});
+    private AgentTool.ToolResult run(String name, ObjectNode arguments, AtomicBoolean signal) throws Exception {
+        if (name.equals("shell")) {
+            BuiltInTools.Shell shell = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")
+                    ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
+            return manager.execute(cwd, shell, arguments.path("command").asText(),
+                    arguments.has("timeout") ? arguments.path("timeout").asDouble() : null,
+                    arguments.path("yield_ms").asInt(1000), signal::get);
+        }
+        return manager.interact(arguments.path("session_id").asText(),
+                arguments.has("input") ? arguments.path("input").asText() : null,
+                arguments.path("close_stdin").asBoolean(), arguments.path("terminate").asBoolean(),
+                arguments.path("yield_ms").asInt(1000), signal::get);
     }
 
     private static Map<?, ?> details(AgentTool.ToolResult result) {
