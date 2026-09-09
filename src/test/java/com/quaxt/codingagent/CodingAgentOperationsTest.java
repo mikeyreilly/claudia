@@ -190,6 +190,94 @@ class CodingAgentOperationsTest {
     }
 
     @Test
+    void loadsUserSettingsAgentsFileBeforePerRunAndRepositoryInstructions() throws Exception {
+        Path home = tempDir.resolve("home");
+        Path userInstructions = home.resolve(".codingagent/AGENTS.md");
+        Files.createDirectories(userInstructions.getParent());
+        Files.writeString(userInstructions, "Personal rule: explain trade-offs.");
+        Files.writeString(workspace.resolve("AGENTS.md"), "Repository rule: prefer tabs.");
+        FauxProvider provider = configure(
+                100_000, workspace, home, "Per-run rule: use concise answers.");
+        List<AgentEvent> events = new ArrayList<>();
+        runtime.subscribe(events::add);
+
+        assertEquals(
+                "Working directory: " + workspace.toAbsolutePath().normalize() + "\n"
+                        + "Relative paths in tool calls resolve against the working directory. "
+                        + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n"
+                        + "Personal rule: explain trade-offs.\n\n"
+                        + "Per-run rule: use concise answers.\n\n"
+                        + "Repository rule: prefer tabs.",
+                promptedSystemPrompt(provider));
+        assertEquals(
+                List.of(userInstructions.toAbsolutePath().normalize(), workspace.resolve("AGENTS.md")),
+                events.stream()
+                        .filter(AgentEvent.InstructionLoaded.class::isInstance)
+                        .map(AgentEvent.InstructionLoaded.class::cast)
+                        .map(loaded -> loaded.path)
+                        .toList());
+    }
+
+    @Test
+    void resolvesInstructionSourcesAndPromptLayersWithoutAnAgentProvider() throws Exception {
+        Path home = tempDir.resolve("home");
+        CodingAgentPaths paths = new CodingAgentPaths(home);
+        Path userInstructions = paths.globalInstructionsFile();
+        Files.createDirectories(userInstructions.getParent());
+        Files.writeString(userInstructions, "Personal rule.");
+        Path repository = Files.createDirectories(tempDir.resolve("repository"));
+        Files.createDirectory(repository.resolve(".git"));
+        Files.writeString(repository.resolve("AGENTS.md"), "Repository rule.");
+        Path module = Files.createDirectories(repository.resolve("module"));
+        Files.writeString(module.resolve("AGENTS.md"), "Ignored standard rule.");
+        Path override = module.resolve("AGENTS.override.md");
+        Files.writeString(override, "Module override rule.");
+
+        AgentInstructionResolver.ResolvedInstructions resolved =
+                AgentInstructionResolver.forWorkspace(module, userInstructions, "Per-run rule.")
+                        .resolve(module);
+
+        assertEquals(
+                "Working directory: " + module.toAbsolutePath().normalize() + "\n"
+                        + "Repository root: " + repository.toAbsolutePath().normalize() + "\n"
+                        + "Relative paths in tool calls resolve against the working directory. "
+                        + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n"
+                        + "Personal rule.\n\n"
+                        + "Per-run rule.\n\n"
+                        + "Repository rule.\n\n"
+                        + "Module override rule.",
+                resolved.systemPrompt());
+        assertEquals(
+                List.of(
+                        new AgentInstructionResolver.InstructionSource(
+                                userInstructions, AgentInstructionResolver.SourceScope.USER, "Personal rule."),
+                        new AgentInstructionResolver.InstructionSource(
+                                repository.resolve("AGENTS.md"),
+                                AgentInstructionResolver.SourceScope.REPOSITORY,
+                                "Repository rule."),
+                        new AgentInstructionResolver.InstructionSource(
+                                override,
+                                AgentInstructionResolver.SourceScope.REPOSITORY,
+                                "Module override rule.")),
+                resolved.sources());
+    }
+
+    @Test
+    void centralizesUserHomeDerivedApplicationPaths() {
+        Path home = tempDir.resolve("home");
+        CodingAgentPaths paths = new CodingAgentPaths(home);
+
+        assertEquals(home.toAbsolutePath().normalize(), paths.homeDirectory());
+        assertEquals(home.resolve(".codingagent/settings.json"), paths.settingsFile());
+        assertEquals(home.resolve(".codingagent/auth.json"), paths.authFile());
+        assertEquals(home.resolve(".codingagent/mcp-auth.json"), paths.mcpAuthFile());
+        assertEquals(home.resolve(".codingagent/sessions"), paths.sessionsDirectory());
+        assertEquals(home.resolve(".codingagent/AGENTS.md"), paths.globalInstructionsFile());
+        assertEquals(home.resolve(".pi-java/auth.json"), paths.legacyAuthFile());
+        assertEquals(home.resolve(".pi-java/sessions"), paths.legacySessionsDirectory());
+    }
+
+    @Test
     void namesTheRepositoryRootWhenTheWorkingDirectoryIsBelowIt() throws Exception {
         Files.createDirectory(workspace.resolve(".git"));
         Path module = Files.createDirectories(workspace.resolve("module"));
@@ -220,6 +308,10 @@ class CodingAgentOperationsTest {
     }
 
     private FauxProvider configure(long contextWindow, Path cwd) {
+        return configure(contextWindow, cwd, tempDir.resolve("home"), "");
+    }
+
+    private FauxProvider configure(long contextWindow, Path cwd, Path home, String systemPrompt) {
         Model model = new Model();
         model.id = "faux-1";
         model.name = "Faux";
@@ -228,7 +320,13 @@ class CodingAgentOperationsTest {
         model.contextWindow = contextWindow;
         model.maxTokens = 4_096;
         FauxProvider provider = new FauxProvider("faux", "faux", List.of(model));
-        runtime.configureAgent(provider, model, cwd, "", null, ThinkingLevel.OFF);
+        CodingAgentPaths originalPaths = runtime.applicationPaths();
+        try {
+            runtime.applicationPaths(new CodingAgentPaths(home));
+            runtime.configureAgent(provider, model, cwd, systemPrompt, null, ThinkingLevel.OFF);
+        } finally {
+            runtime.applicationPaths(originalPaths);
+        }
         runtime.setAutoCompaction(true);
         return provider;
     }

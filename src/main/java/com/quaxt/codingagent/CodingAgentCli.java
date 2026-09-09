@@ -1884,7 +1884,7 @@ public final class CodingAgentCli {
                           --provider <id> Provider when --model is an unqualified model id
                           --api-key <key> Override environment-based API-key lookup
                           --system-prompt <text>
-                        				 Set the system prompt for --print
+                          \t\t\t\t Set a per-run system prompt
                           --no-session   Do not persist the print-mode transcript
                           --mode <print|json|rpc>
                         				 Select plain text, JSONL events, or stdin/stdout RPC
