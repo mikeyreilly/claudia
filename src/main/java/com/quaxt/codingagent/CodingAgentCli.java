@@ -127,6 +127,7 @@ public final class CodingAgentCli {
 
     // Interactive shell and terminal
     private enum SlashCommand {
+        CD("/cd"),
         CLEAR("/clear"),
         COMPACT("/compact"),
         DETAILS("/details"),
@@ -2284,8 +2285,11 @@ public final class CodingAgentCli {
     /** Dispatches one interactive slash command and returns whether the shell should exit. */
     private boolean dispatchSlashCommand(String input) throws IOException, InterruptedException {
         String trimmed = input.trim();
-        SlashCommand command = SlashCommand.from(trimmed);
-        String commandLabel = command == null ? trimmed.split("\\s+", 2)[0] : command.input;
+        String[] parts = trimmed.split("\\s+", 2);
+        String commandInput = parts[0];
+        String arguments = parts.length == 1 ? "" : parts[1].strip();
+        SlashCommand command = SlashCommand.from(commandInput);
+        String commandLabel = command == null ? commandInput : command.input;
         setShellActivity(activeActivity(
                 ActivityStatus.Phase.RUNNING_COMMAND, commandLabel, System.nanoTime()));
         try {
@@ -2293,7 +2297,22 @@ public final class CodingAgentCli {
                 println("Unknown command: " + input);
                 return false;
             }
+            if (command != SlashCommand.CD && !arguments.isEmpty()) {
+                println("Command " + command.input + " does not accept arguments.");
+                return false;
+            }
             switch (command) {
+                case CD -> {
+                    if (arguments.isEmpty()) {
+                        println("Usage: /cd <directory>");
+                        break;
+                    }
+                    try {
+                        changeShellWorkingDirectory(resolveShellWorkingDirectory(cwd, arguments));
+                    } catch (IllegalArgumentException | IOException error) {
+                        println("Could not change working directory: " + error.getMessage());
+                    }
+                }
                 case EXIT, QUIT -> {
                     return true;
                 }
@@ -3137,8 +3156,7 @@ public final class CodingAgentCli {
     }
 
     private void configureShellModel(Model model, boolean persistModel) {
-        Path configuredCwd = Path.of(".").toAbsolutePath().normalize();
-        IOException persistenceFailure = startFreshShellSession(model, configuredCwd);
+        IOException persistenceFailure = startFreshShellSession(model, cwd);
         if (persistenceFailure != null) {
             println("Model configured, but session persistence is unavailable: " + persistenceFailure.getMessage());
         }
@@ -3150,6 +3168,73 @@ public final class CodingAgentCli {
                 println("Model changed for this session, but could not be saved: " + error.getMessage());
             }
         }
+    }
+
+    /**
+     * Reconnects MCP servers and, when a model is active, starts a fresh agent session in {@code directory}.
+     *
+     * <p>This deliberately changes codingagent's virtual workspace only; it does not change the parent
+     * shell's working directory.
+     */
+    private void changeShellWorkingDirectory(Path directory) throws IOException {
+        if (directory.equals(cwd)) {
+            println("Already using " + cwd + ".");
+            return;
+        }
+
+        // MCP initialization carries the workspace to local server processes and remote servers, so a
+        // workspace switch must replace the manager before the agent receives its new tool set.
+        runtime.mcpLoadDefaultManager(directory);
+        if (!agentConfigured) {
+            cwd = directory;
+            println("Changed working directory to " + cwd + ".");
+            return;
+        }
+
+        Model model = runtime.state().model();
+        IOException persistenceFailure = startFreshShellSession(model, directory);
+        replaceScreen(sessionScreenHeader(model));
+        println("Changed working directory to " + cwd + ". Started a new session.");
+        if (persistenceFailure != null) {
+            println("New session will not be saved: " + persistenceFailure.getMessage());
+        }
+    }
+
+    /**
+     * Resolves a {@code /cd} argument against codingagent's current virtual workspace.
+     */
+    static Path resolveShellWorkingDirectory(Path currentDirectory, String argument) {
+        Path base = Objects.requireNonNull(currentDirectory, "currentDirectory").toAbsolutePath().normalize();
+        if (argument == null || argument.isBlank()) {
+            throw new IllegalArgumentException("directory must not be empty");
+        }
+        String text = argument.strip();
+        if (text.equals("~") || text.startsWith("~/")
+                || (System.getProperty("os.name", "").startsWith("Windows") && text.startsWith("~\\"))) {
+            String home = System.getProperty("user.home");
+            if (home == null || home.isBlank()) {
+                throw new IllegalArgumentException("home directory is unavailable");
+            }
+            text = text.equals("~") ? home : Path.of(home).resolve(text.substring(2)).toString();
+        } else if (text.startsWith("~")) {
+            throw new IllegalArgumentException("~user paths are not supported; use an absolute path");
+        }
+
+        final Path candidate;
+        try {
+            candidate = Path.of(text);
+        } catch (InvalidPathException error) {
+            throw new IllegalArgumentException("invalid directory: " + argument, error);
+        }
+        Path resolved = (candidate.isAbsolute() ? candidate : base.resolve(candidate)).normalize();
+        try {
+            if (!Files.isDirectory(resolved)) {
+                throw new IllegalArgumentException("not a directory: " + resolved);
+            }
+        } catch (SecurityException error) {
+            throw new IllegalArgumentException("cannot access directory: " + resolved, error);
+        }
+        return resolved;
     }
 
     /**

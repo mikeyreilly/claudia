@@ -93,10 +93,15 @@ currently configured model is used as a fallback. Use `/clear` to discard the
 active conversation, clear the visible transcript, and start a fresh unnamed
 session using the current model and workspace. When session persistence is
 enabled, the new conversation is recorded in its own session file; with
-`--no-session`, it is fresh in memory only. Use `/fork` to branch the current
-conversation into a new session: the name prompt starts with the current
-session name followed by ` fork` (or `fork` for an unnamed session), and the
-shell switches to the new session after you submit the name.
+`--no-session`, it is fresh in memory only. Use `/cd <directory>` to change
+the agent workspace without restarting the shell. Relative paths resolve from
+the current agent workspace and `~` is supported. A workspace change rebuilds
+local tools and instruction context, reconnects MCP servers, and starts a
+fresh session; it does not change the parent terminal shell's directory. Use
+`/fork` to branch the current conversation into a new session: the name prompt
+starts with the current session name followed by ` fork` (or `fork` for an
+unnamed session), and the shell switches to the new session after you submit
+the name.
 
 Typing `/` opens a four-row, alphabetized command panel below the prompt; continue
 typing to prefix-filter it, use Up/Down to navigate, and press Enter to insert
