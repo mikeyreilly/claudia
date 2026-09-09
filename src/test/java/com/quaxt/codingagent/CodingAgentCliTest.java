@@ -166,14 +166,40 @@ class CodingAgentCliTest {
 	@Test
 	void keepsSlashCommandCompletionAndHelpInSync() {
 		assertEquals(List.of(
-				"/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
+				"/cd", "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
 				"/mcp", "/models", "/quit", "/resume", "/settings"), CodingAgentCli.slashCommands());
 
 		String help = CodingAgentCli.slashCommandHelp();
+		assertTrue(help.contains("/cd"));
 		assertTrue(help.contains("/clear"));
 		assertTrue(help.contains("/compact"));
 		assertTrue(help.contains("/settings"));
 		assertFalse(help.contains("/quit"));
+	}
+
+	@Test
+	void resolvesCdPathsAgainstTheCurrentAgentWorkspace(@TempDir Path workspace) throws Exception {
+		Path nested = Files.createDirectories(workspace.resolve("a directory/nested"));
+		Path file = Files.writeString(workspace.resolve("not-a-directory"), "contents");
+
+		assertEquals(nested, CodingAgentCli.resolveShellWorkingDirectory(workspace, "a directory/nested"));
+		assertEquals(workspace, CodingAgentCli.resolveShellWorkingDirectory(nested, "../.."));
+		assertEquals(nested, CodingAgentCli.resolveShellWorkingDirectory(workspace, nested.toString()));
+		assertThrows(IllegalArgumentException.class,
+				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, "missing"));
+		assertThrows(IllegalArgumentException.class,
+				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, file.getFileName().toString()));
+		assertThrows(IllegalArgumentException.class,
+				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, "  "));
+	}
+
+	@Test
+	void rejectsUnsupportedCdHomeSyntax(@TempDir Path workspace) {
+		IllegalArgumentException error = assertThrows(
+				IllegalArgumentException.class,
+				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, "~another-user"));
+
+		assertTrue(error.getMessage().contains("~user paths are not supported"));
 	}
 
 	@Test
