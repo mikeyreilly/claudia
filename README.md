@@ -140,6 +140,34 @@ model-specific; for example, GitHub Copilot's GPT-5.6 Terra offers `max`. The
 selection becomes the default for future sessions and is clamped when the
 selected model supports fewer levels.
 
+## Interactive scripts
+
+You can ask codingagent to run a script and supply information when it asks:
+for example, "Run the import script; when it asks for a link, ask me for it."
+The agent reads the script's prompt, asks you in chat, and sends your next reply
+to the same running process. Scripts can ask multiple questions this way.
+
+The `shell` tool returns after at most `yield_ms` (default 1000 milliseconds,
+maximum 30000), with a session ID if the command is still running. The agent
+uses `shell_input` with that ID to read subsequent output or write literal
+`input` to stdin, including a newline to submit a line. `close_stdin` sends EOF;
+`terminate` stops the command and its children. An optional `timeout` limits
+the process's total lifetime, including time spent waiting for your reply.
+Each call returns only new output, retaining the most recent 2,000 lines or
+50KB when output is truncated so that a prompt after a long log stays visible.
+
+Shell processes survive ordinary chat turns. Cancelling an active turn,
+resetting the conversation, or exiting codingagent stops them. Running processes
+are not saved with conversations and cannot be restored after a restart.
+One-shot `--print` mode closes processes when the response ends; use the
+interactive CLI or a persistent RPC connection for exchanges across turns.
+
+Commands use stdin/stdout pipes, so prompts must be flushed by the script.
+Python is launched with `PYTHONUNBUFFERED=1` unless you already set that variable.
+PowerShell's `Read-Host` is adapted to read and write through these pipes.
+Programs requiring a PTY, full-screen terminal interaction, or direct console
+keyboard access are not supported.
+
 ## MCP servers
 
 codingagent reads MCP server definitions from the `mcp` object in

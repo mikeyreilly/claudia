@@ -348,6 +348,75 @@ class CodingAgentOperationsTest {
         for (String text : answers) provider.pendingResponses.add(new FauxProvider.ResponseStep.Message(answer(text)));
     }
 
+    @Test
+    void asksTheUserAndSuppliesTheirNextChatReplyToTheSameScript() throws Exception {
+        FauxProvider provider = configure(100_000);
+        try {
+            AssistantMessage launch = answer("");
+            launch.stopReason = StopReason.TOOL_USE;
+            launch.content.add(new ToolCall("shell-1", "shell", jsonObject()
+                    .put("command", ShellStdioFixture.command("eof")).put("yield_ms", 2000), null));
+            provider.pendingResponses.add(new FauxProvider.ResponseStep.Message(launch));
+            var session = new java.util.concurrent.atomic.AtomicReference<String>();
+            provider.pendingResponses.add(new FauxProvider.ResponseStep.Factory(request -> {
+                ToolResultMessage result = (ToolResultMessage) request.context.messages.getLast();
+                assertTrue(CodingAgentOperations.text(result).contains("Send text, then EOF:"));
+                session.set((String) ((Map<?, ?>) result.details).get("session_id"));
+                assertTrue(CodingAgentOperations.text(result).contains(session.get()));
+                return answer("What link should I supply to the script?");
+            }));
+
+            List<Message> firstTurn = runtime.prompt("Launch the script and ask me for the link it needs.");
+            assertEquals("What link should I supply to the script?", CodingAgentOperations.text((AssistantMessage) firstTurn.getLast()));
+            assertFalse(runtime.state().streaming());
+            String link = "https://example.test/import?id=42&source=chat";
+            provider.pendingResponses.add(new FauxProvider.ResponseStep.Factory(request -> {
+                assertEquals(link, CodingAgentOperations.text((UserMessage) request.context.messages.getLast()));
+                AssistantMessage send = answer("");
+                send.stopReason = StopReason.TOOL_USE;
+                send.content.add(new ToolCall("input-1", "shell_input", jsonObject()
+                        .put("session_id", session.get()).put("input", link + "\n")
+                        .put("close_stdin", true).put("yield_ms", 5000), null));
+                return send;
+            }));
+            provider.pendingResponses.add(new FauxProvider.ResponseStep.Factory(request -> {
+                ToolResultMessage result = (ToolResultMessage) request.context.messages.getLast();
+                assertFalse(result.isError);
+                assertTrue(CodingAgentOperations.text(result).contains("Received: " + link));
+                assertTrue(CodingAgentOperations.text(result).contains("EOF received"));
+                assertEquals("exited", ((Map<?, ?>) result.details).get("status"));
+                return answer("The script received your link and finished.");
+            }));
+
+            List<Message> nextTurn = runtime.prompt(link);
+            assertEquals("The script received your link and finished.", CodingAgentOperations.text((AssistantMessage) nextTurn.getLast()));
+        } finally {
+            runtime.closeShellSessions();
+        }
+    }
+
+    @Test
+    void startingANewConversationTerminatesOldShellSessions() throws Exception {
+        configure(100_000);
+        try {
+            AgentTool.ToolResult started = runtime.executeTool(tool(runtime.builtInTools(workspace, ignored -> {}), "shell"),
+                    "shell-1", jsonObject().put("command", ShellStdioFixture.command("wait")).put("yield_ms", 2000),
+                    new AbortSignal(), ignored -> {});
+            String id = (String) ((Map<?, ?>) started.details).get("session_id");
+            var matcher = java.util.regex.Pattern.compile("PID=(\\d+)").matcher(((TextContent) started.content.getFirst()).text);
+            assertTrue(matcher.find());
+            long pid = Long.parseLong(matcher.group(1));
+            configure(100_000);
+            var process = ProcessHandle.of(pid);
+            if (process.isPresent()) process.get().onExit().get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertThrows(IllegalArgumentException.class, () -> runtime.executeTool(
+                    tool(runtime.builtInTools(workspace, ignored -> {}), "shell_input"), "input-1",
+                    jsonObject().put("session_id", id), new AbortSignal(), ignored -> {}));
+        } finally {
+            runtime.closeShellSessions();
+        }
+    }
+
 	// DataCarrierArchitecture
 
     @Test

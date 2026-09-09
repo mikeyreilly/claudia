@@ -22,9 +22,29 @@ public final class BuiltInTools {
 		WRITE,
 		EDIT,
 		SHELL,
+		SHELL_INPUT,
 		GREP,
 		FIND,
 		LS
+	}
+
+	/** A live shell and its unread output, retained across conversation turns. */
+	public static final class ShellSession {
+		public final String id;
+		public final Process process;
+		public final StringBuilder output = new StringBuilder();
+		public boolean truncated;
+		public volatile boolean outputComplete;
+		public volatile String failure;
+		public volatile boolean inputPending;
+		public boolean stdinClosed;
+		public volatile boolean stopped;
+		public volatile boolean terminationComplete;
+
+		public ShellSession(String id, Process process) {
+			this.id = id;
+			this.process = process;
+		}
 	}
 
 	/** Command interpreter used by the shell tool. */
