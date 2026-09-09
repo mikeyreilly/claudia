@@ -41,7 +41,7 @@ public sealed interface AgentEvent
 		}
 	}
 
-	/** A repository instruction file was incorporated into the system prompt. */
+	/** An agent instruction file was incorporated into the system prompt. */
 	final class InstructionLoaded implements AgentEvent {
 		public Path path;
 

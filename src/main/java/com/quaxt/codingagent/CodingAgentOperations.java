@@ -366,7 +366,8 @@ public enum CodingAgentOperations implements CredentialStore {
     private Map<String, List<Model>> byProvider;
     private Map<String, Provider> coreProviders;
 
-    // Folded file credential store state
+    // Folded application paths and file credential store state
+    private CodingAgentPaths applicationPaths = CodingAgentPaths.forCurrentUser();
     private Path authPath;
     private Path lockPath;
     private Path fallbackAuthPath;
@@ -402,8 +403,6 @@ public enum CodingAgentOperations implements CredentialStore {
             String sessionId) {}
 
     // Repository instructions, sessions, settings, and git-ignore filtering
-    private static final String AGENTS_FILE = "AGENTS.md";
-    private static final String AGENTS_OVERRIDE_FILE = "AGENTS.override.md";
     private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
 
     /** One complete append-only JSONL session record. */
@@ -460,11 +459,9 @@ public enum CodingAgentOperations implements CredentialStore {
         }
     }
 
-    private Path repositoryRoot;
-    private String baseSystemPrompt;
-    private Path workingDirectory;
-    private Path currentDirectory;
-    private List<Path> sources = List.of();
+    private AgentInstructionResolver instructionResolver;
+    private Path currentInstructionDirectory;
+    private List<AgentInstructionResolver.InstructionSource> instructionSources = List.of();
     private String sessionId;
     private Path directory;
     private List<Path> legacyDirectories;
@@ -1380,11 +1377,26 @@ public enum CodingAgentOperations implements CredentialStore {
         };
     }
 
+    /** Returns the configured user-home-derived application locations. */
+    public CodingAgentPaths applicationPaths() {
+        return applicationPaths;
+    }
+
+    /**
+     * Configures the user-home-derived locations used for settings, credentials,
+     * sessions, MCP state, and global agent instructions.
+     *
+     * <p>Call this before initializing providers, configuring an agent, or
+     * opening a session. It lets embedders isolate codingagent state without
+     * changing the JVM-global {@code user.home} property.
+     */
+    public void applicationPaths(CodingAgentPaths applicationPaths) {
+        requireIdleAgent();
+        this.applicationPaths = Objects.requireNonNull(applicationPaths, "applicationPaths");
+    }
+
     CodingAgentOperations defaultCredentialStore() {
-        Path home = Path.of(System.getProperty("user.home"));
-        fileCredentialStore(
-                home.resolve(".codingagent").resolve("auth.json"),
-                home.resolve(".pi-java").resolve("auth.json"));
+        fileCredentialStore(applicationPaths.authFile(), applicationPaths.legacyAuthFile());
         return this;
     }
 
@@ -6772,13 +6784,12 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     /**
-     * Builds a manager for the MCP servers in {@code ~/.codingagent/settings.json}.
+     * Builds a manager for the MCP servers in codingagent's settings file.
      */
     void mcpLoadDefaultManager(Path workspace) throws IOException {
-        Path settingsPath = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json");
         mcpCreateManager(
                 mcpLoadConfiguration(new McpConfigLoader(
-                        settingsPath.toAbsolutePath().normalize(), Map.copyOf(System.getenv()))),
+                        applicationPaths.settingsFile(), Map.copyOf(System.getenv()))),
                 workspace);
     }
 
@@ -6814,12 +6825,12 @@ public enum CodingAgentOperations implements CredentialStore {
         servers = new LinkedHashMap<>();
         closed = false;
         HttpClient http = newHttpClient();
-        Path home = Path.of(System.getProperty("user.home"));
+        Path home = applicationPaths.homeDirectory();
         String xdg = System.getenv("XDG_DATA_HOME");
         Path openCodeData = xdg == null || xdg.isBlank()
                 ? home.resolve(".local/share/opencode/mcp-auth.json")
                 : Path.of(xdg).resolve("opencode/mcp-auth.json");
-        Path resolved = home.resolve(".codingagent/mcp-auth.json").toAbsolutePath().normalize();
+        Path resolved = applicationPaths.mcpAuthFile();
         mcpOAuthStore(
                 resolved,
                 resolved.resolveSibling(resolved.getFileName() + ".lock"),
@@ -8082,42 +8093,18 @@ public enum CodingAgentOperations implements CredentialStore {
                 + "</p></body></html>";
     }
 
-    /**
-     * Adds local tools and composes repository {@code AGENTS.md} text into the
-     * agent's system prompt. Path-based tools refresh the prompt when they move
-     * into a deeper descendant scope.
-     */
-    private void agentInstructions(
-            Path repositoryRoot, Path currentDirectory, String baseSystemPrompt) {
-        this.repositoryRoot = repositoryRoot;
-        // The instruction scope starts at the working directory and then descends
-        // with path-based tools; the working directory itself is fixed for the
-        // session because it is what LocalTool resolves relative paths against.
-        this.workingDirectory = currentDirectory;
-        this.currentDirectory = currentDirectory;
-        this.baseSystemPrompt = baseSystemPrompt;
-    }
-
+    /** Configures workspace tools and the resolver that supplies their instruction context. */
     private void configureBuiltInTools(Path cwd, String baseSystemPrompt) {
-        Path directory = instructionDirectory(cwd);
-        if (directory == null) {
-            throw new IllegalArgumentException("workingDirectory must have a parent directory");
-        }
-        Path repositoryRoot = directory;
-        for (Path current = directory; current != null; current = current.getParent()) {
-            if (Files.exists(current.resolve(".git"))) {
-                repositoryRoot = current;
-                break;
-            }
-        }
-        agentInstructions(
-                repositoryRoot, directory, baseSystemPrompt == null ? "" : baseSystemPrompt);
-        refreshAgentInstructionsIn(directory);
+        instructionResolver = AgentInstructionResolver.forWorkspace(
+                cwd, applicationPaths.globalInstructionsFile(), baseSystemPrompt);
+        currentInstructionDirectory = instructionResolver.workingDirectory();
+        instructionSources = List.of();
+        refreshAgentInstructionsIn(currentInstructionDirectory);
         Set<Path> announcedSources = new LinkedHashSet<>();
         subscribe(event -> {
             if (event instanceof AgentEvent.AgentStart) {
                 synchronized (this) {
-                    refreshAgentInstructionsIn(currentDirectory);
+                    refreshAgentInstructionsIn(currentInstructionDirectory);
                 }
                 applyAgentInstructions(announcedSources);
             }
@@ -8126,13 +8113,13 @@ public enum CodingAgentOperations implements CredentialStore {
         tools.addAll(builtInTools(cwd, path -> {
             boolean result;
             synchronized (this) {
-                Path directory1 = instructionDirectory(path);
-                if (directory1 == null
-                        || !directory1.startsWith(this.repositoryRoot)
-                        || !directory1.startsWith(currentDirectory)) {
+                Path directory = AgentInstructionResolver.instructionDirectory(path);
+                if (directory == null
+                        || !directory.startsWith(instructionResolver.repositoryRoot())
+                        || !directory.startsWith(currentInstructionDirectory)) {
                     result = false;
                 } else {
-                    result = refreshAgentInstructionsIn(directory1);
+                    result = refreshAgentInstructionsIn(directory);
                 }
             }
             if (result) {
@@ -8142,99 +8129,34 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     private void applyAgentInstructions(Set<Path> announcedSources) {
-        List<Path> sources = this.sources;
-        announcedSources.retainAll(sources);
-        for (Path source : sources) {
-            if (announcedSources.add(source)) {
-                emit(new AgentEvent.InstructionLoaded(Objects.requireNonNull(source, "path")));
+        Set<Path> activeSources = new LinkedHashSet<>();
+        for (AgentInstructionResolver.InstructionSource source : instructionSources) {
+            activeSources.add(source.path());
+        }
+        announcedSources.retainAll(activeSources);
+        for (AgentInstructionResolver.InstructionSource source : instructionSources) {
+            if (announcedSources.add(source.path())) {
+                emit(new AgentEvent.InstructionLoaded(source.path()));
             }
         }
     }
 
     // ------------------------------------------------------ agent instructions
 
-    /**
-     * States where the agent is running so the model can resolve relative tool
-     * paths without guessing. Reports the working directory rather than {@code
-     * currentDirectory}: the latter only tracks the deepest instruction scope,
-     * while tools keep resolving relative paths against the working directory.
-     */
-    private String agentEnvironmentPrompt() {
-        if (workingDirectory == null) return "";
-        StringBuilder text = new StringBuilder("Working directory: ").append(workingDirectory);
-        if (repositoryRoot != null && !repositoryRoot.equals(workingDirectory)) {
-            text.append("\nRepository root: ").append(repositoryRoot);
-        }
-        return text.append("\nRelative paths in tool calls resolve against the working directory. ")
-                .append("Use an absolute path or a leading ~/ to reach anything outside it.")
-                .toString();
-    }
-
+    /** Refreshes the agent's prompt and instruction-file sources for one local-tool scope. */
     private boolean refreshAgentInstructionsIn(Path directory) {
-        List<Path> nextSources = new ArrayList<>();
-        List<String> promptParts = new ArrayList<>();
-        // The environment block leads because it is stable for the whole session,
-        // which keeps the cacheable prefix intact when instructions change scope.
-        String environment = agentEnvironmentPrompt();
-        if (!environment.isEmpty()) {
-            promptParts.add(environment);
+        Path resolvedDirectory = AgentInstructionResolver.instructionDirectory(directory);
+        if (resolvedDirectory == null) {
+            throw new IllegalArgumentException("instruction directory must have a parent directory");
         }
-        if (!baseSystemPrompt.isBlank()) {
-            promptParts.add(baseSystemPrompt);
-        }
-        List<Path> directories = new ArrayList<>();
-        for (Path current = directory; current != null; current = current.getParent()) {
-            directories.add(current);
-            if (current.equals(repositoryRoot)) {
-                Collections.reverse(directories);
-                break;
-            }
-        }
-        if (directories.isEmpty() || !directories.getFirst().equals(repositoryRoot)) {
-            directories.clear();
-        }
-        for (Path scope : directories) {
-            Path instructionFile;
-            Path override = scope.resolve(AGENTS_OVERRIDE_FILE);
-            if (isReadableRegularFile(override)) {
-                instructionFile = override;
-            } else {
-                Path standard = scope.resolve(AGENTS_FILE);
-                instructionFile = isReadableRegularFile(standard) ? standard : null;
-            }
-            if (instructionFile == null) continue;
-            try {
-                String content = Files.readString(instructionFile, StandardCharsets.UTF_8);
-                nextSources.add(instructionFile);
-                if (!content.isBlank()) promptParts.add(content);
-            } catch (IOException | SecurityException ignored) {
-                // Repository instructions are best-effort. An unreadable file must
-                // not stop the agent from handling the user's task.
-            }
-        }
-
-        String nextPrompt = String.join("\n\n", promptParts);
-        List<Path> immutableSources = List.copyOf(nextSources);
-        boolean changed = !Objects.equals(directory, currentDirectory)
-                || !nextPrompt.equals(systemPrompt)
-                || !immutableSources.equals(sources);
-        currentDirectory = directory;
-        systemPrompt = nextPrompt;
-        sources = immutableSources;
+        AgentInstructionResolver.ResolvedInstructions next = instructionResolver.resolve(resolvedDirectory);
+        boolean changed = !Objects.equals(resolvedDirectory, currentInstructionDirectory)
+                || !next.systemPrompt().equals(systemPrompt)
+                || !next.sources().equals(instructionSources);
+        currentInstructionDirectory = resolvedDirectory;
+        systemPrompt = next.systemPrompt();
+        instructionSources = next.sources();
         return changed;
-    }
-
-    private static boolean isReadableRegularFile(Path path) {
-        try {
-            return Files.isRegularFile(path);
-        } catch (SecurityException ignored) {
-            return false;
-        }
-    }
-
-    private static Path instructionDirectory(Path path) {
-        Path absolute = Objects.requireNonNull(path, "path").toAbsolutePath().normalize();
-        return Files.isDirectory(absolute) ? absolute : absolute.getParent();
     }
 
     /**
@@ -8511,10 +8433,9 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     void defaultSessionStore() {
-        Path home = Path.of(System.getProperty("user.home"));
         sessionStore(
-                home.resolve(".codingagent").resolve("sessions"),
-                List.of(home.resolve(".pi-java").resolve("sessions")));
+                applicationPaths.sessionsDirectory(),
+                List.of(applicationPaths.legacySessionsDirectory()));
     }
 
     /**
@@ -8795,7 +8716,7 @@ public enum CodingAgentOperations implements CredentialStore {
     }
 
     public Settings loadSettings() throws IOException {
-        Path resolved = Path.of(System.getProperty("user.home"), ".codingagent", "settings.json").toAbsolutePath().normalize();
+        Path resolved = applicationPaths.settingsFile();
         settingsStore(
                 resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
         ObjectNode root = readSettingsObject();

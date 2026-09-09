@@ -232,18 +232,26 @@ Successful manual and automatic compactions are recorded as resume boundaries:
 the original transcript remains inspectable, while a resumed session sends only
 the saved checkpoint and messages added after that compaction.
 
-## Repository instructions
+## Agent instructions
 
-When started inside a Git worktree, codingagent reads applicable `AGENTS.md`
-files from the repository root through the current working directory. Their
-contents are appended to the model's instruction context in that order, so
-more deeply nested files are more specific. `AGENTS.override.md` takes
-precedence over `AGENTS.md` when both are in the same directory. As local tools
-move into a deeper descendant directory, any newly applicable instructions are
-loaded before the next model request. Each file is reported once when it first
-applies, for example `Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md`.
-These files are prompt text only; they do not impose separate filesystem
-restrictions.
+For personal defaults, create `~/.codingagent/AGENTS.md`. codingagent reads
+this optional user-owned instruction file into every new agent session. Its
+contents follow the working-directory context and precede any per-run
+`--system-prompt` text and repository instructions. This follows the
+cross-agent `AGENTS.md` convention while keeping the file with codingagent's
+other settings.
+
+When started inside a Git worktree, codingagent also reads applicable
+`AGENTS.md` files from the repository root through the current working
+directory. Their contents are appended to the model's instruction context in
+that order, so more deeply nested files are more specific than the personal
+default. `AGENTS.override.md` takes precedence over `AGENTS.md` when both are
+in the same repository directory. As local tools move into a deeper descendant
+directory, any newly applicable instructions are loaded before the next model
+request. Each instruction file is reported once when it first applies, for
+example `Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md`.
+Missing or unreadable instruction files are ignored. These files are prompt
+text only; they do not impose separate filesystem restrictions.
 
 ## RPC mode
 
