@@ -16,6 +16,12 @@ configuration, shell sessions, and MCP connections. Embedders should use it in
 try-with-resources; `close()` cancels work and releases those resources. The CLI
 creates and closes its own runtime. Separate runtimes can use different
 `CodingAgentPaths` without sharing credentials or conversation state in memory.
+Built-in tools are registered in `LocalTools`: each definition keeps its
+metadata, typed parameters, handler, and call description together. Parameter
+declarations generate the model-facing schema and validate arguments before
+execution. Adding a definition to the registry requires no new tool-kind enum
+or execution/presentation switch branches. `ToolRegistryTest` exercises these
+contracts, including a custom tool bound to independent contexts.
 
 ## Build and run
 

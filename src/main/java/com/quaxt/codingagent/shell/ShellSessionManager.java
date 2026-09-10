@@ -17,6 +17,7 @@ import java.util.function.BooleanSupplier;
 
 /** Owns the processes, I/O, deadlines, and cleanup for one agent's shell sessions. */
 public final class ShellSessionManager implements AutoCloseable {
+    public static final int MAX_INPUT_CHARACTERS = BuiltInTools.MAX_BYTES;
     private final Map<String, ShellSession> shellSessions = new ConcurrentHashMap<>();
     private Thread shutdownHook;
     private boolean closed;
@@ -153,7 +154,7 @@ public final class ShellSessionManager implements AutoCloseable {
     }
 
     private void sendShellInput(ShellSession session, String input, boolean closeStdin) {
-        if (input.length() > BuiltInTools.MAX_BYTES) throw new IllegalArgumentException("input is limited to 51200 characters per call");
+        if (input.codePointCount(0, input.length()) > MAX_INPUT_CHARACTERS) throw new IllegalArgumentException("input is limited to " + MAX_INPUT_CHARACTERS + " characters per call");
         synchronized (session) {
             // A process may finish while the user is answering. Return its final output instead of losing it.
             if (session.stopped || !session.process.isAlive()) return;

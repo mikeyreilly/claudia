@@ -26,7 +26,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -45,20 +44,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
-import java.io.ByteArrayOutputStream;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
-import java.nio.file.FileVisitResult;
-import java.nio.file.InvalidPathException;
-import java.nio.file.PathMatcher;
-import java.nio.file.ProviderNotFoundException;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -125,8 +114,8 @@ import com.quaxt.codingagent.ai.types.UserContent;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
-import com.quaxt.codingagent.cli.tools.BuiltInTools;
-import com.quaxt.codingagent.cli.tools.LocalTool;
+import com.quaxt.codingagent.cli.tools.LocalTools;
+import com.quaxt.codingagent.agent.ToolDefinition;
 import com.quaxt.codingagent.shell.ShellSessionManager;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpClient;
@@ -431,7 +420,6 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             String sessionId) {}
 
     // Repository instructions, sessions, settings, and git-ignore filtering
-    private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
 
     /** One complete append-only JSONL session record. */
     public static final class SessionEntry {
@@ -494,7 +482,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private Path directory;
     private List<Path> legacyDirectories;
     private Path settingsPath;
-    public String executable;
+    public String executable = "git";
 
     // MCP manager and OAuth
     private static final int MCP_OAUTH_DEFAULT_CALLBACK_PORT = 19_876;
@@ -4613,7 +4601,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public static String toolName(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.name;
-            case LocalTool local -> local.name;
+            case ToolDefinition.Bound<?> registered -> registered.definition().name();
             case McpAgentTool mcp -> mcp.name;
             default -> throw unknownTool(tool);
         };
@@ -4622,7 +4610,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public static String toolDescription(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.description;
-            case LocalTool local -> local.description;
+            case ToolDefinition.Bound<?> registered -> registered.definition().description();
             case McpAgentTool mcp -> mcp.definition.description;
             default -> throw unknownTool(tool);
         };
@@ -4634,7 +4622,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public static ObjectNode toolParameters(AgentTool tool) {
         return switch (tool) {
             case FunctionTool function -> function.parameters;
-            case LocalTool local -> local.parameters;
+            case ToolDefinition.Bound<?> registered -> registered.definition().parameters().schema();
             case McpAgentTool mcp -> mcp.definition.inputSchema.deepCopy();
             default -> throw unknownTool(tool);
         };
@@ -4655,325 +4643,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         return switch (tool) {
             case FunctionTool function ->
                     function.execute.apply(new ToolInvocation(toolCallId, arguments, signal, onUpdate));
-            case LocalTool local -> switch (local.kind) {
-                case READ -> {
-                    AgentTool.ToolResult result;
-                    String pathText = requiredToolText(arguments, "path");
-                    BuiltInTools.ArchiveLocation location = localToolArchiveLocation(local, pathText);
-                    if (location == null) {
-                        result = readToolFile(localToolPath(local, pathText), arguments, signal);
-                    } else {
-                        if (location.entry.startsWith("/")) {
-                            throw new IllegalArgumentException("Archive entry paths must not start with '/'");
-                        }
-                        FileSystem archive;
-                        try {
-                            archive = FileSystems.newFileSystem(location.archive);
-                        } catch (IOException | ProviderNotFoundException error) {
-                            throw new IOException("Unable to open archive " + location.archive + ": " + error.getMessage(), error);
-                        }
-                        try (archive) {
-                            Path root = archive.getPath("/");
-                            Path entry = location.entry.isEmpty() ? root : root.resolve(location.entry).normalize();
-                            if (!entry.startsWith(root)) {
-                                throw new IllegalArgumentException("Archive entry paths must stay within the archive");
-                            }
-                            requireNotAborted(signal);
-                            if (Files.isDirectory(entry)) {
-                                List<String> entries;
-                                try (var paths = Files.list(entry)) {
-                                    entries = paths.sorted(
-                                                    Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
-                                            .map(entry1 -> {
-                                                if (Files.isDirectory(entry1)) return entry1.getFileName() + "/";
-                                                try {
-                                                    return entry1.getFileName() + " (" + Files.size(entry1) + " bytes)";
-                                                } catch (IOException ignored) {
-                                                    return entry1.getFileName().toString();
-                                                }
-                                            })
-                                            .toList();
-                                }
-                                result = toolResultText(entries.isEmpty() ? "(empty directory)" : boundToolOutput(String.join("\n", entries), null));
-                            } else {
-                                if (!Files.isRegularFile(entry)) {
-                                    String entry1 = location.entry;
-                                    String withoutTrailingSlash = entry1.endsWith("/") ? entry1.substring(0, entry1.length() - 1) : entry1;
-                                    int slash = withoutTrailingSlash.lastIndexOf('/');
-                                    String prefix = slash < 0 ? "" : withoutTrailingSlash.substring(0, slash + 1);
-                                    List<String> nearby = List.of();
-                                    if (!prefix.isEmpty()) {
-                                        try (var paths = Files.walk(root)) {
-                                            nearby = paths.filter(Files::isRegularFile)
-                                                    .map(path -> root.relativize(path).toString().replace('\\', '/'))
-                                                    .filter(name -> name.startsWith(prefix))
-                                                    .sorted(String.CASE_INSENSITIVE_ORDER)
-                                                    .limit(20)
-                                                    .toList();
-                                        }
-                                    }
-                                    if (nearby.isEmpty()) {
-                                        try (var paths = Files.list(root)) {
-                                            nearby = paths.map(path -> path.getFileName() + (Files.isDirectory(path) ? "/" : ""))
-                                                    .sorted(String.CASE_INSENSITIVE_ORDER)
-                                                    .limit(20)
-                                                    .toList();
-                                        }
-                                    }
-                                    String suggestions = nearby.isEmpty() ? "(archive is empty)" : String.join("\n", nearby);
-                                    throw new IOException("Archive entry not found: " + entry1 + " in " + location.archive
-                                            + ". Nearby entries:\n" + suggestions);
-                                }
-                                result = readToolFile(entry, arguments, signal);
-                            }
-                        }
-                    }
-                    yield result;
-                }
-                case WRITE -> {
-                    String pathText = requiredToolText(arguments, "path");
-                    rejectArchivePath(local, pathText);
-                    Path file = localToolPath(local, pathText);
-                    String content = requiredToolText(arguments, "content");
-                    requireNotAborted(signal);
-                    Path parent = file.getParent();
-                    if (parent != null) {
-                        Files.createDirectories(parent);
-                    }
-                    requireNotAborted(signal);
-                    Files.writeString(
-                            file, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                    requireNotAborted(signal);
-                    yield toolResultText(
-                            "Successfully wrote " + content.getBytes(StandardCharsets.UTF_8).length + " bytes to " + file);
-                }
-                case EDIT -> {
-                    String pathText = requiredToolText(arguments, "path");
-                    rejectArchivePath(local, pathText);
-                    Path file = localToolPath(local, pathText);
-                    JsonNode editsNode = arguments.get("edits");
-                    if (!(editsNode instanceof ArrayNode edits) || edits.isEmpty()) {
-                        throw new IllegalArgumentException("edits must be a non-empty array");
-                    }
-                    requireNotAborted(signal);
-                    String content = Files.readString(file, StandardCharsets.UTF_8);
-                    List<BuiltInTools.Replacement> replacements = new ArrayList<>();
-                    for (JsonNode edit : edits) {
-                        if (!edit.isObject()) {
-                            throw new IllegalArgumentException("each edit must be an object");
-                        }
-                        String oldText = requiredToolText((ObjectNode) edit, "oldText");
-                        String newText = requiredToolText((ObjectNode) edit, "newText");
-                        int first = content.indexOf(oldText);
-                        if (first < 0) {
-                            throw new IllegalArgumentException("oldText was not found in " + file);
-                        }
-                        if (content.indexOf(oldText, first + 1) >= 0) {
-                            throw new IllegalArgumentException("oldText must match exactly one location in " + file);
-                        }
-                        replacements.add(new BuiltInTools.Replacement(first, first + oldText.length(), newText));
-                    }
-                    replacements.sort(Comparator.comparingInt(replacement -> replacement.start));
-                    for (int index = 1; index < replacements.size(); index++) {
-                        if (replacements.get(index).start < replacements.get(index - 1).end) {
-                            throw new IllegalArgumentException("edits must not overlap");
-                        }
-                    }
-                    StringBuilder changed = new StringBuilder(content);
-                    for (int index = replacements.size() - 1; index >= 0; index--) {
-                        BuiltInTools.Replacement replacement = replacements.get(index);
-                        changed.replace(replacement.start, replacement.end, replacement.newText);
-                    }
-                    requireNotAborted(signal);
-                    Files.writeString(file, changed.toString(), StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
-                    yield toolResultText("Successfully replaced " + replacements.size() + " block(s) in " + file);
-                }
-                case SHELL -> {
-                    String command = requiredToolText(arguments, "command");
-                    double timeoutSeconds;
-                    JsonNode value = arguments.get("timeout");
-                    if (value == null || value.isNull()) {
-                        timeoutSeconds = 0;
-                    } else {
-                        if (!value.isNumber() || value.asDouble() <= 0 || !Double.isFinite(value.asDouble())) {
-                            throw new IllegalArgumentException("timeout" + " must be a positive finite number");
-                        }
-                        timeoutSeconds = value.asDouble();
-                    }
-                    int yieldMs = shellYieldMs(arguments);
-                    yield shellSessions.execute(local.cwd, local.shell, command, timeoutSeconds == 0 ? null : timeoutSeconds,
-                            yieldMs, () -> isAborted(signal));
-                }
-                case SHELL_INPUT -> {
-                    String id = requiredToolText(arguments, "session_id");
-                    int yieldMs = shellYieldMs(arguments);
-                    JsonNode input = arguments.get("input");
-                    if (input != null && !input.isNull() && !input.isTextual()) {
-                        throw new IllegalArgumentException("input must be a string");
-                    }
-                    boolean closeStdin = optionalToolBoolean(arguments, "close_stdin");
-                    boolean terminate = optionalToolBoolean(arguments, "terminate");
-                    if (terminate && ((input != null && !input.isNull()) || closeStdin)) {
-                        throw new IllegalArgumentException("terminate cannot be combined with input or close_stdin");
-                    }
-                    yield shellSessions.interact(id, input == null || input.isNull() ? null : input.asText(),
-                            closeStdin, terminate, yieldMs, () -> isAborted(signal));
-                }
-                case GREP -> {
-                    String patternText = requiredToolText(arguments, "pattern");
-                    boolean literal = optionalToolBoolean(arguments, "literal");
-                    int flags = optionalToolBoolean(arguments, "ignoreCase") ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE : 0;
-                    Pattern pattern = Pattern.compile(literal ? Pattern.quote(patternText) : patternText, flags);
-                    String pathText = optionalToolText(arguments, "path", ".");
-                    Path root1;
-                    try {
-                        root1 = localToolPath(local, pathText);
-                    } catch (InvalidPathException error1) {
-                        if (containsGlobMetacharacter(pathText)) {
-                            throw wildcardPathError(pathText);
-                        }
-                        throw error1;
-                    }
-                    if (!Files.exists(root1) && containsGlobMetacharacter(pathText)) {
-                        throw wildcardPathError(pathText);
-                    }
-                    Path root = root1;
-                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_GREP_LIMIT);
-                    String glob = optionalToolText(arguments, "glob", null);
-                    List<PathMatcher> fileMatchers;
-                    if (glob == null) {
-                        fileMatchers = List.of();
-                    } else {
-                        if (glob.isBlank()) {
-                            throw new IllegalArgumentException("glob must be a non-empty string");
-                        }
-                        try {
-                            LinkedHashSet<String> variants = new LinkedHashSet<>();
-                            List<String> pending = new ArrayList<>();
-                            variants.add(glob);
-                            pending.add(glob);
-                            for (int pendingIndex = 0; pendingIndex < pending.size(); pendingIndex++) {
-                                String variant1 = pending.get(pendingIndex);
-                                for (int index = variant1.indexOf("**/"); index >= 0; index = variant1.indexOf("**/", index + 3)) {
-                                    String withoutDirectoryWildcard = variant1.substring(0, index) + variant1.substring(index + 3);
-                                    if (variants.add(withoutDirectoryWildcard)) {
-                                        pending.add(withoutDirectoryWildcard);
-                                    }
-                                }
-                            }
-                            fileMatchers = List.copyOf(variants).stream()
-                                    .map(variant -> FileSystems.getDefault().getPathMatcher("glob:" + variant))
-                                    .toList();
-                        } catch (java.util.regex.PatternSyntaxException error) {
-                            throw new IllegalArgumentException("Invalid glob '" + glob + "': " + error.getDescription(), error);
-                        }
-                    }
-                    List<Path> files = local.gitIgnore.filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), signal);
-                    boolean rootIsDirectory = Files.isDirectory(root);
-                    StringBuilder output = new StringBuilder();
-                    int filesConsidered = files.size();
-                    int filesSearched = 0;
-                    int matches = 0;
-                    search:
-                    for (Path file : files) {
-                        requireNotAborted(signal);
-                        Path relative = rootIsDirectory ? root.relativize(file) : file.getFileName();
-                        if (!fileMatchers.isEmpty()) {
-                            Path fileName = relative.getFileName();
-                            boolean selected = fileMatchers.stream().anyMatch(matcher -> matcher.matches(relative)
-                                    || fileName != null && !fileName.equals(relative) && matcher.matches(fileName));
-                            if (!selected) continue;
-                        }
-                        filesSearched++;
-                        List<String> lines;
-                        try {
-                            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-                        } catch (IOException ignored) {
-                            continue;
-                        }
-                        for (int line = 0; line < lines.size(); line++) {
-                            if (!pattern.matcher(lines.get(line)).find()) {
-                                continue;
-                            }
-                            matches++;
-                            String line1 = lines.get(line);
-                            output.append(Files.isDirectory(root)
-                                            ? root.relativize(file).toString().replace('\\', '/')
-                                            : file.getFileName().toString())
-                                    .append(':')
-                                    .append(line + 1)
-                                    .append(": ")
-                                    .append(line1.length() <= 500 ? line1 : line1.substring(0, 500) + "... [truncated]")
-                                    .append('\n');
-                            if (matches >= limit) {
-                                break search;
-                            }
-                        }
-                    }
-                    if (matches > 0) {
-                        yield toolResultText(boundToolOutput(
-                                output.toString(), matches >= limit ? "[" + limit + " matches limit reached]" : null));
-                    } else if (glob != null && filesSearched == 0 && filesConsidered > 0) {
-                        yield toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
-                                + root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
-                    } else if (glob != null) {
-                        yield toolResultText("No matches found in " + filesSearched + " files matching glob '" + glob + "'");
-                    } else {
-                        yield toolResultText("No matches found in " + filesSearched + " files");
-                    }
-                }
-                case FIND -> {
-                    AgentTool.ToolResult result;
-                    String pattern = requiredToolText(arguments, "pattern");
-                    Path root = localToolPath(local, optionalToolText(arguments, "path", "."));
-                    if (!Files.isDirectory(root)) {
-                        throw new IllegalArgumentException("Not a directory: " + root);
-                    }
-                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_FIND_LIMIT);
-                    var matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
-                    List<Path> candidates =
-                            local.gitIgnore.filesUnder(root, optionalToolBoolean(arguments, "includeIgnored"), signal);
-                    List<String> matches = new ArrayList<>();
-                    for (Path candidate : candidates) {
-                        requireNotAborted(signal);
-                        Path relative = root.relativize(candidate);
-                        if (matcher.matches(relative) || matcher.matches(relative.getFileName())) {
-                            matches.add(relative.toString().replace('\\', '/'));
-                        }
-                    }
-                    matches.sort(String::compareToIgnoreCase);
-                    if (matches.isEmpty()) {
-                        result = toolResultText("No files found matching pattern");
-                    } else {
-                        boolean limitReached = matches.size() > limit;
-                        if (limitReached) matches = new ArrayList<>(matches.subList(0, limit));
-                        String suffix = limitReached ? "\n\n[" + limit + " results limit reached]" : "";
-                        result = toolResultText(boundToolOutput(String.join("\n", matches) + suffix, null));
-                    }
-                    yield result;
-                }
-                case LS -> {
-                    AgentTool.ToolResult result;
-                    Path directory = localToolPath(local, optionalToolText(arguments, "path", "."));
-                    if (!Files.isDirectory(directory)) {
-                        throw new IllegalArgumentException("Not a directory: " + directory);
-                    }
-                    int limit = positiveToolIntOrDefault(arguments, "limit", BuiltInTools.DEFAULT_LS_LIMIT);
-                    List<String> entries;
-                    try (var paths = Files.list(directory)) {
-                        entries = paths.map(entry -> entry.getFileName() + (Files.isDirectory(entry) ? "/" : ""))
-                                .sorted(String.CASE_INSENSITIVE_ORDER)
-                                .limit(limit)
-                                .toList();
-                    }
-                    if (entries.isEmpty()) {
-                        result = toolResultText("(empty directory)");
-                    } else {
-                        result = toolResultText(boundToolOutput(String.join("\n", entries), null));
-                    }
-                    yield result;
-                }
-            };
+            case ToolDefinition.Bound<?> registered ->
+                    registered.execute(new ToolInvocation(toolCallId, arguments, signal, onUpdate));
             case McpAgentTool mcp -> {
                 ObjectNode params = jsonObject().put("name", mcp.definition.name);
                 params.set("arguments", arguments == null ? jsonObject() : arguments);
@@ -5076,474 +4747,14 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     // ------------------------------------------------------- built-in tools
 
-    private static int shellYieldMs(ObjectNode arguments) {
-        JsonNode value = arguments.get("yield_ms");
-        if (value == null || value.isNull()) return 1_000;
-        if (!value.isIntegralNumber() || !value.canConvertToInt() || value.asInt() < 0 || value.asInt() > 30_000) {
-            throw new IllegalArgumentException("yield_ms must be an integer between 0 and 30000");
-        }
-        return value.asInt();
-    }
-
     /** Releases processes retained between conversation turns. */
     public void closeShellSessions() {
         shellSessions.closeSessions();
     }
 
-    /**
-     * Returns tools that filter search results with the given git-ignore configuration.
-     */
+    /** Binds registered built-in tools to this runtime's workspace and process manager. */
     public List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
-        Path resolvedCwd = cwd.toAbsolutePath().normalize();
-        Consumer<Path> observer = Objects.requireNonNull(onPathAccess, "onPathAccess");
-        BuiltInTools.Shell shell = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
-        return List.of(
-                new LocalTool(
-                        BuiltInTools.Kind.READ,
-                        resolvedCwd,
-                        "read",
-                        "Read a text file. Use offset and limit for large files; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
-                        toolSchema("path", toolString("Path to the file to read. A leading ~/ expands to the user home directory."), "offset", toolOptional(toolInteger("1-indexed starting line")), "limit", toolOptional(toolInteger("Maximum lines to read"))),
-                        observer,
-                        null,
-                        null),
-                new LocalTool(
-                        BuiltInTools.Kind.WRITE,
-                        resolvedCwd,
-                        "write",
-                        "Create or overwrite a text file, creating parent directories as needed.",
-                        toolSchema("path", toolString("Path to write. A leading ~/ expands to the user home directory."), "content", toolString("File content")),
-                        observer,
-                        null,
-                        null),
-                new LocalTool(
-                        BuiltInTools.Kind.EDIT,
-                        resolvedCwd,
-                        "edit",
-                        "Replace one or more unique, non-overlapping exact text blocks in a file.",
-                        toolSchema("path", toolString("Path to edit. A leading ~/ expands to the user home directory."), "edits", jsonObject().put("type", "array").put("description", "Exact replacements with oldText and newText")),
-                        observer,
-                        null,
-                        null),
-                new LocalTool(
-                        BuiltInTools.Kind.SHELL,
-                        resolvedCwd,
-                        "shell",
-                        "Execute a " + shell.displayName + " command in the current working directory. Returns output and a session ID if still running after yield_ms (default 1000). Use shell_input to poll or send stdin. When a script requests information you need from the user, ask them and end your turn, then send their reply to the same session; do not restart the script or repeatedly poll while awaiting the user. Sessions survive chat turns, but not conversation resets or application exit. Uses pipes, not a PTY; programs must flush prompts. Output is bounded to 2,000 lines or 50KB.",
-                        toolSchema("command", toolString(shell.displayName + " command"),
-                                "timeout", toolOptional(jsonObject().put("type", "number").put("exclusiveMinimum", 0).put("description", "Optional total process lifetime in seconds, including time waiting for the user; omitted means no deadline")),
-                                "yield_ms", toolOptional(toolInteger("Wait before returning output, 0 to 30000 milliseconds (default 1000); does not terminate the process").put("minimum", 0).put("maximum", 30000))),
-                        observer,
-                        null,
-                        shell),
-                new LocalTool(
-                        BuiltInTools.Kind.SHELL_INPUT,
-                        resolvedCwd,
-                        "shell_input",
-                        "Continue a shell session. Omit input to poll for new output. To answer a script prompt, send the user's reply as input with a trailing newline. Input is written literally to stdin, never evaluated as a new shell command. Ask the user for missing information and wait for their next chat message before answering on their behalf. Completed sessions return final output and are removed.",
-                        toolSchema("session_id", toolString("Session ID returned by shell"),
-                                "input", toolOptional(toolString("Exact text to write to stdin; include a trailing newline to submit a line (maximum 51200 characters)")),
-                                "close_stdin", toolOptional(toolBoolean("Close stdin after writing input, signalling EOF")),
-                                "terminate", toolOptional(toolBoolean("Terminate the process and its children; cannot be combined with input or close_stdin")),
-                                "yield_ms", toolOptional(toolInteger("Wait for new output, 0 to 30000 milliseconds (default 1000)").put("minimum", 0).put("maximum", 30000))),
-                        observer,
-                        null,
-                        shell),
-                new LocalTool(
-                        BuiltInTools.Kind.GREP,
-                        resolvedCwd,
-                        "grep",
-                        "Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Files ignored by git are skipped; set includeIgnored to search them. Returns paths and line numbers, respecting the result limit. For symbol definitions and call sites in indexed repositories, a code-lens context/query tool (when connected) is usually faster and resolves aliases.",
-                        toolSchema(
-                                "pattern", toolString("Regular expression to search for, or literal text when literal is true"),
-                                "path", toolOptional(toolString("Literal file or directory to search (default: current directory); wildcards are not expanded. A leading ~/ expands to the user home directory.")),
-                                "glob", toolOptional(toolString("Glob file filter relative to path, for example '*.java' or 'src/**/*.java'; patterns without a slash match file names at any depth")),
-                                "ignoreCase", toolOptional(toolBoolean("Case insensitive")),
-                                "literal", toolOptional(toolBoolean("Treat pattern literally")),
-                                "includeIgnored", toolOptional(toolBoolean("Search files ignored by git")),
-                                "context", toolOptional(toolInteger("Lines before and after matches")),
-                                "limit", toolOptional(toolInteger("Maximum matches"))),
-                        observer,
-                        this,
-                        null),
-                new LocalTool(
-                        BuiltInTools.Kind.FIND,
-                        resolvedCwd,
-                        "find",
-                        "Find files by glob pattern. Hidden files are included; .git and node_modules are skipped. Files ignored by git are skipped; set includeIgnored to search them.",
-                        toolSchema(
-                                "pattern", toolString("Glob pattern"),
-                                "path", toolOptional(toolString("Directory to search. A leading ~/ expands to the user home directory.")),
-                                "includeIgnored", toolOptional(toolBoolean("Search files ignored by git")),
-                                "limit", toolOptional(toolInteger("Maximum results"))),
-                        observer,
-                        this,
-                        null),
-                new LocalTool(
-                        BuiltInTools.Kind.LS,
-                        resolvedCwd,
-                        "ls",
-                        "List a directory's contents, with a slash suffix on directories.",
-                        toolSchema("path", toolOptional(toolString("Directory to list. A leading ~/ expands to the user home directory.")), "limit", toolOptional(toolInteger("Maximum entries"))),
-                        observer,
-                        null,
-                        null));
-    }
-
-    private AgentTool.ToolResult readToolFile(Path file, ObjectNode arguments, AbortSignal signal)
-            throws IOException {
-        requireNotAborted(signal);
-        if (!Files.isRegularFile(file)) {
-            if (Files.exists(file)) {
-                throw new IOException("Not a regular file: " + file);
-            }
-            try {
-                file.getParent().toFile().canRead();
-            } catch (SecurityException ignored) {
-                throw new IOException("Access denied: " + file + " (the file may be outside the sandbox)");
-            }
-            throw new IOException("File not found: " + file);
-        }
-        List<String> lines;
-        try {
-            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-        } catch (java.nio.file.AccessDeniedException denied) {
-            throw new IOException("Access denied: " + file + " (the file may be outside the sandbox)");
-        }
-        int offset = positiveToolIntOrDefault(arguments, "offset", 1);
-        int start = offset - 1;
-        if (start >= lines.size()) {
-            throw new IllegalArgumentException(
-                    "offset " + offset + " is beyond end of file (" + lines.size() + " lines)");
-        }
-        int limit = positiveToolIntOrDefault(arguments, "limit", Integer.MAX_VALUE);
-        int end = Math.min(lines.size(), start + limit);
-        String output = String.join("\n", lines.subList(start, end));
-        output = boundToolOutput(output, "Use offset=" + (start + (output.isBlank() ? 0 : (int) output.lines().count()) + 1) + " to continue.");
-        if (end < lines.size() && !output.contains("Use offset=")) {
-            output += "\n\n[" + (lines.size() - end) + " more lines. Use offset=" + (end + 1) + " to continue.]";
-        }
-        return toolResultText(output);
-    }
-
-    /**
-     * Resolves a tool path argument against the tool's working directory.
-     */
-    private static Path localToolPath(LocalTool tool, String value) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("path must be a non-empty string");
-        }
-        String expanded = value;
-        if (value.equals("~")) {
-            expanded = System.getProperty("user.home");
-        } else if (value.startsWith("~/") || (isWindowsHost() && value.startsWith("~\\"))) {
-            expanded = Path.of(System.getProperty("user.home")).resolve(value.substring(2)).toString();
-        } else if (value.startsWith("~")) {
-            throw new IllegalArgumentException("~user paths are not supported; use an absolute path");
-        }
-        Path candidate = Path.of(expanded);
-        Path resolved = (candidate.isAbsolute() ? candidate : tool.cwd.resolve(candidate)).normalize();
-        tool.onPathAccess.accept(resolved);
-        return resolved;
-    }
-
-    private static BuiltInTools.ArchiveLocation localToolArchiveLocation(LocalTool tool, String value) {
-        for (int separator = value.indexOf('!'); separator >= 0; separator = value.indexOf('!', separator + 1)) {
-            if (separator == 0) continue;
-            Path archive;
-            try {
-                archive = localToolPath(tool, value.substring(0, separator));
-            } catch (InvalidPathException ignored) {
-                continue;
-            }
-            if (Files.isRegularFile(archive)) {
-                return new BuiltInTools.ArchiveLocation(archive, value.substring(separator + 1));
-            }
-        }
-        return null;
-    }
-
-    private void rejectArchivePath(LocalTool tool, String value) {
-        if (localToolArchiveLocation(tool, value) != null) {
-            throw new IllegalArgumentException("archives are read-only through this tool");
-        }
-    }
-
-    private void requireNotAborted(AbortSignal signal) {
-        if (isAborted(signal)) {
-            throw new IllegalStateException("Operation aborted");
-        }
-    }
-
-    private static IllegalArgumentException wildcardPathError(String path) {
-        return new IllegalArgumentException(
-                "path is literal and does not expand wildcards: " + path
-                        + ". Put the search root in path and the file pattern in glob, for example path=\"src\" and glob=\"**/*.java\".");
-    }
-
-    private static boolean containsGlobMetacharacter(String value) {
-        for (int index = 0; index < value.length(); index++) {
-            if (switch (value.charAt(index)) {
-                case '*', '?', '[', '{' -> true;
-                default -> false;
-            }) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Java's recursive-directory glob requires at least one directory; ripgrep-style globs allow zero.
-
-    private List<Path> filesUnder(Path root, boolean includeIgnored, AbortSignal signal)
-            throws IOException {
-        List<Path> files;
-        if (Files.isRegularFile(root)) {
-            files = List.of(root);
-        } else {
-            if (!Files.isDirectory(root)) {
-                throw new IllegalArgumentException("Path not found: " + root);
-            }
-            List<Path> files1 = new ArrayList<>();
-            Files.walkFileTree(root, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-                    if (isAborted(signal)) throw new IllegalStateException("Operation aborted");
-                    if (!directory.equals(root) && isSkippedPath(root.relativize(directory))) {
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                    if (isAborted(signal)) throw new IllegalStateException("Operation aborted");
-                    if (attributes.isRegularFile() && !isSkippedPath(root.relativize(file))) files1.add(file);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-            files = List.copyOf(files1);
-        }
-        if (includeIgnored) {
-            return files;
-        } else {
-            if (files.isEmpty()) return files;
-            Path workingDirectory = Files.isDirectory(root) ? root : root.getParent();
-            Path result = null;
-            for (Path directory = workingDirectory.toAbsolutePath().normalize(); directory != null; directory = directory.getParent()) {
-                if (Files.exists(directory.resolve(".git"))) {
-                    result = directory;
-                    break;
-                }
-            }
-            if (result == null) return files;
-
-            List<String> relativeNames = new ArrayList<>(files.size());
-            for (Path candidate : files) {
-                relativeNames.add(workingDirectory.relativize(candidate).toString());
-            }
-
-            Process process;
-            try {
-                process = new ProcessBuilder(
-                        executable, "-C", workingDirectory.toString(), "check-ignore", "--stdin", "-z")
-                        .redirectErrorStream(true)
-                        .start();
-            } catch (IOException ignored) {
-                return files;
-            }
-
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            AtomicReference<IOException> transferFailure = new AtomicReference<>();
-            Thread writer = Thread.ofVirtual().start(() -> {
-                try (var input = process.getOutputStream()) {
-                    for (String relative : relativeNames) {
-                        input.write(relative.getBytes(StandardCharsets.UTF_8));
-                        input.write(0);
-                    }
-                } catch (IOException error) {
-                    transferFailure.compareAndSet(null, error);
-                }
-            });
-            Thread reader = Thread.ofVirtual().start(() -> {
-                try (var bytes = process.getInputStream()) {
-                    bytes.transferTo(output);
-                } catch (IOException error) {
-                    transferFailure.compareAndSet(null, error);
-                }
-            });
-
-            long deadline = System.nanoTime() + GIT_IGNORE_TIMEOUT.toNanos();
-            try {
-                while (process.isAlive()) {
-                    if (isAborted(signal)) {
-                        process.destroyForcibly();
-                        joinThreads(writer, reader);
-                        throw new IllegalStateException("Operation aborted");
-                    }
-                    if (System.nanoTime() >= deadline) {
-                        process.destroyForcibly();
-                        joinThreads(writer, reader);
-                        return files;
-                    }
-                    process.waitFor(50, TimeUnit.MILLISECONDS);
-                }
-                joinThreads(writer, reader);
-            } catch (InterruptedException error) {
-                process.destroyForcibly();
-                Thread.currentThread().interrupt();
-                return files;
-            }
-            if (transferFailure.get() != null || (process.exitValue() != 0 && process.exitValue() != 1)) {
-                return files;
-            }
-
-            byte[] bytes = output.toByteArray();
-            Set<String> values = new HashSet<>();
-            int start = 0;
-            for (int index1 = 0; index1 < bytes.length; index1++) {
-                if (bytes[index1] != 0) continue;
-                values.add(new String(bytes, start, index1 - start, StandardCharsets.UTF_8));
-                start = index1 + 1;
-            }
-            if (start < bytes.length) {
-                values.add(new String(bytes, start, bytes.length - start, StandardCharsets.UTF_8));
-            }
-            if (values.isEmpty()) return files;
-            List<Path> filtered = new ArrayList<>(files.size());
-            for (int index = 0; index < files.size(); index++) {
-                if (!values.contains(relativeNames.get(index))) filtered.add(files.get(index));
-            }
-            return List.copyOf(filtered);
-        }
-    }
-
-    private static boolean isSkippedPath(Path relative) {
-        for (Path part : relative) {
-            if (part.toString().equals(".git") || part.toString().equals("node_modules")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean isWindowsHost() {
-        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
-    }
-
-    private static String requiredToolText(ObjectNode arguments, String name) {
-        JsonNode value = arguments.get(name);
-        if (value == null || !value.isTextual()) {
-            throw new IllegalArgumentException(name + " must be a string");
-        }
-        return value.asText();
-    }
-
-    private static String optionalToolText(ObjectNode arguments, String name, String defaultValue) {
-        JsonNode value = arguments.get(name);
-        if (value == null || value.isNull()) {
-            return defaultValue;
-        }
-        if (!value.isTextual()) {
-            throw new IllegalArgumentException(name + " must be a string");
-        }
-        return value.asText();
-    }
-
-    private static int positiveToolIntOrDefault(ObjectNode arguments, String name, int defaultValue) {
-        JsonNode value = arguments.get(name);
-        if (value == null || value.isNull()) {
-            return defaultValue;
-        }
-        if (!value.canConvertToInt() || value.asInt() <= 0) {
-            throw new IllegalArgumentException(name + " must be a positive integer");
-        }
-        return value.asInt();
-    }
-
-    private static boolean optionalToolBoolean(ObjectNode arguments, String name) {
-        JsonNode value = arguments.get(name);
-        if (value == null || value.isNull()) {
-            return false;
-        }
-        if (!value.isBoolean()) {
-            throw new IllegalArgumentException(name + " must be a boolean");
-        }
-        return value.asBoolean();
-    }
-
-    private static ObjectNode toolSchema(Object... fields) {
-        ObjectNode schema = jsonObject();
-        schema.put("type", "object");
-        ObjectNode properties = schema.putObject("properties");
-        ArrayNode required = schema.putArray("required");
-        for (int index = 0; index < fields.length; index += 2) {
-            String name = (String) fields[index];
-            ObjectNode definition = (ObjectNode) fields[index + 1];
-            boolean optional = definition.remove("x-java-optional") != null;
-            properties.set(name, definition);
-            if (!optional) {
-                required.add(name);
-            }
-        }
-        schema.put("additionalProperties", false);
-        return schema;
-    }
-
-    private static ObjectNode toolString(String description) {
-        return jsonObject().put("type", "string").put("description", description);
-    }
-
-    private static ObjectNode toolInteger(String description) {
-        return jsonObject().put("type", "integer").put("minimum", 1).put("description", description);
-    }
-
-    private static ObjectNode toolBoolean(String description) {
-        return jsonObject().put("type", "boolean").put("description", description);
-    }
-
-    private static ObjectNode toolOptional(ObjectNode definition) {
-        return definition.put("x-java-optional", true);
-    }
-
-    /**
-     * Bounds tool output to 2,000 lines or 50KB, appending a truncation notice.
-     */
-    private static String boundToolOutput(String input, String notice) {
-        String[] lines = input.split("\\R", -1);
-        StringBuilder output = new StringBuilder();
-        int count = 0;
-        for (String line : lines) {
-            if (count >= BuiltInTools.MAX_LINES) {
-                return appendToolNotice(output, notice == null ? "[Output truncated at 2,000 lines]" : notice);
-            }
-            byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
-            int separator = output.isEmpty() ? 0 : 1;
-            if (!output.isEmpty()
-                    && output.toString().getBytes(StandardCharsets.UTF_8).length + separator + bytes.length
-                    > BuiltInTools.MAX_BYTES) {
-                return appendToolNotice(output, notice == null ? "[Output truncated at 50KB]" : notice);
-            }
-            if (!output.isEmpty()) {
-                output.append('\n');
-            }
-            output.append(line);
-            count++;
-        }
-        return output.toString();
-    }
-
-    private static String appendToolNotice(StringBuilder output, String notice) {
-        if (!output.isEmpty()) {
-            output.append("\n\n");
-        }
-        return output.append(notice).toString();
-    }
-
-    // ----------------------------------------------------------- git ignore
-
-    private void joinThreads(Thread... threads) throws InterruptedException {
-        for (Thread thread : threads) thread.join();
+        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions);
     }
 
     // ------------------------------------------------------------ mcp tools
