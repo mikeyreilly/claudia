@@ -167,7 +167,7 @@ class CodingAgentCliTest {
 	void keepsSlashCommandCompletionAndHelpInSync() {
 		assertEquals(List.of(
 				"/cd", "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
-				"/mcp", "/models", "/quit", "/resume", "/settings"), CodingAgentCli.slashCommands());
+				"/mcp", "/models", "/quit", "/resume", "/settings", "/subagents"), CodingAgentCli.slashCommands());
 
 		String help = CodingAgentCli.slashCommandHelp();
 		assertTrue(help.contains("/cd"));
@@ -1131,6 +1131,132 @@ class CodingAgentCliTest {
 		cli.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
 		return cli;
 	}
+
+    @Test
+    void navigatesLiveAgentsAndBuffersSelectorOutputWithoutLosingTypedInput(@TempDir Path workspace) throws Exception {
+        TerminalFixture fixture = terminal();
+        try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+            var model = model("faux-1");
+            model.api = "faux"; model.provider = "faux"; model.contextWindow = 100_000;
+            var provider = new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "faux", List.of(model));
+            runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+            runtime.coreProviders(java.util.Map.of("faux", provider));
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            var configure = CodingAgentCli.class.getDeclaredMethod("configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+            configure.setAccessible(true); configure.invoke(cli, model, workspace, false, null);
+            String id = runtime.subagents().create("investigate files", "Worker");
+            CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+            provider.pendingResponses.add(new com.quaxt.codingagent.ai.providers.FauxProvider.ResponseStep.Factory(request -> {
+                started.countDown(); SubagentManagerTest.await(release); return SubagentManagerTest.answer("child secret answer");
+            }));
+            var child = runtime.subagents().submit(id, "child task");
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            invokeCommand(cli, "/clear");
+            assertEquals(2, runtime.subagents().list().size(), "Group changes must be rejected while a child runs");
+            cli.bindAppAction("expandTools", () -> invokeCli(cli, "showSubagents"));
+            var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> "));
+            try {
+                fixture.input().write("draft\u000f".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                waitUntil(() -> Boolean.TRUE.equals(getCliField(cli, "componentOpen")));
+                release.countDown(); child.get(3, TimeUnit.SECONDS);
+                invokeCli(cli, "drainShellEvents");
+                assertFalse(fixture.output().toString(StandardCharsets.UTF_8).contains("child secret answer"));
+                fixture.input().write("Worker\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                waitUntil(() -> id.equals(getCliField(cli, "selectedAgent")));
+                assertTrue(getCliField(cli, "screenDocument").toString().contains("child secret answer"));
+                invokeCommand(cli, "/clear");
+                assertEquals(2, runtime.subagents().list().size(), "Group changes require Main to be selected");
+                fixture.input().write(" suffix\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                assertEquals("draft suffix", reader.get(3, TimeUnit.SECONDS));
+
+                provider.pendingResponses.add(new com.quaxt.codingagent.ai.providers.FauxProvider.ResponseStep.Message(SubagentManagerTest.answer("parent background answer")));
+                runtime.subagents().submit(SubagentManager.MAIN, "parent task").get(3, TimeUnit.SECONDS);
+                invokeCli(cli, "drainShellEvents");
+                assertFalse(getCliField(cli, "screenDocument").toString().contains("parent background answer"));
+                fixture.input().write("Main\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                invokeCli(cli, "showSubagents");
+                assertTrue(getCliField(cli, "screenDocument").toString().contains("parent background answer"));
+                assertFalse(getCliField(cli, "screenDocument").toString().contains("child secret answer"));
+            } finally {
+                release.countDown();
+                fixture.input().close();
+                invokeCli(cli, "closeShellSubscription");
+                cli.closeTerminal();
+            }
+        }
+    }
+
+    @Test
+    void streamedOutputRedrawPreservesTheActiveEditorBuffer() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> "));
+        try {
+            fixture.input().write("unfinished".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+            waitUntil(() -> ((org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader")).getBuffer().toString().equals("unfinished"));
+            // The UI event pump takes this lock before rendering on a background tick.
+            var lock = (java.util.concurrent.locks.ReentrantLock) getCliField(cli, "editorLock");
+            lock.lock();
+            try { cli.println("streamed output"); } finally { lock.unlock(); }
+            fixture.terminal().setSize(org.jline.terminal.Size.of(60, 20));
+            fixture.input().write(" prompt\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+            assertEquals("unfinished prompt", reader.get(3, TimeUnit.SECONDS));
+            assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("streamed output"));
+        } finally { fixture.input().close(); cli.closeTerminal(); }
+    }
+
+    @Test
+    void logoutReleasesTheSessionGroup(@TempDir Path workspace) throws Exception {
+        TerminalFixture fixture = terminal();
+        try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+            var model = model("fixture"); model.provider = "openai"; model.api = "faux";
+            var provider = new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "openai", List.of(model));
+            runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+            runtime.coreProviders(java.util.Map.of("openai", provider));
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            var configure = CodingAgentCli.class.getDeclaredMethod("configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+            configure.setAccessible(true); configure.invoke(cli, model, workspace, false, null);
+            var child = runtime.subagents().runtime(runtime.subagents().create("task", "Worker"));
+            try {
+                invokeCommand(cli, "/logout");
+                assertEquals(false, getCliField(cli, "agentConfigured"));
+                assertThrows(IllegalStateException.class, () -> child.prompt("closed"));
+            } finally { cli.closeTerminal(); }
+        }
+    }
+
+    private static void invokeCommand(CodingAgentCli cli, String command) throws Exception {
+        var method = CodingAgentCli.class.getDeclaredMethod("dispatchSlashCommand", String.class);
+        method.setAccessible(true); method.invoke(cli, command);
+    }
+
+    private static void setCliField(CodingAgentCli cli, String name, Object value) throws Exception {
+        var field = CodingAgentCli.class.getDeclaredField(name); field.setAccessible(true); field.set(cli, value);
+    }
+
+    private static Object getCliField(CodingAgentCli cli, String name) {
+        try {
+            var field = CodingAgentCli.class.getDeclaredField(name); field.setAccessible(true); return field.get(cli);
+        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+
+    private static void invokeCli(CodingAgentCli cli, String name) {
+        try {
+            var method = CodingAgentCli.class.getDeclaredMethod(name); method.setAccessible(true); method.invoke(cli);
+        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+
+    private static void waitUntil(java.util.function.BooleanSupplier ready) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!ready.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+        assertTrue(ready.getAsBoolean(), "Timed out waiting for terminal state");
+    }
 
 	private static TuiComponent<Void> immediateComponent() {
 		return new TuiComponent<>(frame -> List.of("details"), input -> {}, () -> true, () -> null);

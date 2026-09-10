@@ -7,6 +7,10 @@ import com.quaxt.codingagent.ai.types.Message;
 
 /** Metadata, active conversation context, and complete transcript for one persisted session. */
 public final class SessionSnapshot {
+    public String parentSessionId;
+    public String task;
+    public com.quaxt.codingagent.ai.types.ThinkingLevel thinkingLevel;
+    public String lifecycle;
 	public String id;
 	public String name;
 	public Path path;

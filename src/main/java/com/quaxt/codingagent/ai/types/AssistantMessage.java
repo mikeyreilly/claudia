@@ -1,6 +1,6 @@
 package com.quaxt.codingagent.ai.types;
 
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 
 /**
@@ -9,7 +9,7 @@ import java.util.List;
  * same `partial` object is emitted with every event).
  */
 public final class AssistantMessage implements Message {
-	public List<AssistantContent> content = new ArrayList<>();
+	public List<AssistantContent> content = new CopyOnWriteArrayList<>();
 	public String api;
 	public String provider;
 	public String model;

@@ -140,7 +140,8 @@ public final class CodingAgentCli {
         MODELS("/models"),
         QUIT("/quit", false),
         RESUME("/resume"),
-        SETTINGS("/settings");
+        SETTINGS("/settings"),
+        SUBAGENTS("/subagents");
 
         final String input;
         final boolean includeInHelp;
@@ -225,6 +226,89 @@ public final class CodingAgentCli {
     private volatile String statusLocation = "";
     private volatile String statusModel = "";
     private AutoCloseable shellSubscription;
+    private volatile String selectedAgent = SubagentManager.MAIN;
+    private volatile boolean componentOpen;
+    private volatile boolean componentDirty;
+    private java.util.concurrent.locks.ReentrantLock editorLock;
+    private final java.util.concurrent.ConcurrentLinkedQueue<SubagentManager.Event> shellEvents = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> shellNotifications = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private boolean restoredLiveTurn;
+    private volatile boolean lineEditorReading;
+
+    // Never wait for the editor from a provider thread. All rendering takes the editor
+    // lock before the screen lock, matching JLine's order when it invokes a widget.
+    private void drainShellEvents() {
+        if (editorLock == null || !editorLock.tryLock()) return;
+        try {
+            synchronized (this) {
+                if (componentOpen || managedSuspend) return;
+                SubagentManager.Event event;
+                boolean redraw = false;
+                while ((event = shellEvents.poll()) != null) {
+                    if (!event.agentId().equals(selectedAgent)) continue;
+                    if (restoredLiveTurn) redraw = true;
+                    else handleShellAgentEvent(event.event());
+                }
+                if (redraw) {
+                    redrawSelectedConversation();
+                    restoredLiveTurn = selectedState().streaming();
+                }
+                Runnable notice;
+                while ((notice = shellNotifications.poll()) != null) notice.run();
+                if (agentConfigured) activity = agentActivities.getOrDefault(selectedAgent, activity);
+            }
+        } finally { editorLock.unlock(); }
+    }
+
+    private final Map<String, ActivityStatus> agentActivities = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private AgentSnapshot selectedState() {
+        return agentConfigured ? runtime.subagents().snapshot(selectedAgent).state() : runtime.state();
+    }
+
+    static List<SelectItem<String>> subagentItems(List<SubagentManager.Snapshot> agents, String selected) {
+        return agents.stream().map(agent -> new SelectItem<>(agent.id(),
+                (agent.id().equals(selected) ? "* " : "") + agent.name(),
+                agent.status().name().toLowerCase(Locale.ROOT) + "  " + agent.queued() + " queued  " + agent.task(),
+                agent.name() + " " + agent.task() + " " + agent.id() + " " + agent.status())).toList();
+    }
+
+    private void showSubagents() throws IOException {
+        if (!agentConfigured) { println("No model is configured."); return; }
+        List<SubagentManager.Snapshot> agents = runtime.subagents().list();
+        int initial = 0;
+        for (int i = 0; i < agents.size(); i++) if (agents.get(i).id().equals(selectedAgent)) initial = i;
+        String selected = select("Subagents", subagentItems(agents, selectedAgent), initial, true);
+        if (selected != null) {
+            synchronized (this) {
+                selectedAgent = selected;
+                emittedText = false;
+                streamOutput = StreamOutput.NONE;
+                streamedThinkingCharacters = 0;
+                activity = agentActivities.getOrDefault(selected, readyActivity(System.nanoTime()));
+                redrawSelectedConversation();
+            }
+        }
+    }
+
+    private void redrawSelectedConversation() {
+        if (!agentConfigured) return;
+        shellEvents.clear();
+        var agent = runtime.subagents().snapshot(selectedAgent);
+        restoredLiveTurn = agent.state().streaming();
+        List<Message> visible = new ArrayList<>(agent.transcript());
+        List<Message> active = agent.state().messages();
+        if (agent.state().streaming() && !active.isEmpty() && active.getLast() instanceof AssistantMessage partial
+                && partial.stopReason == StopReason.PENDING) visible.add(partial);
+        if (!active.isEmpty() && active.getLast() instanceof AssistantMessage last) emittedText = !text(last).isEmpty();
+        replaceScreen(renderSessionScreen(agent.state().model(), visible, hideThinkingBlock));
+        if (lineEditorReading) {
+            reader.callWidget(LineReader.REDRAW_LINE);
+            reader.callWidget(LineReader.REDISPLAY);
+        }
+        refreshShellStatus();
+    }
+
 
     // InteractiveTerminal fields
     private Terminal jlineTerminal;
@@ -1112,6 +1196,7 @@ public final class CodingAgentCli {
         this.supportsSuspend = supportsSuspend;
         shellAttributes = new Attributes(terminal.getAttributes());
         this.reader = new LineReaderImpl(jlineTerminal, this.jlineTerminal.getName(), null) {
+            { editorLock = lock; }
             @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
                 if (CodingAgentCli.this.dynamicPost == null || post != null) {
@@ -1423,8 +1508,10 @@ public final class CodingAgentCli {
                                    : AttributedString.fromAnsi(String.join("\n", lines));
                         };
                 try {
+                    lineEditorReading = true;
                     result = reader.readLine(editorPrompt, null, mask, initialBuffer);
                 } finally {
+                    lineEditorReading = false;
                     dynamicPost = null;
                     commandSuggestionsActive = false;
                     resetPromptBackground();
@@ -1469,6 +1556,7 @@ public final class CodingAgentCli {
             throws IOException {
         if (reader.isReading()) resetPromptBackground();
         synchronized (this) {
+            componentOpen = true;
             if (statusBar != null) statusBar.suspend();
         }
         try {
@@ -1563,6 +1651,10 @@ public final class CodingAgentCli {
                     }
                 }
             }
+            synchronized (this) {
+                componentOpen = false;
+                if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
+            }
             if (reader.isReading()) reader.callWidget(LineReader.REDRAW_LINE);
         }
     }
@@ -1624,8 +1716,11 @@ public final class CodingAgentCli {
         } catch (IOException error) {
             println("Could not suspend process: " + error.getMessage());
         } finally {
-            repaintScreen();
-            managedSuspend = false;
+            synchronized (this) {
+                managedSuspend = false;
+                if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
+                else repaintScreen();
+            }
             if (restoreBefore != null) jlineTerminal.enterRawMode();
         }
     }
@@ -1655,29 +1750,36 @@ public final class CodingAgentCli {
      * Prints a status line without losing the active line-editor buffer.
      */
     public void printAbove(String text) {
-        synchronized (this) {
-            if (reader.isReading()) resetPromptBackground();
-            reader.printAbove(text);
-            remember(text + System.lineSeparator());
-        }
+        if (editorLock != null) editorLock.lock();
+        try {
+            synchronized (this) {
+                if (reader.isReading()) resetPromptBackground();
+                reader.printAbove(text);
+                remember(text + System.lineSeparator());
+            }
+        } finally { if (editorLock != null) editorLock.unlock(); }
     }
 
     private void print(String text) {
-        synchronized (this) {
-            String value = String.valueOf(text);
-            jlineTerminal.writer().print(value);
-            jlineTerminal.writer().flush();
-            remember(value);
-        }
+        if (editorLock != null) editorLock.lock();
+        try {
+            synchronized (this) {
+                String value = String.valueOf(text);
+                remember(value);
+                if (reader != null && reader.isReading()) {
+                    repaintScreen();
+                    reader.callWidget(LineReader.REDRAW_LINE);
+                    reader.callWidget(LineReader.REDISPLAY);
+                } else {
+                    jlineTerminal.writer().print(value);
+                    jlineTerminal.writer().flush();
+                }
+            }
+        } finally { if (editorLock != null) editorLock.unlock(); }
     }
 
     public void println(String text) {
-        synchronized (this) {
-            String value = String.valueOf(text);
-            jlineTerminal.writer().println(value);
-            jlineTerminal.writer().flush();
-            remember(value + System.lineSeparator());
-        }
+        print(String.valueOf(text) + System.lineSeparator());
     }
 
     /**
@@ -2114,6 +2216,12 @@ public final class CodingAgentCli {
                     activity = noModelActivity(System.nanoTime());
                     statusTicker = Executors.newSingleThreadScheduledExecutor(
                             Thread.ofPlatform().daemon(true).name("codingagent-status").factory());
+                    bindAppAction("interrupt", () -> {
+                        if (agentConfigured) {
+                            runtime.subagents().cancel(selectedAgent);
+                            printAbove("Interrupted " + runtime.subagents().snapshot(selectedAgent).name() + ". Queued prompts cleared.");
+                        }
+                    });
                     bindAppAction("expandTools", () -> showShellTurnDetails(true));
                     bindAppAction("toggleThinking", () -> setShellHideThinkingBlock(!hideThinkingBlock, true));
                     try {
@@ -2204,15 +2312,17 @@ public final class CodingAgentCli {
                         print(sessionScreenHeader(!agentConfigured ? null : runtime.state().model()));
                         refreshShellStatus();
                         statusTicker.scheduleWithFixedDelay(() -> {
-                            if (!isDynamicActivity(activity)) return;
                             try {
+                                drainShellEvents();
+                                if (!isDynamicActivity(activity)) return;
                                 renderShellStatus();
                             } catch (RuntimeException ignored) {
                                 // A best-effort repaint must not terminate the shell's status ticker.
                             }
-                        }, 1, 1, TimeUnit.SECONDS);
+                        }, 50, 50, TimeUnit.MILLISECONDS);
                         while (true) {
                             String input = readLine("\n> ", slashCommands());
+                            drainShellEvents();
                             if (input == null) {
                                 println("");
                                 return 0;
@@ -2226,33 +2336,16 @@ public final class CodingAgentCli {
                                 println("No model configured. Run /login to choose a provider.");
                                 continue;
                             }
-                            setShellActivity(activeActivity(ActivityStatus.Phase.PREPARING_TOOLS, System.nanoTime()));
-                            runtime.mcpAwaitReady();
-                            syncShellMcpTools();
-                            emittedText = false;
-                            streamOutput = StreamOutput.NONE;
-                            streamedThinkingCharacters = 0;
-                            AtomicBoolean interrupted = new AtomicBoolean();
-                            runInterruptibly(() -> runtime.prompt(input), () -> {
-                                        interrupted.set(true);
-                                        setShellActivity(activeActivity(ActivityStatus.Phase.STOPPING, System.nanoTime()));
-                                        runtime.abort();
-                                    });
-
-                            if (interrupted.get()) {
-                                finishShellStreamOutput();
-                                println("Interrupted.");
-                            } else if (runtime.state().messages().getLast() instanceof AssistantMessage response) {
-                                String finalOutput = finalAssistantOutput(response, emittedText);
-                                if (finalOutput != null) {
-                                    finishShellStreamOutput();
-                                    println(finalOutput);
-                                }
-                            }
-// AgentEnd normally performs this transition. Reassert it here to close
-// the small race where Escape arrives after AgentEnd but before the task returns.
-                            setShellActivity(readyActivity(System.nanoTime()));
-                            refreshShellStatus();
+                            String target = selectedAgent;
+                            boolean queued = !runtime.subagents().idle(target);
+                            runtime.subagents().submit(target, input).whenComplete((answer, error) -> {
+                                shellNotifications.add(() -> {
+                                    if (!target.equals(selectedAgent)) return;
+                                    if (error != null) println("Error: " + error.getMessage());
+                                    refreshShellStatus();
+                                });
+                            });
+                            if (queued) println("Prompt queued for " + runtime.subagents().snapshot(target).name() + ".");
                         }
                     } finally {
                         statusTicker.shutdownNow();
@@ -2264,6 +2357,7 @@ public final class CodingAgentCli {
                     }
                 } finally {
                     closeShellSubscription();
+                    runtime.close();
                     closeTerminal();
                 }
             } finally {
@@ -2286,12 +2380,32 @@ public final class CodingAgentCli {
 
     /** Dispatches one interactive slash command and returns whether the shell should exit. */
     private boolean dispatchSlashCommand(String input) throws IOException, InterruptedException {
+        editorLock.lock();
+        try { return handleSlashCommand(input); }
+        finally { editorLock.unlock(); }
+    }
+
+    private boolean handleSlashCommand(String input) throws IOException, InterruptedException {
         String trimmed = input.trim();
         String[] parts = trimmed.split("\\s+", 2);
         String commandInput = parts[0];
         String arguments = parts.length == 1 ? "" : parts[1].strip();
         SlashCommand command = SlashCommand.from(commandInput);
         String commandLabel = command == null ? commandInput : command.input;
+        if (agentConfigured && command != null) {
+            boolean local = switch (command) {
+                case SUBAGENTS, DETAILS, HELP, EXIT, QUIT, COMPACT -> true;
+                default -> false;
+            };
+            if (!local && (!SubagentManager.MAIN.equals(selectedAgent) || !runtime.subagents().idle())) {
+                println("Select Main and wait for all agents to be idle before " + command.input + ".");
+                return false;
+            }
+            if (command == SlashCommand.COMPACT && !runtime.subagents().idle(selectedAgent)) {
+                println("Wait for the selected agent to be idle before compacting.");
+                return false;
+            }
+        }
         setShellActivity(activeActivity(
                 ActivityStatus.Phase.RUNNING_COMMAND, commandLabel, System.nanoTime()));
         try {
@@ -2304,6 +2418,7 @@ public final class CodingAgentCli {
                 return false;
             }
             switch (command) {
+                case SUBAGENTS -> showSubagents();
                 case CD -> {
                     if (arguments.isEmpty()) {
                         println("Usage: /cd <directory>");
@@ -2468,10 +2583,12 @@ public final class CodingAgentCli {
                             // A session snapshot's messages are compaction-aware, so resuming cannot
                             // resurrect summarized transcript entries into the next model request.
                             List<Message> restored = runtime.resumableMessages(selected.messages);
-                            runtime.resumeSessionRecorder(selected.id);
-                            configureShellAgent(model, selected.cwd, true, selected.name);
+                            configureShellAgent(model, selected.cwd, false, selected.name);
                             settings = withSettingsDefaultModel(settings, model.provider, model.id);
                             runtime.restoreMessages(restored);
+                            runtime.resumeSessionRecorder(selected.id);
+                            runtime.setSessionRecording(true, this::reportCheckpointFailure);
+                            recordingSession = true;
                             refreshShellStatus();
                             replaceScreen(renderSessionScreen(
                                     model,
@@ -2571,6 +2688,7 @@ public final class CodingAgentCli {
                     }
                 }
                 case LOGOUT -> {
+                    boolean hadAgent = agentConfigured;
                     try {
                         if (agentConfigured && runtime.state().model().provider.equals(CHATGPT_PROVIDER_ID)) {
                             runtime.chatGptLogout(
@@ -2593,6 +2711,12 @@ public final class CodingAgentCli {
                             }
                         }
                     } finally {
+                        if (hadAgent && !agentConfigured) {
+                            closeShellSubscription();
+                            runtime.subagents().close();
+                            shellEvents.clear();
+                            shellNotifications.clear();
+                        }
                         refreshShellStatus();
                     }
                 }
@@ -2907,9 +3031,12 @@ public final class CodingAgentCli {
                         break;
                     }
                     try {
-                        CompactionResult result1 = runtime.compact(null);
-                        println("Context compacted: " + result1.tokensBefore + " -> " + result1.estimatedTokensAfter + " tokens.");
-                        refreshShellStatus();
+                        String target = selectedAgent;
+                        runtime.subagents().compact(target).whenComplete((answer, error) -> shellNotifications.add(() -> {
+                            if (!target.equals(selectedAgent)) return;
+                            println(error == null ? answer.finalAnswer() : "Error: " + error.getMessage());
+                            refreshShellStatus();
+                        }));
                     } catch (IllegalStateException error) {
                         println("Error: " + error.getMessage());
                     }
@@ -2918,7 +3045,7 @@ public final class CodingAgentCli {
         } finally {
             setShellActivity(!agentConfigured
                     ? noModelActivity(System.nanoTime())
-                    : readyActivity(System.nanoTime()));
+                    : agentActivities.getOrDefault(selectedAgent, readyActivity(System.nanoTime())));
             refreshShellStatus();
         }
         return false;
@@ -3132,7 +3259,7 @@ public final class CodingAgentCli {
         header.append('\n');
         header.append(model == null
                 ? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }
@@ -3264,9 +3391,53 @@ public final class CodingAgentCli {
         closeShellSubscription();
         runtime.configureAgent(model, configuredCwd, systemPrompt, apiKey, initialThinkingLevel(model, settings.defaultThinkingLevel));
         runtime.setSessionRecording(recordingEnabled, this::reportCheckpointFailure);
-        shellSubscription = runtime.subscribe(event -> {
+        selectedAgent = SubagentManager.MAIN;
+        agentActivities.clear();
+        restoredLiveTurn = false;
+        shellEvents.clear();
+        shellNotifications.clear();
+        shellSubscription = runtime.subagents().subscribe(identified -> {
+            agentActivities.compute(identified.agentId(), (id, current) -> activityAfterEvent(current, identified.event()));
+            if (componentOpen || managedSuspend) { componentDirty = true; return; }
+            if (identified.agentId().equals(selectedAgent)) shellEvents.add(identified);
+        });
+        cwd = configuredCwd.toAbsolutePath().normalize();
+        agentConfigured = true;
+        recordingSession = recordingEnabled;
+        sessionName = nextSessionName;
+        if (activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
+            setShellActivity(readyActivity(System.nanoTime()));
+        }
+        refreshShellStatus();
+    }
+
+    private static ActivityStatus activityAfterEvent(ActivityStatus current, AgentEvent event) {
+        long now = System.nanoTime();
+        return switch (event) {
+            case AgentEvent.AgentStart ignored -> activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, now);
+            case AgentEvent.TurnStart ignored -> activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, now);
+            case AgentEvent.AgentEnd ignored -> readyActivity(now);
+            case AgentEvent.CompactionStart ignored -> activeActivity(ActivityStatus.Phase.COMPACTING, now);
+            case AgentEvent.CompactionEnd ignored -> readyActivity(now);
+            case AgentEvent.ToolExecutionStart tool -> activeActivity(ActivityStatus.Phase.RUNNING_TOOL, tool.toolName, now);
+            case AgentEvent.AutoRetryStart retry -> retryingActivity(retry.attempt, retry.maxAttempts, retry.delayMs, now);
+            case AgentEvent.MessageUpdate update -> switch (update.providerEvent) {
+                case AssistantMessageEvent.ThinkingStart ignored -> activeActivity(ActivityStatus.Phase.REASONING, now);
+                case AssistantMessageEvent.TextStart ignored -> activeActivity(ActivityStatus.Phase.RESPONDING, now);
+                case AssistantMessageEvent.ToolCallStart ignored -> activeActivity(ActivityStatus.Phase.PREPARING_TOOL, now);
+                default -> current == null ? readyActivity(now) : current;
+            };
+            default -> current == null ? readyActivity(now) : current;
+        };
+    }
+
+    private void handleShellAgentEvent(AgentEvent event) {
+
             switch ((AgentEvent) event) {
-                case AgentEvent.AgentStart ignored -> setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+                case AgentEvent.AgentStart ignored -> {
+                    emittedText = false; streamOutput = StreamOutput.NONE; streamedThinkingCharacters = 0;
+                    setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
+                }
                 case AgentEvent.AgentEnd ignored -> setShellActivity(readyActivity(System.nanoTime()));
                 case AgentEvent.InstructionLoaded loaded -> {
                     finishShellStreamOutput();
@@ -3274,7 +3445,7 @@ public final class CodingAgentCli {
                 }
                 case AgentEvent.CompactionStart ignored -> setShellActivity(activeActivity(ActivityStatus.Phase.COMPACTING, System.nanoTime()));
                 case AgentEvent.CompactionEnd end -> {
-                    if (agentConfigured && runtime.state().streaming()) {
+                    if (agentConfigured && selectedState().streaming()) {
                         setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
                     } else {
                         setShellActivity(readyActivity(System.nanoTime()));
@@ -3353,7 +3524,9 @@ public final class CodingAgentCli {
                     }
                 }
                 case AgentEvent.MessageEnd end -> {
-                    if (end.message instanceof AssistantMessage) {
+                    if (end.message instanceof AssistantMessage assistant) {
+                        String finalOutput = finalAssistantOutput(assistant, emittedText);
+                        if (finalOutput != null) println(finalOutput);
                         finishShellStreamOutput();
                         refreshShellStatus();
                     }
@@ -3390,15 +3563,6 @@ public final class CodingAgentCli {
                     // Turn-end and low-level update events do not change the presentation phase.
                 }
             }
-        });
-        cwd = configuredCwd.toAbsolutePath().normalize();
-        agentConfigured = true;
-        recordingSession = recordingEnabled;
-        sessionName = nextSessionName;
-        if (activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
-            setShellActivity(readyActivity(System.nanoTime()));
-        }
-        refreshShellStatus();
     }
 
     private void closeShellSubscription() {
@@ -3416,11 +3580,13 @@ public final class CodingAgentCli {
      * Updates cached workspace/model details, then redraws the live activity status.
      */
     private void refreshShellStatus() {
-        AgentSnapshot state = runtime.state();
+        AgentSnapshot state = selectedState();
         String branch = gitBranch(cwd);
         statusLocation = displayPath(Path.of(System.getProperty("user.home", "")), cwd)
                 + (branch == null ? "" : " [" + branch + "]")
-                + (sessionName == null ? "" : " \u2022 " + sessionName);
+                + (sessionName == null ? "" : " \u2022 " + sessionName)
+                + (!agentConfigured ? "" : " \u2022 " + runtime.subagents().snapshot(selectedAgent).name()
+                    + " (" + runtime.subagents().snapshot(selectedAgent).queued() + " queued)");
         statusModel = !agentConfigured
                 ? ""
                 : modelStatus(
@@ -3431,6 +3597,7 @@ public final class CodingAgentCli {
     }
 
     private void renderShellStatus() {
+        if (componentOpen || managedSuspend) return;
         ActivityStatus current = activity;
         setStatus(activityLabel(current, System.nanoTime()), activityAccent(current), statusLocation, statusModel);
     }
@@ -3592,7 +3759,7 @@ public final class CodingAgentCli {
             return;
         }
         TurnDetailsComponent details =
-                turnDetailsForLatestTurn(runtime.state().messages(), hideThinkingBlock);
+                turnDetailsForLatestTurn(selectedState().messages(), hideThinkingBlock);
         if (details == null) {
             showShellShortcutStatus("The latest turn has no reasoning or tool details.", lineEditorActive);
             return;
@@ -4130,8 +4297,8 @@ public final class CodingAgentCli {
     }
 
     private void reportCheckpointFailure(IOException error) {
-        String message = "Warning: compacted context could not be saved for resume: " + error.getMessage();
+        String message = "Warning: session progress could not be saved for resume: " + error.getMessage();
         if (jlineTerminal == null) System.err.println(message);
-        else println(message);
+        else shellNotifications.add(() -> println(message));
     }
 }

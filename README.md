@@ -98,6 +98,40 @@ java -jar target/codingagent.jar \
   --model anthropic/claude-haiku-4-5
 ```
 
+Use the `subagent` tool to delegate a task to a separate conversation. Supply
+`task` and optionally `name`; supply `agent_id` to give an existing child another
+task. Main waits for that request's final answer and receives the child's ID,
+name, and status. Reasoning, searches, intermediate output, and tool results stay
+in the child's transcript. Children inherit the workspace, model, thinking level,
+instructions, and effective local/MCP configuration, and cannot delegate further.
+All agents share files in the workspace, so coordinate edits to the same files.
+Each agent owns its shell processes, MCP connections, and conversation.
+
+Use `/subagents` to search and switch between Main and children in creation
+order. The selected conversation supplies the transcript, streamed output,
+activity, model/context information, and `/details` (Ctrl-O) inspector. You can
+keep typing while work runs; submitted prompts queue in order for the selected
+agent. Direct chats with a child stay in that conversation and do not change the
+answer returned to an earlier delegated request. Background agents keep running
+when you switch views.
+
+Escape closes a selector first. Otherwise it cancels the selected agent and
+clears its queued prompts; cancelling Main also cancels all its children.
+Cancelling a delegated child returns a tool error with its ID to Main. `/compact`
+targets the selected idle conversation. Session, workspace, provider, settings,
+and MCP changes require Main to be selected and the entire group to be idle.
+Exiting closes the whole group.
+
+Each child is saved in its own JSONL file linked to its parent before work starts.
+Accepted conversation steps are saved incrementally, and compaction preserves the
+full transcript. `/resume` lists Main sessions and restores their children;
+previously running children show as interrupted and do not restart automatically.
+Completed children remain available for chat or further delegation. `--no-session`
+provides the same delegation and navigation in memory. Clearing or leaving a
+session releases its child runtimes; `/fork` creates a new Main without copying
+child ownership. Delegation is also available in print and RPC modes; RPC events
+continue to describe Main and this version adds no RPC navigation commands.
+
 Use `/resume` to open a searchable list of saved sessions from the current
 folder. Selecting one restores its model and visible conversation transcript,
 and new messages continue appending to the same session file. The active
