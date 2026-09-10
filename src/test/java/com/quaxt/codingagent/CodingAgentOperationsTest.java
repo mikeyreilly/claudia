@@ -190,7 +190,7 @@ class CodingAgentOperationsTest {
                 "Working directory: " + workspace.toAbsolutePath().normalize() + "\n"
                         + "Relative paths in tool calls resolve against the working directory. "
                         + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n"
-                        + "Repository rule: prefer tabs.",
+                        + "Repository rule: prefer tabs.\n\n" + com.quaxt.codingagent.agent.AgentMode.BUILD.instructions(),
                 promptedSystemPrompt(provider));
     }
 
@@ -212,7 +212,7 @@ class CodingAgentOperationsTest {
                         + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n"
                         + "Personal rule: explain trade-offs.\n\n"
                         + "Per-run rule: use concise answers.\n\n"
-                        + "Repository rule: prefer tabs.",
+                        + "Repository rule: prefer tabs.\n\n" + com.quaxt.codingagent.agent.AgentMode.BUILD.instructions(),
                 promptedSystemPrompt(provider));
         assertEquals(
                 List.of(userInstructions.toAbsolutePath().normalize(), workspace.resolve("AGENTS.md")),
@@ -292,7 +292,7 @@ class CodingAgentOperationsTest {
                 "Working directory: " + module.toAbsolutePath().normalize() + "\n"
                         + "Repository root: " + workspace.toAbsolutePath().normalize() + "\n"
                         + "Relative paths in tool calls resolve against the working directory. "
-                        + "Use an absolute path or a leading ~/ to reach anything outside it.",
+                        + "Use an absolute path or a leading ~/ to reach anything outside it.\n\n" + com.quaxt.codingagent.agent.AgentMode.BUILD.instructions(),
                 promptedSystemPrompt(provider));
     }
 

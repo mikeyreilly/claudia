@@ -6,6 +6,7 @@ import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.agent.ToolDefinition;
 import com.quaxt.codingagent.agent.ToolParameters;
 import com.quaxt.codingagent.agent.ToolRegistry;
+import com.quaxt.codingagent.agent.QuestionBroker;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.shell.ShellSessionManager;
@@ -47,18 +48,44 @@ public final class LocalTools {
     private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
     private static final BuiltInTools.Shell SHELL = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
     private static final ToolRegistry<Environment> REGISTRY = new ToolRegistry<>(
-            List.of(read(), write(), edit(), shell(), shellInput(), grep(), find(), ls()));
+            List.of(read(), write(), edit(), shell(), shellInput(), grep(), find(), ls(), question()));
 
-    private record Environment(Path cwd, Consumer<Path> onPathAccess, String executable, ShellSessionManager shellSessions) {}
+    private record Environment(Path cwd, Consumer<Path> onPathAccess, String executable, ShellSessionManager shellSessions,
+                               QuestionBroker questions, String agentId) {}
     private record Edit(String oldText, String newText) {}
 
     public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable, ShellSessionManager shellSessions) {
+        return bind(cwd, onPathAccess, gitExecutable, shellSessions, new QuestionBroker(), "main");
+    }
+
+    public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable,
+            ShellSessionManager shellSessions, QuestionBroker questions, String agentId) {
         return REGISTRY.bind(new Environment(cwd.toAbsolutePath().normalize(), Objects.requireNonNull(onPathAccess),
-                Objects.requireNonNull(gitExecutable), Objects.requireNonNull(shellSessions)));
+                Objects.requireNonNull(gitExecutable), Objects.requireNonNull(shellSessions),
+                Objects.requireNonNull(questions), Objects.requireNonNull(agentId)));
     }
 
     public static Optional<String> describeCall(String name, ObjectNode arguments) {
         return REGISTRY.describeCall(name, arguments);
+    }
+
+    private static ToolDefinition<Environment> question() {
+        var question = text("question", "A concise question resolving material ambiguity or a user preference.");
+        var label = text("label", "Suggested answer");
+        var description = optionalText("description", "Tradeoff or explanation of this answer", "");
+        var options = optionalList("options", "Optional suggested answers; the user can always enter a custom answer",
+                new ToolParameters(label, description), args -> new QuestionBroker.Option(args.get(label), args.get(description)));
+        return new ToolDefinition<>("question",
+                "Ask the user for clarification and wait for their explicit answer. Use after exploration for ambiguity the workspace cannot resolve. "
+                + "Supply meaningful choices when helpful. A declined or unavailable result is not an answer: retain the unresolved issue, "
+                + "do not repeatedly call this tool, and present the question in your response. Never infer approval or change modes from an answer.",
+                new ToolParameters(question, options), (local, args, invocation) -> {
+                    var answer = local.questions.ask(local.agentId, args.get(question), args.get(options), invocation.signal);
+                    var data = com.quaxt.codingagent.ai.json.Json.MAPPER.createObjectNode().put("status", answer.status());
+                    if (answer.answer() != null) data.put("answer", answer.answer());
+                    else data.put("question", args.get(question));
+                    return new AgentTool.ToolResult(List.of(new TextContent(data.toString(), null)), data, false);
+                }, raw -> "Asking: " + textArgument(raw, "question", ""));
     }
 
     private static ToolDefinition<Environment> read() {

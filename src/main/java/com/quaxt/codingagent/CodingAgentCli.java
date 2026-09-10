@@ -36,6 +36,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.quaxt.codingagent.agent.AgentEvent;
+import com.quaxt.codingagent.agent.AgentMode;
+import com.quaxt.codingagent.agent.QuestionBroker;
+import com.quaxt.codingagent.cli.QuestionComponent;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.ai.Provider;
@@ -127,6 +130,7 @@ public final class CodingAgentCli {
 
     // Interactive shell and terminal
     private enum SlashCommand {
+        BUILD("/build"),
         CD("/cd"),
         CLEAR("/clear"),
         COMPACT("/compact"),
@@ -138,6 +142,7 @@ public final class CodingAgentCli {
         LOGOUT("/logout"),
         MCP("/mcp"),
         MODELS("/models"),
+        PLAN("/plan"),
         QUIT("/quit", false),
         RESUME("/resume"),
         SETTINGS("/settings"),
@@ -183,7 +188,7 @@ public final class CodingAgentCli {
     static String slashCommandHelp() {
         return "Commands: " + String.join(", ", SlashCommand.helpInputs())
                 + "\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; "
-                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking.";
+                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking; Tab toggles Plan/Build.";
     }
 
     private static final int VISIBLE_COMMANDS = 4;
@@ -593,6 +598,7 @@ public final class CodingAgentCli {
         if (binding != null && binding.equals("escape")) {
             return "\u001b";
         }
+        if ("tab".equals(binding)) return "\t";
         throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
     }
 
@@ -1198,6 +1204,23 @@ public final class CodingAgentCli {
         this.reader = new LineReaderImpl(jlineTerminal, this.jlineTerminal.getName(), null) {
             { editorLock = lock; }
             @Override
+            protected <T> T doReadBinding(KeyMap<T> keys, KeyMap<T> local) {
+                if (!commandSuggestionsActive) return super.doReadBinding(keys, local);
+                while (true) {
+                    boolean held = lock.isHeldByCurrentThread();
+                    if (!held) lock.lock();
+                    try { showPendingQuestions(); }
+                    finally { if (!held) lock.unlock(); }
+                    // Only the editor thread consumes input. Poll before starting a key sequence
+                    // so a question can arrive while the user is idle without injecting keystrokes.
+                    if (held) lock.unlock();
+                    int next;
+                    try { next = bindingReader.peekCharacter(100); }
+                    finally { if (held) lock.lock(); }
+                    if (next != NonBlockingReader.READ_EXPIRED) return super.doReadBinding(keys, local);
+                }
+            }
+            @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
                 if (CodingAgentCli.this.dynamicPost == null || post != null) {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
@@ -1320,6 +1343,12 @@ public final class CodingAgentCli {
             bindNavigationKey(keyMap1, suggestionUp, terminalUp, "\u001b[A", "\u001bOA");
             bindNavigationKey(keyMap1, suggestionDown, terminalDown, "\u001b[B", "\u001bOB");
         }
+        String modeWidget = "codingagent-toggleAgentMode";
+        reader.getWidgets().put(modeWidget, () -> {
+            if (!commandSuggestionsActive) return reader.getBuiltinWidgets().get(LineReader.EXPAND_OR_COMPLETE).apply();
+            changeAgentMode(runtime.agentMode() == AgentMode.PLAN ? AgentMode.BUILD : AgentMode.PLAN, true);
+            return true;
+        });
         previousContinueHandler = supportsSuspend
                 ? terminal.handle(Terminal.Signal.CONT, signal -> {
             try {
@@ -1507,10 +1536,20 @@ public final class CodingAgentCli {
                                    ? new AttributedString("")
                                    : AttributedString.fromAnsi(String.join("\n", lines));
                         };
+                Map<KeyMap<Binding>, Binding> previousModeBindings = new LinkedHashMap<>();
+                if (suggestionsEnabled) for (var keyMap : reader.getKeyMaps().values()) {
+                    if (previousModeBindings.containsKey(keyMap)) continue;
+                    previousModeBindings.put(keyMap, keyMap.getBound(appKeySequence("toggleAgentMode")));
+                    keyMap.bind(new Reference("codingagent-toggleAgentMode"), appKeySequence("toggleAgentMode"));
+                }
                 try {
                     lineEditorReading = true;
                     result = reader.readLine(editorPrompt, null, mask, initialBuffer);
                 } finally {
+                    previousModeBindings.forEach((keyMap, binding) -> {
+                        if (binding == null) keyMap.unbind(appKeySequence("toggleAgentMode"));
+                        else keyMap.bind(binding, appKeySequence("toggleAgentMode"));
+                    });
                     lineEditorReading = false;
                     dynamicPost = null;
                     commandSuggestionsActive = false;
@@ -1949,6 +1988,7 @@ public final class CodingAgentCli {
                     case "--system-prompt" -> systemPrompt = cliArgumentValue(args, ++i, arg);
                     case "--no-session" -> noSession = true;
                     case "--mode" -> mode = cliArgumentValue(args, ++i, arg);
+                    case "--agent-mode" -> runtime.setAgentMode(AgentMode.parse(cliArgumentValue(args, ++i, arg)));
                     case "-p", "--print" -> {
                         print = true;
                         if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
@@ -1991,6 +2031,8 @@ public final class CodingAgentCli {
                           --no-session   Do not persist the print-mode transcript
                           --mode <print|json|rpc>
                         				 Select plain text, JSONL events, or stdin/stdout RPC
+                          --agent-mode <build|plan>
+                                         Select the workflow (default: build)
                           -p, --print <prompt>
                         				 Run a headless coding-agent prompt and print the final answer
 
@@ -2036,6 +2078,9 @@ public final class CodingAgentCli {
                     runtime.mcpCloseManager();
                     throw error;
                 }
+                runtime.questions().setInteractive(true);
+                List<java.util.concurrent.CompletableFuture<?>> rpcTasks = new ArrayList<>();
+                AutoCloseable questionEvents = runtime.questions().subscribe(event -> outputRpc(questionEventJson(event)));
                 try (BufferedReader input =
                              new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
                     String line;
@@ -2054,17 +2099,20 @@ public final class CodingAgentCli {
                         String id = command.path("id").isTextual() ? command.path("id").asText() : null;
                         String type = command.path("type").asText();
                         try {
+                            rpcTasks.removeIf(java.util.concurrent.CompletableFuture::isDone);
+                            if (Set.of("set_model", "new_session", "set_agent_mode", "set_auto_compaction").contains(type))
+                                runtime.requireIdleGroup();
                             switch (type) {
                                 case "prompt" -> {
                                     JsonNode message = command.get("message");
                                     if (message == null || !message.isTextual() || message.asText().isBlank()) {
                                         throw new IllegalArgumentException("prompt requires a non-empty string message");
                                     }
-                                    runtime.mcpAwaitReady();
-                                    runtime.syncMcpTools();
-                                    runtime.prompt(message.asText());
-
-                                    respondRpc(id, "prompt", true, null, null);
+                                    rpcTasks.add(runtime.subagents().submit(SubagentManager.MAIN, message.asText())
+                                            .handle((answer, failure) -> {
+                                                respondRpc(id, "prompt", failure == null, null, rpcFailure(failure));
+                                                return null;
+                                            }));
                                 }
                                 case "abort" -> {
                                     runtime.abort();
@@ -2079,7 +2127,24 @@ public final class CodingAgentCli {
                                     data.put("autoCompactionEnabled", state.autoCompactionEnabled());
                                     data.put("messageCount", state.messages().size());
                                     data.put("sessionId", noSession ? "" : state.sessionId());
+                                    data.put("agentMode", state.agentMode().wire);
+                                    var pending = data.putArray("pendingQuestions");
+                                    runtime.questions().pending().forEach(question -> pending.add(questionRequestJson(question)));
                                     respondRpc(id, type, true, data, null);
+                                }
+                                case "set_agent_mode" -> {
+                                    runtime.setAgentMode(AgentMode.parse(requiredRpcText(command, "agentMode")));
+                                    respondRpc(id, type, true, jsonObject().put("agentMode", runtime.agentMode().wire), null);
+                                }
+                                case "answer_question" -> {
+                                    String questionId = requiredRpcText(command, "questionId");
+                                    if (command.has("decline") && !command.path("decline").isBoolean())
+                                        throw new IllegalArgumentException("decline must be a boolean");
+                                    if (command.path("decline").asBoolean()) {
+                                        if (command.has("answer")) throw new IllegalArgumentException("Supply an answer or decline, not both");
+                                        runtime.questions().decline(questionId);
+                                    } else runtime.questions().answer(questionId, requiredRpcText(command, "answer"));
+                                    respondRpc(id, type, true, null, null);
                                 }
                                 case "get_available_models" -> {
                                     ObjectNode data = jsonObject();
@@ -2097,8 +2162,7 @@ public final class CodingAgentCli {
                                     String instructions = command.path("customInstructions").isTextual()
                                             ? command.path("customInstructions").asText()
                                             : null;
-                                    CompactionResult result1 = runtime.compact(instructions);
-                                    respondRpc(id, type, true, Json.MAPPER.valueToTree(result1), null);
+                                    rpcTasks.add(submitRpcCompaction(id, instructions));
                                 }
                                 case "set_auto_compaction" -> {
                                     if (!command.path("enabled").isBoolean()) {
@@ -2135,6 +2199,9 @@ public final class CodingAgentCli {
                         }
                     }
                 } finally {
+                    runtime.questions().setInteractive(false);
+                    java.util.concurrent.CompletableFuture.allOf(rpcTasks.toArray(java.util.concurrent.CompletableFuture[]::new)).join();
+                    try { questionEvents.close(); } catch (Exception ignored) { }
                     runtime.mcpCloseManager();
                 }
                 return 0;
@@ -2210,6 +2277,7 @@ public final class CodingAgentCli {
                         !System.getProperty("os.name").startsWith("Windows"));
                 try {
                     this.settings = settings;
+                    runtime.questions().setInteractive(true);
                     agentConfigured = false;
                     recordingSession = false;
                     hideThinkingBlock = settings.hideThinkingBlock;
@@ -2418,6 +2486,8 @@ public final class CodingAgentCli {
                 return false;
             }
             switch (command) {
+                case PLAN -> changeAgentMode(AgentMode.PLAN, false);
+                case BUILD -> changeAgentMode(AgentMode.BUILD, false);
                 case SUBAGENTS -> showSubagents();
                 case CD -> {
                     if (arguments.isEmpty()) {
@@ -3258,8 +3328,8 @@ public final class CodingAgentCli {
         if (model != null) header.append("  ").append(model);
         header.append('\n');
         header.append(model == null
-                ? "Run /login to choose a provider. Commands: /help, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                ? "Run /login to choose a provider. Tab toggles Plan/Build. Commands: /help, /plan, /build, /resume, /login, /mcp, /exit"
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Tab toggles Plan/Build. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }
@@ -3599,7 +3669,44 @@ public final class CodingAgentCli {
     private void renderShellStatus() {
         if (componentOpen || managedSuspend) return;
         ActivityStatus current = activity;
-        setStatus(activityLabel(current, System.nanoTime()), activityAccent(current), statusLocation, statusModel);
+        boolean waiting = runtime.questions().pending().stream()
+                .anyMatch(question -> question.agentId().equals(selectedAgent) || SubagentManager.MAIN.equals(selectedAgent));
+        String label = waiting ? "Waiting for answer" : activityLabel(current, System.nanoTime());
+        setStatus(label + " [" + runtime.agentMode().label + "]", waiting ? StatusAccent.ACTIVE : activityAccent(current), statusLocation, statusModel);
+    }
+
+    private void changeAgentMode(AgentMode mode, boolean editorActive) {
+        String notice;
+        try {
+            if (agentConfigured && !SubagentManager.MAIN.equals(selectedAgent))
+                throw new IllegalStateException("Select Main before changing mode.");
+            runtime.setAgentMode(mode);
+            notice = mode.label + " mode selected."
+                    + (mode == AgentMode.BUILD ? " Send a prompt to request implementation." : " Explore and refine a plan before implementation.");
+        } catch (IllegalStateException error) { notice = error.getMessage(); }
+        if (editorActive) printAbove(notice); else println(notice);
+        refreshShellStatus();
+    }
+
+    private void showPendingQuestions() {
+        if (componentOpen || managedSuspend || !commandSuggestionsActive) return;
+        if (runtime.questions().pending().isEmpty()) return;
+        for (var question : runtime.questions().pending()) {
+            if (!runtime.questions().contains(question.questionId())) continue;
+            String name = question.agentId();
+            if (agentConfigured) name = runtime.subagents().snapshot(question.agentId()).name();
+            try {
+                var component = new QuestionComponent(question, name, () -> runtime.questions().contains(question.questionId()));
+                var answer = runComponent(component.component());
+                if (!runtime.questions().contains(question.questionId())) continue;
+                if ("answered".equals(answer.status())) runtime.questions().answer(question.questionId(), answer.answer());
+                else runtime.questions().decline(question.questionId());
+            } catch (IOException | IllegalArgumentException error) {
+                if (runtime.questions().contains(question.questionId())) runtime.questions().decline(question.questionId());
+                printAbove("Question could not be completed: " + error.getMessage());
+            }
+        }
+        refreshShellStatus();
     }
 
     private void setShellActivity(ActivityStatus next) {
@@ -3932,6 +4039,42 @@ public final class CodingAgentCli {
             runtime.createSessionRecorder(Path.of("."), model.provider, model.id);
         }
         runtime.setSessionRecording(!noSession, this::reportCheckpointFailure);
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> submitRpcCompaction(String id, String instructions) throws Exception {
+        var result = new java.util.concurrent.atomic.AtomicReference<CompactionResult>();
+        AutoCloseable listener = runtime.subscribe(event -> {
+            if (event instanceof AgentEvent.CompactionEnd end) result.set(end.result);
+        });
+        try {
+            return runtime.subagents().compact(SubagentManager.MAIN, instructions).handle((answer, failure) -> {
+                try { listener.close(); } catch (Exception ignored) { }
+                respondRpc(id, "compact", failure == null, failure == null ? Json.MAPPER.valueToTree(result.get()) : null,
+                        rpcFailure(failure));
+                return null;
+            });
+        } catch (RuntimeException error) { listener.close(); throw error; }
+    }
+
+    private static String rpcFailure(Throwable failure) {
+        return failure == null ? null : failure.getMessage() == null ? failure.toString() : failure.getMessage();
+    }
+
+    private static ObjectNode questionRequestJson(QuestionBroker.Request request) {
+        ObjectNode node = jsonObject().put("questionId", request.questionId()).put("agentId", request.agentId())
+                .put("question", request.question());
+        var options = node.putArray("options");
+        for (var option : request.options()) options.addObject().put("label", option.label()).put("description", option.description());
+        return node;
+    }
+
+    private static ObjectNode questionEventJson(QuestionBroker.Event event) {
+        ObjectNode node = questionRequestJson(event.request()).put("type", event.type());
+        if (event.answer() != null) {
+            node.put("status", event.answer().status());
+            if (event.answer().answer() != null) node.put("answer", event.answer().answer());
+        }
+        return node;
     }
 
     private void respondRpc(

@@ -144,6 +144,21 @@ public final class ToolParameters {
         });
     }
 
+    public static <T> Parameter<List<T>> optionalList(String name, String description, ToolParameters itemParameters,
+            Function<Arguments, T> decodeItem) {
+        ObjectNode schema = type("array", description);
+        schema.set("items", itemParameters.schema());
+        return new Parameter<>(name, schema, false, List.of(), value -> {
+            if (!value.isArray()) throw new IllegalArgumentException("must be an array");
+            List<T> items = new ArrayList<>();
+            for (JsonNode item : value) {
+                if (!(item instanceof ObjectNode object)) throw new IllegalArgumentException("each item must be an object");
+                items.add(decodeItem.apply(itemParameters.parse(object)));
+            }
+            return List.copyOf(items);
+        });
+    }
+
     private static ObjectNode type(String type, String description) {
         return Json.MAPPER.createObjectNode().put("type", type).put("description", description);
     }

@@ -14,6 +14,7 @@ public final class Keybindings {
 			"cancel", "ctrl-c",
 			"deletePreviousWord", "alt-backspace");
 	public static final Map<String, String> DEFAULT_APP_KEYBINDINGS = Map.of(
+			"toggleAgentMode", "tab",
 			"exit", "ctrl-d",
 			"interrupt", "escape",
 			"suspend", "ctrl-z",
