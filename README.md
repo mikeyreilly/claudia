@@ -130,7 +130,8 @@ Completed children remain available for chat or further delegation. `--no-sessio
 provides the same delegation and navigation in memory. Clearing or leaving a
 session releases its child runtimes; `/fork` creates a new Main without copying
 child ownership. Delegation is also available in print and RPC modes; RPC events
-continue to describe Main and this version adds no RPC navigation commands.
+continue to describe Main, except for question events identifying the requesting
+agent. There are no RPC navigation commands.
 
 Use `/resume` to open a searchable list of saved sessions from the current
 folder. Selecting one restores its model and visible conversation transcript,
@@ -186,6 +187,48 @@ Use `/settings` to select the thinking level. The available levels are
 model-specific; for example, GitHub Copilot's GPT-5.6 Terra offers `max`. The
 selection becomes the default for future sessions and is clamped when the
 selected model supports fewer levels.
+
+## Plan mode and questions
+
+Use `/plan` to investigate a change and develop an implementation plan before
+editing code. Use `/build` to return to implementation, or press Tab at the main
+chat prompt to toggle modes. The status bar shows the current mode. Switching
+preserves the conversation and starts no work: after switching to Build, send an
+explicit implementation request.
+
+Main and all its subagents share one mode. Switch with Main selected and the
+entire group idle, including queued prompts and outstanding questions. Plan uses
+the same model, thinking level, and tools as Build. Its instructions advise the
+model to explore first, clarify material ambiguity, and present an actionable
+Markdown plan in chat. Diagnostic tests/builds may produce disposable output or
+caches. Source edits, automatic fixes, installs, commits, and external changes
+are outside the planning workflow. These are model instructions, not enforced
+tool permissions.
+
+The local `question` tool asks one question at a time, with optional suggested
+answers. The terminal shows the requesting agent, lets you select a suggestion
+or type a custom answer, and waits for Enter to submit. Escape declines without
+supplying an answer. Questions wait while another selector or auxiliary prompt
+is open and preserve your chat draft and cursor. The requesting agent waits;
+other agents can continue. Queued chat messages are not used as question answers.
+The tool is available in Build as well as Plan.
+
+Mode is saved with each session. Resume restores it; clear, fork, workspace
+changes, and model changes retain the current selection. A new process defaults
+to Build, independently of earlier sessions. Override that with
+`--agent-mode plan` in interactive, print, JSON, or RPC usage:
+
+```bash
+java -jar target/codingagent.jar --agent-mode plan
+java -jar target/codingagent.jar --agent-mode plan \
+  --model anthropic/claude-haiku-4-5 --print "Plan the cache refactor"
+```
+
+With `--no-session`, mode and question answers stay in memory. Completed questions
+and answers otherwise appear in the normal saved tool transcript. Interrupted
+questions are not automatically reopened on resume. Print/JSON mode cannot
+collect answers: the tool returns `unavailable` and instructs the model to present
+the unresolved question in its response, without waiting for stdin.
 
 ## Interactive scripts
 
@@ -338,8 +381,34 @@ text only; they do not impose separate filesystem restrictions.
 `--mode rpc` accepts JSONL commands on standard input and emits JSONL responses
 and agent events on standard output. It currently supports `prompt`, `abort`,
 `get_state`, `get_available_models`, `set_model`, `get_messages`,
-`get_last_assistant_text`, `new_session`, `compact`, and
-`set_auto_compaction`.
+`get_last_assistant_text`, `new_session`, `compact`, `set_auto_compaction`,
+`set_agent_mode`, and `answer_question`.
+
+Prompts queue in order, and their response IDs are completed when the work
+finishes. Prompt and compaction execution leave the input loop responsive to
+state requests, question replies, and aborts. Mode, model, session, and settings
+changes require the whole group to be idle; wait for outstanding prompts to
+complete before issuing them.
+
+`get_state` includes `agentMode` (`build` or `plan`) and `pendingQuestions`.
+Each pending question and `question_requested` event includes `questionId`,
+`agentId`, `question`, and `options` (labels and descriptions). Reply with answer
+text, including the selected label when choosing a suggestion, or explicitly
+decline:
+
+```json
+{"id":"mode-1","type":"set_agent_mode","agentMode":"plan"}
+{"id":"reply-1","type":"answer_question","questionId":"<request-id>","answer":"My preferred approach"}
+{"id":"reply-2","type":"answer_question","questionId":"<request-id>","decline":true}
+```
+
+`question_resolved` identifies the same request and includes its `status`
+(`answered`, `declined`, or `unavailable`) and answer text when supplied.
+Duplicate or stale replies fail without changing the conversation. Question
+events include delegated agents even though ordinary RPC conversation events
+remain scoped to Main. EOF makes pending and future questions unavailable and
+drains already accepted prompts before exiting, so piped commands do not hang
+waiting for an answer.
 
 ```bash
 printf '%s\n' '{"id":"state-1","type":"get_state"}' |
@@ -358,6 +427,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |
 | Interactive `/resume` session listing and restoration | Implemented |
+| Plan/Build modes and local clarification questions in the terminal and RPC | Implemented |
 | Manual and automatic context compaction | Implemented |
 | JSON event mode and core JSONL RPC automation | Implemented |
 | Interactive JLine prompt shell and streamed output | Implemented |

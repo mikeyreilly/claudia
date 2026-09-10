@@ -17,7 +17,7 @@ public final class SubagentManager implements AutoCloseable {
     public record Snapshot(String id, String name, String task, Status status, int queued,
                            CodingAgentOperations.AgentSnapshot state, List<Message> transcript) {}
     public record Event(String agentId, AgentEvent event) {}
-    private record Request(String prompt, CompletableFuture<Answer> result) {}
+    private record Request(String prompt, String compactionInstructions, CompletableFuture<Answer> result) {}
     private static final class Entry {
         final String id, name, task;
         final Deque<Request> queue = new ArrayDeque<>();
@@ -67,7 +67,7 @@ public final class SubagentManager implements AutoCloseable {
                 ? new CodingAgentOperations.AgentSnapshot(root.state().model(),
                     saved == null || saved.thinkingLevel == null ? root.state().thinkingLevel() : saved.thinkingLevel,
                     false, false, true, saved == null ? List.of() : CodingAgentOperations.snapshotMessages(saved.messages),
-                    saved == null ? null : entry.id)
+                    saved == null ? null : entry.id, root.agentMode())
                 : entry.runtime.state();
         Status status = state.streaming() || state.compacting() ? Status.RUNNING : entry.status;
         return new Snapshot(entry.id, entry.name, entry.task, status, entry.queue.size(), state,
@@ -107,15 +107,23 @@ public final class SubagentManager implements AutoCloseable {
 
     /** Compaction occupies the same mailbox, so new chats queue behind it. */
     public synchronized CompletableFuture<Answer> compact(String id) {
+        return compact(id, null);
+    }
+
+    public synchronized CompletableFuture<Answer> compact(String id, String instructions) {
         if (closed) throw new IllegalStateException("Subagent manager is closed");
         if (!idle(id)) throw new IllegalStateException("Wait for the selected agent to be idle before compacting");
-        return enqueue(id, null);
+        return enqueue(id, null, instructions);
     }
 
     private CompletableFuture<Answer> enqueue(String id, String prompt) {
+        return enqueue(id, prompt, null);
+    }
+
+    private CompletableFuture<Answer> enqueue(String id, String prompt, String compactionInstructions) {
         Entry entry = require(id);
         var result = new CompletableFuture<Answer>();
-        entry.queue.addLast(new Request(prompt, result));
+        entry.queue.addLast(new Request(prompt, compactionInstructions, result));
         if (entry.worker == null) {
             entry.worker = Thread.ofVirtual().name("agent-" + id).unstarted(() -> drain(entry));
             entry.worker.start();
@@ -134,18 +142,19 @@ public final class SubagentManager implements AutoCloseable {
             }
             Answer answer = null;
             Throwable failure = null;
+            boolean drained;
             try {
                 synchronized (this) {
                     if (request.result.isDone()) throw new CancellationException("Cancelled");
                     if (entry.runtime == null) {
-                        entry.runtime = root.createChildRuntime(entry.saved);
+                        entry.runtime = root.createChildRuntime(entry.saved, entry.id);
                         watch(entry);
                     }
                 }
                 entry.runtime.recordLifecycle("RUNNING");
                 if (request.result.isDone()) throw new CancellationException("Cancelled");
                 if (request.prompt == null) {
-                    var result = entry.runtime.compact(null);
+                    var result = entry.runtime.compact(request.compactionInstructions);
                     answer = new Answer(entry.id, entry.name, Status.COMPLETED,
                             "Context compacted: " + result.tokensBefore + " -> " + result.estimatedTokensAfter + " tokens.");
                 } else {
@@ -168,11 +177,14 @@ public final class SubagentManager implements AutoCloseable {
                     if (entry.runtime != null) entry.runtime.recordLifecycle(entry.status.name());
                 } catch (IOException error) { failure = error; entry.status = Status.FAILED; }
                 entry.current = null;
+                drained = entry.queue.isEmpty() || closed;
+                if (drained) entry.worker = null;
                 // Interruption belongs to this request; subsequent accepted prompts can still run.
                 Thread.interrupted();
             }
             if (failure == null) request.result.complete(answer);
             else request.result.completeExceptionally(new IllegalStateException("Agent " + entry.id + ": " + failure.getMessage(), failure));
+            if (drained) return;
         }
     }
 
@@ -195,7 +207,7 @@ public final class SubagentManager implements AutoCloseable {
 
     public synchronized CodingAgentOperations runtime(String id) throws IOException {
         Entry entry = require(id);
-        if (entry.runtime == null) { entry.runtime = root.createChildRuntime(entry.saved); watch(entry); }
+        if (entry.runtime == null) { entry.runtime = root.createChildRuntime(entry.saved, entry.id); watch(entry); }
         return entry.runtime;
     }
 

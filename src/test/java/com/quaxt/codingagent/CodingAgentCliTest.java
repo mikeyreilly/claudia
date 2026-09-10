@@ -166,8 +166,8 @@ class CodingAgentCliTest {
 	@Test
 	void keepsSlashCommandCompletionAndHelpInSync() {
 		assertEquals(List.of(
-				"/cd", "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
-				"/mcp", "/models", "/quit", "/resume", "/settings", "/subagents"), CodingAgentCli.slashCommands());
+				"/build", "/cd", "/clear", "/compact", "/details", "/exit", "/fork", "/help", "/login", "/logout",
+				"/mcp", "/models", "/plan", "/quit", "/resume", "/settings", "/subagents"), CodingAgentCli.slashCommands());
 
 		String help = CodingAgentCli.slashCommandHelp();
 		assertTrue(help.contains("/cd"));
@@ -1206,6 +1206,76 @@ class CodingAgentCliTest {
             assertEquals("unfinished prompt", reader.get(3, TimeUnit.SECONDS));
             assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("streamed output"));
         } finally { fixture.input().close(); cli.closeTerminal(); }
+    }
+
+    @Test
+    void answersAnArrivingQuestionAndTogglesModeWithoutLosingDraftOrCursor() throws Exception {
+        TerminalFixture fixture = terminal();
+        try (var runtime = new CodingAgentOperations()) {
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            runtime.questions().setInteractive(true);
+            var line = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> ", CodingAgentCli.slashCommands()));
+            try {
+                fixture.input().write(("draft tail" + "\u0002".repeat(5)).getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                var editor = (org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader");
+                waitUntil(() -> editor.getBuffer().toString().equals("draft tail") && editor.getBuffer().cursor() == 5);
+                var answer = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                    try { return runtime.questions().ask("main", "Which scope?",
+                            List.of(new com.quaxt.codingagent.agent.QuestionBroker.Option("Small", "Less work")),
+                            new com.quaxt.codingagent.ai.util.AbortSignal()); }
+                    catch (InterruptedException error) { throw new RuntimeException(error); }
+                });
+                waitUntil(() -> Boolean.TRUE.equals(getCliField(cli, "componentOpen")));
+                assertFalse(answer.isDone(), "A highlighted choice is not an answer");
+                fixture.input().write("Custom scope\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                assertEquals("Custom scope", answer.get(3, TimeUnit.SECONDS).answer());
+                waitUntil(() -> Boolean.FALSE.equals(getCliField(cli, "componentOpen")));
+                assertEquals("draft tail", editor.getBuffer().toString());
+                assertEquals(5, editor.getBuffer().cursor());
+                fixture.input().write('\t'); fixture.input().flush();
+                waitUntil(() -> runtime.agentMode() == com.quaxt.codingagent.agent.AgentMode.PLAN);
+                assertEquals(5, editor.getBuffer().cursor());
+                assertTrue(getCliField(cli, "statusActivity").toString().contains("[Plan]"));
+                fixture.input().write(" new\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                assertEquals("draft new tail", line.get(3, TimeUnit.SECONDS));
+                invokeCommand(cli, "/build");
+                assertEquals(com.quaxt.codingagent.agent.AgentMode.BUILD, runtime.agentMode());
+                assertTrue(runtime.state().messages().isEmpty());
+            } finally { fixture.input().close(); cli.closeTerminal(); }
+        }
+    }
+
+    @Test
+    void auxiliaryPromptsDeferQuestionsAndEscapeDeclinesWithoutAnswering() throws Exception {
+        TerminalFixture fixture = terminal();
+        try (var runtime = new CodingAgentOperations()) {
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            runtime.questions().setInteractive(true);
+            var auxiliary = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("Name: "));
+            try {
+                waitUntil(() -> Boolean.TRUE.equals(getCliField(cli, "lineEditorReading")));
+                var answer = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                    try { return runtime.questions().ask("main", "Which scope?", List.of(), new com.quaxt.codingagent.ai.util.AbortSignal()); }
+                    catch (InterruptedException error) { throw new RuntimeException(error); }
+                });
+                waitUntil(() -> !runtime.questions().pending().isEmpty());
+                assertFalse(Boolean.TRUE.equals(getCliField(cli, "componentOpen")));
+                fixture.input().write("Session name\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                assertEquals("Session name", auxiliary.get(3, TimeUnit.SECONDS));
+                assertFalse(answer.isDone());
+                var main = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> ", CodingAgentCli.slashCommands()));
+                waitUntil(() -> Boolean.TRUE.equals(getCliField(cli, "componentOpen")));
+                fixture.input().write(27); fixture.input().flush();
+                assertEquals("declined", answer.get(3, TimeUnit.SECONDS).status());
+                waitUntil(() -> Boolean.FALSE.equals(getCliField(cli, "componentOpen")));
+                fixture.input().write("Continue\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                assertEquals("Continue", main.get(3, TimeUnit.SECONDS));
+            } finally { fixture.input().close(); cli.closeTerminal(); }
+        }
     }
 
     @Test

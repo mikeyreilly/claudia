@@ -72,6 +72,8 @@ import java.util.stream.Stream;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.quaxt.codingagent.agent.AgentEvent;
+import com.quaxt.codingagent.agent.AgentMode;
+import com.quaxt.codingagent.agent.QuestionBroker;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.agent.CompactionResult;
 import com.quaxt.codingagent.agent.FunctionTool;
@@ -139,6 +141,36 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private volatile boolean runtimeClosed;
     private boolean childRuntime;
     private SubagentManager subagents;
+    private CodingAgentOperations parentRuntime;
+    private volatile AgentMode agentMode = AgentMode.BUILD;
+    private final QuestionBroker questionBroker = new QuestionBroker();
+    private String questionAgentId = SubagentManager.MAIN;
+
+    public AgentMode agentMode() { return parentRuntime == null ? agentMode : parentRuntime.agentMode(); }
+    public QuestionBroker questions() { return parentRuntime == null ? questionBroker : parentRuntime.questions(); }
+
+    private Object groupLock() { return parentRuntime != null ? parentRuntime.groupLock() : subagents == null ? this : subagents; }
+
+    public void requireIdleGroup() {
+        requireIdleAgent();
+        if (subagents != null && !subagents.idle()) throw new IllegalStateException("Wait for all agents to be idle");
+        if (!questions().pending().isEmpty()) throw new IllegalStateException("Wait for pending questions to be resolved");
+    }
+
+    /** Changes the entire group's workflow without starting a turn or resetting its conversation. */
+    public void setAgentMode(AgentMode mode) {
+        Objects.requireNonNull(mode, "mode");
+        if (parentRuntime != null) throw new IllegalStateException("Change the mode through Main");
+        synchronized (groupLock()) {
+            requireOpen();
+            if (agentMode == mode) return;
+            requireIdleGroup();
+            agentMode = mode;
+            if (recordingSession) try {
+                appendSessionEntry(sessionId, "agent_mode_change", jsonObject().put("agentMode", mode.wire));
+            } catch (IOException error) { persistenceFailure.accept(error); }
+        }
+    }
     private Path agentWorkspace;
     private String baseInstructions;
     private final List<Message> transcript = new CopyOnWriteArrayList<>();
@@ -240,6 +272,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     SessionSnapshot createChildSession(String task, String name) throws IOException {
         if (!recordingSession) return null;
         try (CodingAgentOperations recorder = new CodingAgentOperations()) {
+            recorder.agentMode = agentMode();
             recorder.sessionStore(directory, legacyDirectories);
             recorder.createSessionRecorder(agentWorkspace, selectedModel.provider, selectedModel.id, name,
                     sessionId, task, thinkingLevel);
@@ -247,10 +280,12 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         }
     }
 
-    CodingAgentOperations createChildRuntime(SessionSnapshot saved) throws IOException {
+    CodingAgentOperations createChildRuntime(SessionSnapshot saved, String agentId) throws IOException {
         CodingAgentOperations child = new CodingAgentOperations();
         try {
             child.childRuntime = true;
+            child.parentRuntime = this;
+            child.questionAgentId = agentId;
             child.applicationPaths(applicationPaths);
             if (authPath != null) child.fileCredentialStore(authPath, fallbackAuthPath);
             Provider provider = copyProviderForChild(agentProvider, child);
@@ -329,6 +364,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         try {
             abort();
         } finally {
+            if (parentRuntime == null) questionBroker.close();
             try {
                 mcpCloseManager();
             } finally {
@@ -590,7 +626,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             boolean compacting,
             boolean autoCompactionEnabled,
             List<Message> messages,
-            String sessionId) {}
+            String sessionId,
+            AgentMode agentMode) {}
 
     // Repository instructions, sessions, settings, and git-ignore filtering
 
@@ -4389,7 +4426,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public AgentSnapshot state() {
         return new AgentSnapshot(
                 selectedModel == null ? null : copyModel(selectedModel), thinkingLevel,
-                isStreaming, isCompacting, autoCompactionEnabled, snapshotMessages(messages), sessionId);
+                isStreaming, isCompacting, autoCompactionEnabled, snapshotMessages(messages), sessionId, agentMode());
     }
 
     /** Starts a fresh conversation with the selected provider and workspace tools. */
@@ -4399,7 +4436,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     /** Configures an explicitly supplied provider, including an in-process provider for embedding or tests. */
     public void configureAgent(Provider provider, Model model, Path cwd, String systemPrompt, String apiKey, ThinkingLevel level) {
-        requireIdleAgent();
+        if (childRuntime) requireIdleAgent(); else requireIdleGroup();
         if (subagents != null) { subagents.close(); subagents = null; }
         closeShellSessions();
         agentWorkspace = cwd.toAbsolutePath().normalize();
@@ -4460,7 +4497,10 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     private static final String COMPACTION_SYSTEM_PROMPT =
             "You summarize coding-agent conversations. Do not continue the conversation. "
-                    + "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps.";
+                    + "Return a concise structured checkpoint covering the goal, completed work, current state, decisions, and next steps. "
+                    + "Preserve the latest implementation plan, ordered changes, clarification questions and explicit answers, "
+                    + "unresolved issues, assumptions, and verification steps. Do not invent approval or answers. "
+                    + "The application's current mode instructions, supplied separately on future turns, determine whether implementation is allowed.";
 
     /** Creates the folded mutable state for one agent. */
     private void agentState(String systemPrompt, Model model) {
@@ -4504,6 +4544,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (signal != null) {
             abort(signal);
         }
+        questions().cancelAgent(questionAgentId);
         closeShellSessions();
     }
 
@@ -4514,14 +4555,12 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      */
     public CompactionResult compact(String customInstructions) throws InterruptedException {
         requireOpen();
-        if (isStreaming || isCompacting) {
-            throw new IllegalStateException("Agent is already processing");
+        synchronized (groupLock()) {
+            requireIdleAgent();
+            if (messages.isEmpty()) throw new IllegalStateException("Cannot compact an empty conversation");
+            activeSignal = new AbortSignal();
+            isCompacting = true;
         }
-        if (messages.isEmpty()) {
-            throw new IllegalStateException("Cannot compact an empty conversation");
-        }
-        activeSignal = new AbortSignal();
-        isCompacting = true;
         try {
             return performCompaction(compactionPrompt(messages, customInstructions), false);
         } finally {
@@ -4602,11 +4641,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      */
     private List<Message> runPrompt(String text) throws InterruptedException {
         Message[] prompts = new Message[]{userMessage(text)};
-        if (isStreaming || isCompacting) {
-            throw new IllegalStateException("Agent is already processing");
+        synchronized (groupLock()) {
+            requireIdleAgent();
+            activeSignal = new AbortSignal();
+            isStreaming = true;
         }
-        activeSignal = new AbortSignal();
-        isStreaming = true;
         List<Message> newMessages = new ArrayList<>();
         try {
             if (autoCompactionEnabled
@@ -4634,7 +4673,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 AssistantMessage[] lastAttempt = new AssistantMessage[1];
                 AssistantMessage response = retryAssistantCall(
                         () -> {
-                            Context context = new Context(systemPrompt);
+                            Context context = new Context(systemPrompt + "\n\n" + agentMode().instructions());
                             for (Message message : messages) {
                                 if (!(message instanceof AssistantMessage assistant)
                                         || (assistant.stopReason != StopReason.ERROR && assistant.stopReason != StopReason.ABORTED)) {
@@ -4948,7 +4987,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     /** Binds registered built-in tools to this runtime's workspace and process manager. */
     public List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
-        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions);
+        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions, questions(), questionAgentId);
     }
 
     // ------------------------------------------------------------ mcp tools
@@ -7744,6 +7783,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         start.put("cwd", cwd.toAbsolutePath().normalize().toString());
         start.put("provider", provider);
         start.put("model", model);
+        start.put("agentMode", agentMode().wire);
         String normalizedName = sessionName == null ? null : sessionName.strip();
         if (normalizedName != null && !normalizedName.isEmpty()) start.put("name", normalizedName);
         if (parent != null) {
@@ -7766,7 +7806,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Opens an existing session so future messages continue in the same JSONL file.
      */
     public void resumeSessionRecorder(String sessionId) throws IOException {
+        if (!childRuntime) requireIdleGroup();
         SessionSnapshot saved = sessionSnapshot(sessionId);
+        if (!childRuntime) agentMode = saved.agentMode;
         sessionRecorder(sessionId);
         transcript.clear();
         transcript.addAll(saved.transcriptMessages);
@@ -8001,6 +8043,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         String task = optionalSessionText(payload, "task");
         String level = optionalSessionText(payload, "thinkingLevel");
         String lifecycle = optionalSessionText(payload, "lifecycle");
+        AgentMode savedMode = sessionAgentMode(payload);
         List<Message> transcriptMessages = new ArrayList<>();
         List<Message> messages = new ArrayList<>();
         String firstMessage = "";
@@ -8009,6 +8052,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         for (SessionEntry entry : entries) {
             modified = Math.max(modified, entry.timestamp);
             if (entry.type.equals("agent_lifecycle")) lifecycle = optionalSessionText(entry.payload, "status");
+            if (entry.type.equals("agent_mode_change")) savedMode = sessionAgentMode(entry.payload);
             if (entry.type.equals("compaction")) {
                 messages.clear();
                 String summary = requiredSessionPayloadText(entry.payload, "summary", sessionId);
@@ -8167,7 +8211,14 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         snapshot.task = task;
         snapshot.thinkingLevel = level == null ? null : thinkingLevelFromWire(level);
         snapshot.lifecycle = lifecycle;
+        snapshot.agentMode = savedMode;
         return snapshot;
+    }
+
+    private static AgentMode sessionAgentMode(JsonNode payload) throws IOException {
+        if (!payload.has("agentMode")) return AgentMode.BUILD;
+        try { return AgentMode.parse(payload.path("agentMode").asText()); }
+        catch (IllegalArgumentException error) { throw new IOException("Invalid session agentMode", error); }
     }
 
     private Path existingSessionPath(String sessionId) {
