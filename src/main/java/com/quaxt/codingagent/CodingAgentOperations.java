@@ -137,6 +137,176 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 public final class CodingAgentOperations implements CredentialStore, AutoCloseable {
     private final Map<ProviderState.Role, ProviderState> providerStates = new EnumMap<>(ProviderState.Role.class);
     private volatile boolean runtimeClosed;
+    private boolean childRuntime;
+    private SubagentManager subagents;
+    private Path agentWorkspace;
+    private String baseInstructions;
+    private final List<Message> transcript = new CopyOnWriteArrayList<>();
+    private static final Object CREDENTIAL_FILES = new Object();
+
+    public SubagentManager subagents() {
+        if (childRuntime) throw new IllegalStateException("Children cannot delegate");
+        if (subagents == null) throw new IllegalStateException("No agent configured");
+        return subagents;
+    }
+
+    public List<Message> transcript() { return snapshotMessages(transcript); }
+
+    static List<Message> snapshotMessages(List<Message> source) {
+        return source.stream().map(message -> switch (message) {
+            case UserMessage user -> (Message) new UserMessage(copyUserContent(user.content), user.timestamp);
+            case ToolResultMessage tool -> new ToolResultMessage(tool.toolCallId, tool.toolName,
+                    copyUserContent(tool.content), tool.details instanceof JsonNode node ? node.deepCopy() : tool.details,
+                    tool.isError, tool.timestamp);
+            case AssistantMessage assistant -> {
+                AssistantMessage copy = new AssistantMessage(assistant.api, assistant.provider, assistant.model);
+                copy.timestamp = assistant.timestamp; copy.responseModel = assistant.responseModel;
+                copy.responseId = assistant.responseId; copy.stopReason = assistant.stopReason;
+                copy.errorMessage = assistant.errorMessage; copy.rawStopReason = assistant.rawStopReason;
+                for (AssistantContent block : assistant.content) copy.content.add(switch (block) {
+                    case TextContent text -> new TextContent(text.text, text.textSignature);
+                    case ThinkingContent thought -> new ThinkingContent(thought.thinking, thought.thinkingSignature, thought.redacted);
+                    case ToolCall call -> new ToolCall(call.id, call.name, call.arguments.deepCopy(), call.thoughtSignature);
+                });
+                Usage u = assistant.usage, v = copy.usage;
+                v.input = u.input; v.output = u.output; v.cacheRead = u.cacheRead; v.cacheWrite = u.cacheWrite;
+                v.cacheWrite1h = u.cacheWrite1h; v.reasoning = u.reasoning; v.totalTokens = u.totalTokens;
+                v.cost.input = u.cost.input; v.cost.output = u.cost.output; v.cost.cacheRead = u.cost.cacheRead;
+                v.cost.cacheWrite = u.cost.cacheWrite; v.cost.total = u.cost.total;
+                yield copy;
+            }
+        }).toList();
+    }
+
+    private static List<UserContent> copyUserContent(List<UserContent> content) {
+        return content.stream().map(block -> switch (block) {
+            case TextContent text -> (UserContent) new TextContent(text.text, text.textSignature);
+            case ImageContent image -> new ImageContent(image.data, image.mimeType);
+        }).toList();
+    }
+
+    static AgentEvent snapshotEvent(AgentEvent event) {
+        return switch (event) {
+            case AgentEvent.MessageStart e -> new AgentEvent.MessageStart(snapshotMessages(List.of(e.message)).getFirst());
+            case AgentEvent.MessageEnd e -> new AgentEvent.MessageEnd(snapshotMessages(List.of(e.message)).getFirst());
+            case AgentEvent.MessageUpdate e -> new AgentEvent.MessageUpdate(snapshotUpdate(e.providerEvent));
+            case AgentEvent.AgentEnd e -> new AgentEvent.AgentEnd(snapshotMessages(e.newMessages));
+            case AgentEvent.TurnEnd e -> new AgentEvent.TurnEnd(snapshotMessages(List.of(e.assistant)).getFirst(),
+                    snapshotMessages(new ArrayList<Message>(e.toolResults)).stream().map(ToolResultMessage.class::cast).toList());
+            case AgentEvent.ToolExecutionStart e -> new AgentEvent.ToolExecutionStart(e.toolCallId, e.toolName, e.arguments.deepCopy());
+            case AgentEvent.ToolExecutionUpdate e -> new AgentEvent.ToolExecutionUpdate(e.toolCallId, e.toolName, snapshotToolResult(e.partialResult));
+            case AgentEvent.ToolExecutionEnd e -> new AgentEvent.ToolExecutionEnd(e.toolCallId, e.toolName, snapshotToolResult(e.result));
+            default -> event; // Remaining event payloads are scalar lifecycle metadata.
+        };
+    }
+
+    private static AgentTool.ToolResult snapshotToolResult(AgentTool.ToolResult result) {
+        return new AgentTool.ToolResult(copyUserContent(result.content),
+                result.details instanceof JsonNode node ? node.deepCopy() : result.details, result.isError);
+    }
+
+    private static AssistantMessage snapshotAssistant(AssistantMessage message) {
+        return (AssistantMessage) snapshotMessages(List.of(message)).getFirst();
+    }
+
+    private static AssistantMessageEvent snapshotUpdate(AssistantMessageEvent event) {
+        return switch (event) {
+            case AssistantMessageEvent.Start e -> new AssistantMessageEvent.Start(snapshotAssistant(e.partial));
+            case AssistantMessageEvent.TextStart e -> new AssistantMessageEvent.TextStart(e.contentIndex, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.TextDelta e -> new AssistantMessageEvent.TextDelta(e.contentIndex, e.delta, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.TextEnd e -> new AssistantMessageEvent.TextEnd(e.contentIndex, e.content, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ThinkingStart e -> new AssistantMessageEvent.ThinkingStart(e.contentIndex, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ThinkingDelta e -> new AssistantMessageEvent.ThinkingDelta(e.contentIndex, e.delta, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ThinkingEnd e -> new AssistantMessageEvent.ThinkingEnd(e.contentIndex, e.content, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ToolCallStart e -> new AssistantMessageEvent.ToolCallStart(e.contentIndex, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ToolCallDelta e -> new AssistantMessageEvent.ToolCallDelta(e.contentIndex, e.delta, snapshotAssistant(e.partial));
+            case AssistantMessageEvent.ToolCallEnd e -> new AssistantMessageEvent.ToolCallEnd(e.contentIndex,
+                    new ToolCall(e.toolCall.id, e.toolCall.name, e.toolCall.arguments.deepCopy(), e.toolCall.thoughtSignature), snapshotAssistant(e.partial));
+            case AssistantMessageEvent.Done e -> new AssistantMessageEvent.Done(e.reason, snapshotAssistant(e.message));
+            case AssistantMessageEvent.Error e -> new AssistantMessageEvent.Error(e.reason, snapshotAssistant(e.error));
+        };
+    }
+
+    private void acceptMessage(Message message) {
+        transcript.add(message);
+        if (recordingSession) try { appendSessionMessages(List.of(message)); }
+        catch (IOException error) { persistenceFailure.accept(error); }
+    }
+
+    void recordLifecycle(String status) throws IOException {
+        if (recordingSession && childRuntime) appendSessionEntry(sessionId, "agent_lifecycle", jsonObject().put("status", status));
+    }
+
+    SessionSnapshot createChildSession(String task, String name) throws IOException {
+        if (!recordingSession) return null;
+        try (CodingAgentOperations recorder = new CodingAgentOperations()) {
+            recorder.sessionStore(directory, legacyDirectories);
+            recorder.createSessionRecorder(agentWorkspace, selectedModel.provider, selectedModel.id, name,
+                    sessionId, task, thinkingLevel);
+            return recorder.sessionSnapshot(recorder.sessionId);
+        }
+    }
+
+    CodingAgentOperations createChildRuntime(SessionSnapshot saved) throws IOException {
+        CodingAgentOperations child = new CodingAgentOperations();
+        try {
+            child.childRuntime = true;
+            child.applicationPaths(applicationPaths);
+            if (authPath != null) child.fileCredentialStore(authPath, fallbackAuthPath);
+            Provider provider = copyProviderForChild(agentProvider, child);
+            Map<String, McpServerConfig> configs = new LinkedHashMap<>();
+            servers.forEach((name, server) -> {
+                synchronized (server.lock) {
+                    configs.put(name, switch (server.config) {
+                        case McpServerConfig.Local local -> new McpServerConfig.Local(List.copyOf(local.command), local.cwd,
+                                Map.copyOf(local.environment), server.enabled, local.timeoutMillis,
+                                List.copyOf(local.resultFilters), List.copyOf(server.disabledTools));
+                        case McpServerConfig.Remote remote -> new McpServerConfig.Remote(remote.url, Map.copyOf(remote.headers),
+                                remote.oauth == null ? null : remote.oauth.deepCopy(), server.enabled, remote.timeoutMillis,
+                                List.copyOf(remote.resultFilters), List.copyOf(server.disabledTools));
+                    });
+                }
+            });
+            if (!configs.isEmpty()) child.mcpCreateManager(new McpConfiguration(configs, List.of()), agentWorkspace);
+            child.configureAgent(provider, copyModel(selectedModel), agentWorkspace, baseInstructions, apiKey,
+                    saved != null && saved.thinkingLevel != null ? saved.thinkingLevel : thinkingLevel);
+            child.retryPolicy = retryPolicy;
+            child.autoCompactionEnabled = autoCompactionEnabled;
+            child.compactionReserveTokens = compactionReserveTokens;
+            if (saved != null) {
+                child.sessionStore(directory, legacyDirectories);
+                child.resumeSessionRecorder(saved.id);
+                child.restoreMessages(saved.messages);
+                child.transcript.clear();
+                child.transcript.addAll(saved.transcriptMessages);
+                child.setSessionRecording(true, persistenceFailure);
+            }
+            return child;
+        } catch (IOException | RuntimeException error) { child.close(); throw error; }
+    }
+
+    private Provider copyProviderForChild(Provider provider, CodingAgentOperations child) {
+        return switch (provider) {
+            // Faux scripts are a synchronized test fixture, not an execution resource.
+            case FauxProvider faux -> faux;
+            case AnthropicProvider p -> new AnthropicProvider(p.id, p.name, p.models, p.apiKeyEnvVars, p.bearerAuthentication);
+            case OpenAiResponsesProvider p -> new OpenAiResponsesProvider(p.id, p.name, p.models, p.apiKeyEnvVars,
+                    p.credentials == this ? child : p.credentials, p.requestProfile);
+            case ProviderState p -> {
+                ProviderState copy = child.providerState(p.role);
+                copy.id = p.id; copy.models = p.models;
+                copy.credentials = p.credentials == this ? child : p.credentials;
+                copy.authBaseUrl = p.authBaseUrl; copy.clientId = p.clientId;
+                copy.githubBaseUrl = p.githubBaseUrl; copy.copilotTokenUrl = p.copilotTokenUrl;
+                copy.defaultCopilotBaseUrl = p.defaultCopilotBaseUrl;
+                if (p.anthropic != null) copy.anthropic = (AnthropicProvider) copyProviderForChild(p.anthropic, child);
+                if (p.responses != null) copy.responses = (OpenAiResponsesProvider) copyProviderForChild(p.responses, child);
+                yield copy;
+            }
+            default -> throw unknownProvider(provider);
+        };
+    }
+
 
     public CodingAgentOperations() {
         for (ProviderState.Role role : ProviderState.Role.values()) providerStates.put(role, new ProviderState(role));
@@ -155,6 +325,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public void close() {
         if (runtimeClosed) return;
         runtimeClosed = true;
+        if (subagents != null) subagents.close();
         try {
             abort();
         } finally {
@@ -386,7 +557,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     // Folded application paths and file credential store state
     private CodingAgentPaths applicationPaths = CodingAgentPaths.forCurrentUser();
     private Path authPath;
-    private Path lockPath;
+    private Path authLockPath;
+    private Path settingsLockPath;
+    private Path mcpAuthLockPath;
     private Path fallbackAuthPath;
 
     // Folded Agent and AgentState state
@@ -399,11 +572,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private Model selectedModel;
     private ThinkingLevel thinkingLevel = ThinkingLevel.OFF;
     private List<AgentTool> tools = new ArrayList<>();
-    private List<Message> messages = new ArrayList<>();
-    private boolean isStreaming;
+    private List<Message> messages = new CopyOnWriteArrayList<>();
+    private volatile boolean isStreaming;
     private AssistantMessage streamingMessage;
     private Set<String> pendingToolCalls = new LinkedHashSet<>();
-    private boolean isCompacting;
+    private volatile boolean isCompacting;
     private boolean autoCompactionEnabled = true;
     private int compactionReserveTokens = 16_384;
     private boolean recordingSession;
@@ -863,7 +1036,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     /**
      * Registers a listener, invoking it immediately if already aborted.
      */
-    private void onAbort(AbortSignal signal, Runnable listener) {
+    void onAbort(AbortSignal signal, Runnable listener) {
         boolean runNow;
         synchronized (signal) {
             runNow = signal.aborted;
@@ -1381,7 +1554,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         Path resolved = authPath.toAbsolutePath().normalize();
 
         this.authPath = resolved;
-        lockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
+        authLockPath = resolved.resolveSibling(resolved.getFileName() + ".lock");
         this.fallbackAuthPath =
                 fallbackAuthPath == null ? null : fallbackAuthPath.toAbsolutePath().normalize();
     }
@@ -1432,72 +1605,74 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      */
     public void modifyCredential(
             CredentialStore store, String providerId, UnaryOperator<Credential> operation) throws IOException {
-        switch (store) {
-            case CodingAgentOperations file -> {
-                validateProviderId(providerId);
-                if (operation == null) {
-                    throw new IllegalArgumentException("operation must not be null");
-                }
-                Files.createDirectories(file.authPath.getParent());
-                setPosixPermissions(file.authPath.getParent(), DIRECTORY_PERMISSIONS);
-                try (FileChannel channel =
-                             FileChannel.open(file.lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-                     FileLock ignored = channel.lock()) {
-                    Map<String, Credential> credentials = file.readAllCredentials();
-                    Credential next = operation.apply(credentials.get(providerId));
-                    if (next == null) {
-                        credentials.remove(providerId);
-                    } else {
-                        credentials.put(providerId, next);
+        synchronized (CREDENTIAL_FILES) {
+            switch (store) {
+                case CodingAgentOperations file -> {
+                    validateProviderId(providerId);
+                    if (operation == null) {
+                        throw new IllegalArgumentException("operation must not be null");
                     }
-                    ObjectNode root = jsonObject();
-                    for (Map.Entry<String, Credential> entry : credentials.entrySet()) {
-                        ObjectNode node = jsonObject();
-                        switch (entry.getValue()) {
-                            case Credential.ApiKeyCredential apiKey -> {
-                                node.put("type", credentialType(apiKey));
-                                if (apiKey.key != null) {
-                                    node.put("key", apiKey.key);
-                                }
-                                if (!apiKey.env.isEmpty()) {
-                                    ObjectNode env = node.putObject("env");
-                                    apiKey.env.forEach(env::put);
-                                }
-                            }
-                            case Credential.OAuthCredential oauth -> {
-                                node.put("type", credentialType(oauth));
-                                node.put("access", oauth.access);
-                                node.put("refresh", oauth.refresh);
-                                node.put("expires", oauth.expires);
-                                if (oauth.availableModelIds != null) {
-                                    ArrayNode ids = node.putArray("availableModelIds");
-                                    oauth.availableModelIds.forEach(ids::add);
-                                }
-                                if (!oauth.metadata.isEmpty()) {
-                                    ObjectNode metadata = node.putObject("metadata");
-                                    oauth.metadata.forEach(metadata::put);
-                                }
-                            }
+                    Files.createDirectories(file.authPath.getParent());
+                    setPosixPermissions(file.authPath.getParent(), DIRECTORY_PERMISSIONS);
+                    try (FileChannel channel =
+                                 FileChannel.open(file.authLockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                         FileLock ignored = channel.lock()) {
+                        Map<String, Credential> credentials = file.readAllCredentials();
+                        Credential next = operation.apply(credentials.get(providerId));
+                        if (next == null) {
+                            credentials.remove(providerId);
+                        } else {
+                            credentials.put(providerId, next);
                         }
-                        root.set(entry.getKey(), node);
-                    }
-                    Path temp = Files.createTempFile(file.authPath.getParent(), "auth-", ".json");
-                    try {
-                        Files.writeString(temp, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
-                        setPosixPermissions(temp, FILE_PERMISSIONS);
+                        ObjectNode root = jsonObject();
+                        for (Map.Entry<String, Credential> entry : credentials.entrySet()) {
+                            ObjectNode node = jsonObject();
+                            switch (entry.getValue()) {
+                                case Credential.ApiKeyCredential apiKey -> {
+                                    node.put("type", credentialType(apiKey));
+                                    if (apiKey.key != null) {
+                                        node.put("key", apiKey.key);
+                                    }
+                                    if (!apiKey.env.isEmpty()) {
+                                        ObjectNode env = node.putObject("env");
+                                        apiKey.env.forEach(env::put);
+                                    }
+                                }
+                                case Credential.OAuthCredential oauth -> {
+                                    node.put("type", credentialType(oauth));
+                                    node.put("access", oauth.access);
+                                    node.put("refresh", oauth.refresh);
+                                    node.put("expires", oauth.expires);
+                                    if (oauth.availableModelIds != null) {
+                                        ArrayNode ids = node.putArray("availableModelIds");
+                                        oauth.availableModelIds.forEach(ids::add);
+                                    }
+                                    if (!oauth.metadata.isEmpty()) {
+                                        ObjectNode metadata = node.putObject("metadata");
+                                        oauth.metadata.forEach(metadata::put);
+                                    }
+                                }
+                            }
+                            root.set(entry.getKey(), node);
+                        }
+                        Path temp = Files.createTempFile(file.authPath.getParent(), "auth-", ".json");
                         try {
-                            Files.move(temp, file.authPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                        } catch (AtomicMoveNotSupportedException e) {
-                            Files.move(temp, file.authPath, StandardCopyOption.REPLACE_EXISTING);
+                            Files.writeString(temp, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
+                            setPosixPermissions(temp, FILE_PERMISSIONS);
+                            try {
+                                Files.move(temp, file.authPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                            } catch (AtomicMoveNotSupportedException e) {
+                                Files.move(temp, file.authPath, StandardCopyOption.REPLACE_EXISTING);
+                            }
+                            setPosixPermissions(file.authPath, FILE_PERMISSIONS);
+                        } finally {
+                            Files.deleteIfExists(temp);
                         }
-                        setPosixPermissions(file.authPath, FILE_PERMISSIONS);
-                    } finally {
-                        Files.deleteIfExists(temp);
+                        break;
                     }
-                    break;
                 }
+                default -> throw new IllegalArgumentException("Unknown credential store: " + store.getClass().getName());
             }
-            default -> throw new IllegalArgumentException("Unknown credential store: " + store.getClass().getName());
         }
     }
 
@@ -1694,26 +1869,28 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
      */
     public ChatGptToken chatGptResolveToken(ProviderState state) throws IOException {
-        Credential credential = readCredential(state.credentials, CHATGPT_PROVIDER_ID)
-                .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
-        if (!(credential instanceof Credential.OAuthCredential oauth)) {
-            throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
+        synchronized (CREDENTIAL_FILES) {
+            Credential credential = readCredential(state.credentials, CHATGPT_PROVIDER_ID)
+                    .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
+            if (!(credential instanceof Credential.OAuthCredential oauth)) {
+                throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
+            }
+            if (oauth.expires > System.currentTimeMillis() && !oauth.access.isBlank()) {
+                return chatGptToken(oauth);
+            }
+            Map<String, String> form = new LinkedHashMap<>();
+            form.put("grant_type", "refresh_token");
+            form.put("refresh_token", oauth.refresh);
+            form.put("client_id", state.clientId);
+            Credential.OAuthCredential refreshed =
+                    chatGptCredentialFromTokenResponse(authPost(
+                            state.authBaseUrl.resolve("/oauth/token"),
+                            Map.of("Accept", "application/json"),
+                            mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
+                            true), oauth);
+            modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
+            return chatGptToken(refreshed);
         }
-        if (oauth.expires > System.currentTimeMillis() && !oauth.access.isBlank()) {
-            return chatGptToken(oauth);
-        }
-        Map<String, String> form = new LinkedHashMap<>();
-        form.put("grant_type", "refresh_token");
-        form.put("refresh_token", oauth.refresh);
-        form.put("client_id", state.clientId);
-        Credential.OAuthCredential refreshed =
-                chatGptCredentialFromTokenResponse(authPost(
-                        state.authBaseUrl.resolve("/oauth/token"),
-                        Map.of("Accept", "application/json"),
-                        mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
-                        true), oauth);
-        modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
-        return chatGptToken(refreshed);
     }
 
     public boolean chatGptHasCredential(ProviderState state) throws IOException {
@@ -1910,23 +2087,25 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Returns a valid Copilot API token, refreshing it from the stored GitHub token when necessary.
      */
     public CopilotToken gitHubCopilotResolveToken(ProviderState state) throws IOException {
-        Credential credential = readCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID)
-                .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
-        if (!(credential instanceof Credential.OAuthCredential oauth)) {
-            throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
+        synchronized (CREDENTIAL_FILES) {
+            Credential credential = readCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID)
+                    .orElseThrow(() -> new IOException("GitHub Copilot is not logged in. Run /login."));
+            if (!(credential instanceof Credential.OAuthCredential oauth)) {
+                throw new IOException("GitHub Copilot credential is not an OAuth credential. Run /login.");
+            }
+            if (!(oauth.expires <= System.currentTimeMillis()) && !oauth.access.isBlank()) {
+                return copilotToken(state, oauth);
+            }
+            Credential.OAuthCredential refreshed = createCopilotCredential(state, oauth.refresh, oauth.availableModelIds);
+            try {
+                refreshed = withCopilotAvailableModels(state, refreshed);
+            } catch (IOException ignored) {
+                // Retain the last known entitlement list if model discovery cannot be refreshed.
+            }
+            Credential.OAuthCredential saved = refreshed;
+            modifyCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
+            return copilotToken(state, refreshed);
         }
-        if (!(oauth.expires <= System.currentTimeMillis()) && !oauth.access.isBlank()) {
-            return copilotToken(state, oauth);
-        }
-        Credential.OAuthCredential refreshed = createCopilotCredential(state, oauth.refresh, oauth.availableModelIds);
-        try {
-            refreshed = withCopilotAvailableModels(state, refreshed);
-        } catch (IOException ignored) {
-            // Retain the last known entitlement list if model discovery cannot be refreshed.
-        }
-        Credential.OAuthCredential saved = refreshed;
-        modifyCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID, ignored -> saved);
-        return copilotToken(state, refreshed);
     }
 
     /**
@@ -4210,7 +4389,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     public AgentSnapshot state() {
         return new AgentSnapshot(
                 selectedModel == null ? null : copyModel(selectedModel), thinkingLevel,
-                isStreaming, isCompacting, autoCompactionEnabled, List.copyOf(messages), sessionId);
+                isStreaming, isCompacting, autoCompactionEnabled, snapshotMessages(messages), sessionId);
     }
 
     /** Starts a fresh conversation with the selected provider and workspace tools. */
@@ -4221,7 +4400,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     /** Configures an explicitly supplied provider, including an in-process provider for embedding or tests. */
     public void configureAgent(Provider provider, Model model, Path cwd, String systemPrompt, String apiKey, ThinkingLevel level) {
         requireIdleAgent();
+        if (subagents != null) { subagents.close(); subagents = null; }
         closeShellSessions();
+        agentWorkspace = cwd.toAbsolutePath().normalize();
+        baseInstructions = systemPrompt;
+        transcript.clear();
         agentState(systemPrompt == null ? "" : systemPrompt, model);
         agent(Objects.requireNonNull(provider, "provider"));
         this.apiKey = apiKey;
@@ -4229,13 +4412,16 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         recordingSession = false;
         persistenceFailure = ignored -> {};
         configureBuiltInTools(cwd, systemPrompt);
+        if (!childRuntime) { subagents = new SubagentManager(this); tools.add(subagents.tool()); }
         syncMcpTools();
     }
 
     /** Restores the conversation after selecting its model and session recorder. */
     public void restoreMessages(List<Message> restored) {
         requireIdleAgent();
-        messages = new ArrayList<>(resumableMessages(restored));
+        messages = new CopyOnWriteArrayList<>(resumableMessages(restored));
+        transcript.clear();
+        transcript.addAll(restored);
     }
 
     public void setThinkingLevel(ThinkingLevel level) {
@@ -4258,9 +4444,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     public List<Message> prompt(String text) throws IOException, InterruptedException {
         requireOpen();
-        List<Message> created = runPrompt(text);
-        if (recordingSession) appendSessionMessages(created);
-        return created;
+        return runPrompt(text);
     }
 
     public void syncMcpTools() {
@@ -4282,7 +4466,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private void agentState(String systemPrompt, Model model) {
         this.systemPrompt = systemPrompt;
         selectedModel = model;
-        messages = new ArrayList<>();
+        messages = new CopyOnWriteArrayList<>();
         streamingMessage = null;
         pendingToolCalls = new LinkedHashSet<>();
         isStreaming = false;
@@ -4311,6 +4495,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Cancels the turn in flight, if any.
      */
     public void abort() {
+        if (subagents != null) subagents.cancel(SubagentManager.MAIN);
+        else abortLocal();
+    }
+
+    void abortLocal() {
         AbortSignal signal = activeSignal;
         if (signal != null) {
             abort(signal);
@@ -4331,11 +4520,13 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (messages.isEmpty()) {
             throw new IllegalStateException("Cannot compact an empty conversation");
         }
+        activeSignal = new AbortSignal();
         isCompacting = true;
         try {
             return performCompaction(compactionPrompt(messages, customInstructions), false);
         } finally {
             isCompacting = false;
+            activeSignal = null;
         }
     }
 
@@ -4365,7 +4556,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         emit(new AgentEvent.CompactionStart(tokensBefore));
         Context context = new Context(COMPACTION_SYSTEM_PROMPT);
         context.messages.add(userMessage(prompt));
-        AbortSignal signal = new AbortSignal();
+        AbortSignal signal = activeSignal == null ? new AbortSignal() : activeSignal;
         AssistantMessage response = retryAssistantCall(
                 () -> {
                     StreamOptions options = new StreamOptions();
@@ -4434,6 +4625,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             for (Message prompt : prompts) {
                 messages.add(prompt);
                 newMessages.add(prompt);
+                acceptMessage(prompt);
                 emit(new AgentEvent.MessageStart(prompt));
                 emit(new AgentEvent.MessageEnd(prompt));
             }
@@ -4502,6 +4694,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                             }
                         }));
                 newMessages.add(response);
+                acceptMessage(response);
                 if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
                     emit(new AgentEvent.TurnEnd(response, List.of()));
                     break;
@@ -4546,6 +4739,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                             System.currentTimeMillis());
                     messages.add(resultMessage);
                     results1.add(resultMessage);
+                    acceptMessage(resultMessage);
                     emit(new AgentEvent.MessageStart(resultMessage));
                     emit(new AgentEvent.MessageEnd(resultMessage));
                 }
@@ -6056,7 +6250,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private void mcpOAuthStore(
             Path path, Path lockPath, List<Path> importPaths) {
         this.path = path;
-        this.lockPath = lockPath;
+        this.mcpAuthLockPath = lockPath;
         this.importPaths = importPaths;
     }
 
@@ -6715,35 +6909,41 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private McpOAuthEntry mcpOAuthRefresh(
             McpOAuthSession session, McpOAuthEntry current, McpOAuthChallenge challenge)
             throws Exception {
-        McpOAuthDiscovery discovery = mcpOAuthDiscover(session.config, challenge);
-        McpOAuthClientInfo clientInfo;
-        URI redirectUri = mcpOAuthRedirectUri(session.settings);
-        if (session.settings.clientId != null) {
-            clientInfo = new McpOAuthClientInfo(
-                    session.settings.clientId,
-                    session.settings.clientSecret,
-                    null,
-                    null,
-                    null,
-                    redirectUri.toString());
-        } else {
-            McpOAuthClientInfo candidate = current == null ? null : current.clientInfo;
-            clientInfo = mcpOAuthClientUsable(session, candidate, redirectUri) ? candidate : null;
+        synchronized (CREDENTIAL_FILES) {
+            McpOAuthEntry latest = mcpOAuthReload(session);
+            if (latest != null && latest.tokens != null && current != null && current.tokens != null
+                    && !Objects.equals(latest.tokens.accessToken, current.tokens.accessToken)) return latest;
+
+            McpOAuthDiscovery discovery = mcpOAuthDiscover(session.config, challenge);
+            McpOAuthClientInfo clientInfo;
+            URI redirectUri = mcpOAuthRedirectUri(session.settings);
+            if (session.settings.clientId != null) {
+                clientInfo = new McpOAuthClientInfo(
+                        session.settings.clientId,
+                        session.settings.clientSecret,
+                        null,
+                        null,
+                        null,
+                        redirectUri.toString());
+            } else {
+                McpOAuthClientInfo candidate = current == null ? null : current.clientInfo;
+                clientInfo = mcpOAuthClientUsable(session, candidate, redirectUri) ? candidate : null;
+            }
+            if (clientInfo == null) {
+                throw new McpOAuthFailure(
+                        400, "invalid_client", "No OAuth client is registered for this MCP server");
+            }
+            LinkedHashMap<String, String> parameters = new LinkedHashMap<>();
+            parameters.put("grant_type", "refresh_token");
+            parameters.put("refresh_token", current.tokens.refreshToken);
+            McpOAuthTokens refreshed =
+                    mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
+            McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
+            mcpOAuthWrite(session.name, session.config.url.toString(), updated);
+            session.entry = updated;
+            session.loaded = true;
+            return updated;
         }
-        if (clientInfo == null) {
-            throw new McpOAuthFailure(
-                    400, "invalid_client", "No OAuth client is registered for this MCP server");
-        }
-        LinkedHashMap<String, String> parameters = new LinkedHashMap<>();
-        parameters.put("grant_type", "refresh_token");
-        parameters.put("refresh_token", current.tokens.refreshToken);
-        McpOAuthTokens refreshed =
-                mcpOAuthRequestTokens(discovery, clientInfo, parameters, current.tokens, Map.of());
-        McpOAuthEntry updated = new McpOAuthEntry(refreshed, current.clientInfo);
-        mcpOAuthWrite(session.name, session.config.url.toString(), updated);
-        session.entry = updated;
-        session.loaded = true;
-        return updated;
     }
 
     private static boolean mcpOAuthClientUsable(
@@ -7209,45 +7409,47 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Stores one server credential under an exclusive file lock.
      */
     private void mcpOAuthWrite(String name, String serverUrl, McpOAuthEntry entry) throws IOException {
-        if (name == null || name.isBlank()) throw new IllegalArgumentException("MCP server name must not be blank");
-        Files.createDirectories(path.getParent());
-        mcpSetPermissions(path.getParent(), DIRECTORY_PERMISSIONS);
-        try (FileChannel channel =
-                     FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-             FileLock ignored = channel.lock()) {
-            ObjectNode root = mcpOAuthReadRoot(path, false);
-            ObjectNode node = jsonObject().put("serverUrl", serverUrl);
-            if (entry.tokens != null) {
-                McpOAuthTokens value = entry.tokens;
-                ObjectNode tokens = node.putObject("tokens").put("accessToken", value.accessToken);
-                mcpPutText(tokens, "refreshToken", value.refreshToken);
-                if (value.expiresAt != null) tokens.put("expiresAt", value.expiresAt);
-                mcpPutText(tokens, "scope", value.scope);
-            }
-            if (entry.clientInfo != null) {
-                McpOAuthClientInfo value = entry.clientInfo;
-                ObjectNode client = node.putObject("clientInfo").put("clientId", value.clientId);
-                mcpPutText(client, "clientSecret", value.clientSecret);
-                if (value.clientIdIssuedAt != null) client.put("clientIdIssuedAt", value.clientIdIssuedAt);
-                if (value.clientSecretExpiresAt != null) {
-                    client.put("clientSecretExpiresAt", value.clientSecretExpiresAt);
+        synchronized (CREDENTIAL_FILES) {
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("MCP server name must not be blank");
+            Files.createDirectories(path.getParent());
+            mcpSetPermissions(path.getParent(), DIRECTORY_PERMISSIONS);
+            try (FileChannel channel =
+                         FileChannel.open(mcpAuthLockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                 FileLock ignored = channel.lock()) {
+                ObjectNode root = mcpOAuthReadRoot(path, false);
+                ObjectNode node = jsonObject().put("serverUrl", serverUrl);
+                if (entry.tokens != null) {
+                    McpOAuthTokens value = entry.tokens;
+                    ObjectNode tokens = node.putObject("tokens").put("accessToken", value.accessToken);
+                    mcpPutText(tokens, "refreshToken", value.refreshToken);
+                    if (value.expiresAt != null) tokens.put("expiresAt", value.expiresAt);
+                    mcpPutText(tokens, "scope", value.scope);
                 }
-                mcpPutText(client, "tokenEndpointAuthMethod", value.tokenEndpointAuthMethod);
-                mcpPutText(client, "redirectUri", value.redirectUri);
-            }
-            root.set(name, node);
-            Path temporary = Files.createTempFile(path.getParent(), "mcp-auth-", ".json");
-            try {
-                Files.writeString(temporary, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
-                mcpSetPermissions(temporary, FILE_PERMISSIONS);
+                if (entry.clientInfo != null) {
+                    McpOAuthClientInfo value = entry.clientInfo;
+                    ObjectNode client = node.putObject("clientInfo").put("clientId", value.clientId);
+                    mcpPutText(client, "clientSecret", value.clientSecret);
+                    if (value.clientIdIssuedAt != null) client.put("clientIdIssuedAt", value.clientIdIssuedAt);
+                    if (value.clientSecretExpiresAt != null) {
+                        client.put("clientSecretExpiresAt", value.clientSecretExpiresAt);
+                    }
+                    mcpPutText(client, "tokenEndpointAuthMethod", value.tokenEndpointAuthMethod);
+                    mcpPutText(client, "redirectUri", value.redirectUri);
+                }
+                root.set(name, node);
+                Path temporary = Files.createTempFile(path.getParent(), "mcp-auth-", ".json");
                 try {
-                    Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException error) {
-                    Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+                    Files.writeString(temporary, Json.MAPPER.writeValueAsString(root) + "\n", StandardCharsets.UTF_8);
+                    mcpSetPermissions(temporary, FILE_PERMISSIONS);
+                    try {
+                        Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (AtomicMoveNotSupportedException error) {
+                        Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    mcpSetPermissions(path, FILE_PERMISSIONS);
+                } finally {
+                    Files.deleteIfExists(temporary);
                 }
-                mcpSetPermissions(path, FILE_PERMISSIONS);
-            } finally {
-                Files.deleteIfExists(temporary);
             }
         }
     }
@@ -7516,7 +7718,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     private void settingsStore(Path settingsPath, Path lockPath) {
         this.settingsPath = settingsPath;
-        this.lockPath = lockPath;
+        this.settingsLockPath = lockPath;
     }
 
     public void createSessionRecorder(Path cwd, String provider, String model) throws IOException {
@@ -7527,6 +7729,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Creates a session with an optional user-visible name.
      */
     void createSessionRecorder(Path cwd, String provider, String model, String sessionName) throws IOException {
+        createSessionRecorder(cwd, provider, model, sessionName, null, null, null);
+    }
+
+    private void createSessionRecorder(Path cwd, String provider, String model, String sessionName,
+            String parent, String task, ThinkingLevel level) throws IOException {
         Files.createDirectories(directory);
         setPosixPermissions(directory, DIRECTORY_PERMISSIONS);
         String id1 = uuidv7();
@@ -7539,6 +7746,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         start.put("model", model);
         String normalizedName = sessionName == null ? null : sessionName.strip();
         if (normalizedName != null && !normalizedName.isEmpty()) start.put("name", normalizedName);
+        if (parent != null) {
+            start.put("parentSessionId", parent).put("task", task).put("thinkingLevel", level.wire).put("lifecycle", "IDLE");
+        }
         appendSessionEntry(id1, "session_start", start);
         sessionRecorder(id1);
     }
@@ -7556,8 +7766,15 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * Opens an existing session so future messages continue in the same JSONL file.
      */
     public void resumeSessionRecorder(String sessionId) throws IOException {
-        sessionSnapshot(sessionId);
+        SessionSnapshot saved = sessionSnapshot(sessionId);
         sessionRecorder(sessionId);
+        transcript.clear();
+        transcript.addAll(saved.transcriptMessages);
+        if (!childRuntime && subagents != null) {
+            subagents.restore(listAllSessions(saved.cwd).stream()
+                    .filter(child -> sessionId.equals(child.parentSessionId))
+                    .sorted(Comparator.comparing(child -> child.created)).toList());
+        }
     }
 
     /**
@@ -7648,6 +7865,10 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     // ------------------------------------------------------------ session store
 
     public List<SessionSnapshot> listSessions(Path cwd) throws IOException {
+        return listAllSessions(cwd).stream().filter(session -> session.parentSessionId == null).toList();
+    }
+
+    private List<SessionSnapshot> listAllSessions(Path cwd) throws IOException {
         Set<String> ids = new LinkedHashSet<>();
         for (Path directory : Stream.concat(
                 Stream.of(this.directory), legacyDirectories.stream()).toList()) {
@@ -7776,6 +7997,10 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         String provider = requiredSessionPayloadText(payload, "provider", sessionId);
         String model = requiredSessionPayloadText(payload, "model", sessionId);
         String name = optionalSessionText(payload, "name");
+        String parentSessionId = optionalSessionText(payload, "parentSessionId");
+        String task = optionalSessionText(payload, "task");
+        String level = optionalSessionText(payload, "thinkingLevel");
+        String lifecycle = optionalSessionText(payload, "lifecycle");
         List<Message> transcriptMessages = new ArrayList<>();
         List<Message> messages = new ArrayList<>();
         String firstMessage = "";
@@ -7783,6 +8008,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         long modified = start.timestamp;
         for (SessionEntry entry : entries) {
             modified = Math.max(modified, entry.timestamp);
+            if (entry.type.equals("agent_lifecycle")) lifecycle = optionalSessionText(entry.payload, "status");
             if (entry.type.equals("compaction")) {
                 messages.clear();
                 String summary = requiredSessionPayloadText(entry.payload, "summary", sessionId);
@@ -7923,7 +8149,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         }
         String firstMessage1 = firstMessage.isEmpty() ? "(no messages)" : firstMessage;
         String normalized = name == null ? null : name.strip();
-        return new SessionSnapshot(
+        SessionSnapshot snapshot = new SessionSnapshot(
                 Objects.requireNonNull(sessionId, "id"),
                 normalized == null || normalized.isEmpty() ? null : normalized,
                 Objects.requireNonNull(file, "path"),
@@ -7937,6 +8163,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 Objects.requireNonNull(allMessages.toString(), "allMessagesText"),
                 List.copyOf(messages),
                 List.copyOf(transcriptMessages));
+        snapshot.parentSessionId = parentSessionId;
+        snapshot.task = task;
+        snapshot.thinkingLevel = level == null ? null : thinkingLevelFromWire(level);
+        snapshot.lifecycle = lifecycle;
+        return snapshot;
     }
 
     private Path existingSessionPath(String sessionId) {
@@ -8067,38 +8298,40 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      * UncheckedIOException, which is unwrapped into the declared IOException.
      */
     private void modifySettings(Consumer<ObjectNode> operation) throws IOException {
-        Path parent = settingsPath.getParent();
-        if (parent == null) {
-            throw new IOException("Settings path has no parent directory: " + settingsPath);
-        }
-        Files.createDirectories(parent);
-        setPosixPermissions(parent, DIRECTORY_PERMISSIONS);
-        try (FileChannel channel =
-                     FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-             FileLock ignored = channel.lock()) {
-            setPosixPermissions(lockPath, FILE_PERMISSIONS);
-            ObjectNode root = readSettingsObject();
-            operation.accept(root);
-            Path temp = Files.createTempFile(settingsPath.getParent(), "settings-", ".json");
-            try {
-                Files.writeString(
-                        temp,
-                        Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
-                        StandardCharsets.UTF_8,
-                        StandardOpenOption.WRITE,
-                        StandardOpenOption.TRUNCATE_EXISTING);
-                setPosixPermissions(temp, FILE_PERMISSIONS);
-                try {
-                    Files.move(temp, settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException error) {
-                    Files.move(temp, settingsPath, StandardCopyOption.REPLACE_EXISTING);
-                }
-                setPosixPermissions(settingsPath, FILE_PERMISSIONS);
-            } finally {
-                Files.deleteIfExists(temp);
+        synchronized (CREDENTIAL_FILES) {
+            Path parent = settingsPath.getParent();
+            if (parent == null) {
+                throw new IOException("Settings path has no parent directory: " + settingsPath);
             }
-        } catch (UncheckedIOException error) {
-            throw error.getCause();
+            Files.createDirectories(parent);
+            setPosixPermissions(parent, DIRECTORY_PERMISSIONS);
+            try (FileChannel channel =
+                         FileChannel.open(settingsLockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                 FileLock ignored = channel.lock()) {
+                setPosixPermissions(settingsLockPath, FILE_PERMISSIONS);
+                ObjectNode root = readSettingsObject();
+                operation.accept(root);
+                Path temp = Files.createTempFile(settingsPath.getParent(), "settings-", ".json");
+                try {
+                    Files.writeString(
+                            temp,
+                            Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n",
+                            StandardCharsets.UTF_8,
+                            StandardOpenOption.WRITE,
+                            StandardOpenOption.TRUNCATE_EXISTING);
+                    setPosixPermissions(temp, FILE_PERMISSIONS);
+                    try {
+                        Files.move(temp, settingsPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (AtomicMoveNotSupportedException error) {
+                        Files.move(temp, settingsPath, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    setPosixPermissions(settingsPath, FILE_PERMISSIONS);
+                } finally {
+                    Files.deleteIfExists(temp);
+                }
+            } catch (UncheckedIOException error) {
+                throw error.getCause();
+            }
         }
     }
 
