@@ -188,7 +188,7 @@ public final class CodingAgentCli {
     static String slashCommandHelp() {
         return "Commands: " + String.join(", ", SlashCommand.helpInputs())
                 + "\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; "
-                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking; Tab toggles Plan/Build.";
+                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking; Shift-Tab toggles Plan/Build.";
     }
 
     private static final int VISIBLE_COMMANDS = 4;
@@ -598,7 +598,7 @@ public final class CodingAgentCli {
         if (binding != null && binding.equals("escape")) {
             return "\u001b";
         }
-        if ("tab".equals(binding)) return "\t";
+        if ("shift-tab".equals(binding)) return "\u001b[Z";
         throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
     }
 
@@ -3328,8 +3328,8 @@ public final class CodingAgentCli {
         if (model != null) header.append("  ").append(model);
         header.append('\n');
         header.append(model == null
-                ? "Run /login to choose a provider. Tab toggles Plan/Build. Commands: /help, /plan, /build, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Tab toggles Plan/Build. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                ? "Run /login to choose a provider. Shift-Tab toggles Plan/Build. Commands: /help, /plan, /build, /resume, /login, /mcp, /exit"
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Shift-Tab toggles Plan/Build. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }

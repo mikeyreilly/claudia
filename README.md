@@ -191,7 +191,7 @@ selected model supports fewer levels.
 ## Plan mode and questions
 
 Use `/plan` to investigate a change and develop an implementation plan before
-editing code. Use `/build` to return to implementation, or press Tab at the main
+editing code. Use `/build` to return to implementation, or press Shift-Tab at the main
 chat prompt to toggle modes. The status bar shows the current mode. Switching
 preserves the conversation and starts no work: after switching to Build, send an
 explicit implementation request.

@@ -174,6 +174,7 @@ class CodingAgentCliTest {
 		assertTrue(help.contains("/clear"));
 		assertTrue(help.contains("/compact"));
 		assertTrue(help.contains("/settings"));
+		assertTrue(help.contains("Shift-Tab toggles Plan/Build"));
 		assertFalse(help.contains("/quit"));
 	}
 
@@ -1234,7 +1235,7 @@ class CodingAgentCliTest {
                 waitUntil(() -> Boolean.FALSE.equals(getCliField(cli, "componentOpen")));
                 assertEquals("draft tail", editor.getBuffer().toString());
                 assertEquals(5, editor.getBuffer().cursor());
-                fixture.input().write('\t'); fixture.input().flush();
+                fixture.input().write("\u001b[Z".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 waitUntil(() -> runtime.agentMode() == com.quaxt.codingagent.agent.AgentMode.PLAN);
                 assertEquals(5, editor.getBuffer().cursor());
                 assertTrue(getCliField(cli, "statusActivity").toString().contains("[Plan]"));
@@ -1365,6 +1366,7 @@ class CodingAgentCliTest {
 	@Test
 	void parsesNavigationControlAndMouseSequences() {
 		assertEquals("escape", Keybindings.DEFAULT_APP_KEYBINDINGS.get("interrupt"));
+		assertEquals("shift-tab", Keybindings.DEFAULT_APP_KEYBINDINGS.get("toggleAgentMode"));
 		assertEquals(
 				CodingAgentCli.key(TuiInput.KeyType.ESCAPE),
 				CodingAgentCli.parseInputSequence("\u001b"));
