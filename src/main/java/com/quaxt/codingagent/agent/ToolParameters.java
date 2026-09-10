@@ -1,0 +1,155 @@
+package com.quaxt.codingagent.agent;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.quaxt.codingagent.ai.json.Json;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+/** Typed parameters whose declarations supply both JSON schemas and runtime validation. */
+public final class ToolParameters {
+    public static final class Parameter<T> {
+        private final String name;
+        private final ObjectNode schema;
+        private final boolean required;
+        private final T fallback;
+        private final Function<JsonNode, T> decoder;
+
+        private Parameter(String name, ObjectNode schema, boolean required, T fallback, Function<JsonNode, T> decoder) {
+            this.name = name;
+            this.schema = schema;
+            this.required = required;
+            this.fallback = fallback;
+            this.decoder = decoder;
+        }
+
+        private T decode(JsonNode value) {
+            if (value == null || value.isNull()) {
+                if (required) throw new IllegalArgumentException(name + " is required");
+                return fallback;
+            }
+            try {
+                return decoder.apply(value);
+            } catch (IllegalArgumentException error) {
+                throw new IllegalArgumentException(name + ": " + error.getMessage(), error);
+            }
+        }
+    }
+
+    public static final class Arguments {
+        private final Map<Parameter<?>, Object> values = new IdentityHashMap<>();
+
+        @SuppressWarnings("unchecked")
+        public <T> T get(Parameter<T> parameter) {
+            if (!values.containsKey(parameter)) throw new IllegalArgumentException("Parameter is not part of this tool: " + parameter.name);
+            return (T) values.get(parameter);
+        }
+    }
+
+    private final Map<String, Parameter<?>> parameters = new LinkedHashMap<>();
+
+    public ToolParameters(Parameter<?>... parameters) {
+        for (Parameter<?> parameter : parameters) {
+            if (this.parameters.putIfAbsent(parameter.name, parameter) != null) {
+                throw new IllegalArgumentException("Duplicate parameter: " + parameter.name);
+            }
+        }
+    }
+
+    public ObjectNode schema() {
+        ObjectNode schema = Json.MAPPER.createObjectNode().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = schema.putObject("properties");
+        var required = schema.putArray("required");
+        for (Parameter<?> parameter : parameters.values()) {
+            properties.set(parameter.name, parameter.schema.deepCopy());
+            if (parameter.required) required.add(parameter.name);
+        }
+        return schema;
+    }
+
+    public Arguments parse(ObjectNode input) {
+        ObjectNode source = input == null ? Json.MAPPER.createObjectNode() : input;
+        var names = source.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (!parameters.containsKey(name)) throw new IllegalArgumentException("Unknown argument: " + name);
+        }
+        var parsed = new Arguments();
+        for (Parameter<?> parameter : parameters.values()) parsed.values.put(parameter, parameter.decode(source.get(parameter.name)));
+        return parsed;
+    }
+
+    public static Parameter<String> text(String name, String description) {
+        return new Parameter<>(name, type("string", description), true, null, ToolParameters::decodeText);
+    }
+
+    public static Parameter<String> optionalText(String name, String description, String fallback) {
+        return new Parameter<>(name, type("string", description), false, fallback, ToolParameters::decodeText);
+    }
+
+    public static Parameter<String> optionalText(String name, String description, String fallback, int maximumLength) {
+        if (maximumLength < 0 || fallback != null && fallback.codePointCount(0, fallback.length()) > maximumLength) {
+            throw new IllegalArgumentException("Invalid text length/default");
+        }
+        return new Parameter<>(name, type("string", description).put("maxLength", maximumLength), false, fallback, value -> {
+            String text = decodeText(value);
+            if (text.codePointCount(0, text.length()) > maximumLength) throw new IllegalArgumentException("must contain at most " + maximumLength + " characters");
+            return text;
+        });
+    }
+
+    public static Parameter<Integer> integer(String name, String description, int minimum, int maximum, int fallback) {
+        if (minimum > maximum || fallback < minimum || fallback > maximum) throw new IllegalArgumentException("Invalid integer bounds/default");
+        return new Parameter<>(name, type("integer", description).put("minimum", minimum).put("maximum", maximum).put("default", fallback),
+                false, fallback, value -> {
+                    if (!value.isIntegralNumber() || !value.canConvertToInt() || value.asInt() < minimum || value.asInt() > maximum) {
+                        throw new IllegalArgumentException("must be an integer between " + minimum + " and " + maximum);
+                    }
+                    return value.asInt();
+                });
+    }
+
+    public static Parameter<Double> optionalPositiveNumber(String name, String description) {
+        return new Parameter<>(name, type("number", description).put("exclusiveMinimum", 0), false, null, value -> {
+            if (!value.isNumber() || !Double.isFinite(value.asDouble()) || value.asDouble() <= 0) {
+                throw new IllegalArgumentException("must be a positive finite number");
+            }
+            return value.asDouble();
+        });
+    }
+
+    public static Parameter<Boolean> flag(String name, String description) {
+        return new Parameter<>(name, type("boolean", description).put("default", false), false, false, value -> {
+            if (!value.isBoolean()) throw new IllegalArgumentException("must be a boolean");
+            return value.asBoolean();
+        });
+    }
+
+    public static <T> Parameter<List<T>> nonEmptyList(String name, String description, ToolParameters itemParameters,
+            Function<Arguments, T> decodeItem) {
+        ObjectNode schema = type("array", description).put("minItems", 1);
+        schema.set("items", itemParameters.schema());
+        return new Parameter<>(name, schema, true, null, value -> {
+            if (!value.isArray() || value.isEmpty()) throw new IllegalArgumentException("must be a non-empty array");
+            List<T> items = new ArrayList<>();
+            for (JsonNode item : value) {
+                if (!(item instanceof ObjectNode object)) throw new IllegalArgumentException("each item must be an object");
+                items.add(decodeItem.apply(itemParameters.parse(object)));
+            }
+            return List.copyOf(items);
+        });
+    }
+
+    private static ObjectNode type(String type, String description) {
+        return Json.MAPPER.createObjectNode().put("type", type).put("description", description);
+    }
+
+    private static String decodeText(JsonNode value) {
+        if (!value.isTextual()) throw new IllegalArgumentException("must be a string");
+        return value.asText();
+    }
+}

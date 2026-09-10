@@ -3643,29 +3643,8 @@ public final class CodingAgentCli {
      * One-line description of the work a tool call is about to perform.
      */
     public static String toolCallDescription(String toolName, ObjectNode arguments) {
-        return switch (toolName) {
-            case "read" -> {
-                int offset = arguments.path("offset").asInt(1);
-                int limit = arguments.path("limit").asInt();
-                yield "Reading " + toolTextArgument(arguments, "path", ".")
-                        + (limit > 0 ? " (lines " + offset + "-" + (offset + limit - 1) + ")" : " (from line " + offset + ")");
-            }
-            case "write" ->
-                    "Writing " + toolTextArgument(arguments, "path", ".") + " (" + toolTextArgument(arguments, "content", "").length() + " characters)";
-            case "edit" ->
-                    "Editing " + toolTextArgument(arguments, "path", ".") + " (" + arguments.path("edits").size() + " replacement(s))";
-            case "shell" -> abbreviateShellText(toolTextArgument(arguments, "command", ""), 240);
-            case "shell_input" -> (arguments.path("terminate").asBoolean() ? "Stopping command "
-                    : arguments.hasNonNull("input") ? "Sending input to command "
-                    : arguments.path("close_stdin").asBoolean() ? "Closing command input " : "Checking command ")
-                    + toolTextArgument(arguments, "session_id", "");
-            case "grep" ->
-                    "Searching for " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-            case "find" ->
-                    "Finding " + toolTextArgument(arguments, "pattern", "") + " in " + toolTextArgument(arguments, "path", ".");
-            case "ls" -> "Listing " + toolTextArgument(arguments, "path", ".");
-            default -> abbreviateShellText(arguments.toString(), 240);
-        };
+        return com.quaxt.codingagent.cli.tools.LocalTools.describeCall(toolName, arguments)
+                .orElseGet(() -> abbreviateShellText(arguments.toString(), 240));
     }
 
     /**
@@ -3692,11 +3671,6 @@ public final class CodingAgentCli {
             return "Read " + output.lines().count() + " line(s).";
         }
         return abbreviateShellText(output, error ? 480 : 320);
-    }
-
-    private static String toolTextArgument(ObjectNode arguments, String name, String fallback) {
-        JsonNode value = arguments.get(name);
-        return value != null && value.isTextual() ? value.asText() : fallback;
     }
 
     private static String abbreviateShellText(String value, int maximumLength) {

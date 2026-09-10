@@ -4,9 +4,10 @@ import java.util.List;
 import com.quaxt.codingagent.ai.types.UserContent;
 
 /**
- * Marker for a model-visible tool carrier. Tool metadata (name, description,
- * parameters) and execution are supplied by the static operations in
- * CodingAgentOperations, which dispatch over the concrete tool carriers.
+ * A model-visible tool. Registered definitions bind metadata, typed argument
+ * validation, and a handler to runtime resources; function and MCP carriers
+ * supply the other supported tool forms. CodingAgentOperations dispatches
+ * these forms without knowing individual built-in tool names.
  */
 public interface AgentTool {
 

@@ -5,7 +5,7 @@ import java.nio.file.Path;
 /**
  * Data carrier for the built-in local filesystem and shell tools: output
  * bounds, result-limit defaults, and the small carriers their execution uses.
- * Tool construction and execution live in CodingAgentOperations.
+ * Tool definitions and filesystem execution live in LocalTools.
  */
 public final class BuiltInTools {
 	public static final int MAX_LINES = 2_000;
@@ -15,18 +15,6 @@ public final class BuiltInTools {
 	public static final int DEFAULT_LS_LIMIT = 500;
 
 	public BuiltInTools() {}
-
-	/** Which built-in tool a {@link LocalTool} carrier represents. */
-	public enum Kind {
-		READ,
-		WRITE,
-		EDIT,
-		SHELL,
-		SHELL_INPUT,
-		GREP,
-		FIND,
-		LS
-	}
 
 	/** Command interpreter used by the shell tool. */
 	public enum Shell {
