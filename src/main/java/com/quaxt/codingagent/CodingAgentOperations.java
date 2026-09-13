@@ -406,7 +406,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             "gpt-5.5",
             "gpt-5.6-luna",
             "gpt-5.6-sol",
-            "gpt-5.6-terra");
+            "gpt-5.6-terra",
+            "gpt-6-astra");
 
     // GitHub Copilot authentication and provider
     public static final String GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
