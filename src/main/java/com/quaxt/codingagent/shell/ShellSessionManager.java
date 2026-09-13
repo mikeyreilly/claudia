@@ -22,20 +22,6 @@ public final class ShellSessionManager implements AutoCloseable {
     private Thread shutdownHook;
     private boolean closed;
 
-    // PowerShell's console host bypasses redirected stdout for Read-Host prompts.
-    // Adapt that cmdlet to our pipes; other console-only prompts still fail promptly.
-    private static final String POWERSHELL_STDIN_PREAMBLE = """
-            $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);
-            function global:Read-Host {
-                [CmdletBinding()]
-                param([Parameter(Position=0)][object]$Prompt, [switch]$AsSecureString, [switch]$MaskInput)
-                if ($null -ne $Prompt) { [Console]::Write([string]$Prompt + ': '); [Console]::Out.Flush() }
-                $reply = [Console]::ReadLine()
-                if ($null -eq $reply) { throw 'Command stdin closed while waiting for input' }
-                if ($AsSecureString) { ConvertTo-SecureString -String $reply -AsPlainText -Force } else { $reply }
-            }
-            """;
-
     /** Starts a process and returns its current output, retaining it if still running. */
     public AgentTool.ToolResult execute(Path cwd, BuiltInTools.Shell shell, String command,
             Double timeoutSeconds, int yieldMs, BooleanSupplier cancelled) throws IOException, InterruptedException {
@@ -102,11 +88,8 @@ public final class ShellSessionManager implements AutoCloseable {
                 shutdownHook = new Thread(this::closeSessions, "codingagent-shell-cleanup");
                 Runtime.getRuntime().addShutdownHook(shutdownHook);
             }
-            ProcessBuilder builder = new ProcessBuilder(switch (shell) {
-                case BASH -> List.of("/bin/bash", "-c", command);
-                case POWERSHELL -> List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                        POWERSHELL_STDIN_PREAMBLE + command);
-            }).directory(cwd.toFile()).redirectErrorStream(true);
+            ProcessBuilder builder = new ProcessBuilder(ShellCommandLine.arguments(shell, command))
+                    .directory(cwd.toFile()).redirectErrorStream(true);
             // Python otherwise buffers stdout when attached to a pipe, hiding input prompts.
             builder.environment().putIfAbsent("PYTHONUNBUFFERED", "1");
             session = new ShellSession(java.util.UUID.randomUUID().toString(), builder.start());

@@ -14,6 +14,8 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import static com.quaxt.codingagent.CodingAgentOperations.jsonObject;
@@ -147,6 +149,119 @@ class ShellSessionManagerTest {
         assertTrue(text(last).contains("Got: https://example.test/"), text(last));
         assertFalse(last.isError);
         assertEquals("exited", details(last).get("status"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellPreservesQuotesAndInterpolation() throws Exception {
+        String command = """
+                $key = 'gpt-6-astra'
+                "Added model: $key"
+                Write-Output "embedded `"double`" quotes and 'single' quotes"
+                Write-Output 'literal "quotes" $key $(Get-Date); & | < >'
+                """;
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertEquals("exited", details(result).get("status"));
+        assertEquals(0, details(result).get("exit_code"));
+        assertEquals("""
+                Added model: gpt-6-astra
+                embedded "double" quotes and 'single' quotes
+                literal "quotes" $key $(Get-Date); & | < >
+                """, text(result).replace("\r\n", "\n"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellPreservesMultilineScriptsAndUnicode() throws Exception {
+        String command = """
+                $value = 'café 雪 🚀'
+                # This comment must end before the here-string starts.
+                @"
+                Unicode: $value
+                Literal: `"quotes`" 'apostrophe' `$dollar ; & |
+                "@ | ForEach-Object { $_.Replace('Unicode:', 'Value:') }
+                @'
+                Literal: "$value" `backticks` C:\\path with spaces\\
+                '@
+                """;
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertEquals(0, details(result).get("exit_code"));
+        assertEquals("""
+                Value: café 雪 🚀
+                Literal: "quotes" 'apostrophe' $dollar ; & |
+                Literal: "$value" `backticks` C:\\path with spaces\\
+                """, text(result).replace("\r\n", "\n"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellKeepsStdinAvailableForQuotedPrompts() throws Exception {
+        AgentTool.ToolResult first = run("shell", jsonObject()
+                .put("command", "$reply = Read-Host \"Your label\"; Write-Output \"Received: $reply\"")
+                .put("yield_ms", 2000));
+        assertTrue(text(first).contains("Your label: "), text(first));
+        assertEquals("running", details(first).get("status"));
+
+        String reply = "café 雪 🚀 \"quoted\" 'single' $value $(whoami); & |";
+        AgentTool.ToolResult last = run("shell_input", jsonObject().put("session_id", id(first))
+                .put("input", reply + "\n").put("yield_ms", 5000));
+        assertFalse(last.isError, text(last));
+        assertEquals("exited", details(last).get("status"));
+        assertEquals(0, details(last).get("exit_code"));
+        assertEquals("Received: " + reply + "\n", text(last).replace("\r\n", "\n"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellReportsErrorsAsTextAndPreservesExitCodes() throws Exception {
+        AgentTool.ToolResult result = run("shell", jsonObject()
+                .put("command", "Write-Error 'quoted failure'; exit 7").put("yield_ms", 5000));
+
+        assertTrue(result.isError);
+        assertEquals("exited", details(result).get("status"));
+        assertEquals(7, details(result).get("exit_code"));
+        assertTrue(text(result).contains("quoted failure"), text(result));
+        assertFalse(text(result).contains("#< CLIXML"), text(result));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellPreservesBackslashesBeforeQuotesAndAtTheEnd() throws Exception {
+        String command = """
+                Write-Output "C:\\path with spaces\\"
+                Write-Output "\\\\server\\share\\\\"
+                """ + "# trailing backslashes \\\\";
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertEquals(0, details(result).get("exit_code"));
+        assertEquals("C:\\path with spaces\\\n\\\\server\\share\\\\\n", text(result).replace("\r\n", "\n"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellStillSupportsLongScripts() throws Exception {
+        String command = "#".repeat(20_000) + "\nWrite-Output 'long script survived'";
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertEquals(0, details(result).get("exit_code"));
+        assertEquals("long script survived\n", text(result).replace("\r\n", "\n"));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void powerShellPreservesImplicitFailureExitStatus() throws Exception {
+        for (String command : java.util.List.of("Write-Error 'failed'", "throw 'failed'", "& cmd.exe /c exit 7", "if (")) {
+            AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+            assertTrue(result.isError, command + ": " + text(result));
+            assertEquals(1, details(result).get("exit_code"), command);
+            assertFalse(text(result).contains("#< CLIXML"), text(result));
+        }
     }
 
     @Test
