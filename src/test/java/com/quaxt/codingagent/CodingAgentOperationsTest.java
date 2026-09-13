@@ -568,6 +568,21 @@ class CodingAgentOperationsTest {
 	}
 
 	@Test
+	void loadsGpt6AstraMetadata() {
+		Model astra = loadBundledModelCatalog().requireCatalogModel("openai", "gpt-6-astra");
+
+		assertEquals("GPT-6 Astra", astra.name);
+		assertEquals("openai-responses", astra.api);
+		assertTrue(astra.reasoning);
+		assertEquals(List.of("text", "image"), astra.input);
+		assertEquals(272_000, astra.contextWindow);
+		assertEquals(128_000, astra.maxTokens);
+		assertEquals(new ModelCost(10, 50, 1, 12.5, List.of(
+				new ModelCost.Tier(272_000, 20, 75, 2, 25))), astra.cost);
+		assertEquals("max", astra.thinkingLevelMap.get(ThinkingLevel.MAX));
+	}
+
+	@Test
 	void includesChatModelsForChatGptSubscriptions() {
 		CodingAgentOperations catalog = loadBundledModelCatalog();
 
@@ -576,7 +591,8 @@ class CodingAgentOperationsTest {
 		assertTrue(ids.containsAll(List.of(
 				"gpt-5-chat-latest",
 				"gpt-5.2-chat-latest",
-				"gpt-5.3-chat-latest")));
+				"gpt-5.3-chat-latest",
+				"gpt-6-astra")));
 		assertTrue(models.stream().allMatch(model -> model.provider.equals("chatgpt")));
 		assertTrue(models.stream().allMatch(model -> model.baseUrl.equals(
 				CodingAgentOperations.CHATGPT_CODEX_API_BASE_URL.toString())));
@@ -594,6 +610,7 @@ class CodingAgentOperationsTest {
 				.toList();
 		assertTrue(chatGptIds.contains("gpt-5.6-terra"));
 		assertTrue(chatGptIds.contains("gpt-5.3-chat-latest"));
+		assertTrue(chatGptIds.contains("gpt-6-astra"));
 		assertTrue(operations.coreProviderModels("google").stream()
 				.allMatch(model -> model.provider.equals("google")));
 		assertTrue(operations.coreProviderModels("github-copilot").stream()
