@@ -121,7 +121,8 @@ class ToolRegistryTest {
             var result = execute(runtime, shell, jsonObject()
                     .put("command", "$PSVersionTable.PSVersion.ToString()").put("yield_ms", 5000));
             assertFalse(result.isError, text(result));
-            String version = text(result).strip();
+            assertTrue(text(result).endsWith("[Command exited with code 0.]"), text(result));
+            String version = text(result).lines().findFirst().orElseThrow().strip();
             assertTrue(version.matches("[0-9]+(?:\\.[0-9]+){1,3}"), version);
             String description = CodingAgentOperations.toolDescription(shell);
             assertTrue(description.startsWith("Execute a PowerShell " + version + " (powershell.exe) command"), description);
