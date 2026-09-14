@@ -1,6 +1,7 @@
 package com.quaxt.codingagent;
 
 import com.quaxt.codingagent.agent.AgentEvent;
+import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.ai.providers.FauxProvider;
 import com.quaxt.codingagent.ai.types.*;
 import com.quaxt.codingagent.ai.json.Json;
@@ -10,6 +11,9 @@ import java.util.concurrent.*;
 import java.util.function.Function;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import static com.quaxt.codingagent.CodingAgentOperations.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -95,6 +99,38 @@ class SubagentManagerTest {
         assertFalse(rootEvents.stream().anyMatch(event -> event instanceof AgentEvent.MessageEnd end
                 && end.message instanceof AssistantMessage assistant && text(assistant).equals("child final")));
         assertEquals("Main", CodingAgentCli.subagentItems(root.subagents().list(), id).getFirst().label);
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" ", "\t\r\n", "\u2003"})
+    void nullOrBlankAgentIdCreatesANewChild(String agentId) throws Exception {
+        reply("child final");
+        var result = root.executeTool(root.subagents().tool(), "new-child",
+                jsonObject().put("task", "Investigate").put("name", "Investigator").put("agent_id", agentId),
+                new AbortSignal(), ignored -> {});
+
+        assertFalse(result.isError);
+        var data = (com.fasterxml.jackson.databind.JsonNode) result.details;
+        String childId = data.path("agent_id").asText();
+        assertFalse(childId.isBlank());
+        assertNotEquals(SubagentManager.MAIN, childId);
+        assertEquals("completed", data.path("status").asText());
+        assertEquals("child final", data.path("final_answer").asText());
+        assertEquals(2, root.subagents().list().size());
+        var child = root.subagents().snapshot(childId);
+        assertEquals("Investigator", child.name());
+        assertEquals("Investigate", child.task());
+        assertEquals("Investigate", text((UserMessage) child.transcript().getFirst()));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"main", "missing-child", " main "})
+    void invalidNonblankAgentIdsDoNotCreateChildren(String agentId) {
+        assertThrows(IllegalArgumentException.class, () -> root.executeTool(root.subagents().tool(), "invalid-child",
+                jsonObject().put("task", "Investigate").put("agent_id", agentId), new AbortSignal(), ignored -> {}));
+        assertEquals(1, root.subagents().list().size());
+        assertTrue(provider.pendingResponses.isEmpty());
     }
 
     @Test void directChatsAndDelegatedRequestsHaveSeparateResultsAndSerialContexts() throws Exception {
