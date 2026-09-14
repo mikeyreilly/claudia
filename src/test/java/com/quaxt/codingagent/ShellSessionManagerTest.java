@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static com.quaxt.codingagent.CodingAgentOperations.jsonObject;
 import static org.junit.jupiter.api.Assertions.*;
@@ -29,6 +31,47 @@ class ShellSessionManagerTest {
     @AfterEach
     void cleanup() {
         manager.close();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 7})
+    void silentCommandsReportCompletionAndExitCodeInText(int exitCode) throws Exception {
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", "exit " + exitCode).put("yield_ms", 5000));
+
+        assertEquals("(no output)\n\n[Command exited with code " + exitCode + ".]", text(result));
+        assertEquals("exited", details(result).get("status"));
+        assertEquals(exitCode, details(result).get("exit_code"));
+        assertEquals(exitCode != 0, result.isError);
+        assertThrows(IllegalArgumentException.class, () -> run("shell_input", jsonObject().put("session_id", id(result))));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 7})
+    void silentSessionsDistinguishRunningPollsFromFinalResults(int exitCode) throws Exception {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        String command = (windows ? "$null = [Console]::ReadLine(); " : "IFS= read -r ignored; ") + "exit " + exitCode;
+        AgentTool.ToolResult initial = run("shell", jsonObject().put("command", command).put("yield_ms", 0));
+        assertRunning(initial);
+        AgentTool.ToolResult poll = run("shell_input", jsonObject().put("session_id", id(initial)).put("yield_ms", 0));
+        assertRunning(poll);
+
+        AgentTool.ToolResult last = run("shell_input", jsonObject().put("session_id", id(initial))
+                .put("input", "\n").put("yield_ms", 5000));
+        assertEquals("(no output)\n\n[Command exited with code " + exitCode + ".]", text(last));
+        assertEquals("exited", details(last).get("status"));
+        assertEquals(exitCode, details(last).get("exit_code"));
+        assertEquals(exitCode != 0, last.isError);
+        assertThrows(IllegalArgumentException.class, () -> run("shell_input", jsonObject().put("session_id", id(initial))));
+    }
+
+    @Test
+    void separatesCompletionNoticeFromOutputWithoutATrailingNewline() throws Exception {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        String command = windows ? "[Console]::Write('hello')" : "printf 'hello'";
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertEquals("hello\n\n[Command exited with code 0.]", text(result));
     }
 
     @Test
@@ -70,6 +113,7 @@ class ShellSessionManagerTest {
         AgentTool.ToolResult result = run("shell_input", jsonObject().put("session_id", id(initial)).put("yield_ms", 5000));
         assertTrue(result.isError);
         assertTrue(text(result).contains("timed out"), text(result));
+        assertExitCodeInText(result);
         assertEquals("exited", details(result).get("status"));
     }
 
@@ -77,7 +121,9 @@ class ShellSessionManagerTest {
     void terminateKillsTheScriptAndReleasesItsSession() throws Exception {
         AgentTool.ToolResult initial = start("wait");
         AgentTool.ToolResult result = run("shell_input", jsonObject().put("session_id", id(initial)).put("terminate", true));
+        assertTrue(result.isError);
         assertTrue(text(result).contains("Command terminated"), text(result));
+        assertExitCodeInText(result);
         awaitDead(pid(initial));
         assertThrows(IllegalArgumentException.class, () -> run("shell_input", jsonObject().put("session_id", id(initial))));
     }
@@ -109,7 +155,10 @@ class ShellSessionManagerTest {
         while (worker.getState() != Thread.State.TIMED_WAITING && !polling.isDone() && System.nanoTime() < deadline) Thread.sleep(10);
         assertEquals(Thread.State.TIMED_WAITING, worker.getState());
         signal.set(true);
-        assertTrue(polling.get(5, TimeUnit.SECONDS).isError);
+        AgentTool.ToolResult result = polling.get(5, TimeUnit.SECONDS);
+        assertTrue(result.isError);
+        assertTrue(text(result).contains("Command aborted"), text(result));
+        assertExitCodeInText(result);
         awaitDead(pid(initial));
     }
 
@@ -125,11 +174,24 @@ class ShellSessionManagerTest {
     }
 
     @Test
+    void completionNoticeSurvivesOutputTruncation() throws Exception {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        String command = windows ? "[Console]::Write('x' * 60000)" : "printf 'x%.0s' {1..60000}";
+        AgentTool.ToolResult result = run("shell", jsonObject().put("command", command).put("yield_ms", 5000));
+
+        assertFalse(result.isError, text(result));
+        assertTrue(text(result).startsWith("[Earlier command output truncated; showing most recent output]\n"), text(result));
+        assertTrue(text(result).length() < 53_000);
+        assertEquals(0, details(result).get("exit_code"));
+        assertExitCodeInText(result);
+    }
+
+    @Test
     void reportsNonzeroExitAndRejectsInvalidArguments() throws Exception {
         AgentTool.ToolResult result = start("fail");
         assertTrue(result.isError);
         assertTrue(text(result).contains("Script failed"), text(result));
-        assertTrue(text(result).contains("Command exited with code"), text(result));
+        assertExitCodeInText(result);
         assertNotEquals(0, details(result).get("exit_code"));
         assertThrows(IllegalArgumentException.class, () -> run("shell", jsonObject().put("command", "echo ok").put("yield_ms", -1)));
         assertThrows(IllegalArgumentException.class, () -> run("shell", jsonObject().put("command", "echo ok").put("yield_ms", 30001)));
@@ -169,7 +231,7 @@ class ShellSessionManagerTest {
                 Added model: gpt-6-astra
                 embedded "double" quotes and 'single' quotes
                 literal "quotes" $key $(Get-Date); & | < >
-                """, text(result).replace("\r\n", "\n"));
+                """ + "\n\n[Command exited with code 0.]", text(result).replace("\r\n", "\n"));
     }
 
     @Test
@@ -194,7 +256,7 @@ class ShellSessionManagerTest {
                 Value: café 雪 🚀
                 Literal: "quotes" 'apostrophe' $dollar ; & |
                 Literal: "$value" `backticks` C:\\path with spaces\\
-                """, text(result).replace("\r\n", "\n"));
+                """ + "\n\n[Command exited with code 0.]", text(result).replace("\r\n", "\n"));
     }
 
     @Test
@@ -212,7 +274,7 @@ class ShellSessionManagerTest {
         assertFalse(last.isError, text(last));
         assertEquals("exited", details(last).get("status"));
         assertEquals(0, details(last).get("exit_code"));
-        assertEquals("Received: " + reply + "\n", text(last).replace("\r\n", "\n"));
+        assertEquals("Received: " + reply + "\n\n\n[Command exited with code 0.]", text(last).replace("\r\n", "\n"));
     }
 
     @Test
@@ -239,7 +301,7 @@ class ShellSessionManagerTest {
 
         assertFalse(result.isError, text(result));
         assertEquals(0, details(result).get("exit_code"));
-        assertEquals("C:\\path with spaces\\\n\\\\server\\share\\\\\n", text(result).replace("\r\n", "\n"));
+        assertEquals("C:\\path with spaces\\\n\\\\server\\share\\\\\n\n\n[Command exited with code 0.]", text(result).replace("\r\n", "\n"));
     }
 
     @Test
@@ -250,7 +312,7 @@ class ShellSessionManagerTest {
 
         assertFalse(result.isError, text(result));
         assertEquals(0, details(result).get("exit_code"));
-        assertEquals("long script survived\n", text(result).replace("\r\n", "\n"));
+        assertEquals("long script survived\n\n\n[Command exited with code 0.]", text(result).replace("\r\n", "\n"));
     }
 
     @Test
@@ -320,6 +382,22 @@ class ShellSessionManagerTest {
 
     private static String text(AgentTool.ToolResult result) {
         return ((TextContent) result.content.getFirst()).text;
+    }
+
+    private static void assertRunning(AgentTool.ToolResult result) {
+        assertEquals("running", details(result).get("status"));
+        assertFalse(details(result).containsKey("exit_code"));
+        assertFalse(result.isError);
+        assertTrue(text(result).contains("[Shell session " + id(result) + " is still running."), text(result));
+        assertTrue(text(result).contains("Use shell_input"), text(result));
+        assertFalse(text(result).contains("Command exited"), text(result));
+    }
+
+    private static void assertExitCodeInText(AgentTool.ToolResult result) {
+        assertEquals("exited", details(result).get("status"));
+        assertNotNull(details(result).get("exit_code"));
+        assertTrue(text(result).endsWith("[Command exited with code " + details(result).get("exit_code") + ".]"), text(result));
+        assertFalse(text(result).contains("Use shell_input"), text(result));
     }
 
     private static long pid(AgentTool.ToolResult result) {

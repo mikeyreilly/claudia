@@ -256,7 +256,7 @@ public final class LocalTools {
         var timeoutArg = optionalPositiveNumber("timeout", "Optional total process lifetime in seconds, including time waiting for the user; omitted means no deadline");
         var yieldMsArg = integer("yield_ms", "Wait before returning output in milliseconds; does not terminate the process", 0, 30000, 1000);
         return new ToolDefinition<>("shell",
-                "Execute a " + ShellCommandLine.displayName(SHELL) + " command in the current working directory. Returns output and a session ID if still running after yield_ms (default 1000). Use shell_input to poll or send stdin. When a script requests information you need from the user, ask them and end your turn, then send their reply to the same session; do not restart the script or repeatedly poll while awaiting the user. Sessions survive chat turns, but not conversation resets or application exit. Uses pipes, not a PTY; programs must flush prompts. Output is bounded to 2,000 lines or 50KB.",
+                "Execute a " + ShellCommandLine.displayName(SHELL) + " command in the current working directory. Returns output with an explicit running or completion notice and the exit code when available. Includes a session ID if still running after yield_ms (default 1000). Use shell_input to poll or send stdin. When a script requests information you need from the user, ask them and end your turn, then send their reply to the same session; do not restart the script or repeatedly poll while awaiting the user. Sessions survive chat turns, but not conversation resets or application exit. Uses pipes, not a PTY; programs must flush prompts. Output is bounded to 2,000 lines or 50KB.",
                 new ToolParameters(commandArg, timeoutArg, yieldMsArg),
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;
@@ -271,7 +271,7 @@ public final class LocalTools {
         var terminateArg = flag("terminate", "Terminate the process and its children; cannot be combined with input or close_stdin");
         var yieldMsArg = integer("yield_ms", "Wait for new output in milliseconds", 0, 30000, 1000);
         return new ToolDefinition<>("shell_input",
-                "Continue a shell session. Omit input to poll for new output. To answer a script prompt, send the user's reply as input with a trailing newline. Input is written literally to stdin, never evaluated as a new shell command. Ask the user for missing information and wait for their next chat message before answering on their behalf. Completed sessions return final output and are removed.",
+                "Continue a shell session. Omit input to poll for new output. To answer a script prompt, send the user's reply as input with a trailing newline. Input is written literally to stdin, never evaluated as a new shell command. Ask the user for missing information and wait for their next chat message before answering on their behalf. Completed sessions return final output with an explicit completion notice and the exit code when available, then are removed.",
                 new ToolParameters(sessionIdArg, inputArg, closeStdinArg, terminateArg, yieldMsArg),
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;

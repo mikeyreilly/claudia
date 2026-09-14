@@ -191,14 +191,20 @@ public final class ShellSessionManager implements AutoCloseable {
         details.put("status", finished ? "exited" : session.stopped ? "stopping" : "running");
         details.put("input_pending", session.inputPending);
         String failure = session.failure;
+        boolean isError = finished && failure != null;
         if (finished) {
             shellSessions.remove(session.id, session);
+            String completion = "[Command stopped; exit code unavailable.]";
             if (!session.process.isAlive()) {
                 int code = session.process.exitValue();
                 details.put("exit_code", code);
-                if (failure == null && code != 0) failure = "Command exited with code " + code;
+                isError |= code != 0;
+                completion = "[Command exited with code " + code + ".]";
             }
-            if (failure != null) output += (output.isBlank() ? "" : "\n\n") + failure;
+            // Providers may omit details, so completion and the exit code must also be in content.
+            if (output.isBlank()) output = "(no output)";
+            if (failure != null) output += "\n\n" + failure;
+            output += "\n\n" + completion;
         } else if (session.stopped) {
             output += (output.isBlank() ? "" : "\n\n") + "[Shell session " + session.id
                     + " is stopping: " + failure + ". Use shell_input to collect its final result.]";
@@ -207,8 +213,7 @@ public final class ShellSessionManager implements AutoCloseable {
                     + " is still running. Use shell_input to poll or send input. If the output requests user information,"
                     + " ask the user and end this turn; after their reply, send it to this session, including a newline to submit it.]";
         }
-        return new AgentTool.ToolResult(List.of(new TextContent(output.isBlank() ? "(no output)" : output, null)),
-                details, finished && failure != null);
+        return new AgentTool.ToolResult(List.of(new TextContent(output, null)), details, isError);
     }
 
     private void stopShellSession(ShellSession session, String reason) {

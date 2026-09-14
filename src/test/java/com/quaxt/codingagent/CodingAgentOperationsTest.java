@@ -368,6 +368,7 @@ class CodingAgentOperationsTest {
                 assertTrue(CodingAgentOperations.text(result).contains("Send text, then EOF:"));
                 session.set((String) ((Map<?, ?>) result.details).get("session_id"));
                 assertTrue(CodingAgentOperations.text(result).contains(session.get()));
+                assertTrue(CodingAgentOperations.text(result).contains("is still running."));
                 return answer("What link should I supply to the script?");
             }));
 
@@ -389,6 +390,7 @@ class CodingAgentOperationsTest {
                 assertFalse(result.isError);
                 assertTrue(CodingAgentOperations.text(result).contains("Received: " + link));
                 assertTrue(CodingAgentOperations.text(result).contains("EOF received"));
+                assertTrue(CodingAgentOperations.text(result).endsWith("[Command exited with code 0.]"));
                 assertEquals("exited", ((Map<?, ?>) result.details).get("status"));
                 return answer("The script received your link and finished.");
             }));
