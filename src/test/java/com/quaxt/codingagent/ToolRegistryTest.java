@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import static com.quaxt.codingagent.CodingAgentOperations.jsonObject;
@@ -108,6 +110,21 @@ class ToolRegistryTest {
             assertThrows(IllegalArgumentException.class, () -> execute(runtime, tool(tools, "read"), jsonObject().put("path", "lines.txt").put("offset", 1.5)));
             assertThrows(IllegalArgumentException.class, () -> execute(runtime, tool(tools, "shell"), jsonObject().put("command", "echo unreachable").put("yield_ms", -1)));
             assertThrows(IllegalArgumentException.class, () -> execute(runtime, tool(tools, "shell"), jsonObject().put("command", "echo unreachable").put("timeout", 0)));
+        }
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void shellDescriptionAdvertisesTheVersionOfTheInterpreterItRuns() throws Exception {
+        try (var runtime = new CodingAgentOperations()) {
+            var shell = tool(runtime.builtInTools(cwd, ignored -> {}), "shell");
+            var result = execute(runtime, shell, jsonObject()
+                    .put("command", "$PSVersionTable.PSVersion.ToString()").put("yield_ms", 5000));
+            assertFalse(result.isError, text(result));
+            String version = text(result).strip();
+            assertTrue(version.matches("[0-9]+(?:\\.[0-9]+){1,3}"), version);
+            String description = CodingAgentOperations.toolDescription(shell);
+            assertTrue(description.startsWith("Execute a PowerShell " + version + " (powershell.exe) command"), description);
         }
     }
 
