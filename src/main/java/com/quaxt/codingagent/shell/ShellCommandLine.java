@@ -1,11 +1,51 @@
 package com.quaxt.codingagent.shell;
 
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /** Platform-specific script transport and setup; stdin remains reserved for session input. */
-final class ShellCommandLine {
+public final class ShellCommandLine {
     private ShellCommandLine() {}
+
+    /** Model-facing interpreter name, with a cached version from the executable we actually launch. */
+    public static String displayName(BuiltInTools.Shell shell) {
+        return shell == BuiltInTools.Shell.POWERSHELL ? PowerShellName.VALUE : shell.displayName;
+    }
+
+    private static final class PowerShellName {
+        private static final String VALUE = detectPowerShellName();
+    }
+
+    private static String detectPowerShellName() {
+        Process process = null;
+        try {
+            process = new ProcessBuilder(arguments(BuiltInTools.Shell.POWERSHELL,
+                    "[Console]::Write($PSVersionTable.PSVersion.ToString())"))
+                    .redirectErrorStream(true).start();
+            process.getOutputStream().close();
+            try (var output = process.getInputStream()) {
+                if (process.waitFor(3, TimeUnit.SECONDS) && process.exitValue() == 0) {
+                    return powerShellDisplayName(new String(output.readNBytes(256), StandardCharsets.UTF_8).strip());
+                }
+            }
+        } catch (IOException ignored) {
+            // A missing or unavailable shell must not prevent registering the other tools.
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
+        }
+        return powerShellDisplayName(null);
+    }
+
+    static String powerShellDisplayName(String version) {
+        return version != null && version.matches("[0-9]+(?:\\.[0-9]+){1,3}")
+                ? "PowerShell " + version + " (powershell.exe)"
+                : "PowerShell (powershell.exe; version unavailable)";
+    }
 
     // PowerShell's console host bypasses redirected stdout for Read-Host prompts.
     // Adapt that cmdlet to our pipes; other console-only prompts still fail promptly.

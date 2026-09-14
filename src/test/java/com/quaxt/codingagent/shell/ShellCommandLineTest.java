@@ -8,6 +8,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ShellCommandLineTest {
     @Test
+    void advertisesPowerShellVersionAndExecutable() {
+        assertEquals("PowerShell 5.1.26100.9444 (powershell.exe)",
+                ShellCommandLine.powerShellDisplayName("5.1.26100.9444"));
+        assertEquals("PowerShell 5.1 (powershell.exe)", ShellCommandLine.powerShellDisplayName("5.1"));
+        assertEquals("bash", ShellCommandLine.displayName(BuiltInTools.Shell.BASH));
+    }
+
+    @Test
+    void unavailableVersionsDoNotAdvertiseGuessedCapabilitiesOrProbeErrors() {
+        String fallback = "PowerShell (powershell.exe; version unavailable)";
+        assertEquals(fallback, ShellCommandLine.powerShellDisplayName(null));
+        assertEquals(fallback, ShellCommandLine.powerShellDisplayName(""));
+        assertEquals(fallback, ShellCommandLine.powerShellDisplayName("access denied"));
+        assertEquals(fallback, ShellCommandLine.powerShellDisplayName("5.1\nUnexpected output"));
+    }
+
+    @Test
     void bashPassesTheScriptAsOneUnmodifiedArgument() {
         String command = "printf '%s\\n' \"$HOME\" 'café 雪 🚀'\n# keep this newline\necho done";
 
