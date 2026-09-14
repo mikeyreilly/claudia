@@ -233,13 +233,13 @@ public final class SubagentManager implements AutoCloseable {
     AgentTool tool() {
         var task = text("task", "Task brief for the child. Include the context it needs; parent history is not shared.");
         var name = optionalText("name", "Optional display name for a new child", null);
-        var id = optionalText("agent_id", "Reuse a child ID returned by this tool", null);
+        var id = optionalText("agent_id", "Reuse a child ID returned by this tool. Omit or leave blank to create a new child.", null);
         return new ToolDefinition<SubagentManager>("subagent",
                 "Delegate a task to a separate conversation and wait for its final answer. Children share the workspace and cannot delegate further.",
                 new ToolParameters(task, name, id), (manager, args, invocation) -> {
                     String child = args.get(id);
                     if (MAIN.equals(child)) throw new IllegalArgumentException("agent_id must identify a child");
-                    if (child == null) child = manager.create(args.get(task), args.get(name));
+                    if (child == null || child.isBlank()) child = manager.create(args.get(task), args.get(name));
                     CompletableFuture<Answer> result = manager.submit(child, args.get(task));
                     String childId = child;
                     root.onAbort(invocation.signal, () -> manager.cancel(childId));

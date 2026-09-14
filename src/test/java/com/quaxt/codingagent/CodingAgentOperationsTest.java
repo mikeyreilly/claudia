@@ -2229,7 +2229,7 @@ class CodingAgentOperationsTest {
 		String listing = run(tools, "ls", CodingAgentOperations.jsonObject());
 		assertTrue(listing.contains("README.md"));
 		assertTrue(listing.contains("src/"));
-		assertEquals("ok", run(tools, "shell", CodingAgentOperations.jsonObject().put("command", shellCommandThatPrintsOk())));
+		assertEquals("ok\n\n[Command exited with code 0.]", run(tools, "shell", CodingAgentOperations.jsonObject().put("command", shellCommandThatPrintsOk())));
 	}
 
 	@Test
