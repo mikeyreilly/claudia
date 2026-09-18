@@ -91,6 +91,36 @@ public final class ToolParameters {
         return new Parameter<>(name, type("string", description), false, fallback, ToolParameters::decodeText);
     }
 
+    public static Parameter<List<String>> stringList(String name, String description) {
+        ObjectNode schema = type("array", description);
+        schema.set("items", type("string", "One argument"));
+        return new Parameter<>(name, schema, true, null, value -> decodeStringList(value));
+    }
+
+    public static Parameter<List<String>> optionalStringList(String name, String description) {
+        ObjectNode schema = type("array", description);
+        schema.set("items", type("string", "One value"));
+        return new Parameter<>(name, schema, false, List.of(), ToolParameters::decodeStringList);
+    }
+
+    public static Parameter<Map<String, String>> optionalStringMap(String name, String description) {
+        ObjectNode schema = type("object", description);
+        schema.set("additionalProperties", type("string", "Environment value"));
+        return new Parameter<>(name, schema, false, Map.of(), value -> {
+            if (!(value instanceof ObjectNode object)) throw new IllegalArgumentException("must be an object of strings");
+            Map<String, String> result = new LinkedHashMap<>();
+            object.fields().forEachRemaining(entry -> result.put(entry.getKey(), decodeText(entry.getValue())));
+            return Map.copyOf(result);
+        });
+    }
+
+    private static List<String> decodeStringList(JsonNode value) {
+        if (!value.isArray()) throw new IllegalArgumentException("must be an array of strings");
+        List<String> result = new ArrayList<>();
+        for (JsonNode item : value) result.add(decodeText(item));
+        return List.copyOf(result);
+    }
+
     public static Parameter<String> optionalText(String name, String description, String fallback, int maximumLength) {
         if (maximumLength < 0 || fallback != null && fallback.codePointCount(0, fallback.length()) > maximumLength) {
             throw new IllegalArgumentException("Invalid text length/default");
@@ -124,6 +154,13 @@ public final class ToolParameters {
 
     public static Parameter<Boolean> flag(String name, String description) {
         return new Parameter<>(name, type("boolean", description).put("default", false), false, false, value -> {
+            if (!value.isBoolean()) throw new IllegalArgumentException("must be a boolean");
+            return value.asBoolean();
+        });
+    }
+
+    public static Parameter<Boolean> flagWithDefault(String name, String description, boolean fallback) {
+        return new Parameter<>(name, type("boolean", description).put("default", fallback), false, fallback, value -> {
             if (!value.isBoolean()) throw new IllegalArgumentException("must be a boolean");
             return value.asBoolean();
         });

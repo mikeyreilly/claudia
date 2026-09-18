@@ -11,6 +11,7 @@ import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.shell.ShellCommandLine;
 import com.quaxt.codingagent.shell.ShellSessionManager;
+import com.quaxt.codingagent.shell.PosixPreflight;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +50,7 @@ public final class LocalTools {
     private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
     private static final BuiltInTools.Shell SHELL = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
     private static final ToolRegistry<Environment> REGISTRY = new ToolRegistry<>(
-            List.of(read(), write(), edit(), shell(), shellInput(), grep(), find(), ls(), question()));
+            List.of(read(), write(), edit(), shell(), runProcess(), shellInput(), preflightPosix(), grep(), find(), ls(), question()));
 
     private record Environment(Path cwd, Consumer<Path> onPathAccess, String executable, ShellSessionManager shellSessions,
                                QuestionBroker questions, String agentId) {}
@@ -269,17 +270,56 @@ public final class LocalTools {
         var inputArg = optionalText("input", "Exact text to write to stdin; include a trailing newline to submit a line (maximum 51200 characters)", null, ShellSessionManager.MAX_INPUT_CHARACTERS);
         var closeStdinArg = flag("close_stdin", "Close stdin after writing input, signalling EOF");
         var terminateArg = flag("terminate", "Terminate the process and its children; cannot be combined with input or close_stdin");
+        var processTreeArg = flag("process_tree", "Include the process and its descendants in the status result");
         var yieldMsArg = integer("yield_ms", "Wait for new output in milliseconds", 0, 30000, 1000);
         return new ToolDefinition<>("shell_input",
                 "Continue a shell session. Omit input to poll for new output. To answer a script prompt, send the user's reply as input with a trailing newline. Input is written literally to stdin, never evaluated as a new shell command. Ask the user for missing information and wait for their next chat message before answering on their behalf. Completed sessions return final output with an explicit completion notice and the exit code when available, then are removed.",
-                new ToolParameters(sessionIdArg, inputArg, closeStdinArg, terminateArg, yieldMsArg),
+                new ToolParameters(sessionIdArg, inputArg, closeStdinArg, terminateArg, processTreeArg, yieldMsArg),
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;
-                    return local.shellSessions.interact(args.get(sessionIdArg), args.get(inputArg), args.get(closeStdinArg), args.get(terminateArg), args.get(yieldMsArg), () -> isAborted(signal));
+                    return local.shellSessions.interact(args.get(sessionIdArg), args.get(inputArg), args.get(closeStdinArg), args.get(terminateArg), args.get(processTreeArg), args.get(yieldMsArg), () -> isAborted(signal));
                 }, raw -> (raw.path("terminate").asBoolean() ? "Stopping command "
                         : raw.hasNonNull("input") ? "Sending input to command "
                         : raw.path("close_stdin").asBoolean() ? "Closing command input " : "Checking command ")
                         + textArgument(raw, "session_id", ""));
+    }
+
+    private static ToolDefinition<Environment> runProcess() {
+        var executable = text("executable", "Native executable path or name found on the child PATH; Windows .bat/.cmd files are rejected");
+        var arguments = stringList("arguments", "Exact argument strings passed directly to the executable, without shell parsing");
+        var workingDirectory = optionalText("working_directory", "Child working directory (default: current workspace)", null);
+        var environment = optionalStringMap("environment", "Environment values scoped to this child");
+        var unsetEnvironment = optionalStringList("unset_environment", "Environment variable names removed from this child");
+        var inheritEnvironment = flagWithDefault("inherit_environment", "Inherit parent environment before applying changes; false retains only Windows startup variables", true);
+        var stdoutLog = optionalText("stdout_log", "File receiving complete stdout", null);
+        var stderrLog = optionalText("stderr_log", "File receiving complete stderr", null);
+        var timeout = optionalPositiveNumber("timeout", "Maximum process lifetime in seconds");
+        var yieldMs = integer("yield_ms", "Wait before returning output in milliseconds", 0, 30000, 1000);
+        return new ToolDefinition<>("run_process",
+                "Run an executable directly with exact argument boundaries. Stdout and stderr are separate; exit_code is the child process's actual status. Sessions can be polled, sent stdin, or terminated with shell_input. Output is bounded; optional log files retain complete text.",
+                new ToolParameters(executable, arguments, workingDirectory, environment, unsetEnvironment,
+                        inheritEnvironment, stdoutLog, stderrLog, timeout, yieldMs),
+                (local, args, invocation) -> local.shellSessions.executeProcess(
+                        args.get(workingDirectory) == null ? local.cwd : localToolPath(local, args.get(workingDirectory)),
+                        args.get(executable), args.get(arguments), args.get(environment), args.get(unsetEnvironment),
+                        args.get(inheritEnvironment), args.get(stdoutLog) == null ? null : localToolPath(local, args.get(stdoutLog)),
+                        args.get(stderrLog) == null ? null : localToolPath(local, args.get(stderrLog)),
+                        args.get(timeout), args.get(yieldMs), () -> isAborted(invocation.signal)),
+                raw -> "Running " + abbreviate(textArgument(raw, "executable", "")));
+    }
+
+    private static ToolDefinition<Environment> preflightPosix() {
+        var layer = text("layer", "Requested POSIX layer: msys2 or git-bash");
+        var root = optionalText("installation_root", "Windows path to the requested installation root", null);
+        var environment = optionalStringMap("environment", "Environment values for tool discovery and checks");
+        var unsetEnvironment = optionalStringList("unset_environment", "Environment names removed for this check");
+        var inheritEnvironment = flagWithDefault("inherit_environment", "Inherit parent environment before applying changes", true);
+        return new ToolDefinition<>("preflight_posix",
+                "Check a Windows MSYS2 or Git Bash build environment. Reports tool origins, Windows/POSIX paths, compiler, temp write access, missing tools and MSYS2 package hints, and Visual Studio toolsets found with vswhere. Makes no installations.",
+                new ToolParameters(layer, root, environment, unsetEnvironment, inheritEnvironment),
+                (local, args, invocation) -> PosixPreflight.inspect(local.cwd, args.get(layer), args.get(root),
+                        args.get(environment), args.get(unsetEnvironment), args.get(inheritEnvironment)),
+                raw -> "Checking " + textArgument(raw, "layer", "") + " POSIX environment");
     }
 
     private static ToolDefinition<Environment> grep() {
