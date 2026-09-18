@@ -246,6 +246,22 @@ the process's total lifetime, including time spent waiting for your reply.
 Each call returns only new output, retaining the most recent 2,000 lines or
 50KB when output is truncated so that a prompt after a long log stays visible.
 
+For native build commands, `run_process` runs an executable directly with an
+`arguments` array. Each element is passed as one argument, including embedded
+spaces, quotes, and newlines. It returns separate `stdout` and `stderr`, the
+child's `exit_code`, `timed_out`, elapsed time, CPU time when available, and
+the last output time. `stdout_log` and `stderr_log` save complete raw streams
+to separate files. `environment`, `unset_environment`, and
+`inherit_environment` change only the child environment. A running process
+uses the same `shell_input` session API; set `process_tree` when polling to
+inspect descendants.
+
+On Windows, `preflight_posix` checks a requested `msys2` or `git-bash` layer
+before a build. It reports the resolved tools, Windows and POSIX paths,
+compiler, TMPDIR write access, missing tool package hints, and Visual Studio
+toolsets found through `vswhere`. It accepts the same child environment
+settings as `run_process` and does not install packages.
+
 Shell processes survive ordinary chat turns. Cancelling an active turn,
 resetting the conversation, or exiting codingagent stops them. Running processes
 are not saved with conversations and cannot be restored after a restart.
@@ -422,7 +438,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | --- | --- |
 | Anthropic, OpenAI Responses, ChatGPT Plus/Pro, Google, OpenAI-compatible, GitHub Copilot providers | Implemented |
 | Streaming agent loop and sequential tool calls | Implemented |
-| `read`, `write`, `edit`, `shell`, `grep`, `find`, `ls` tools | Implemented |
+| `read`, `write`, `edit`, `shell`, `run_process`, `preflight_posix`, `grep`, `find`, `ls` tools | Implemented |
 | OpenCode-compatible local/remote MCP servers, OAuth 2.1/PKCE, and interactive per-server/per-tool `/mcp` toggles | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |

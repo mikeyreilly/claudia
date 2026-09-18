@@ -4,15 +4,23 @@ import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.cli.tools.BuiltInTools;
 import java.io.IOException;
+import java.io.FilterInputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 /** Owns the processes, I/O, deadlines, and cleanup for one agent's shell sessions. */
@@ -34,9 +42,139 @@ public final class ShellSessionManager implements AutoCloseable {
         return pollShellSession(session, yieldMs, cancelled);
     }
 
+    /** Runs an executable directly, preserving the caller's argument boundaries. */
+    public AgentTool.ToolResult executeProcess(Path cwd, String executable, List<String> arguments,
+            Map<String, String> environment, List<String> unsetEnvironment, boolean inheritEnvironment,
+            Path stdoutLog, Path stderrLog, Double timeoutSeconds, int yieldMs, BooleanSupplier cancelled)
+            throws IOException, InterruptedException {
+        validateYield(yieldMs);
+        if (timeoutSeconds != null && (timeoutSeconds <= 0 || !Double.isFinite(timeoutSeconds))) {
+            throw new IllegalArgumentException("timeout must be a positive finite number");
+        }
+        for (String argument : arguments) ProcessEnvironment.validate(argument, "argument");
+        if (stdoutLog != null && stdoutLog.equals(stderrLog)) {
+            throw new IllegalArgumentException("stdout_log and stderr_log must be different files");
+        }
+        ProcessBuilder builder = new ProcessBuilder();
+        builder.directory(cwd.toFile());
+        ProcessEnvironment.apply(builder.environment(), environment, unsetEnvironment, inheritEnvironment);
+        Path child = ProcessEnvironment.resolveExecutable(executable, cwd, builder.environment());
+        List<String> command = new ArrayList<>(arguments.size() + 1);
+        command.add(child.toString());
+        for (String argument : arguments) command.add(ProcessEnvironment.processBuilderArgument(argument));
+        builder.command(command);
+        OutputStream stdoutWriter = openLog(stdoutLog);
+        OutputStream stderrWriter;
+        try {
+            stderrWriter = openLog(stderrLog);
+        } catch (IOException error) {
+            if (stdoutWriter != null) stdoutWriter.close();
+            throw error;
+        }
+        ShellSession session;
+        try {
+            synchronized (shellSessions) {
+                requireNotCancelled(cancelled);
+                if (closed) throw new IllegalStateException("Shell session manager is closed");
+                if (shellSessions.size() >= 32) throw new IllegalStateException("Too many shell sessions; poll or terminate existing sessions with shell_input first");
+                ensureShutdownHook();
+                session = new ShellSession(java.util.UUID.randomUUID().toString(), builder.start(), child.toString(), stdoutLog, stderrLog);
+                shellSessions.put(session.id, session);
+            }
+        } catch (IOException | RuntimeException error) {
+            if (stdoutWriter != null) stdoutWriter.close();
+            if (stderrWriter != null) stderrWriter.close();
+            throw error;
+        }
+        readDirectStream(session, session.process.getInputStream(), session.stdout, stdoutWriter, "stdout");
+        readDirectStream(session, session.process.getErrorStream(), session.stderr, stderrWriter, "stderr");
+        startTimeout(session, timeoutSeconds == null ? 0 : timeoutSeconds);
+        return pollShellSession(session, yieldMs, cancelled, false);
+    }
+
+    private static OutputStream openLog(Path path) throws IOException {
+        return path == null ? null : Files.newOutputStream(path,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+    }
+
+    private void readDirectStream(ShellSession session, InputStream stream, StringBuilder buffer,
+            OutputStream log, String name) {
+        Thread.ofVirtual().name("codingagent-process-" + name).start(() -> {
+            try (var reader = new InputStreamReader(new LoggingInputStream(stream, log, session, name), StandardCharsets.UTF_8)) {
+                char[] chunk = new char[4096];
+                int count;
+                while ((count = reader.read(chunk)) != -1) {
+                    synchronized (session) {
+                        buffer.append(chunk, 0, count);
+                        int excess = buffer.length() - BuiltInTools.MAX_BYTES / 2;
+                        if (excess > 0) {
+                            if (Character.isLowSurrogate(buffer.charAt(excess))) excess++;
+                            buffer.delete(0, excess);
+                            if (name.equals("stdout")) session.stdoutTruncated = true;
+                            else session.stderrTruncated = true;
+                        }
+                        session.lastOutputTime = Instant.now();
+                    }
+                }
+            } catch (IOException error) {
+                session.streamError = name + ": " + error.getMessage();
+            } finally {
+                if (session.readersRemaining.decrementAndGet() == 0) session.outputComplete = true;
+            }
+        });
+    }
+
+    private static final class LoggingInputStream extends FilterInputStream {
+        private OutputStream log;
+        private final ShellSession session;
+        private final String name;
+
+        private LoggingInputStream(InputStream source, OutputStream log, ShellSession session, String name) {
+            super(source);
+            this.log = log;
+            this.session = session;
+            this.name = name;
+        }
+
+        @Override public int read() throws IOException {
+            int value = super.read();
+            if (value >= 0) write(new byte[] {(byte) value}, 0, 1);
+            return value;
+        }
+
+        @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+            int count = in.read(bytes, offset, length);
+            if (count > 0) write(bytes, offset, count);
+            return count;
+        }
+
+        private void write(byte[] bytes, int offset, int length) {
+            if (log == null) return;
+            try { log.write(bytes, offset, length); }
+            catch (IOException error) {
+                session.logError = name + " log: " + error.getMessage();
+                try { log.close(); } catch (IOException ignored) {}
+                log = null;
+            }
+        }
+
+        @Override public void close() throws IOException {
+            try { super.close(); }
+            finally {
+                if (log != null) try { log.close(); }
+                catch (IOException error) { session.logError = name + " log: " + error.getMessage(); }
+            }
+        }
+    }
+
     /** Polls, writes literal stdin, sends EOF, or terminates an existing process. */
     public AgentTool.ToolResult interact(String id, String input, boolean closeStdin, boolean terminate,
             int yieldMs, BooleanSupplier cancelled) throws InterruptedException {
+        return interact(id, input, closeStdin, terminate, false, yieldMs, cancelled);
+    }
+
+    public AgentTool.ToolResult interact(String id, String input, boolean closeStdin, boolean terminate,
+            boolean processTree, int yieldMs, BooleanSupplier cancelled) throws InterruptedException {
         validateYield(yieldMs);
         if (terminate && (input != null || closeStdin)) {
             throw new IllegalArgumentException("terminate cannot be combined with input or close_stdin");
@@ -47,7 +185,7 @@ public final class ShellSessionManager implements AutoCloseable {
                 "Unknown shell session: " + id + ". Shell sessions do not survive a reset or restart.");
         if (terminate) stopShellSession(session, "Command terminated");
         else if (input != null || closeStdin) sendShellInput(session, input == null ? "" : input, closeStdin);
-        return pollShellSession(session, yieldMs, cancelled);
+        return pollShellSession(session, yieldMs, cancelled, processTree);
     }
 
     private static void validateYield(int yieldMs) {
@@ -84,10 +222,7 @@ public final class ShellSessionManager implements AutoCloseable {
             if (shellSessions.size() >= 32) {
                 throw new IllegalStateException("Too many shell sessions; poll or terminate existing sessions with shell_input first");
             }
-            if (shutdownHook == null) {
-                shutdownHook = new Thread(this::closeSessions, "codingagent-shell-cleanup");
-                Runtime.getRuntime().addShutdownHook(shutdownHook);
-            }
+            ensureShutdownHook();
             ProcessBuilder builder = new ProcessBuilder(ShellCommandLine.arguments(shell, command))
                     .directory(cwd.toFile()).redirectErrorStream(true);
             // Python otherwise buffers stdout when attached to a pipe, hiding input prompts.
@@ -102,6 +237,7 @@ public final class ShellSessionManager implements AutoCloseable {
                 while ((count = reader.read(buffer)) != -1) {
                     synchronized (session) {
                         session.output.append(buffer, 0, count);
+                        session.lastOutputTime = Instant.now();
                         int excess = session.output.length() - BuiltInTools.MAX_BYTES;
                         if (excess > 0) {
                             if (Character.isLowSurrogate(session.output.charAt(excess))) excess++;
@@ -116,12 +252,24 @@ public final class ShellSessionManager implements AutoCloseable {
                 session.outputComplete = true;
             }
         });
+        startTimeout(session, timeoutSeconds);
+        return session;
+    }
+
+    private void ensureShutdownHook() {
+        if (shutdownHook == null) {
+            shutdownHook = new Thread(this::closeSessions, "codingagent-shell-cleanup");
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
+        }
+    }
+
+    private void startTimeout(ShellSession session, double timeoutSeconds) {
         if (timeoutSeconds > 0) {
-            long started = System.nanoTime();
             Thread.ofVirtual().name("codingagent-shell-timeout").start(() -> {
                 try {
                     while (!session.stopped && (session.process.isAlive() || !session.outputComplete)) {
-                        if (System.nanoTime() - started >= timeoutSeconds * 1_000_000_000d) {
+                        if (System.nanoTime() - session.startedNanos >= timeoutSeconds * 1_000_000_000d) {
+                            session.timedOut = true;
                             stopShellSession(session, "Command timed out after " + timeoutSeconds + " seconds");
                             break;
                         }
@@ -133,7 +281,6 @@ public final class ShellSessionManager implements AutoCloseable {
                 }
             });
         }
-        return session;
     }
 
     private void sendShellInput(ShellSession session, String input, boolean closeStdin) {
@@ -163,6 +310,11 @@ public final class ShellSessionManager implements AutoCloseable {
 
     private AgentTool.ToolResult pollShellSession(ShellSession session, int yieldMs, BooleanSupplier cancelled)
             throws InterruptedException {
+        return pollShellSession(session, yieldMs, cancelled, false);
+    }
+
+    private AgentTool.ToolResult pollShellSession(ShellSession session, int yieldMs, BooleanSupplier cancelled,
+            boolean processTree) throws InterruptedException {
         long started = System.nanoTime();
         try {
             while (true) {
@@ -180,6 +332,7 @@ public final class ShellSessionManager implements AutoCloseable {
             throw error;
         }
         boolean finished = shellSessionFinished(session);
+        if (session.direct) return directResult(session, finished, processTree);
         String output;
         synchronized (session) {
             output = boundShellOutput(session.output.toString(), session.truncated);
@@ -190,6 +343,8 @@ public final class ShellSessionManager implements AutoCloseable {
         details.put("session_id", session.id);
         details.put("status", finished ? "exited" : session.stopped ? "stopping" : "running");
         details.put("input_pending", session.inputPending);
+        details.put("timed_out", session.timedOut);
+        addStatus(details, session, processTree);
         String failure = session.failure;
         boolean isError = finished && failure != null;
         if (finished) {
@@ -216,6 +371,82 @@ public final class ShellSessionManager implements AutoCloseable {
         return new AgentTool.ToolResult(List.of(new TextContent(output, null)), details, isError);
     }
 
+    private AgentTool.ToolResult directResult(ShellSession session, boolean finished, boolean processTree) {
+        String stdout;
+        String stderr;
+        boolean stdoutTruncated;
+        boolean stderrTruncated;
+        synchronized (session) {
+            stdoutTruncated = session.stdoutTruncated;
+            stderrTruncated = session.stderrTruncated;
+            stdout = boundShellOutput(session.stdout.toString(), stdoutTruncated);
+            stderr = boundShellOutput(session.stderr.toString(), stderrTruncated);
+            session.stdout.setLength(0);
+            session.stderr.setLength(0);
+            session.stdoutTruncated = false;
+            session.stderrTruncated = false;
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("session_id", session.id);
+        details.put("status", finished ? "exited" : session.stopped ? "stopping" : "running");
+        details.put("executable", session.executable);
+        details.put("pid", session.process.pid());
+        details.put("stdout", stdout);
+        details.put("stderr", stderr);
+        details.put("stdout_truncated", stdoutTruncated);
+        details.put("stderr_truncated", stderrTruncated);
+        details.put("input_pending", session.inputPending);
+        details.put("timed_out", session.timedOut);
+        if (session.stdoutLog != null) details.put("stdout_log", session.stdoutLog.toString());
+        if (session.stderrLog != null) details.put("stderr_log", session.stderrLog.toString());
+        if (session.logError != null) details.put("log_error", session.logError);
+        if (session.streamError != null) details.put("stream_error", session.streamError);
+        addStatus(details, session, processTree);
+        StringBuilder content = new StringBuilder();
+        if (!stdout.isEmpty()) content.append("stdout:\n").append(stdout);
+        if (!stderr.isEmpty()) content.append(content.isEmpty() ? "" : "\n\n").append("stderr:\n").append(stderr);
+        if (finished) {
+            shellSessions.remove(session.id, session);
+            if (!session.process.isAlive()) {
+                int code = session.process.exitValue();
+                details.put("exit_code", code);
+                content.append("\n\n[").append(session.executable).append(" exited with code ").append(code).append(".]");
+            } else content.append("\n\n[Process stopped; exit code unavailable.]");
+            if (session.failure != null) content.append(" ").append(session.failure);
+        } else {
+            content.append("\n\n[Process session ").append(session.id).append(" is ")
+                    .append(session.stopped ? "stopping" : "running")
+                    .append(". Use shell_input to poll, send stdin, or terminate.]");
+        }
+        boolean isError = finished && (session.timedOut || session.failure != null
+                || !session.process.isAlive() && session.process.exitValue() != 0);
+        return new AgentTool.ToolResult(List.of(new TextContent(content.toString(), null)), details, isError);
+    }
+
+    private static void addStatus(Map<String, Object> details, ShellSession session, boolean processTree) {
+        details.put("elapsed_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - session.startedNanos));
+        details.put("last_output_time", session.lastOutputTime == null ? null : session.lastOutputTime.toString());
+        details.put("cpu_time_ms", session.process.info().totalCpuDuration()
+                .map(duration -> duration.toMillis()).orElse(null));
+        List<ProcessHandle> children = session.process.descendants().toList();
+        details.put("child_count", children.size());
+        if (processTree) {
+            List<Map<String, Object>> tree = new ArrayList<>();
+            tree.add(processNode(session.process.toHandle()));
+            for (ProcessHandle child : children) tree.add(processNode(child));
+            details.put("process_tree", tree);
+        }
+    }
+
+    private static Map<String, Object> processNode(ProcessHandle handle) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("pid", handle.pid());
+        node.put("parent_pid", handle.parent().map(ProcessHandle::pid).orElse(null));
+        node.put("command", handle.info().command().orElse(null));
+        node.put("cpu_time_ms", handle.info().totalCpuDuration().map(duration -> duration.toMillis()).orElse(null));
+        return node;
+    }
+
     private void stopShellSession(ShellSession session, String reason) {
         synchronized (session) {
             if (session.stopped) return;
@@ -234,7 +465,8 @@ public final class ShellSessionManager implements AutoCloseable {
     }
 
     private static boolean shellSessionFinished(ShellSession session) {
-        return session.stopped ? session.terminationComplete : !session.process.isAlive() && session.outputComplete;
+        return session.stopped ? session.terminationComplete && session.outputComplete
+                : !session.process.isAlive() && session.outputComplete;
     }
 
     private static void awaitShellExit(ShellSession session) {
@@ -277,8 +509,22 @@ public final class ShellSessionManager implements AutoCloseable {
     private static final class ShellSession {
         public final String id;
         public final Process process;
+        public final boolean direct;
+        public final String executable;
+        public final Path stdoutLog;
+        public final Path stderrLog;
+        public final long startedNanos = System.nanoTime();
         public final StringBuilder output = new StringBuilder();
+        public final StringBuilder stdout = new StringBuilder();
+        public final StringBuilder stderr = new StringBuilder();
+        public final AtomicInteger readersRemaining;
         public boolean truncated;
+        public boolean stdoutTruncated;
+        public boolean stderrTruncated;
+        public volatile Instant lastOutputTime;
+        public volatile boolean timedOut;
+        public volatile String logError;
+        public volatile String streamError;
         public volatile boolean outputComplete;
         public volatile String failure;
         public volatile boolean inputPending;
@@ -289,6 +535,21 @@ public final class ShellSessionManager implements AutoCloseable {
         public ShellSession(String id, Process process) {
             this.id = id;
             this.process = process;
+            this.direct = false;
+            this.executable = null;
+            this.stdoutLog = null;
+            this.stderrLog = null;
+            this.readersRemaining = new AtomicInteger(1);
+        }
+
+        public ShellSession(String id, Process process, String executable, Path stdoutLog, Path stderrLog) {
+            this.id = id;
+            this.process = process;
+            this.direct = true;
+            this.executable = executable;
+            this.stdoutLog = stdoutLog;
+            this.stderrLog = stderrLog;
+            this.readersRemaining = new AtomicInteger(2);
         }
     }
 
