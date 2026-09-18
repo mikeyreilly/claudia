@@ -1,5 +1,6 @@
 package com.quaxt.codingagent;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
 import com.quaxt.codingagent.ai.types.Message;
@@ -1126,12 +1127,53 @@ class CodingAgentCliTest {
 		}
 	}
 
-	private static CodingAgentCli newInteractiveTerminal(
-			Terminal terminal, java.util.concurrent.Callable<Void> suspendAction, boolean supportsSuspend) {
-		CodingAgentCli cli = new CodingAgentCli();
-		cli.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
-		return cli;
-	}
+    private static CodingAgentCli newInteractiveTerminal(
+            Terminal terminal, java.util.concurrent.Callable<Void> suspendAction, boolean supportsSuspend) {
+        CodingAgentCli cli = new CodingAgentCli();
+        cli.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
+        return cli;
+    }
+
+    @Test
+    void noSessionForkKeepsAnIndependentCopyOfTaskState(@TempDir Path workspace) throws Exception {
+        TerminalFixture fixture = terminal();
+        try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+            Model model = model("faux-1");
+            model.api = "faux"; model.provider = "faux"; model.contextWindow = 100_000;
+            runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+            runtime.coreProviders(java.util.Map.of("faux",
+                    new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "faux", List.of(model))));
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            setCliField(cli, "noSession", true);
+            var configure = CodingAgentCli.class.getDeclaredMethod("configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+            configure.setAccessible(true); configure.invoke(cli, model, workspace, false, null);
+            var stateTool = runtime.builtInTools(workspace, ignored -> {}).stream()
+                    .filter(tool -> CodingAgentOperations.toolName(tool).equals("task_state")).findFirst().orElseThrow();
+            runtime.executeTool(stateTool, "add", CodingAgentOperations.jsonObject().put("action", "add_task")
+                    .put("description", "Source task"), new com.quaxt.codingagent.ai.util.AbortSignal(), ignored -> {});
+            ObjectNode source = runtime.taskStateSnapshot();
+            var fork = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try { invokeCommand(cli, "/fork"); }
+                catch (Exception error) { throw new RuntimeException(error); }
+            });
+            try {
+                waitUntil(() -> Boolean.TRUE.equals(getCliField(cli, "lineEditorReading")));
+                fixture.input().write("Branch\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                fork.get(3, TimeUnit.SECONDS);
+                assertEquals(source, runtime.taskStateSnapshot());
+                assertNull(runtime.state().sessionId());
+                stateTool = runtime.builtInTools(workspace, ignored -> {}).stream()
+                        .filter(tool -> CodingAgentOperations.toolName(tool).equals("task_state")).findFirst().orElseThrow();
+                runtime.executeTool(stateTool, "add2", CodingAgentOperations.jsonObject().put("action", "add_task")
+                        .put("description", "Branch task"), new com.quaxt.codingagent.ai.util.AbortSignal(), ignored -> {});
+                assertEquals(1, source.path("tasks").size());
+                assertEquals(2, runtime.taskStateSnapshot().path("tasks").size());
+            } finally { fixture.input().close(); cli.closeTerminal(); }
+        }
+    }
 
     @Test
     void navigatesLiveAgentsAndBuffersSelectorOutputWithoutLosingTypedInput(@TempDir Path workspace) throws Exception {

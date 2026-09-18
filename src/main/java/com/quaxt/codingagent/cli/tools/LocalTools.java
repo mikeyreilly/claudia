@@ -50,10 +50,10 @@ public final class LocalTools {
     private static final Duration GIT_IGNORE_TIMEOUT = Duration.ofSeconds(30);
     private static final BuiltInTools.Shell SHELL = isWindowsHost() ? BuiltInTools.Shell.POWERSHELL : BuiltInTools.Shell.BASH;
     private static final ToolRegistry<Environment> REGISTRY = new ToolRegistry<>(
-            List.of(read(), write(), edit(), shell(), runProcess(), shellInput(), preflightPosix(), grep(), find(), ls(), question()));
+            List.of(read(), write(), edit(), shell(), runProcess(), shellInput(), preflightPosix(), grep(), find(), ls(), question(), taskState()));
 
     private record Environment(Path cwd, Consumer<Path> onPathAccess, String executable, ShellSessionManager shellSessions,
-                               QuestionBroker questions, String agentId) {}
+                               QuestionBroker questions, String agentId, TaskState taskState) {}
     private record Edit(String oldText, String newText) {}
 
     public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable, ShellSessionManager shellSessions) {
@@ -62,13 +62,37 @@ public final class LocalTools {
 
     public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable,
             ShellSessionManager shellSessions, QuestionBroker questions, String agentId) {
+        return bind(cwd, onPathAccess, gitExecutable, shellSessions, questions, agentId, new TaskState(ignored -> {}));
+    }
+
+    public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable,
+            ShellSessionManager shellSessions, QuestionBroker questions, String agentId, TaskState taskState) {
         return REGISTRY.bind(new Environment(cwd.toAbsolutePath().normalize(), Objects.requireNonNull(onPathAccess),
                 Objects.requireNonNull(gitExecutable), Objects.requireNonNull(shellSessions),
-                Objects.requireNonNull(questions), Objects.requireNonNull(agentId)));
+                Objects.requireNonNull(questions), Objects.requireNonNull(agentId), Objects.requireNonNull(taskState)));
     }
 
     public static Optional<String> describeCall(String name, ObjectNode arguments) {
         return REGISTRY.describeCall(name, arguments);
+    }
+
+    private static ToolDefinition<Environment> taskState() {
+        var action = text("action", "add_task, update_task, remove_task, list, add_finding, remove_finding, add_constraint, or remove_constraint");
+        var id = optionalText("id", "Existing task (#1), finding (F1), or constraint (C1) ID", null);
+        var description = optionalText("description", "Task description", null);
+        var status = optionalText("status", "Task status: todo, in_progress, done, or cancelled", null);
+        var note = optionalText("note", "Task note; an empty string clears it", null);
+        var dependencies = optionalStringList("depends_on", "Task IDs this task depends on; an empty list clears them");
+        var entryText = optionalText("text", "Finding or constraint text", null);
+        return new ToolDefinition<>("task_state",
+                "Keep coarse per-agent tasks, findings, and constraints across turns, compaction, and saved sessions. "
+                        + "Use meaningful tasks for difficult work; record discoveries and requirements; revise or cancel tasks as evidence changes. "
+                        + "Consult list after compaction or resume and before declaring completion. A call after every action is unnecessary.",
+                new ToolParameters(action, id, description, status, note, dependencies, entryText),
+                (local, args, invocation) -> toolResultText(local.taskState.apply(args.get(action), args.get(id),
+                        args.get(description), args.get(status), args.get(note), args.get(dependencies),
+                        invocation.arguments != null && invocation.arguments.hasNonNull("depends_on"), args.get(entryText))),
+                raw -> "Task state: " + textArgument(raw, "action", "list"));
     }
 
     private static ToolDefinition<Environment> question() {

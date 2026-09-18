@@ -23,6 +23,19 @@ execution. Adding a definition to the registry requires no new tool-kind enum
 or execution/presentation switch branches. `ToolRegistryTest` exercises these
 contracts, including a custom tool bound to independent contexts.
 
+The `task_state` tool keeps each agent's coarse tasks, findings, and constraints
+outside the conversation. Use `action=add_task` with a description; new tasks
+start as `todo` and receive IDs such as `#1`. `update_task` accepts an ID and
+optional description, status (`todo`, `in_progress`, `done`, or `cancelled`), note,
+and `depends_on` task IDs. An empty note or dependency list clears that field.
+`remove_task` deletes a task and its dependency references. `add_finding` and
+`add_constraint` accept `text` and assign IDs such as `F1` and `C1`; use
+`remove_finding` or `remove_constraint` with the ID to delete one. `list` shows
+all IDs and details. IDs are never reused within a session. Valid changes are
+saved to the session journal; compaction and resume retain them. `/fork` copies
+the current state into an independent session, including with `--no-session`.
+Each delegated child has its own state.
+
 ## Build and run
 
 Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:

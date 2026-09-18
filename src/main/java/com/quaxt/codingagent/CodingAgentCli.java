@@ -2531,6 +2531,7 @@ public final class CodingAgentCli {
                     name = name.strip();
                     Model model = runtime.state().model();
                     List<Message> forkMessages = runtime.resumableMessages(runtime.state().messages());
+                    ObjectNode forkTaskState = runtime.taskStateSnapshot();
                     boolean recordingEnabled = false;
                     if (!noSession) {
                         try {
@@ -2545,6 +2546,7 @@ public final class CodingAgentCli {
                     }
                     configureShellAgent(model, this.cwd, recordingEnabled, name);
                     runtime.restoreMessages(forkMessages);
+                    runtime.restoreTaskState(forkTaskState);
                     refreshShellStatus();
                     println("Forked session " + name + " with " + forkMessages.size() + " message(s).");
                 }

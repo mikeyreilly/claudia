@@ -117,6 +117,7 @@ import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
 import com.quaxt.codingagent.cli.tools.LocalTools;
+import com.quaxt.codingagent.cli.tools.TaskState;
 import com.quaxt.codingagent.agent.ToolDefinition;
 import com.quaxt.codingagent.shell.ShellSessionManager;
 import com.quaxt.codingagent.mcp.McpAgentTool;
@@ -144,10 +145,15 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private CodingAgentOperations parentRuntime;
     private volatile AgentMode agentMode = AgentMode.BUILD;
     private final QuestionBroker questionBroker = new QuestionBroker();
+    private final TaskState taskState = new TaskState(snapshot -> {
+        if (this.recordingSession) appendSessionEntry(this.sessionId, "task_state", snapshot);
+    });
     private String questionAgentId = SubagentManager.MAIN;
 
     public AgentMode agentMode() { return parentRuntime == null ? agentMode : parentRuntime.agentMode(); }
     public QuestionBroker questions() { return parentRuntime == null ? questionBroker : parentRuntime.questions(); }
+    public ObjectNode taskStateSnapshot() { return taskState.snapshot(); }
+    public void restoreTaskState(JsonNode snapshot) throws IOException { taskState.restore(snapshot); }
 
     private Object groupLock() { return parentRuntime != null ? parentRuntime.groupLock() : subagents == null ? this : subagents; }
 
@@ -4443,6 +4449,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         agentWorkspace = cwd.toAbsolutePath().normalize();
         baseInstructions = systemPrompt;
         transcript.clear();
+        taskState.reset();
         agentState(systemPrompt == null ? "" : systemPrompt, model);
         agent(Objects.requireNonNull(provider, "provider"));
         this.apiKey = apiKey;
@@ -4988,7 +4995,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     /** Binds registered built-in tools to this runtime's workspace and process manager. */
     public List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
-        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions, questions(), questionAgentId);
+        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions, questions(), questionAgentId, taskState);
     }
 
     // ------------------------------------------------------------ mcp tools
@@ -7792,6 +7799,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         }
         appendSessionEntry(id1, "session_start", start);
         sessionRecorder(id1);
+        taskState.reset();
     }
 
     /**
@@ -7799,8 +7807,18 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
      */
     public void forkSessionRecorder(Path cwd, String provider, String model, String sessionName, List<Message> messages)
             throws IOException {
-        createSessionRecorder(cwd, provider, model, sessionName);
-        appendSessionMessages(messages);
+        ObjectNode forkedState = taskState.snapshot();
+        String previousSessionId = sessionId;
+        try {
+            createSessionRecorder(cwd, provider, model, sessionName);
+            appendSessionMessages(messages);
+            appendSessionEntry(sessionId, "task_state", forkedState);
+            taskState.restore(forkedState);
+        } catch (IOException | RuntimeException error) {
+            sessionRecorder(previousSessionId);
+            taskState.restore(forkedState);
+            throw error;
+        }
     }
 
     /**
@@ -7810,6 +7828,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (!childRuntime) requireIdleGroup();
         SessionSnapshot saved = sessionSnapshot(sessionId);
         if (!childRuntime) agentMode = saved.agentMode;
+        if (saved.taskState == null) taskState.reset(); else taskState.restore(saved.taskState);
         sessionRecorder(sessionId);
         transcript.clear();
         transcript.addAll(saved.transcriptMessages);
@@ -8045,6 +8064,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         String level = optionalSessionText(payload, "thinkingLevel");
         String lifecycle = optionalSessionText(payload, "lifecycle");
         AgentMode savedMode = sessionAgentMode(payload);
+        ObjectNode savedTaskState = null;
         List<Message> transcriptMessages = new ArrayList<>();
         List<Message> messages = new ArrayList<>();
         String firstMessage = "";
@@ -8054,6 +8074,12 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             modified = Math.max(modified, entry.timestamp);
             if (entry.type.equals("agent_lifecycle")) lifecycle = optionalSessionText(entry.payload, "status");
             if (entry.type.equals("agent_mode_change")) savedMode = sessionAgentMode(entry.payload);
+            if (entry.type.equals("task_state")) {
+                if (!(entry.payload instanceof ObjectNode object)) throw new IOException("Invalid task_state entry in " + sessionId);
+                TaskState validator = new TaskState(ignored -> {});
+                validator.restore(object);
+                savedTaskState = object.deepCopy();
+            }
             if (entry.type.equals("compaction")) {
                 messages.clear();
                 String summary = requiredSessionPayloadText(entry.payload, "summary", sessionId);
@@ -8213,6 +8239,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         snapshot.thinkingLevel = level == null ? null : thinkingLevelFromWire(level);
         snapshot.lifecycle = lifecycle;
         snapshot.agentMode = savedMode;
+        snapshot.taskState = savedTaskState;
         return snapshot;
     }
 

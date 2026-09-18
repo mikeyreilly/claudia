@@ -51,6 +51,7 @@ class PlanModeTest {
     static void assertMode(FauxProvider.Request request, AgentMode mode) {
         String instructions = request.context.systemPrompt;
         assertTrue(instructions.contains("Current mode: " + mode.label));
+        assertTrue(instructions.contains("task_state list"));
         assertEquals(1, instructions.split("<agent_mode>", -1).length - 1);
         assertTrue(instructions.indexOf("Project context") < instructions.indexOf("<agent_mode>"));
     }
