@@ -7,6 +7,8 @@ import com.quaxt.codingagent.ai.types.Message;
 
 /** Metadata, active conversation context, and complete transcript for one persisted session. */
 public final class SessionSnapshot {
+    /** Latest per-agent task-state checkpoint, or null for older sessions. */
+    public com.fasterxml.jackson.databind.node.ObjectNode taskState;
     public com.quaxt.codingagent.agent.AgentMode agentMode = com.quaxt.codingagent.agent.AgentMode.BUILD;
     public String parentSessionId;
     public String task;
