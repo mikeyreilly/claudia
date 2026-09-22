@@ -8,6 +8,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 /** Typed parameters whose declarations supply both JSON schemas and runtime validation. */
@@ -51,16 +52,35 @@ public final class ToolParameters {
     }
 
     private final Map<String, Parameter<?>> parameters = new LinkedHashMap<>();
+    private final ObjectNode advertisedSchema;
 
     public ToolParameters(Parameter<?>... parameters) {
+        this(null, parameters);
+    }
+
+    private ToolParameters(ObjectNode advertisedSchema, Parameter<?>... parameters) {
         for (Parameter<?> parameter : parameters) {
             if (this.parameters.putIfAbsent(parameter.name, parameter) != null) {
                 throw new IllegalArgumentException("Duplicate parameter: " + parameter.name);
             }
         }
+        this.advertisedSchema = advertisedSchema == null ? null : advertisedSchema.deepCopy();
+    }
+
+    /**
+     * Returns the same typed parameters with a more precise model-facing schema.
+     * Runtime decoding continues to use the parameter declarations above.
+     */
+    public ToolParameters withSchema(ObjectNode schema) {
+        Objects.requireNonNull(schema, "schema");
+        if (!schema.path("type").asText().equals("object")) {
+            throw new IllegalArgumentException("Tool parameter schema must have type object");
+        }
+        return new ToolParameters(schema, parameters.values().toArray(Parameter<?>[]::new));
     }
 
     public ObjectNode schema() {
+        if (advertisedSchema != null) return advertisedSchema.deepCopy();
         ObjectNode schema = Json.MAPPER.createObjectNode().put("type", "object").put("additionalProperties", false);
         ObjectNode properties = schema.putObject("properties");
         var required = schema.putArray("required");

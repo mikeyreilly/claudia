@@ -40,7 +40,19 @@ class TaskStateTest {
         try (var runtime = new CodingAgentOperations()) {
             AgentTool tool = tool(runtime, workspace);
             assertTrue(CodingAgentOperations.toolDescription(tool).contains("compaction"));
-            assertEquals("action", CodingAgentOperations.toolParameters(tool).path("required").get(0).asText());
+            ObjectNode schema = CodingAgentOperations.toolParameters(tool);
+            assertEquals("action", schema.path("required").get(0).asText());
+            assertEquals(8, schema.path("properties").path("action").path("enum").size());
+            assertEquals(8, schema.path("oneOf").size());
+            var addSchema = actionSchema(schema, "add_task");
+            assertTrue(hasRequired(addSchema, "description"));
+            assertFalse(addSchema.path("properties").has("id"));
+            assertEquals("\\S", addSchema.path("properties").path("description").path("pattern").asText());
+            assertTrue(addSchema.path("properties").path("depends_on").path("uniqueItems").asBoolean());
+            var updateSchema = actionSchema(schema, "update_task");
+            assertTrue(hasRequired(updateSchema, "id"));
+            assertEquals(4, updateSchema.path("anyOf").size());
+            assertEquals("^#[1-9][0-9]*$", updateSchema.path("properties").path("id").path("pattern").asText());
             assertTrue(call(runtime, tool, action("add_task").put("description", "Inspect repository"))
                     .contains("#1 [todo] Inspect repository"));
             ObjectNode second = action("add_task").put("description", "Implement change");
@@ -83,6 +95,26 @@ class TaskStateTest {
             assertTrue(listed.contains("#2 [cancelled] Finish change | note: Requirement withdrawn"));
             assertTrue(call(runtime, tool, action("add_task").put("description", "Follow-up"))
                     .contains("#3 [todo] Follow-up"));
+        }
+    }
+
+    @Test void blankIdsAreOmittedForAddsAndInvalidIdsReceiveCorrectiveErrors() throws Exception {
+        try (var runtime = new CodingAgentOperations()) {
+            AgentTool tool = tool(runtime, workspace);
+            for (String blank : List.of("", " ", "\t\r\n", "\u2003")) {
+                assertTrue(call(runtime, tool, action("add_task").put("id", blank)
+                        .put("description", "Task " + blank.length())).contains("[todo]"));
+            }
+            assertTrue(call(runtime, tool, action("add_finding").put("id", " ").put("text", "Finding"))
+                    .contains("F1 Finding"));
+            assertTrue(call(runtime, tool, action("list").put("id", " ")).contains("Tasks:"));
+
+            var error = assertThrows(IllegalArgumentException.class, () -> call(runtime, tool,
+                    action("add_task").put("id", "new").put("description", "Invalid")));
+            assertEquals("Omit id when action=add_task; task IDs are assigned automatically", error.getMessage());
+            var missing = assertThrows(IllegalArgumentException.class, () -> call(runtime, tool,
+                    action("update_task").put("id", " ").put("status", "done")));
+            assertEquals("id must be non-empty", missing.getMessage());
         }
     }
 
@@ -194,5 +226,19 @@ class TaskStateTest {
         model.id = "faux-1"; model.name = "Faux"; model.api = "faux"; model.provider = "faux";
         model.contextWindow = 100_000; model.maxTokens = 4096;
         return model;
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode actionSchema(ObjectNode schema, String action) {
+        for (var alternative : schema.path("oneOf")) {
+            if (alternative.path("properties").path("action").path("enum").get(0).asText().equals(action)) {
+                return alternative;
+            }
+        }
+        throw new AssertionError("Missing schema for " + action);
+    }
+
+    private static boolean hasRequired(com.fasterxml.jackson.databind.JsonNode schema, String field) {
+        for (var required : schema.path("required")) if (required.asText().equals(field)) return true;
+        return false;
     }
 }

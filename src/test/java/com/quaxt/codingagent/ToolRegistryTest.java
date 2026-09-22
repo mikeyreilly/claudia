@@ -66,6 +66,24 @@ class ToolRegistryTest {
     }
 
     @Test
+    void preciseAdvertisedSchemasAreDefensiveAndKeepTypedRuntimeParsing() {
+        var input = optionalText("input", "Input", null);
+        var parameters = new ToolParameters(input);
+        ObjectNode precise = parameters.schema();
+        ((ObjectNode) precise.path("properties").path("input")).put("pattern", "\\S");
+        var advertised = parameters.withSchema(precise);
+
+        ((ObjectNode) precise.path("properties").path("input")).put("pattern", "changed");
+        assertEquals("\\S", advertised.schema().path("properties").path("input").path("pattern").asText());
+        ObjectNode returned = advertised.schema();
+        ((ObjectNode) returned.path("properties").path("input")).put("pattern", "changed again");
+        assertEquals("\\S", advertised.schema().path("properties").path("input").path("pattern").asText());
+        assertEquals("value", advertised.parse(jsonObject().put("input", "value")).get(input));
+        assertThrows(IllegalArgumentException.class, () -> advertised.parse(jsonObject().put("input", 1)));
+        assertThrows(IllegalArgumentException.class, () -> parameters.withSchema(jsonObject().put("type", "array")));
+    }
+
+    @Test
     void textLengthConstraintsCountUnicodeCharactersAsTheSchemaDoes() {
         var input = optionalText("input", "Short input", null, 2);
         var parameters = new ToolParameters(input);

@@ -24,8 +24,9 @@ or execution/presentation switch branches. `ToolRegistryTest` exercises these
 contracts, including a custom tool bound to independent contexts.
 
 The `task_state` tool keeps each agent's coarse tasks, findings, and constraints
-outside the conversation. Use `action=add_task` with a description; new tasks
-start as `todo` and receive IDs such as `#1`. `update_task` accepts an ID and
+outside the conversation. Use `action=add_task` with a description and omit the
+ID; new tasks start as `todo` and receive IDs such as `#1`. Blank optional IDs
+are treated as omitted. `update_task` accepts an ID and
 optional description, status (`todo`, `in_progress`, `done`, or `cancelled`), note,
 and `depends_on` task IDs. An empty note or dependency list clears that field.
 `remove_task` deletes a task and its dependency references. `add_finding` and
