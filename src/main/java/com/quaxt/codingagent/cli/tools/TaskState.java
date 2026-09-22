@@ -50,18 +50,21 @@ public final class TaskState {
 
     public synchronized String apply(String action, String id, String description, String status, String note,
             List<String> dependsOn, boolean hasDependencies, String text) throws IOException {
+        if (id != null && id.isBlank()) id = null;
         if ("list".equals(action)) {
-            requireAbsent(id, "id"); requireAbsent(description, "description");
-            requireAbsent(status, "status"); requireAbsent(note, "note");
-            if (hasDependencies) throw new IllegalArgumentException("depends_on is not valid for list");
-            requireAbsent(text, "text");
+            requireAbsent(id, "id", action); requireAbsent(description, "description", action);
+            requireAbsent(status, "status", action); requireAbsent(note, "note", action);
+            if (hasDependencies) throw new IllegalArgumentException("Omit depends_on when action=" + action);
+            requireAbsent(text, "text", action);
             return list();
         }
         State next = state.copy();
         String result;
         switch (action) {
             case "add_task" -> {
-                requireAbsent(id, "id"); requireAbsent(text, "text");
+                if (id != null) throw new IllegalArgumentException(
+                        "Omit id when action=add_task; task IDs are assigned automatically");
+                requireAbsent(text, "text", action);
                 String value = required(description, "description");
                 String selectedStatus = status == null ? "todo" : validStatus(status);
                 List<String> dependencies = hasDependencies ? validateDependencies(next, dependsOn) : List.of();
@@ -71,8 +74,8 @@ public final class TaskState {
                 result = "Added " + newId;
             }
             case "update_task" -> {
-                requireAbsent(text, "text");
-                String taskId = existingTask(next, id);
+                requireAbsent(text, "text", action);
+                String taskId = existingTask(next, required(id, "id"));
                 Task before = next.tasks.get(taskId);
                 if (description == null && status == null && note == null && !hasDependencies)
                     throw new IllegalArgumentException("update_task requires a field to change");
@@ -83,19 +86,21 @@ public final class TaskState {
                 result = "Updated " + taskId;
             }
             case "remove_task" -> {
-                String taskId = existingTask(next, id);
-                requireAbsent(description, "description"); requireAbsent(status, "status");
-                requireAbsent(note, "note"); requireAbsent(text, "text");
-                if (hasDependencies) throw new IllegalArgumentException("depends_on is not valid for remove_task");
+                String taskId = existingTask(next, required(id, "id"));
+                requireAbsent(description, "description", action); requireAbsent(status, "status", action);
+                requireAbsent(note, "note", action); requireAbsent(text, "text", action);
+                if (hasDependencies) throw new IllegalArgumentException("Omit depends_on when action=" + action);
                 next.tasks.remove(taskId);
                 next.tasks.replaceAll((key, task) -> new Task(task.description, task.status, task.note,
                         task.dependsOn.stream().filter(dependency -> !dependency.equals(taskId)).toList()));
                 result = "Removed " + taskId;
             }
             case "add_finding", "add_constraint" -> {
-                requireAbsent(id, "id"); requireAbsent(description, "description");
-                requireAbsent(status, "status"); requireAbsent(note, "note");
-                if (hasDependencies) throw new IllegalArgumentException("depends_on is not valid for " + action);
+                if (id != null) throw new IllegalArgumentException(
+                        "Omit id when action=" + action + "; IDs are assigned automatically");
+                requireAbsent(description, "description", action);
+                requireAbsent(status, "status", action); requireAbsent(note, "note", action);
+                if (hasDependencies) throw new IllegalArgumentException("Omit depends_on when action=" + action);
                 String value = required(text, "text");
                 boolean finding = action.equals("add_finding");
                 String newId = finding ? "F" + next.nextFinding++ : "C" + next.nextConstraint++;
@@ -103,11 +108,12 @@ public final class TaskState {
                 result = "Added " + newId;
             }
             case "remove_finding", "remove_constraint" -> {
-                requireAbsent(description, "description"); requireAbsent(status, "status");
-                requireAbsent(note, "note"); requireAbsent(text, "text");
-                if (hasDependencies) throw new IllegalArgumentException("depends_on is not valid for " + action);
+                requireAbsent(description, "description", action); requireAbsent(status, "status", action);
+                requireAbsent(note, "note", action); requireAbsent(text, "text", action);
+                if (hasDependencies) throw new IllegalArgumentException("Omit depends_on when action=" + action);
                 Map<String, String> items = action.equals("remove_finding") ? next.findings : next.constraints;
                 String prefix = action.equals("remove_finding") ? "F" : "C";
+                id = required(id, "id");
                 validId(id, prefix);
                 if (items.remove(id) == null) throw new IllegalArgumentException("Unknown " + prefix + " ID: " + id);
                 result = "Removed " + id;
@@ -142,8 +148,8 @@ public final class TaskState {
         return value;
     }
 
-    private static void requireAbsent(String value, String field) {
-        if (value != null) throw new IllegalArgumentException(field + " is not valid for this action");
+    private static void requireAbsent(String value, String field, String action) {
+        if (value != null) throw new IllegalArgumentException("Omit " + field + " when action=" + action);
     }
 
     private static String validStatus(String value) {

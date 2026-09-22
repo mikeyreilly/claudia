@@ -1,6 +1,7 @@
 package com.quaxt.codingagent.cli.tools;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quaxt.codingagent.agent.AgentTool;
 import com.quaxt.codingagent.agent.ToolDefinition;
@@ -78,21 +79,79 @@ public final class LocalTools {
 
     private static ToolDefinition<Environment> taskState() {
         var action = text("action", "add_task, update_task, remove_task, list, add_finding, remove_finding, add_constraint, or remove_constraint");
-        var id = optionalText("id", "Existing task (#1), finding (F1), or constraint (C1) ID", null);
-        var description = optionalText("description", "Task description", null);
-        var status = optionalText("status", "Task status: todo, in_progress, done, or cancelled", null);
-        var note = optionalText("note", "Task note; an empty string clears it", null);
-        var dependencies = optionalStringList("depends_on", "Task IDs this task depends on; an empty list clears them");
-        var entryText = optionalText("text", "Finding or constraint text", null);
+        var id = optionalText("id", "Existing ID for update/remove actions: task (#1), finding (F1), or constraint (C1). Omit for add/list actions; new IDs are assigned automatically.", null);
+        var description = optionalText("description", "Task description; required for add_task and optional for update_task", null);
+        var status = optionalText("status", "Task status for add_task/update_task: todo, in_progress, done, or cancelled", null);
+        var note = optionalText("note", "Task note for add_task/update_task; an empty string clears it", null);
+        var dependencies = optionalStringList("depends_on", "Task IDs for add_task/update_task; an empty list clears them");
+        var entryText = optionalText("text", "Finding or constraint text; required for add_finding/add_constraint", null);
+        var parameters = new ToolParameters(action, id, description, status, note, dependencies, entryText);
+        parameters = parameters.withSchema(taskStateSchema(parameters.schema()));
         return new ToolDefinition<>("task_state",
                 "Keep coarse per-agent tasks, findings, and constraints across turns, compaction, and saved sessions. "
                         + "Use meaningful tasks for difficult work; record discoveries and requirements; revise or cancel tasks as evidence changes. "
+                        + "For add_task, supply description and omit id; the tool assigns the ID. For update/remove actions, use an existing ID. "
                         + "Consult list after compaction or resume and before declaring completion. A call after every action is unnecessary.",
-                new ToolParameters(action, id, description, status, note, dependencies, entryText),
+                parameters,
                 (local, args, invocation) -> toolResultText(local.taskState.apply(args.get(action), args.get(id),
                         args.get(description), args.get(status), args.get(note), args.get(dependencies),
                         invocation.arguments != null && invocation.arguments.hasNonNull("depends_on"), args.get(entryText))),
                 raw -> "Task state: " + textArgument(raw, "action", "list"));
+    }
+
+    private static ObjectNode taskStateSchema(ObjectNode schema) {
+        ObjectNode properties = (ObjectNode) schema.path("properties");
+        enumValues((ObjectNode) properties.path("action"),
+                "add_task", "update_task", "remove_task", "list",
+                "add_finding", "remove_finding", "add_constraint", "remove_constraint");
+        enumValues((ObjectNode) properties.path("status"), "todo", "in_progress", "done", "cancelled");
+        ((ObjectNode) properties.path("id")).put("pattern", "^(?:#[1-9][0-9]*|F[1-9][0-9]*|C[1-9][0-9]*)$");
+        ((ObjectNode) properties.path("description")).put("minLength", 1).put("pattern", "\\S");
+        ((ObjectNode) properties.path("text")).put("minLength", 1).put("pattern", "\\S");
+        ((ObjectNode) properties.path("depends_on")).put("uniqueItems", true);
+        ((ObjectNode) properties.path("depends_on").path("items")).put("pattern", "^#[1-9][0-9]*$");
+
+        ArrayNode alternatives = schema.putArray("oneOf");
+        addTaskStateSchema(alternatives, properties, "add_task",
+                List.of("action", "description", "status", "note", "depends_on"),
+                List.of("action", "description"), null, List.of());
+        addTaskStateSchema(alternatives, properties, "update_task",
+                List.of("action", "id", "description", "status", "note", "depends_on"),
+                List.of("action", "id"), "^#[1-9][0-9]*$",
+                List.of("description", "status", "note", "depends_on"));
+        addTaskStateSchema(alternatives, properties, "remove_task",
+                List.of("action", "id"), List.of("action", "id"), "^#[1-9][0-9]*$", List.of());
+        addTaskStateSchema(alternatives, properties, "list",
+                List.of("action"), List.of("action"), null, List.of());
+        addTaskStateSchema(alternatives, properties, "add_finding",
+                List.of("action", "text"), List.of("action", "text"), null, List.of());
+        addTaskStateSchema(alternatives, properties, "remove_finding",
+                List.of("action", "id"), List.of("action", "id"), "^F[1-9][0-9]*$", List.of());
+        addTaskStateSchema(alternatives, properties, "add_constraint",
+                List.of("action", "text"), List.of("action", "text"), null, List.of());
+        addTaskStateSchema(alternatives, properties, "remove_constraint",
+                List.of("action", "id"), List.of("action", "id"), "^C[1-9][0-9]*$", List.of());
+        return schema;
+    }
+
+    private static void addTaskStateSchema(ArrayNode alternatives, ObjectNode allProperties, String action,
+            List<String> allowed, List<String> required, String idPattern, List<String> oneRequired) {
+        ObjectNode alternative = alternatives.addObject().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = alternative.putObject("properties");
+        for (String field : allowed) properties.set(field, allProperties.path(field).deepCopy());
+        enumValues((ObjectNode) properties.path("action"), action);
+        if (idPattern != null) ((ObjectNode) properties.path("id")).put("pattern", idPattern);
+        ArrayNode requiredFields = alternative.putArray("required");
+        required.forEach(requiredFields::add);
+        if (!oneRequired.isEmpty()) {
+            ArrayNode anyOf = alternative.putArray("anyOf");
+            for (String field : oneRequired) anyOf.addObject().putArray("required").add(field);
+        }
+    }
+
+    private static void enumValues(ObjectNode schema, String... values) {
+        ArrayNode choices = schema.putArray("enum");
+        for (String value : values) choices.add(value);
     }
 
     private static ToolDefinition<Environment> question() {
