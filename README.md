@@ -121,11 +121,15 @@ java -jar target/codingagent.jar \
 ```
 
 Use the `subagent` tool to delegate a task to a separate conversation. Supply
-`task` and optionally `name`; supply `agent_id` to give an existing child another
-task. Main waits for that request's final answer and receives the child's ID,
-name, and status. Reasoning, searches, intermediate output, and tool results stay
-in the child's transcript. Children inherit the workspace, model, thinking level,
-instructions, and effective local/MCP configuration, and cannot delegate further.
+`task` and optionally `name`; when creating a child, `model` selects a model by
+ID from the current provider or by `provider/model`, and `thinking_level` selects
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Omitted selections
+inherit Main's model and thinking level. Supply `agent_id` to give an existing
+child another task with its original model and thinking level. Main waits for that
+request's final answer and receives the child's ID, name, status, model, and
+thinking level. Reasoning, searches, intermediate output, and tool results stay
+in the child's transcript. Children inherit the workspace, instructions, and
+effective local/MCP configuration, and cannot delegate further.
 All agents share files in the workspace, so coordinate edits to the same files.
 Each agent owns its shell processes, MCP connections, and conversation.
 
