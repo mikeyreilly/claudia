@@ -587,6 +587,34 @@ static int java_count_lines(const char *path)
     return count;
 }
 
+static bool java_file_contains(const char *path, const char *needle)
+{
+    FILE *file = fopen(path, "rb");
+    size_t len = needle == nullptr ? 0U : strlen(needle);
+    size_t matched = 0U;
+    int ch;
+
+    if ((file == nullptr) || (len == 0U)) {
+        if (file != nullptr) {
+            (void)fclose(file);
+        }
+        return false;
+    }
+    while ((ch = fgetc(file)) != EOF) {
+        if ((unsigned char)ch == (unsigned char)needle[matched]) {
+            matched++;
+            if (matched == len) {
+                (void)fclose(file);
+                return true;
+            }
+        } else {
+            matched = (unsigned char)ch == (unsigned char)needle[0] ? 1U : 0U;
+        }
+    }
+    (void)fclose(file);
+    return false;
+}
+
 static char *java_first_row_value(const char *rows)
 {
     const char *start = rows == nullptr ? nullptr : strchr(rows, '\n');
@@ -879,7 +907,10 @@ static int test_clojure_dependency_sources(void)
     static const char command_script[] =
         "#!/bin/sh\n"
         "set -eu\n"
-        "echo run >> dependency-invocations.txt\n"
+        "printf 'run %s\\n' \"$*\" >> dependency-invocations.txt\n"
+        "if printf '%s' \"$*\" | grep -q -- '-Sdeps'; then\n"
+        "  cp ../fetch-lib-sources-template.jar ../home/.m2/repository/acme/fetch-lib/1.0/fetch-lib-1.0-sources.jar\n"
+        "fi\n"
         "if [ -f fail-deps ]; then exit 43; fi\n"
         "cat dependency-classpath.txt\n";
     static const char clojure_dependency[] =
@@ -892,6 +923,8 @@ static int test_clojure_dependency_sources(void)
         "package acme.java; public class IgnoredMainJar {}\n";
     static const char preferred_java[] =
         "package acme.java; public class PreferredSourcesJar {}\n";
+    static const char fetched_java[] =
+        "package acme.fetch; public class DownloadedSource {}\n";
     char template_buffer[PATH_MAX];
     char resolved[PATH_MAX];
     const char *tmp = getenv("TMPDIR");
@@ -921,6 +954,10 @@ static int test_clojure_dependency_sources(void)
     char *clj_jar;
     char *java_jar;
     char *java_sources_jar;
+    char *fetch_dir;
+    char *fetch_jar;
+    char *fetch_sources_jar;
+    char *fetch_template;
     char *command;
     char *lein_repo;
     char *lein_src;
@@ -933,6 +970,7 @@ static int test_clojure_dependency_sources(void)
     char *none_src;
     char *classpath_text;
     CodeLensIndexStats stats = {0};
+    CodeLensDependencyOptions tools_deps_aliases = {.tools_deps_aliases = ":dev:reporting"};
     CodeLensQueryOptions dependency_options = {
         .limit = 10,
         .kind = "function",
@@ -984,6 +1022,12 @@ static int test_clojure_dependency_sources(void)
     java_sources_jar = java_dir == nullptr
                            ? nullptr
                            : code_lens_join_path(java_dir, "java-lib-2.0-sources.jar");
+    fetch_dir = repository == nullptr ? nullptr : code_lens_join_path(repository, "acme/fetch-lib/1.0");
+    fetch_jar = fetch_dir == nullptr ? nullptr : code_lens_join_path(fetch_dir, "fetch-lib-1.0.jar");
+    fetch_sources_jar = fetch_dir == nullptr
+                            ? nullptr
+                            : code_lens_join_path(fetch_dir, "fetch-lib-1.0-sources.jar");
+    fetch_template = code_lens_join_path(root, "fetch-lib-sources-template.jar");
     command = code_lens_join_path(root, "fake-classpath-command");
     lein_repo = code_lens_join_path(root, "lein-repo");
     lein_src = lein_repo == nullptr ? nullptr : code_lens_join_path(lein_repo, "src/app");
@@ -1000,12 +1044,14 @@ static int test_clojure_dependency_sources(void)
     none_src = none_repo == nullptr ? nullptr : code_lens_join_path(none_repo, "src/app");
     if ((home == nullptr) || (repository == nullptr) || (clj_dir == nullptr) ||
         (java_dir == nullptr) || (clj_jar == nullptr) || (java_jar == nullptr) ||
-        (java_sources_jar == nullptr) || (command == nullptr) || (lein_repo == nullptr) ||
+        (java_sources_jar == nullptr) || (fetch_dir == nullptr) || (fetch_jar == nullptr) ||
+        (fetch_sources_jar == nullptr) || (fetch_template == nullptr) || (command == nullptr) || (lein_repo == nullptr) ||
         (lein_src == nullptr) || (lein_count == nullptr) || (lein_fail == nullptr) ||
         (deps_repo == nullptr) || (deps_src == nullptr) || (deps_count == nullptr) ||
         (none_repo == nullptr) || (none_src == nullptr) ||
         (code_lens_mkdir_p(home) != 0) || (code_lens_mkdir_p(clj_dir) != 0) ||
-        (code_lens_mkdir_p(java_dir) != 0) || (code_lens_mkdir_p(lein_src) != 0) ||
+        (code_lens_mkdir_p(java_dir) != 0) || (code_lens_mkdir_p(fetch_dir) != 0) ||
+        (code_lens_mkdir_p(lein_src) != 0) ||
         (code_lens_mkdir_p(deps_src) != 0) || (code_lens_mkdir_p(none_src) != 0) ||
         (java_write_file(root, "fake-classpath-command", command_script) != 0) ||
         (chmod(command, 0755) != 0) ||
@@ -1013,20 +1059,25 @@ static int test_clojure_dependency_sources(void)
         (java_write_archive_entry(java_jar, "acme/java/IgnoredMainJar.java", ignored_java) != 0) ||
         (java_write_archive_entry(java_sources_jar,
                                   "acme/java/PreferredSourcesJar.java",
-                                  preferred_java) != 0)) {
+                                  preferred_java) != 0) ||
+        (java_write_archive_entry(fetch_jar, "META-INF/placeholder", "") != 0) ||
+        (java_write_archive_entry(fetch_template,
+                                  "acme/fetch/DownloadedSource.java",
+                                  fetched_java) != 0)) {
         failed = 1;
         goto done;
     }
     {
-        int needed = snprintf(nullptr, 0, "%s:%s:%s/src\n", clj_jar, java_jar, lein_repo);
+        int needed = snprintf(nullptr, 0, "%s:%s:%s:%s/src\n", clj_jar, java_jar, fetch_jar, lein_repo);
 
         classpath_text = needed < 0 ? nullptr : code_lens_alloc((size_t)needed + 1U);
         if (classpath_text != nullptr) {
             (void)snprintf(classpath_text,
                            (size_t)needed + 1U,
-                           "%s:%s:%s/src\n",
+                           "%s:%s:%s:%s/src\n",
                            clj_jar,
                            java_jar,
+                           fetch_jar,
                            lein_repo);
         }
     }
@@ -1146,9 +1197,37 @@ static int test_clojure_dependency_sources(void)
         goto done;
     }
     query = code_lens_query_symbols_ex(deps_repo, "some-fn", &dependency_options);
-    failed |= java_assert(java_count_lines(deps_count) == 1 && (query != nullptr) &&
+    failed |= java_assert(java_count_lines(deps_count) == 2 &&
+                              java_file_contains(deps_count, "run -Spath") &&
+                              !java_file_contains(deps_count, "-M:") &&
+                              java_file_contains(deps_count, "-Sdeps {:deps {acme/fetch-lib$sources {:mvn/version \"1.0\"}}}") &&
+                              code_lens_path_exists(fetch_sources_jar) &&
+                              (query != nullptr) &&
                               (strstr(query, "some-fn|function|some.ns") != nullptr),
-                          "enabling dependency resolution retries tools.deps without deps.edn edit");
+                          "tools.deps fetches a missing Maven source classifier without changing the default basis");
+    query = code_lens_query_symbols_ex(deps_repo, "DownloadedSource", &any_dependency_options);
+    failed |= java_assert((query != nullptr) &&
+                              (strstr(query, "DownloadedSource|class|acme.fetch.DownloadedSource") != nullptr),
+                          "fetched tools.deps source jar is indexed instead of its source-less main jar");
+
+    /* The selected aliases are part of dependency-cache identity. Changing them
+     * must rerun tools.deps rather than reuse the default classpath artifacts. */
+    if (code_lens_index_repository_ex(deps_repo, &tools_deps_aliases, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    query = code_lens_query_symbols_ex(deps_repo, "some-fn", &dependency_options);
+    failed |= java_assert(java_count_lines(deps_count) == 3 &&
+                              java_file_contains(deps_count, "run -Spath -M:dev:reporting") &&
+                              (query != nullptr) &&
+                              (strstr(query, "some-fn|function|some.ns") != nullptr),
+                          "tools.deps resolution passes concatenated aliases and refreshes dependencies");
+    if (code_lens_index_repository(deps_repo, &stats) != 0) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(deps_count) == 4,
+                          "switching back to the default tools.deps basis refreshes dependencies");
 
     if (code_lens_index_repository(none_repo, &stats) != 0) {
         failed = 1;

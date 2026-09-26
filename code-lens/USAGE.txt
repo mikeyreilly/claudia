@@ -7,15 +7,15 @@ Initial command surface:
 
   code-lens help
   code-lens version
-  code-lens index --repo <path>
+  code-lens index --repo <path> [--aliases :a[:b...]]
   code-lens remove --repo <path>
   code-lens list
-  code-lens query --repo <path> [--exclude-tests] [--kind <kind>]
+  code-lens query --repo <path> [--aliases :a[:b...]] [--exclude-tests] [--kind <kind>]
                    [--path <substring>] [--scope workspace|dependencies|all]
                    [--dependency <gav-glob>] [--limit <n>] "<terms>"
-  code-lens context --repo <path> --name <symbol> [--exclude-tests]
+  code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--exclude-tests]
                      [--namespace <namespace>] [--path <substring>]
-  code-lens sql --repo <path> "<query>"
+  code-lens sql --repo <path> [--aliases :a[:b...]] "<query>"
   code-lens mcp
 
 Explicit CLI commands and public APIs identify a repository by path alone —
@@ -27,9 +27,9 @@ any file or directory within it. Supported source extensions are .clj, .cljc,
 
 MCP tool surface:
 
-  query(query, repo?, limit?, excludeTests?, kind?, path?, scope?, dependency?)
-  context(name, repo?, excludeTests?, namespace?, path?)
-  sql(query, repo?)
+  query(query, repo?, aliases?, limit?, excludeTests?, kind?, path?, scope?, dependency?)
+  context(name, repo?, aliases?, excludeTests?, namespace?, path?)
+  sql(query, repo?, aliases?)
 
   `repo` accepts an absolute repository root or any file or directory inside a
   non-bare Git worktree. When supplied, `repo` must be absolute; omitting it
@@ -43,8 +43,14 @@ Dependency sources:
 
   Root build files are detected in priority order: pom.xml uses mvnw/mvnw.cmd
   or Maven on PATH, project.clj uses `lein classpath`, and deps.edn uses
-  `clojure -Spath`. Classpath JARs prefer sibling -sources.jar files and otherwise
-  expose Clojure/Java sources from the main JAR. Extracted sources are cached
+  `clojure -Spath`. Pass --aliases :dev:reporting to `index` (or MCP aliases:
+  ":dev:reporting" on any read tool) to select a tools.deps alias basis; it
+  resolves with `clojure -Spath -M:dev:reporting` and aliases are part of the
+  dependency cache identity. Direct query/context/sql accepts the option for
+  dependency-staleness checks. Classpath JARs prefer sibling -sources.jar files;
+  tools.deps asks the Clojure CLI to fetch missing Maven artifact$sources
+  classifiers in bounded batches, then falls back to sources embedded in the
+  main JAR when a source artifact is unavailable. Extracted sources are cached
   under CODE_LENS_HOME and indexed with their GAV coordinates. query defaults to
   scope=workspace; use --scope dependencies/`scope: "dependencies"` or --scope
   all, optionally with --dependency/`dependency` set to a GAV glob such as

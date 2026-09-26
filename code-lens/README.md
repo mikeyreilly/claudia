@@ -104,10 +104,19 @@ Code-lens detects one root build file in priority order:
 
 Maven applies the project's normal parent POMs, dependency management,
 profiles, mirrors, credentials, proxies, and reactor rules. Leiningen and
-`tools.deps` use their default profile/alias classpaths. For classpath JARs,
-code-lens prefers a sibling `-sources.jar`; when none exists it extracts
-supported Clojure and Java source files from the main JAR, as is customary for
-Clojure libraries.
+`tools.deps` use their default profile/alias classpaths. Supply
+`--aliases :dev:reporting` to `index` to resolve a tools.deps basis through
+those aliases; code-lens invokes `clojure -Spath -M:dev:reporting` and stores
+the alias selection in dependency metadata, so a changed selection refreshes
+the dependency index. Direct `query`, `context`, and `sql` accept the same
+option for their dependency-staleness check. MCP exposes `aliases` on every
+read tool and transparently prepares the matching dependency index. The setting
+is ignored for Maven and Leiningen. For classpath JARs, code-lens prefers a
+sibling `-sources.jar`. During tools.deps resolution, it asks the Clojure CLI to
+fetch missing Maven `artifact$sources` classifiers in bounded batches, retaining
+main-JAR fallback for artifacts whose sources are unavailable. When no source
+JAR is available it extracts supported Clojure and Java source files from the
+main JAR, as is customary for Clojure libraries.
 
 Extracted sources are materialized under
 `$CODE_LENS_HOME/dependencies/sources/<group>/<artifact>/<version>/<checksum>/`.
@@ -156,14 +165,14 @@ or starting MCP.
 ```
 code-lens help
 code-lens version
-code-lens index --repo <path>
+code-lens index --repo <path> [--aliases :a[:b...]]
 code-lens remove --repo <path>
 code-lens list
-code-lens query --repo <path> [--scope workspace|dependencies|all]
+code-lens query --repo <path> [--aliases :a[:b...]] [--scope workspace|dependencies|all]
                 [--dependency <gav-glob>] "<terms>"
-code-lens context --repo <path> --name <symbol> [--exclude-tests]
+code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--exclude-tests]
                    [--namespace <namespace>] [--path <substring>]
-code-lens sql --repo <path> "<query>"
+code-lens sql --repo <path> [--aliases :a[:b...]] "<query>"
 code-lens mcp
 ```
 

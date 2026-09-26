@@ -144,6 +144,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private SubagentManager subagents;
     private CodingAgentOperations parentRuntime;
     private volatile AgentMode agentMode = AgentMode.BUILD;
+    /* Per-process tools.deps aliases forced into code-lens MCP calls. */
+    private String codeLensAliases;
     private final QuestionBroker questionBroker = new QuestionBroker();
     private final TaskState taskState = new TaskState(snapshot -> {
         if (this.recordingSession) appendSessionEntry(this.sessionId, "task_state", snapshot);
@@ -152,6 +154,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     public AgentMode agentMode() { return parentRuntime == null ? agentMode : parentRuntime.agentMode(); }
     public QuestionBroker questions() { return parentRuntime == null ? questionBroker : parentRuntime.questions(); }
+    public String codeLensAliases() { return parentRuntime == null ? codeLensAliases : parentRuntime.codeLensAliases(); }
+    public void setCodeLensAliases(String aliases) {
+        if (parentRuntime != null) throw new IllegalStateException("Change code-lens aliases through Main");
+        codeLensAliases = aliases;
+    }
     public ObjectNode taskStateSnapshot() { return taskState.snapshot(); }
     public void restoreTaskState(JsonNode snapshot) throws IOException { taskState.restore(snapshot); }
 
@@ -292,6 +299,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             child.childRuntime = true;
             child.parentRuntime = this;
             child.questionAgentId = agentId;
+            child.codeLensAliases = codeLensAliases();
             child.applicationPaths(applicationPaths);
             if (authPath != null) child.fileCredentialStore(authPath, fallbackAuthPath);
             Provider provider = copyProviderForChild(agentProvider, child);
@@ -4887,8 +4895,19 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             case ToolDefinition.Bound<?> registered ->
                     registered.execute(new ToolInvocation(toolCallId, arguments, signal, onUpdate));
             case McpAgentTool mcp -> {
+                ObjectNode effectiveArguments = arguments == null ? jsonObject() : arguments.deepCopy();
+                JsonNode properties = mcp.definition.inputSchema.path("properties");
+                String aliases = codeLensAliases();
+                /* code-lens advertises this optional field on every read tool. The command-line
+                 * configuration is authoritative, so do not let a model-selected value change
+                 * the dependency graph mid-session. Server identity avoids affecting unrelated
+                 * MCP tools that may also happen to use an "aliases" property. */
+                if (aliases != null && "code-lens".equals(mcp.client.serverName)
+                        && properties.isObject() && properties.has("aliases")) {
+                    effectiveArguments.put("aliases", aliases);
+                }
                 ObjectNode params = jsonObject().put("name", mcp.definition.name);
-                params.set("arguments", arguments == null ? jsonObject() : arguments);
+                params.set("arguments", effectiveArguments);
                 JsonNode response = mcpTransportRequest(mcp.client.transport, "tools/call", params, mcp.client.timeout, signal);
                 if (!(response instanceof ObjectNode object)) {
                     throw new IOException("MCP tools/call returned an invalid result");
@@ -6070,6 +6089,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             client.capabilities = result.path("capabilities") instanceof ObjectNode object
                     ? object.deepCopy()
                     : jsonObject();
+            client.serverName = result.path("serverInfo").path("name").isTextual()
+                    ? result.path("serverInfo").path("name").asText()
+                    : null;
             client.instructions = result.path("instructions").isTextual()
                     ? result.path("instructions").asText().trim()
                     : null;
@@ -7840,6 +7862,21 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     }
 
     /**
+     * Reattaches an already-running conversation to its existing recorder after its workspace-bound
+     * tools have been rebuilt. The workspace transition is append-only, so an interrupted process
+     * can resume the session from its latest workspace without rewriting its original metadata.
+     */
+    void moveSessionRecorderToWorkspace(String sessionId, Path workspace) throws IOException {
+        if (!childRuntime) requireIdleGroup();
+        SessionSnapshot saved = sessionSnapshot(sessionId);
+        Path normalized = Objects.requireNonNull(workspace, "workspace").toAbsolutePath().normalize();
+        if (!saved.cwd.equals(normalized)) {
+            appendSessionEntry(sessionId, "workspace_change", jsonObject().put("cwd", normalized.toString()));
+        }
+        sessionRecorder(sessionId);
+    }
+
+    /**
      * Appends finished agent messages in chronological order.
      */
     public void appendSessionMessages(List<Message> messages) throws IOException {
@@ -8074,6 +8111,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             modified = Math.max(modified, entry.timestamp);
             if (entry.type.equals("agent_lifecycle")) lifecycle = optionalSessionText(entry.payload, "status");
             if (entry.type.equals("agent_mode_change")) savedMode = sessionAgentMode(entry.payload);
+            if (entry.type.equals("workspace_change")) {
+                cwdText = requiredSessionPayloadText(entry.payload, "cwd", sessionId);
+            }
             if (entry.type.equals("task_state")) {
                 if (!(entry.payload instanceof ObjectNode object)) throw new IOException("Invalid task_state entry in " + sessionId);
                 TaskState validator = new TaskState(ignored -> {});

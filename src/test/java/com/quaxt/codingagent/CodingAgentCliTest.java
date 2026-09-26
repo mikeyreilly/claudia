@@ -54,6 +54,23 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class CodingAgentCliTest {
 
+	// Command line
+
+	@Test
+	void parsesPerRunCodeLensAliases() {
+		try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+			CodingAgentCli cli = new CodingAgentCli(runtime);
+			assertEquals(0, cli.cliRun(new String[] {"--aliases", ":dev:reporting", "--help"}));
+			assertEquals(":dev:reporting", runtime.codeLensAliases());
+		}
+	}
+
+	@Test
+	void rejectsMalformedCodeLensAliases() {
+		assertEquals(2, new CodingAgentCli().cliRun(new String[] {"--aliases", "dev", "--help"}));
+		assertEquals(2, new CodingAgentCli().cliRun(new String[] {"--aliases", "--help"}));
+	}
+
 	// McpSelector
 
 	@Test
@@ -193,6 +210,84 @@ class CodingAgentCliTest {
 				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, file.getFileName().toString()));
 		assertThrows(IllegalArgumentException.class,
 				() -> CodingAgentCli.resolveShellWorkingDirectory(workspace, "  "));
+	}
+
+	@Test
+	void cdPreservesAndMovesThePersistedMainSession(@TempDir Path workspace) throws Exception {
+		Path origin = Files.createDirectories(workspace.resolve("origin"));
+		Path destination = Files.createDirectories(workspace.resolve("destination"));
+		TerminalFixture fixture = terminal();
+		try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+			Model model = model("faux-1");
+			model.api = "faux"; model.provider = "faux"; model.contextWindow = 100_000;
+			runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+			runtime.coreProviders(java.util.Map.of("faux",
+					new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "faux", List.of(model))));
+			CodingAgentCli cli = new CodingAgentCli(runtime);
+			cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+			setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+			setCliField(cli, "activity", readyActivity(System.nanoTime()));
+			runtime.defaultSessionStore();
+			runtime.createSessionRecorder(origin, model.provider, model.id, "cross workspace");
+			String sessionId = runtime.state().sessionId();
+			var configure = CodingAgentCli.class.getDeclaredMethod(
+					"configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+			configure.setAccessible(true); configure.invoke(cli, model, origin, true, "cross workspace");
+			List<Message> messages = List.of(CodingAgentOperations.userMessage("keep this conversation"));
+			runtime.restoreMessages(messages);
+			runtime.appendSessionMessages(messages);
+			var taskState = runtime.builtInTools(origin, ignored -> {}).stream()
+					.filter(tool -> CodingAgentOperations.toolName(tool).equals("task_state")).findFirst().orElseThrow();
+			runtime.executeTool(taskState, "add", CodingAgentOperations.jsonObject()
+					.put("action", "add_task").put("description", "Preserve me"),
+					new com.quaxt.codingagent.ai.util.AbortSignal(), ignored -> {});
+			try {
+				invokeCommand(cli, "/cd " + destination);
+
+				assertEquals(sessionId, runtime.state().sessionId());
+				assertEquals(messages, runtime.state().messages());
+				assertEquals(1, runtime.taskStateSnapshot().path("tasks").size());
+				assertEquals(destination.toAbsolutePath().normalize(), getCliField(cli, "cwd"));
+				assertTrue((Boolean) getCliField(cli, "recordingSession"));
+				assertEquals(destination.toAbsolutePath().normalize(), runtime.sessionSnapshot(sessionId).cwd);
+				assertEquals(List.of(sessionId), runtime.listSessions(destination).stream()
+						.map(session -> session.id).toList());
+				assertTrue(runtime.listSessions(origin).isEmpty());
+				assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("Continuing current session"));
+			} finally { cli.closeTerminal(); }
+		}
+	}
+
+	@Test
+	void cdPreservesAnInMemoryMainSession(@TempDir Path workspace) throws Exception {
+		Path origin = Files.createDirectories(workspace.resolve("origin"));
+		Path destination = Files.createDirectories(workspace.resolve("destination"));
+		TerminalFixture fixture = terminal();
+		try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+			Model model = model("faux-1");
+			model.api = "faux"; model.provider = "faux"; model.contextWindow = 100_000;
+			runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+			runtime.coreProviders(java.util.Map.of("faux",
+					new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "faux", List.of(model))));
+			CodingAgentCli cli = new CodingAgentCli(runtime);
+			cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+			setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+			setCliField(cli, "activity", readyActivity(System.nanoTime()));
+			setCliField(cli, "noSession", true);
+			var configure = CodingAgentCli.class.getDeclaredMethod(
+					"configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+			configure.setAccessible(true); configure.invoke(cli, model, origin, false, null);
+			List<Message> messages = List.of(CodingAgentOperations.userMessage("keep this in memory"));
+			runtime.restoreMessages(messages);
+			try {
+				invokeCommand(cli, "/cd " + destination);
+
+				assertNull(runtime.state().sessionId());
+				assertEquals(messages, runtime.state().messages());
+				assertEquals(destination.toAbsolutePath().normalize(), getCliField(cli, "cwd"));
+				assertFalse((Boolean) getCliField(cli, "recordingSession"));
+			} finally { cli.closeTerminal(); }
+		}
 	}
 
 	@Test

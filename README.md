@@ -68,6 +68,14 @@ java -jar target/codingagent.jar \
   --no-session
 ```
 
+For a Clojure tools.deps monorepo, use `--aliases :dev:reporting` to force that
+alias basis on every code-lens MCP query, context lookup, and SQL read during
+this codingagent run. The option is per-run and is not saved to settings:
+
+```bash
+java -jar target/codingagent.jar --aliases :dev:reporting
+```
+
 ### Anthropic APIM proxy
 
 `codingagent` honors the standard `ANTHROPIC_BASE_URL` and
@@ -158,12 +166,15 @@ enabled, the new conversation is recorded in its own session file; with
 `--no-session`, it is fresh in memory only. Use `/cd <directory>` to change
 the agent workspace without restarting the shell. Relative paths resolve from
 the current agent workspace and `~` is supported. A workspace change rebuilds
-local tools and instruction context, reconnects MCP servers, and starts a
-fresh session; it does not change the parent terminal shell's directory. Use
-`/fork` to branch the current conversation into a new session: the name prompt
-starts with the current session name followed by ` fork` (or `fork` for an
-unnamed session), and the shell switches to the new session after you submit
-the name.
+local tools and instruction context and reconnects MCP servers while preserving
+the Main conversation and its session file. Persisted sessions move to the new
+workspace, so `/resume` lists them there after a restart. Workspace-bound child
+runtimes are released rather than migrated; their saved transcripts remain
+available in their original session files. `/cd` does not change the parent
+terminal shell's directory. Use `/fork` to branch the current conversation into
+a new session: the name prompt starts with the current session name followed by
+` fork` (or `fork` for an unnamed session), and the shell switches to the new
+session after you submit the name.
 
 Typing `/` opens a four-row, alphabetized command panel below the prompt; continue
 typing to prefix-filter it, use Up/Down to navigate, and press Enter to insert
