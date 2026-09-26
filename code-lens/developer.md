@@ -141,11 +141,18 @@ All of these are `?=` assignments and can be overridden on the command line,
 as can `VENDOR_CFLAGS`, `PTHREADFLAGS` (default `-pthread`), `CFLAGS`,
 `LDFLAGS`, and the tool variables `CC` and `AR`.
 
+When `CC` has not been set explicitly, the Makefile selects the first compiler
+from `cc`, `gcc`, and `clang` that passes the C23 feature probe. An explicit
+`CC` always takes precedence, including for cross builds.
+
 Project sources compile with `-Wall -Wextra -Wpedantic -Werror
 -pedantic-errors` plus the detected C-standard flag (`-std=c23`, falling back
-to `-std=c2x`, via `scripts/detect-c23-flag.sh`). Vendor sources are compiled
-with `VENDOR_CFLAGS` only, deliberately without the warning set, so vendor
-code is exempt from `-Werror`.
+to `-std=c2x`, via `scripts/detect-c23-flag.sh`). The probe verifies the C23
+`nullptr` feature used by the codebase rather than accepting the mode flag
+alone. Linux project and test sources additionally use `_XOPEN_SOURCE=700` so
+glibc exposes the required POSIX interfaces. Vendor sources are compiled with
+`VENDOR_CFLAGS` only, deliberately without the warning set, so vendor code is
+exempt from `-Werror`.
 
 `vendor/sqlite/sqlite3.c` additionally compiles with `SQLITE_DEFINES`:
 
@@ -387,7 +394,7 @@ Rules:
   `CODE_LENS_PROFILE=1` prints `git_blob_reads`/`git_file_reads`
   (exported as `code_lens_git_blob_read_count`/
   `code_lens_git_file_read_count`). Requires the system zlib
-  (`PROJECT_LDLIBS = -lz`).
+  (`PROJECT_LDLIBS = -lz`, plus `-lm` on Linux for SQLite FTS5).
 - The recursive walker (`walk_path`) accepts an extension predicate. The
   indexing and staleness paths use `has_supported_extension` for `.clj`,
   `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, and `.h`; the public Clojure compatibility
