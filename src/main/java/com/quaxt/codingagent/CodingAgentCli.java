@@ -1986,6 +1986,7 @@ public final class CodingAgentCli {
                     case "--model" -> this.model = cliArgumentValue(args, ++i, arg);
                     case "--api-key" -> this.apiKey = cliArgumentValue(args, ++i, arg);
                     case "--system-prompt" -> systemPrompt = cliArgumentValue(args, ++i, arg);
+                    case "--aliases" -> runtime.setCodeLensAliases(cliAliasesValue(args, ++i));
                     case "--no-session" -> noSession = true;
                     case "--mode" -> mode = cliArgumentValue(args, ++i, arg);
                     case "--agent-mode" -> runtime.setAgentMode(AgentMode.parse(cliArgumentValue(args, ++i, arg)));
@@ -2028,6 +2029,8 @@ public final class CodingAgentCli {
                           --api-key <key> Override environment-based API-key lookup
                           --system-prompt <text>
                           \t\t\t\t Set a per-run system prompt
+                          --aliases <:a[:b...]>
+                                         Force these Clojure tools.deps aliases on all code-lens MCP reads
                           --no-session   Do not persist the print-mode transcript
                           --mode <print|json|rpc>
                         				 Select plain text, JSONL events, or stdin/stdout RPC
@@ -3130,6 +3133,14 @@ public final class CodingAgentCli {
         return args[index];
     }
 
+    private static String cliAliasesValue(String[] args, int index) {
+        String aliases = cliArgumentValue(args, index, "--aliases");
+        if (aliases.length() < 2 || aliases.charAt(0) != ':') {
+            throw new IllegalArgumentException("--aliases requires a non-empty colon-prefixed alias string such as :dev:reporting");
+        }
+        return aliases;
+    }
+
     private static String instructionLoadedMessage(Path path) {
         return "Found " + path;
     }
@@ -3372,10 +3383,11 @@ public final class CodingAgentCli {
     }
 
     /**
-     * Reconnects MCP servers and, when a model is active, starts a fresh agent session in {@code directory}.
+     * Reconnects workspace-bound tools while preserving the active Main conversation in {@code directory}.
      *
      * <p>This deliberately changes codingagent's virtual workspace only; it does not change the parent
-     * shell's working directory.
+     * shell's working directory. Rebuilding the agent releases workspace-bound child runtimes, but the
+     * Main conversation, task state, and recorder continue in the destination workspace.
      */
     private void changeShellWorkingDirectory(Path directory) throws IOException {
         if (directory.equals(cwd)) {
@@ -3393,12 +3405,30 @@ public final class CodingAgentCli {
         }
 
         Model model = runtime.state().model();
-        IOException persistenceFailure = startFreshShellSession(model, directory);
-        replaceScreen(sessionScreenHeader(model));
-        println("Changed working directory to " + cwd + ". Started a new session.");
-        if (persistenceFailure != null) {
-            println("New session will not be saved: " + persistenceFailure.getMessage());
+        List<Message> messages = runtime.state().messages();
+        ObjectNode taskState = runtime.taskStateSnapshot();
+        String existingSessionId = recordingSession ? runtime.state().sessionId() : null;
+        String existingSessionName = sessionName;
+
+        // configureAgent intentionally creates a fresh tool/runtime graph. Restore the conversational
+        // state immediately afterwards instead of using startFreshShellSession, which creates a new JSONL file.
+        configureShellAgent(model, directory, false, existingSessionName);
+        runtime.restoreMessages(messages);
+        runtime.restoreTaskState(taskState);
+
+        if (existingSessionId != null) {
+            try {
+                runtime.moveSessionRecorderToWorkspace(existingSessionId, directory);
+                runtime.setSessionRecording(true, this::reportCheckpointFailure);
+                recordingSession = true;
+            } catch (IOException | IllegalArgumentException error) {
+                recordingSession = false;
+                println("Session continues in memory, but its new workspace could not be saved: "
+                        + error.getMessage());
+            }
         }
+        refreshShellStatus();
+        println("Changed working directory to " + cwd + ". Continuing current session.");
     }
 
     /**

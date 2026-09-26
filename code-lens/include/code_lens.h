@@ -198,6 +198,15 @@ typedef struct {
     uint64_t git_blob_reads;
 } CodeLensIndexStats;
 
+/* tools_deps_aliases is a Clojure CLI alias string such as ":dev:reporting".
+ * It only affects tools.deps dependency resolution; NULL/empty uses the default basis. */
+typedef struct {
+    const char *tools_deps_aliases;
+} CodeLensDependencyOptions;
+
+int code_lens_index_repository_ex(const char *repo_path,
+                                  const CodeLensDependencyOptions *options,
+                                  CodeLensIndexStats *out_stats);
 int code_lens_index_repository(const char *repo_path, CodeLensIndexStats *out_stats);
 char *code_lens_remove_repo(const char *repo_name);
 
@@ -250,6 +259,8 @@ typedef struct {
      * Leiningen, or tools.deps. */
     const char *scope;
     const char *dependency;
+    /* Clojure tools.deps aliases used when checking/refreshing dependencies. */
+    const char *tools_deps_aliases;
 } CodeLensQueryOptions;
 
 char *code_lens_query_symbols_ex(const char *repo_name,
@@ -262,12 +273,17 @@ typedef struct {
      * is exact; path is a case-insensitive definition-file substring. */
     const char *namespace_name;
     const char *path;
+    /* Clojure tools.deps aliases used when checking/refreshing dependencies. */
+    const char *tools_deps_aliases;
 } CodeLensContextOptions;
 
 char *code_lens_context_symbol_ex(const char *repo_name,
                                    const char *symbol_name,
                                    const CodeLensContextOptions *options);
 char *code_lens_context_symbol(const char *repo_name, const char *symbol_name);
+char *code_lens_run_sql_ex(const char *repo_name,
+                            const char *sql,
+                            const CodeLensDependencyOptions *options);
 char *code_lens_run_sql(const char *repo_name, const char *sql);
 
 int code_lens_mcp_main(void);

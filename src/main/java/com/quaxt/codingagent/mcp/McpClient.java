@@ -16,6 +16,8 @@ public final class McpClient {
 	public McpTransport transport;
 	public Duration timeout;
 	public ObjectNode capabilities;
+	/** The server's self-reported MCP name, when initialize supplied one. */
+	public String serverName;
 	public String instructions;
 
 	public McpClient() {}

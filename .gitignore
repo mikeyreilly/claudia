@@ -4,3 +4,5 @@ target/
 .project
 .settings/
 .DS_Store
+coding-agent-sandbox.jsonc
+run-sandboxed.sh

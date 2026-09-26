@@ -2143,6 +2143,27 @@ class CodingAgentOperationsTest {
 	}
 
 	@Test
+	void movesPersistedSessionToItsLatestWorkspace() throws Exception {
+		Path origin = Files.createDirectories(tempDir.resolve("origin"));
+		Path destination = Files.createDirectories(tempDir.resolve("destination"));
+		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
+		store.createSessionRecorder(origin, "faux", "faux-1");
+		String sessionId = runtime.state().sessionId();
+		store.appendSessionMessages(List.of(CodingAgentOperations.userMessage("continue in another workspace")));
+
+		store.moveSessionRecorderToWorkspace(sessionId, destination);
+
+		SessionSnapshot snapshot = store.sessionSnapshot(sessionId);
+		assertEquals(destination.toAbsolutePath().normalize(), snapshot.cwd);
+		assertEquals(List.of(sessionId), store.listSessions(destination).stream()
+				.map(session -> session.id).toList());
+		assertTrue(store.listSessions(origin).isEmpty());
+		assertEquals("workspace_change", store.readSession(sessionId).getLast().type);
+		assertEquals(destination.toAbsolutePath().normalize().toString(),
+				store.readSession(sessionId).getLast().payload.path("cwd").asText());
+	}
+
+	@Test
 	void restoresTypedMessagesAndContinuesTheSameSession() throws Exception {
 		CodingAgentOperations store = sessionStore(tempDir.resolve("sessions"));
 		store.createSessionRecorder(tempDir, "faux", "faux-1");
@@ -2613,6 +2634,80 @@ class CodingAgentOperationsTest {
 			assertTrue(sawProtocol.get());
 		} finally {
 			http.stop(0);
+		}
+	}
+
+	@Test
+	void forwardsConfiguredAliasesToAdvertisedCodeLensTools() throws Exception {
+		AtomicReference<String> receivedAliases = new AtomicReference<>();
+		HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		http.createContext("/mcp", exchange -> handleCodeLensAliases(exchange, receivedAliases));
+		http.start();
+		try {
+			runtime.setCodeLensAliases(":dev:reporting");
+			var remote = new McpServerConfig.Remote(
+					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
+					Map.of(), null, true, 5_000L, List.of(), List.of());
+			runtime.mcpCreateManager(new McpConfiguration(Map.of("renamed-server", remote), List.of()), tempDir);
+			try {
+				runtime.mcpAwaitReady();
+				AgentTool tool = runtime.mcpTools().getFirst();
+				ObjectNode arguments = CodingAgentOperations.jsonObject()
+						.put("query", "driver").put("aliases", ":model-value");
+				runtime.executeTool(tool, "id", arguments, new AbortSignal(), ignored -> {});
+
+				assertEquals(":dev:reporting", receivedAliases.get());
+				assertEquals(":model-value", arguments.path("aliases").asText(),
+						"injection must not mutate the model transcript arguments");
+			} finally {
+				runtime.mcpCloseManager();
+			}
+		} finally {
+			http.stop(0);
+		}
+	}
+
+	private static void handleCodeLensAliases(HttpExchange exchange, AtomicReference<String> receivedAliases)
+			throws IOException {
+		try (exchange) {
+			if (exchange.getRequestMethod().equals("DELETE")) {
+				exchange.sendResponseHeaders(204, -1);
+				return;
+			}
+			JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+			if (!request.has("id")) {
+				exchange.sendResponseHeaders(202, -1);
+				return;
+			}
+			ObjectNode response = CodingAgentOperations.jsonObject().put("jsonrpc", "2.0");
+			response.set("id", request.get("id"));
+			switch (request.path("method").asText()) {
+				case "initialize" -> {
+					ObjectNode result = response.putObject("result");
+					result.put("protocolVersion", "2025-11-25");
+					result.putObject("capabilities").putObject("tools");
+					result.putObject("serverInfo").put("name", "code-lens").put("version", "test");
+					exchange.getResponseHeaders().set("Mcp-Session-Id", "code-lens-session");
+				}
+				case "tools/list" -> {
+					ObjectNode tool = response.putObject("result").putArray("tools").addObject();
+					tool.put("name", "query");
+					ObjectNode properties = tool.putObject("inputSchema").put("type", "object")
+							.putObject("properties");
+					properties.putObject("query").put("type", "string");
+					properties.putObject("aliases").put("type", "string");
+				}
+				case "tools/call" -> {
+					receivedAliases.set(request.path("params").path("arguments").path("aliases").asText());
+					response.putObject("result").putArray("content").addObject()
+							.put("type", "text").put("text", "ok");
+				}
+				default -> response.putObject("error").put("code", -32601).put("message", "not found");
+			}
+			byte[] body = Json.MAPPER.writeValueAsBytes(response);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
 		}
 	}
 
