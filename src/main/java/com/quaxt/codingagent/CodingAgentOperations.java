@@ -282,18 +282,41 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (recordingSession && childRuntime) appendSessionEntry(sessionId, "agent_lifecycle", jsonObject().put("status", status));
     }
 
-    SessionSnapshot createChildSession(String task, String name) throws IOException {
+    SessionSnapshot createChildSession(String task, String name, Model model, ThinkingLevel level) throws IOException {
         if (!recordingSession) return null;
         try (CodingAgentOperations recorder = new CodingAgentOperations()) {
             recorder.agentMode = agentMode();
             recorder.sessionStore(directory, legacyDirectories);
-            recorder.createSessionRecorder(agentWorkspace, selectedModel.provider, selectedModel.id, name,
-                    sessionId, task, thinkingLevel);
+            recorder.createSessionRecorder(agentWorkspace, model.provider, model.id, name,
+                    sessionId, task, level);
             return recorder.sessionSnapshot(recorder.sessionId);
         }
     }
 
-    CodingAgentOperations createChildRuntime(SessionSnapshot saved, String agentId) throws IOException {
+    Model resolveChildModel(String requested) {
+        if (requested == null || requested.isBlank()) return copyModel(selectedModel);
+        String selection = requested.strip();
+        String providerId = selectedModel.provider;
+        String modelId = selection;
+        if (selection.contains("/")) {
+            String[] parts = selection.split("/", 2);
+            providerId = parts[0];
+            modelId = parts[1];
+        }
+        if (providerId.isBlank() || modelId.isBlank()) {
+            throw new IllegalArgumentException("model must be a model ID or provider/model");
+        }
+        Provider provider = providerId.equals(selectedModel.provider)
+                ? agentProvider
+                : requireCoreProvider(providerId);
+        for (Model candidate : providerModels(provider)) {
+            if (candidate.id.equals(modelId)) return copyModel(candidate);
+        }
+        throw new IllegalArgumentException("Unknown model: " + providerId + "/" + modelId);
+    }
+
+    CodingAgentOperations createChildRuntime(
+            SessionSnapshot saved, String agentId, Model model, ThinkingLevel level) throws IOException {
         CodingAgentOperations child = new CodingAgentOperations();
         try {
             child.childRuntime = true;
@@ -302,7 +325,9 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             child.codeLensAliases = codeLensAliases();
             child.applicationPaths(applicationPaths);
             if (authPath != null) child.fileCredentialStore(authPath, fallbackAuthPath);
-            Provider provider = copyProviderForChild(agentProvider, child);
+            boolean sameProvider = selectedModel.provider.equals(model.provider);
+            Provider sourceProvider = sameProvider ? agentProvider : requireCoreProvider(model.provider);
+            Provider provider = copyProviderForChild(sourceProvider, child);
             Map<String, McpServerConfig> configs = new LinkedHashMap<>();
             servers.forEach((name, server) -> {
                 synchronized (server.lock) {
@@ -317,8 +342,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 }
             });
             if (!configs.isEmpty()) child.mcpCreateManager(new McpConfiguration(configs, List.of()), agentWorkspace);
-            child.configureAgent(provider, copyModel(selectedModel), agentWorkspace, baseInstructions, apiKey,
-                    saved != null && saved.thinkingLevel != null ? saved.thinkingLevel : thinkingLevel);
+            child.configureAgent(provider, copyModel(model), agentWorkspace, baseInstructions,
+                    sameProvider ? apiKey : null, level);
             child.retryPolicy = retryPolicy;
             child.autoCompactionEnabled = autoCompactionEnabled;
             child.compactionReserveTokens = compactionReserveTokens;

@@ -21,6 +21,8 @@ public final class SubagentManager implements AutoCloseable {
     private static final class Entry {
         final String id, name, task;
         final Deque<Request> queue = new ArrayDeque<>();
+        Model model;
+        ThinkingLevel thinkingLevel;
         CodingAgentOperations runtime;
         SessionSnapshot saved;
         Status status = Status.IDLE;
@@ -64,8 +66,8 @@ public final class SubagentManager implements AutoCloseable {
     private Snapshot snapshot(Entry entry) {
         var saved = entry.saved;
         var state = entry.runtime == null
-                ? new CodingAgentOperations.AgentSnapshot(root.state().model(),
-                    saved == null || saved.thinkingLevel == null ? root.state().thinkingLevel() : saved.thinkingLevel,
+                ? new CodingAgentOperations.AgentSnapshot(CodingAgentOperations.copyModel(entry.model),
+                    entry.thinkingLevel,
                     false, false, true, saved == null ? List.of() : CodingAgentOperations.snapshotMessages(saved.messages),
                     saved == null ? null : entry.id, root.agentMode())
                 : entry.runtime.state();
@@ -87,13 +89,22 @@ public final class SubagentManager implements AutoCloseable {
     }
 
     public synchronized String create(String task, String name) throws IOException {
+        return create(task, name, null, null);
+    }
+
+    public synchronized String create(String task, String name, String model, ThinkingLevel level) throws IOException {
         if (closed) throw new IllegalStateException("Subagent manager is closed");
         if (task == null || task.isBlank()) throw new IllegalArgumentException("task must not be blank");
         String childName = name == null || name.isBlank() ? "Agent " + entries.size() : name.strip();
+        Model childModel = root.resolveChildModel(model);
+        ThinkingLevel requestedLevel = level == null ? root.state().thinkingLevel() : level;
+        ThinkingLevel childLevel = CodingAgentOperations.clampThinkingLevel(childModel, requestedLevel);
         // The parent link is durable before any child provider call is made.
-        SessionSnapshot saved = root.createChildSession(task, childName);
+        SessionSnapshot saved = root.createChildSession(task, childName, childModel, childLevel);
         String id = saved == null ? CodingAgentOperations.uuidv7() : saved.id;
         Entry child = new Entry(id, childName, task);
+        child.model = childModel;
+        child.thinkingLevel = childLevel;
         child.saved = saved;
         entries.put(id, child);
         return id;
@@ -147,7 +158,8 @@ public final class SubagentManager implements AutoCloseable {
                 synchronized (this) {
                     if (request.result.isDone()) throw new CancellationException("Cancelled");
                     if (entry.runtime == null) {
-                        entry.runtime = root.createChildRuntime(entry.saved, entry.id);
+                        entry.runtime = root.createChildRuntime(
+                                entry.saved, entry.id, entry.model, entry.thinkingLevel);
                         watch(entry);
                     }
                 }
@@ -207,7 +219,10 @@ public final class SubagentManager implements AutoCloseable {
 
     public synchronized CodingAgentOperations runtime(String id) throws IOException {
         Entry entry = require(id);
-        if (entry.runtime == null) { entry.runtime = root.createChildRuntime(entry.saved, entry.id); watch(entry); }
+        if (entry.runtime == null) {
+            entry.runtime = root.createChildRuntime(entry.saved, entry.id, entry.model, entry.thinkingLevel);
+            watch(entry);
+        }
         return entry.runtime;
     }
 
@@ -218,6 +233,15 @@ public final class SubagentManager implements AutoCloseable {
         for (SessionSnapshot saved : children) {
             Entry entry = new Entry(saved.id, saved.name == null ? "Agent " + entries.size() : saved.name, saved.task);
             entry.saved = saved;
+            try {
+                entry.model = root.resolveChildModel(saved.provider + "/" + saved.model);
+            } catch (IllegalArgumentException unavailable) {
+                entry.model = root.resolveChildModel(null);
+            }
+            ThinkingLevel requestedLevel = saved.thinkingLevel == null
+                    ? root.state().thinkingLevel()
+                    : saved.thinkingLevel;
+            entry.thinkingLevel = CodingAgentOperations.clampThinkingLevel(entry.model, requestedLevel);
             try { entry.status = Status.valueOf(saved.lifecycle); } catch (RuntimeException ignored) { entry.status = Status.IDLE; }
             if (entry.status == Status.RUNNING) entry.status = Status.INTERRUPTED;
             entries.put(entry.id, entry);
@@ -234,19 +258,40 @@ public final class SubagentManager implements AutoCloseable {
         var task = text("task", "Task brief for the child. Include the context it needs; parent history is not shared.");
         var name = optionalText("name", "Optional display name for a new child", null);
         var id = optionalText("agent_id", "Reuse a child ID returned by this tool. Omit or leave blank to create a new child.", null);
+        var model = optionalText("model", "Model for a new child, as a model ID from the current provider or provider/model. Omit to inherit the parent's model.", null);
+        var thinkingLevel = optionalText("thinking_level", "Thinking level for a new child. Omit to inherit the parent's level.", null);
+        var baseParameters = new ToolParameters(task, name, id, model, thinkingLevel);
+        var schema = baseParameters.schema();
+        var properties = (com.fasterxml.jackson.databind.node.ObjectNode) schema.get("properties");
+        var levelSchema = (com.fasterxml.jackson.databind.node.ObjectNode) properties.get("thinking_level");
+        var levels = levelSchema.putArray("enum");
+        for (ThinkingLevel level : ThinkingLevel.values()) levels.add(level.wire);
+        var parameters = baseParameters.withSchema(schema);
         return new ToolDefinition<SubagentManager>("subagent",
-                "Delegate a task to a separate conversation and wait for its final answer. Children share the workspace and cannot delegate further.",
-                new ToolParameters(task, name, id), (manager, args, invocation) -> {
+                "Delegate a task to a separate conversation and wait for its final answer. New children may use a selected model and thinking level. Children share the workspace and cannot delegate further.",
+                parameters, (manager, args, invocation) -> {
                     String child = args.get(id);
                     if (MAIN.equals(child)) throw new IllegalArgumentException("agent_id must identify a child");
-                    if (child == null || child.isBlank()) child = manager.create(args.get(task), args.get(name));
+                    String requestedModel = args.get(model);
+                    String requestedThinking = args.get(thinkingLevel);
+                    if (child == null || child.isBlank()) {
+                        child = manager.create(args.get(task), args.get(name), requestedModel,
+                                parseThinkingLevel(requestedThinking));
+                    } else if ((requestedModel != null && !requestedModel.isBlank())
+                            || (requestedThinking != null && !requestedThinking.isBlank())) {
+                        throw new IllegalArgumentException(
+                                "model and thinking_level can only be selected when creating a new child");
+                    }
                     CompletableFuture<Answer> result = manager.submit(child, args.get(task));
                     String childId = child;
                     root.onAbort(invocation.signal, () -> manager.cancel(childId));
                     try {
                         Answer answer = result.get();
+                        CodingAgentOperations.AgentSnapshot state = manager.snapshot(answer.agentId).state();
                         var data = CodingAgentOperations.jsonObject().put("agent_id", answer.agentId)
                                 .put("name", answer.name).put("status", answer.status.name().toLowerCase(Locale.ROOT))
+                                .put("model", state.model().provider + "/" + state.model().id)
+                                .put("thinking_level", state.thinkingLevel().wire)
                                 .put("final_answer", answer.finalAnswer);
                         return new AgentTool.ToolResult(List.of(new TextContent(data.toString(), null)), data, false);
                     } catch (InterruptedException error) {
@@ -256,6 +301,15 @@ public final class SubagentManager implements AutoCloseable {
                         throw new IllegalStateException("Agent " + childId + ": " + error.getMessage(), error);
                     }
                 }, args -> args.path("task").asText()).bind(this);
+    }
+
+    private static ThinkingLevel parseThinkingLevel(String value) {
+        if (value == null || value.isBlank()) return null;
+        String requested = value.strip();
+        for (ThinkingLevel level : ThinkingLevel.values()) {
+            if (level.wire.equals(requested)) return level;
+        }
+        throw new IllegalArgumentException("Unknown thinking level: " + requested);
     }
 
     @Override public void close() {
