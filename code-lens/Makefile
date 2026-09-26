@@ -1,9 +1,38 @@
-CC ?= cc
 AR ?= ar
 RM ?= rm -f
 CP ?= cp
 
+NON_BUILD_GOALS := clean vendor-deps
+BUILD_GOALS := $(filter-out $(NON_BUILD_GOALS),$(MAKECMDGOALS))
+ifeq ($(strip $(MAKECMDGOALS)),)
+BUILD_GOALS := all
+endif
+
+ifneq ($(strip $(BUILD_GOALS)),)
+ifneq ($(filter default undefined,$(origin CC)),)
+CC := $(shell for compiler in cc gcc clang; do \
+	if sh scripts/detect-c23-flag.sh "$$compiler" >/dev/null 2>&1; then \
+		printf '%s\n' "$$compiler"; \
+		break; \
+	fi; \
+done)
+endif
+ifeq ($(strip $(CC)),)
+$(error No compiler with the required ISO C23 features was found; set CC to a suitable compiler)
+endif
 CSTD_FLAG := $(shell sh scripts/detect-c23-flag.sh "$(CC)")
+ifeq ($(strip $(CSTD_FLAG)),)
+$(error Compiler '$(CC)' does not support the required ISO C23 features; set CC to a newer compiler)
+endif
+endif
+
+PLATFORM_CPPFLAGS :=
+PLATFORM_LDLIBS :=
+ifeq ($(shell uname -s 2>/dev/null),Linux)
+PLATFORM_CPPFLAGS += -D_XOPEN_SOURCE=700
+PLATFORM_LDLIBS += -lm
+endif
+
 WARNFLAGS := -Wall -Wextra -Wpedantic -Werror -pedantic-errors
 CPPFLAGS := -Iinclude -Ivendor/sqlite -Ivendor/tree-sitter/lib/include -Ivendor/libdeflate
 BUILD ?= release
@@ -32,13 +61,13 @@ OPTFLAGS ?= $(DEFAULT_OPTFLAGS)
 LTOFLAGS ?= $(DEFAULT_LTOFLAGS)
 PTHREADFLAGS ?= -pthread
 CFLAGS ?=
-PROJECT_CFLAGS := $(CSTD_FLAG) $(WARNFLAGS) $(OPTFLAGS) $(LTOFLAGS) $(PTHREADFLAGS) $(CFLAGS)
+PROJECT_CFLAGS := $(CSTD_FLAG) $(PLATFORM_CPPFLAGS) $(WARNFLAGS) $(OPTFLAGS) $(LTOFLAGS) $(PTHREADFLAGS) $(CFLAGS)
 VENDOR_CFLAGS ?= $(OPTFLAGS) $(LTOFLAGS)
 LDFLAGS ?=
 PROJECT_LDFLAGS := $(filter-out -D%,$(OPTFLAGS)) $(LTOFLAGS) $(PTHREADFLAGS) $(LDFLAGS)
 # System zlib still inflates loose objects (streaming, unknown output size);
 # vendored libdeflate inflates pack objects (whole-buffer, known size).
-PROJECT_LDLIBS ?= -lz
+PROJECT_LDLIBS ?= -lz $(PLATFORM_LDLIBS)
 
 BUILD_DIR := build
 BUILD_ROOT := $(BUILD_DIR)/$(BUILD)
@@ -143,7 +172,7 @@ test-debug:
 	$(MAKE) BUILD=debug test
 
 check-c23:
-	@printf 'Using %s for ISO C23 mode\n' "$(CSTD_FLAG)"
+	@printf 'Using %s with %s for ISO C23 mode\n' "$(CC)" "$(CSTD_FLAG)"
 
 # Opt-in profile-guided build; the default release path stays PGO-free so
 # clean builds need no profile data. Trains on PGO_TRAIN_PATH (defaults to

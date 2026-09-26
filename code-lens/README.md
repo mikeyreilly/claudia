@@ -15,7 +15,7 @@ C compiler.
 
 ### macOS and Linux
 
-- A C compiler with ISO C23 (or C2x) support
+- A C compiler with ISO C23 (or C2x) support, including `nullptr`
 - `make`, `git`, `curl`, `unzip`, and a POSIX shell
 - The project's dependency tool plus a JDK when indexing dependency sources:
   Maven/`mvnw`, Leiningen, or the Clojure CLI
@@ -41,6 +41,9 @@ scripts/vendor-deps.sh
 
 # 2. Build the release binary (copied to build/code-lens).
 make release
+
+# Override the automatically selected compiler if needed.
+# make CC=clang release
 
 # 3. Run the tests.
 make test

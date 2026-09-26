@@ -10,13 +10,18 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-printf 'int main(void) { return 0; }\n' > "$tmp"
+printf '%s\n' \
+    '#include <stddef.h>' \
+    'int main(void) {' \
+    '    void *pointer = nullptr;' \
+    '    return pointer != nullptr;' \
+    '}' > "$tmp"
 
 if "$cc" -std=c23 -pedantic-errors -c "$tmp" -o "$obj" >/dev/null 2>&1; then
     printf '%s\n' '-std=c23'
 elif "$cc" -std=c2x -pedantic-errors -c "$tmp" -o "$obj" >/dev/null 2>&1; then
     printf '%s\n' '-std=c2x'
 else
-    printf 'error: %s does not support ISO C23 or C2x mode\n' "$cc" >&2
+    printf 'error: %s does not support the required ISO C23 features (including nullptr)\n' "$cc" >&2
     exit 1
 fi
