@@ -864,6 +864,153 @@ class CodingAgentCliTest {
 		}
 	}
 
+    private static final String KEYBOARD_PUSH = "\u001b[>1u";
+    private static final String KEYBOARD_POP = "\u001b[<1u";
+
+    @Test
+    void scopesEnhancedKeyboardReportingToEveryReadAndCleansUpAllExitPaths() throws Exception {
+        TerminalFixture fixture = terminal();
+        var attributes = fixture.terminal().getAttributes();
+        attributes.setControlChar(org.jline.terminal.Attributes.ControlChar.VINTR, 3);
+        attributes.setControlChar(org.jline.terminal.Attributes.ControlChar.VEOF, 4);
+        fixture.terminal().setAttributes(attributes);
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        try {
+            assertFalse(fixture.output().toString(StandardCharsets.UTF_8).contains(KEYBOARD_PUSH));
+            String[] inputs = {"first\u001b[13;2usecond\r", "\u001b[99;5u", "\u001b[100;5u", "\u001b[111;5u"};
+            cli.bindAppAction("expandTools", () -> { throw new IllegalStateException("widget failed"); });
+            for (int i = 0; i < inputs.length; i++) {
+                fixture.output().reset();
+                fixture.input().write(inputs[i].getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                int exit = i;
+                assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                    switch (exit) {
+                        case 0 -> assertEquals("first\nsecond", cli.readLine("> "));
+                        case 1 -> assertEquals("", cli.readLine("> "));
+                        case 2 -> assertNull(cli.readLine("> "));
+                        case 3 -> assertThrows(IllegalStateException.class, () -> cli.readLine("> "));
+                    }
+                });
+                String written = fixture.output().toString(StandardCharsets.UTF_8);
+                assertEquals(1, count(written, KEYBOARD_PUSH));
+                assertEquals(1, count(written, KEYBOARD_POP));
+                assertTrue(written.indexOf(KEYBOARD_PUSH) < written.indexOf("> "));
+                assertTrue(written.indexOf(KEYBOARD_PUSH) < written.indexOf(KEYBOARD_POP));
+            }
+        } finally { cli.closeTerminal(); }
+    }
+
+    @Test
+    void doesNotEnableEnhancedReportingOnDumbTerminals() throws Exception {
+        for (String type : List.of(Terminal.TYPE_DUMB, Terminal.TYPE_DUMB_COLOR)) {
+            TerminalFixture fixture = terminal(type);
+            CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            try {
+                fixture.input().write("hello\r".getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                assertEquals("hello", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
+                String written = fixture.output().toString(StandardCharsets.UTF_8);
+                assertFalse(written.contains(KEYBOARD_PUSH));
+                assertFalse(written.contains(KEYBOARD_POP));
+            } finally { cli.closeTerminal(); }
+        }
+    }
+
+    @Test
+    void enhancedControlsUseCurrentJlineAndApplicationBindings() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        var actions = new java.util.ArrayList<String>();
+        try {
+            cli.bindAppAction("expandTools", () -> actions.add("details"));
+            cli.bindAppAction("toggleThinking", () -> actions.add("thinking"));
+            cli.bindAppAction("interrupt", () -> actions.add("escape"));
+            var editor = (org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader");
+            // A tab alias must invoke the existing binding, not insert CSI text.
+            editor.getWidgets().put("test-tab", () -> {
+                assertEquals("\t", editor.getLastBinding());
+                actions.add("tab");
+                return true;
+            });
+            editor.getWidgets().put("test-prefix", () -> {
+                assertEquals("\u0018\u0015", editor.getLastBinding());
+                actions.add("prefix");
+                return true;
+            });
+            editor.getKeyMaps().values().forEach(map -> {
+                map.bind(new org.jline.reader.Reference("test-tab"), "\t");
+                map.bind(new org.jline.reader.Reference("test-prefix"), "\u0018\u0015");
+            });
+            for (String submit : List.of("\r", "\u001b[13u", "\u001b[13;1u", "\u001b[109;5u")) {
+                fixture.input().write(("discard\u001b[97;5u\u001b[107;5u" // Ctrl-A, Ctrl-K
+                        + "abX\u001b[127uY\u001b[127;1u" // Backspace, both forms
+                        + "\u001b[111;5u\u001b[116;5u\u001b[27u\u001b[27;1u"
+                        + "\u001b[9u\u001b[9;1u"
+                        + "\u001b[120;5u\u001b[117;5u\u0018\u001b[117;5u"
+                        + "\u001b[13;2ucd\u001b[13;5uef" + submit).getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                assertEquals("ab\ncd\nef", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
+                assertEquals(List.of("details", "thinking", "escape", "escape", "tab", "tab", "prefix", "prefix"), actions);
+                actions.clear();
+            }
+        } finally { cli.closeTerminal(); }
+    }
+
+    @Test
+    void enhancedAltShortcutsStillMoveByWord() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        try {
+            fixture.input().write("one two\u001b[98;3uX\u001b[102;3uY\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("one XtwoY", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
+        } finally { cli.closeTerminal(); }
+    }
+
+    @Test
+    void nestedSelectorFailureRestoresThenPopsEditorReporting() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        try {
+            cli.bindAppAction("expandTools", () -> {
+                try {
+                    cli.runComponent(new TuiComponent<>(frame -> {
+                        String written = fixture.output().toString(StandardCharsets.UTF_8);
+                        assertEquals(1, count(written, KEYBOARD_PUSH));
+                        assertEquals(1, count(written, KEYBOARD_POP));
+                        throw new IllegalStateException("render failed");
+                    }, input -> {}, () -> false, () -> null));
+                } catch (java.io.IOException error) { throw new AssertionError(error); }
+            });
+            fixture.input().write("draft\u001b[111;5u".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
+                    assertThrows(IllegalStateException.class, () -> cli.readLine("> ")));
+            String written = fixture.output().toString(StandardCharsets.UTF_8);
+            assertEquals(2, count(written, KEYBOARD_PUSH));
+            assertEquals(2, count(written, KEYBOARD_POP));
+            assertTrue(written.indexOf(KEYBOARD_POP) < written.indexOf("\u001b[?1049h"));
+            assertTrue(written.lastIndexOf(KEYBOARD_PUSH) > written.lastIndexOf("\u001b[?1049l"));
+            assertTrue(written.lastIndexOf(KEYBOARD_POP) > written.lastIndexOf(KEYBOARD_PUSH));
+        } finally { cli.closeTerminal(); }
+    }
+
+    @Test
+    void selectorsNormalizeQueuedEnhancedControls() {
+        for (String legacy : List.of("\u0001", "\u0003", "\u0004", "\u000e", "\u000f", "\u0010", "\u0014", "\u0015", "\u001a")) {
+            int letter = legacy.charAt(0) + 96;
+            assertEquals(CodingAgentCli.parseInputSequence(legacy),
+                    CodingAgentCli.parseInputSequence("\u001b[" + letter + ";5u"));
+        }
+        for (int code : new int[] {9, 13, 27, 127}) {
+            for (String modifier : List.of("", ";1")) {
+                assertEquals(CodingAgentCli.parseInputSequence(Character.toString(code)),
+                        CodingAgentCli.parseInputSequence("\u001b[" + code + modifier + "u"));
+            }
+        }
+    }
+
 	@Test
 	void bracketedPasteKeepsMultilineTextUntilEnter() throws Exception {
 		TerminalFixture fixture = terminal();
@@ -933,6 +1080,9 @@ class CodingAgentCliTest {
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+                    String written = fixture.output().toString(StandardCharsets.UTF_8);
+                    assertEquals(1, count(written, KEYBOARD_PUSH));
+                    assertEquals(1, count(written, KEYBOARD_POP));
 					suspended.set(true);
 					fixture.output().writeBytes("shell activity\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write("d\r".getBytes(StandardCharsets.UTF_8));
@@ -942,13 +1092,15 @@ class CodingAgentCliTest {
 				true);
 		try {
 			interactive.println("conversation before suspend");
-			fixture.input().write("abc\u001a".getBytes(StandardCharsets.UTF_8));
+			fixture.input().write("abc\u001b[122;5u".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
 
 			assertEquals("abcd", line);
 			assertTrue(suspended.get());
 			String written = fixture.output().toString(StandardCharsets.UTF_8);
+            assertEquals(2, count(written, KEYBOARD_PUSH));
+            assertEquals(2, count(written, KEYBOARD_POP));
 			int shellActivity = written.indexOf("shell activity");
 			int redraw = written.indexOf("\u001b[2J\u001b[H\u001b[3J", shellActivity);
 			assertTrue(redraw > shellActivity);
@@ -1052,6 +1204,9 @@ class CodingAgentCliTest {
 				() -> {
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
 					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+                    String written = fixture.output().toString(StandardCharsets.UTF_8);
+                    assertEquals(1, count(written, KEYBOARD_PUSH));
+                    assertEquals(1, count(written, KEYBOARD_POP));
 					suspended.set(true);
 					fixture.output().writeBytes("nested shell activity\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write("\rcd\r".getBytes(StandardCharsets.UTF_8));
@@ -1069,7 +1224,7 @@ class CodingAgentCliTest {
 					throw new AssertionError(error);
 				}
 			});
-			fixture.input().write("ab\u000f\u001a".getBytes(StandardCharsets.UTF_8));
+			fixture.input().write("ab\u001b[111;5u\u001b[122;5u".getBytes(StandardCharsets.UTF_8));
 			fixture.input().flush();
 
 			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
@@ -1077,6 +1232,10 @@ class CodingAgentCliTest {
 			assertEquals("abcd", line);
 			assertTrue(suspended.get());
 			String written = fixture.output().toString(StandardCharsets.UTF_8);
+            assertEquals(2, count(written, KEYBOARD_PUSH));
+            assertEquals(2, count(written, KEYBOARD_POP));
+            assertTrue(written.indexOf(KEYBOARD_POP) < written.indexOf("\u001b[?1049h"));
+            assertTrue(written.lastIndexOf(KEYBOARD_PUSH) > written.lastIndexOf("\u001b[?1049l"));
 			int shellActivity = written.indexOf("nested shell activity");
 			int redraw = written.indexOf("\u001b[2J\u001b[H\u001b[3J", shellActivity);
 			assertTrue(redraw > shellActivity);
@@ -1372,7 +1531,7 @@ class CodingAgentCliTest {
                 waitUntil(() -> Boolean.FALSE.equals(getCliField(cli, "componentOpen")));
                 assertEquals("draft tail", editor.getBuffer().toString());
                 assertEquals(5, editor.getBuffer().cursor());
-                fixture.input().write("\u001b[Z".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+                fixture.input().write("\u001b[9;2u".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 waitUntil(() -> runtime.agentMode() == com.quaxt.codingagent.agent.AgentMode.PLAN);
                 assertEquals(5, editor.getBuffer().cursor());
                 assertTrue(getCliField(cli, "statusActivity").toString().contains("[Plan]"));
@@ -1471,10 +1630,14 @@ class CodingAgentCliTest {
 	}
 
 	private static TerminalFixture terminal() throws Exception {
+        return terminal("xterm-256color");
+    }
+
+    private static TerminalFixture terminal(String type) throws Exception {
 		PipedInputStream input = new PipedInputStream();
 		PipedOutputStream inputWriter = new PipedOutputStream(input);
 		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		Terminal terminal = new DumbTerminal("test", "xterm-256color", input, output, StandardCharsets.UTF_8);
+		Terminal terminal = new DumbTerminal("test", type, input, output, StandardCharsets.UTF_8);
 		terminal.setSize(org.jline.terminal.Size.of(80, 24));
 		return new TerminalFixture(terminal, inputWriter, output);
 	}

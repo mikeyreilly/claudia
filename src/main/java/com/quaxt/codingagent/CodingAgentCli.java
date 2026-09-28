@@ -335,6 +335,8 @@ public final class CodingAgentCli {
     private int suspendedCursor = -1;
     private int restoreCursor = -1;
     private boolean commandSuggestionsActive;
+    private boolean enhancedKeyboardReporting;
+    private final Map<String, String> enhancedBindingAliases = new LinkedHashMap<>(ENHANCED_KEY_ALIASES);
     private Supplier<AttributedString> dynamicPost;
 
     // CommandSuggestions fields
@@ -590,6 +592,94 @@ public final class CodingAgentCli {
         throw new IllegalArgumentException("Unsupported editor keybinding: " + action + "=" + binding);
     }
 
+    private static final String KITTY_KEYBOARD_PUSH = "\u001b[>1u";
+    private static final String KITTY_KEYBOARD_POP = "\u001b[<1u";
+    private static final Map<String, String> ENHANCED_KEY_ALIASES = enhancedKeyAliases();
+
+    /** Flag 1 disambiguates control keys, but leaves ordinary text in legacy form. */
+    private static Map<String, String> enhancedKeyAliases() {
+        Map<String, String> aliases = new LinkedHashMap<>();
+        for (int code : new int[] {9, 13, 27, 127}) {
+            aliases.put("\u001b[" + code + "u", Character.toString(code));
+            aliases.put("\u001b[" + code + ";1u", Character.toString(code));
+        }
+        for (char letter = 'a'; letter <= 'z'; letter++) {
+            aliases.put("\u001b[" + (int) letter + ";5u", KeyMap.ctrl(letter));
+        }
+        for (char code = '@'; code <= '_'; code++) {
+            aliases.put("\u001b[" + (int) code + ";5u", KeyMap.ctrl(code));
+        }
+        aliases.put("\u001b[32;5u", "\u0000");
+        aliases.put("\u001b[9;2u", "\u001b[Z");
+        // Disambiguation also changes Alt shortcuts such as JLine's Alt-B/Alt-F.
+        for (int code = 32; code <= 126; code++) {
+            aliases.put("\u001b[" + code + ";3u", "\u001b" + Character.toString(code));
+        }
+        for (int code : new int[] {9, 13, 27, 127}) {
+            aliases.put("\u001b[" + code + ";3u", "\u001b" + Character.toString(code));
+        }
+        Map.copyOf(aliases).forEach((encoded, legacy) -> {
+            if (encoded.endsWith(";5u")) {
+                aliases.put(encoded.replace(";5u", ";7u"), "\u001b" + legacy);
+            }
+        });
+        return Map.copyOf(aliases);
+    }
+
+    private void bindEnhancedKeyAliases() {
+        // Resolve against the current maps, including application actions and the
+        // temporary Shift-Tab binding. Do not replay an encoded Escape as a macro:
+        // it could combine with the next key and become an unintended Alt shortcut.
+        for (var keyMap : reader.getKeyMaps().values()) {
+            Map<String, Binding> bindings = keyMap.getBoundKeys();
+            // Preserve multi-key Ctrl prefixes too (for example Emacs Ctrl-X Ctrl-U).
+            bindings.forEach((legacy, binding) -> {
+                if (legacy.length() > 1 && legacy.charAt(0) < 32 && legacy.charAt(0) != 27
+                        && !enhancedBindingAliases.containsKey(legacy)) {
+                    bindEnhancedKeyVariants(keyMap, binding, legacy, "", 0);
+                }
+            });
+            ENHANCED_KEY_ALIASES.forEach((encoded, legacy) -> {
+                Binding binding = bindings.get(legacy);
+                if (binding == null) keyMap.unbind(encoded);
+                else keyMap.bind(binding, encoded);
+            });
+        }
+    }
+
+    private void bindEnhancedKeyVariants(
+            KeyMap<Binding> keyMap, Binding binding, String legacy, String variant, int offset) {
+        if (offset == legacy.length()) {
+            if (!variant.equals(legacy)) {
+                keyMap.bind(binding, variant);
+                enhancedBindingAliases.put(variant, legacy);
+            }
+            return;
+        }
+        String character = legacy.substring(offset, offset + 1);
+        bindEnhancedKeyVariants(keyMap, binding, legacy, variant + character, offset + 1);
+        ENHANCED_KEY_ALIASES.forEach((encoded, decoded) -> {
+            if (decoded.equals(character)) {
+                bindEnhancedKeyVariants(keyMap, binding, legacy, variant + encoded, offset + 1);
+            }
+        });
+    }
+
+    private void pushEnhancedKeyboardReporting() {
+        String type = jlineTerminal.getType();
+        if (type == null || Terminal.TYPE_DUMB.equals(type) || Terminal.TYPE_DUMB_COLOR.equals(type)) return;
+        jlineTerminal.writer().write(KITTY_KEYBOARD_PUSH);
+        jlineTerminal.flush();
+        enhancedKeyboardReporting = true;
+    }
+
+    private void popEnhancedKeyboardReporting() {
+        if (!enhancedKeyboardReporting) return;
+        enhancedKeyboardReporting = false;
+        jlineTerminal.writer().write(KITTY_KEYBOARD_POP);
+        jlineTerminal.flush();
+    }
+
     private static String appKeySequence(String action) {
         String binding = Keybindings.DEFAULT_APP_KEYBINDINGS.get(action);
         if (binding != null && binding.startsWith("ctrl-") && binding.length() == 6) {
@@ -714,6 +804,9 @@ public final class CodingAgentCli {
     }
 
     private static TuiInput csiInput(String sequence) {
+        // A selector may consume keys queued before the editor paused reporting.
+        String legacy = ENHANCED_KEY_ALIASES.get("\u001b[" + sequence);
+        if (legacy != null) return parseInputSequence(legacy);
         return switch (sequence) {
             case "A" -> key(TuiInput.KeyType.UP);
             case "B" -> key(TuiInput.KeyType.DOWN);
@@ -1221,6 +1314,14 @@ public final class CodingAgentCli {
                 }
             }
             @Override
+            public String getLastBinding() {
+                String binding = super.getLastBinding();
+                // JLine also inspects the original bytes (not just the widget),
+                // notably for EOF on Ctrl-D and completion on Tab.
+                return binding == null ? null : enhancedBindingAliases.getOrDefault(binding, binding);
+            }
+
+            @Override
             public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
                 if (CodingAgentCli.this.dynamicPost == null || post != null) {
                     return super.getDisplayedBufferWithPrompts(secondaryPrompts);
@@ -1543,9 +1644,13 @@ public final class CodingAgentCli {
                     keyMap.bind(new Reference("codingagent-toggleAgentMode"), appKeySequence("toggleAgentMode"));
                 }
                 try {
+                    bindEnhancedKeyAliases();
                     lineEditorReading = true;
+                    pushEnhancedKeyboardReporting();
                     result = reader.readLine(editorPrompt, null, mask, initialBuffer);
                 } finally {
+                    // Also runs before the suspend hook: readLine unwinds first.
+                    popEnhancedKeyboardReporting();
                     previousModeBindings.forEach((keyMap, binding) -> {
                         if (binding == null) keyMap.unbind(appKeySequence("toggleAgentMode"));
                         else keyMap.bind(binding, appKeySequence("toggleAgentMode"));
@@ -1593,6 +1698,19 @@ public final class CodingAgentCli {
      */
     public <T> T runComponent(TuiComponent<T> component)
             throws IOException {
+        // Selectors read directly, may nest inside a JLine widget, and can suspend
+        // without unwinding readLine. Leave their alternate screen (and the shell)
+        // in legacy mode; restore reporting only after returning to the editor.
+        boolean resumeReporting = enhancedKeyboardReporting;
+        popEnhancedKeyboardReporting();
+        try {
+            return runComponentInternal(component);
+        } finally {
+            if (resumeReporting) pushEnhancedKeyboardReporting();
+        }
+    }
+
+    private <T> T runComponentInternal(TuiComponent<T> component) throws IOException {
         if (reader.isReading()) resetPromptBackground();
         synchronized (this) {
             componentOpen = true;
