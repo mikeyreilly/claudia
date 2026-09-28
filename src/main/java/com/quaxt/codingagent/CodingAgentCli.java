@@ -16,7 +16,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -26,7 +25,6 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -73,24 +71,13 @@ import com.quaxt.codingagent.tui.TuiComponent;
 import com.quaxt.codingagent.tui.TuiFrame;
 import com.quaxt.codingagent.tui.TuiInput;
 import com.quaxt.codingagent.tui.TuiRuntime;
-import org.jline.keymap.KeyMap;
-import org.jline.reader.Binding;
-import org.jline.reader.EndOfFileException;
-import org.jline.reader.LineReader;
-import org.jline.reader.Reference;
-import org.jline.reader.UserInterruptException;
-import org.jline.reader.impl.LineReaderImpl;
-import org.jline.reader.impl.history.DefaultHistory;
-import org.jline.terminal.Attributes;
-import org.jline.terminal.Size;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
-import org.jline.utils.AttributedString;
-import org.jline.utils.Curses;
-import org.jline.utils.InfoCmp.Capability;
-import org.jline.utils.NonBlockingReader;
-import org.jline.utils.Status;
-import org.jline.utils.WCWidth;
+import com.quaxt.codingagent.terminal.Ansi;
+import com.quaxt.codingagent.terminal.Cells;
+import com.quaxt.codingagent.terminal.KeyParser;
+import com.quaxt.codingagent.terminal.LineEditor;
+import com.quaxt.codingagent.terminal.StatusLine;
+import com.quaxt.codingagent.terminal.Terminal;
+import com.quaxt.codingagent.terminal.TerminalEvent;
 
 import static com.quaxt.codingagent.CodingAgentOperations.AgentSnapshot;
 import static com.quaxt.codingagent.CodingAgentOperations.CHATGPT_PROVIDER_ID;
@@ -193,18 +180,12 @@ public final class CodingAgentCli {
     }
 
     private static final int VISIBLE_COMMANDS = 4;
-    private static final int DEFAULT_COLUMNS = 80;
-    private static final int DEFAULT_ROWS = 24;
-    private static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
-    private static final String END_SYNCHRONIZED_OUTPUT = "\u001b[?2026l";
-    /** JLine draws ─ and │ by designating DEC Special Graphics into G0 when smacs is this sequence. */
-    private static final String DEC_SPECIAL_GRAPHICS_INTO_G0 = "\u001b(0";
-    /** SI (invoke G0 into GL), then designate ASCII into G0: the state JLine assumes before it draws. */
+    /** SI (invoke G0 into GL), then designate ASCII into G0, undoing stray character-set shifts. */
     static final String RESET_CHARACTER_SET = "\u000f\u001b(B";
     private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
-    private static final String SECONDARY_PROMPT = "%M> ";
-    private static final String BRACKETED_PASTE_END = "\u001b[201~";
-    private static final long PASTE_LOOKAHEAD_MILLIS = 10;
+    private static final String SECONDARY_PROMPT = "> ";
+    /** Kitty keyboard-protocol flag 1 disambiguates control keys but leaves text in legacy form. */
+    private static final int KITTY_DISAMBIGUATE = 1;
 
     private enum StreamOutput {
         NONE,
@@ -246,7 +227,7 @@ public final class CodingAgentCli {
     private volatile boolean lineEditorReading;
 
     // Never wait for the editor from a provider thread. All rendering takes the editor
-    // lock before the screen lock, matching JLine's order when it invokes a widget.
+    // lock before the screen lock, matching the editor's order when it handles a key.
     private void drainShellEvents() {
         if (editorLock == null || !editorLock.tryLock()) return;
         try {
@@ -312,38 +293,30 @@ public final class CodingAgentCli {
                 && partial.stopReason == StopReason.PENDING) visible.add(partial);
         if (!active.isEmpty() && active.getLast() instanceof AssistantMessage last) emittedText = !text(last).isEmpty();
         replaceScreen(renderSessionScreen(agent.state().model(), visible, hideThinkingBlock));
-        if (lineEditorReading) {
-            reader.callWidget(LineReader.REDRAW_LINE);
-            reader.callWidget(LineReader.REDISPLAY);
-        }
         refreshShellStatus();
     }
 
 
     // InteractiveTerminal fields
-    private Terminal jlineTerminal;
-    private LineReaderImpl reader;
+    private Terminal terminal;
+    private LineEditor editor;
     private Callable<Void> suspendAction;
     private boolean supportsSuspend;
-    private Attributes shellAttributes;
-    private Terminal.SignalHandler previousContinueHandler;
-    private Terminal.SignalHandler previousResizeHandler;
+    /** The line discipline the shell uses; restored whenever the process is suspended. */
+    private Terminal.Mode shellMode;
+    private final List<AutoCloseable> signalRegistrations = new ArrayList<>();
     private StringBuilder screenDocument = new StringBuilder();
-    private Status statusBar;
+    private StatusLine statusLine;
     private String statusActivity;
     private StatusAccent statusAccent = StatusAccent.NONE;
     private String statusLeft;
     private String statusRight;
-    private Attributes fullScreenResumeAttributes;
+    private Terminal.Mode fullScreenResumeMode;
     private volatile boolean managedSuspend;
-    private String suspendedBuffer;
-    private int suspendedCursor = -1;
-    private int restoreCursor = -1;
     private boolean commandSuggestionsActive;
     private boolean enhancedKeyboardReporting;
-    private final Map<String, String> enhancedBindingAliases = new LinkedHashMap<>(ENHANCED_KEY_ALIASES);
-    private Supplier<AttributedString> dynamicPost;
-    private boolean resetsCharacterSet;
+    /** Application shortcuts active in every prompt, keyed by keybinding action. */
+    private final Map<String, Runnable> appActions = new LinkedHashMap<>();
 
     // CommandSuggestions fields
     private List<String> commands;
@@ -368,9 +341,6 @@ public final class CodingAgentCli {
     private boolean noSession;
     private String mode = "print";
 
-    private static final CancellationException SUSPEND_REQUESTED =
-            new CancellationException("Interactive terminal suspend requested");
-
     // ------------------------------------------------------------ tui text
 
     private static final Pattern TERMINAL_ANSI = Pattern.compile(
@@ -380,14 +350,7 @@ public final class CodingAgentCli {
      * Terminal cell width of a string, ignoring ANSI escapes.
      */
     public static int visibleWidth(String value) {
-        String plain = stripAnsi(value);
-        int width = 0;
-        for (int index = 0; index < plain.length(); ) {
-            int codePoint = plain.codePointAt(index);
-            width += Math.max(0, WCWidth.wcwidth(codePoint));
-            index += Character.charCount(codePoint);
-        }
-        return width;
+        return Cells.width(stripAnsi(value));
     }
 
     /**
@@ -406,7 +369,7 @@ public final class CodingAgentCli {
         int width = 0;
         for (int index = 0; index < value.length(); ) {
             int codePoint = value.codePointAt(index);
-            int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+            int codePointWidth = Math.max(0, Cells.width(codePoint));
             if (width + codePointWidth > targetWidth) {
                 break;
             }
@@ -598,136 +561,33 @@ public final class CodingAgentCli {
 
     // ----------------------------------------------------------- keybindings
 
-    /**
-     * Shift+Enter is commonly LF, CSI-u, or xterm modifyOtherKeys depending on
-     * the terminal. Keep Ctrl+Enter variants as aliases for compatibility.
-     */
-    private static List<String> editorKeySequences(String action) {
-        String binding = Keybindings.DEFAULT_EDITOR_KEYBINDINGS.get(action);
-        if ("shift-enter".equals(binding)) {
-            return List.of(
-                    KeyMap.ctrl('J'),
-                    "\u001b[13;2u",
-                    "\u001b[27;2;13~",
-                    "\u001b[13;5u",
-                    "\u001b[27;5;13~");
-        }
-        if ("enter".equals(binding)) {
-            return List.of(KeyMap.ctrl('M'));
-        }
-        throw new IllegalArgumentException("Unsupported editor keybinding: " + action + "=" + binding);
-    }
-
-    private static final String KITTY_KEYBOARD_PUSH = "\u001b[>1u";
-    private static final String KITTY_KEYBOARD_POP = "\u001b[<1u";
-    private static final Map<String, String> ENHANCED_KEY_ALIASES = enhancedKeyAliases();
-
-    /** Flag 1 disambiguates control keys, but leaves ordinary text in legacy form. */
-    private static Map<String, String> enhancedKeyAliases() {
-        Map<String, String> aliases = new LinkedHashMap<>();
-        for (int code : new int[] {9, 13, 27, 127}) {
-            aliases.put("\u001b[" + code + "u", Character.toString(code));
-            aliases.put("\u001b[" + code + ";1u", Character.toString(code));
-        }
-        for (char letter = 'a'; letter <= 'z'; letter++) {
-            aliases.put("\u001b[" + (int) letter + ";5u", KeyMap.ctrl(letter));
-        }
-        for (char code = '@'; code <= '_'; code++) {
-            aliases.put("\u001b[" + (int) code + ";5u", KeyMap.ctrl(code));
-        }
-        aliases.put("\u001b[32;5u", "\u0000");
-        aliases.put("\u001b[9;2u", "\u001b[Z");
-        // Disambiguation also changes Alt shortcuts such as JLine's Alt-B/Alt-F.
-        for (int code = 32; code <= 126; code++) {
-            aliases.put("\u001b[" + code + ";3u", "\u001b" + Character.toString(code));
-        }
-        for (int code : new int[] {9, 13, 27, 127}) {
-            aliases.put("\u001b[" + code + ";3u", "\u001b" + Character.toString(code));
-        }
-        Map.copyOf(aliases).forEach((encoded, legacy) -> {
-            if (encoded.endsWith(";5u")) {
-                aliases.put(encoded.replace(";5u", ";7u"), "\u001b" + legacy);
-            }
-        });
-        return Map.copyOf(aliases);
-    }
-
-    private void bindEnhancedKeyAliases() {
-        // Resolve against the current maps, including application actions and the
-        // temporary Shift-Tab binding. Do not replay an encoded Escape as a macro:
-        // it could combine with the next key and become an unintended Alt shortcut.
-        for (var keyMap : reader.getKeyMaps().values()) {
-            Map<String, Binding> bindings = keyMap.getBoundKeys();
-            // Preserve multi-key Ctrl prefixes too (for example Emacs Ctrl-X Ctrl-U).
-            bindings.forEach((legacy, binding) -> {
-                if (legacy.length() > 1 && legacy.charAt(0) < 32 && legacy.charAt(0) != 27
-                        && !enhancedBindingAliases.containsKey(legacy)) {
-                    bindEnhancedKeyVariants(keyMap, binding, legacy, "", 0);
-                }
-            });
-            ENHANCED_KEY_ALIASES.forEach((encoded, legacy) -> {
-                Binding binding = bindings.get(legacy);
-                if (binding == null) keyMap.unbind(encoded);
-                else keyMap.bind(binding, encoded);
-            });
-        }
-    }
-
-    private void bindEnhancedKeyVariants(
-            KeyMap<Binding> keyMap, Binding binding, String legacy, String variant, int offset) {
-        if (offset == legacy.length()) {
-            if (!variant.equals(legacy)) {
-                keyMap.bind(binding, variant);
-                enhancedBindingAliases.put(variant, legacy);
-            }
-            return;
-        }
-        String character = legacy.substring(offset, offset + 1);
-        bindEnhancedKeyVariants(keyMap, binding, legacy, variant + character, offset + 1);
-        ENHANCED_KEY_ALIASES.forEach((encoded, decoded) -> {
-            if (decoded.equals(character)) {
-                bindEnhancedKeyVariants(keyMap, binding, legacy, variant + encoded, offset + 1);
-            }
-        });
-    }
-
     private void pushEnhancedKeyboardReporting() {
-        String type = jlineTerminal.getType();
+        String type = terminal.type();
         if (type == null || Terminal.TYPE_DUMB.equals(type) || Terminal.TYPE_DUMB_COLOR.equals(type)) return;
-        jlineTerminal.writer().write(KITTY_KEYBOARD_PUSH);
-        jlineTerminal.flush();
+        terminal.pushKeyboardFlags(KITTY_DISAMBIGUATE);
         enhancedKeyboardReporting = true;
     }
 
     private void popEnhancedKeyboardReporting() {
         if (!enhancedKeyboardReporting) return;
         enhancedKeyboardReporting = false;
-        jlineTerminal.writer().write(KITTY_KEYBOARD_POP);
-        jlineTerminal.flush();
+        terminal.popKeyboardFlags();
     }
 
-    private static String appKeySequence(String action) {
+    /** Whether a decoded key is the configured shortcut for an application action. */
+    static boolean appKeyMatches(TerminalEvent.Key key, String action) {
         String binding = Keybindings.DEFAULT_APP_KEYBINDINGS.get(action);
         if (binding != null && binding.startsWith("ctrl-") && binding.length() == 6) {
-            return KeyMap.ctrl(binding.charAt(5));
+            return key.isCtrl(binding.charAt(5));
         }
-        if (binding != null && binding.equals("escape")) {
-            return "\u001b";
+        if ("escape".equals(binding)) return key.is(TerminalEvent.KeyType.ESCAPE);
+        if ("shift-tab".equals(binding)) {
+            return key.type() == TerminalEvent.KeyType.TAB && key.modifiers() == TerminalEvent.SHIFT;
         }
-        if ("shift-tab".equals(binding)) return "\u001b[Z";
         throw new IllegalArgumentException("Unsupported application keybinding: " + action + "=" + binding);
     }
 
-    private static boolean appKeyMatches(int value, String action) {
-        String sequence = appKeySequence(action);
-        return sequence.length() == 1 && sequence.charAt(0) == value;
-    }
-
     // ----------------------------------------------------------- input parsing
-
-    private static final long ESCAPE_TIMEOUT_MS = 25;
-    private static final Pattern SGR_MOUSE = Pattern.compile("<(\\d+);(\\d+);(\\d+)([Mm])");
-    private static final String TUI_PASTE_END = "\u001b[201~";
 
     /**
      * Creates a key event without associated text.
@@ -737,68 +597,11 @@ public final class CodingAgentCli {
     }
 
     /**
-     * Reads one normalized input event, or null when the read timed out.
+     * Reads one normalized event from the shared input path, or null when the read timed out.
      */
-    private static TuiInput readTuiInput(NonBlockingReader reader, long timeoutMs) throws IOException {
-        int value = reader.read(timeoutMs);
-        if (value == NonBlockingReader.READ_EXPIRED) {
-            return null;
-        }
-        if (value == NonBlockingReader.EOF) {
-            return key(TuiInput.KeyType.CANCEL);
-        }
-        if (value == 0x1b) {
-            int next = reader.read(ESCAPE_TIMEOUT_MS);
-            if (next == NonBlockingReader.READ_EXPIRED || next == NonBlockingReader.EOF) {
-                return key(TuiInput.KeyType.ESCAPE);
-            }
-            if (next == '[') {
-                StringBuilder sequence = new StringBuilder();
-                while (sequence.length() < 64) {
-                    int value1 = reader.read(ESCAPE_TIMEOUT_MS);
-                    if (value1 == NonBlockingReader.READ_EXPIRED || value1 == NonBlockingReader.EOF) {
-                        break;
-                    }
-                    sequence.append((char) value1);
-                    if (value1 >= 0x40 && value1 <= 0x7e) {
-                        break;
-                    }
-                }
-                if (sequence.toString().equals("200~")) {
-                    String result;
-                    StringBuilder content = new StringBuilder();
-                    StringBuilder suffix = new StringBuilder();
-                    while (true) {
-                        int value1 = reader.read();
-                        if (value1 == NonBlockingReader.EOF) {
-                            content.append(suffix);
-                            result = content.toString();
-                            break;
-                        }
-                        suffix.append((char) value1);
-                        while (!TUI_PASTE_END.startsWith(suffix.toString())) {
-                            content.append(suffix.charAt(0));
-                            suffix.deleteCharAt(0);
-                        }
-                        if (suffix.toString().equals(TUI_PASTE_END)) {
-                            result = content.toString();
-                            break;
-                        }
-                    }
-                    return new TuiInput.Key(TuiInput.KeyType.PASTE, result);
-                }
-                return csiInput(sequence.toString());
-            }
-            if (next == 'O') {
-                int value1 = reader.read(ESCAPE_TIMEOUT_MS);
-                return value1 < 0
-                        ? key(TuiInput.KeyType.ESCAPE)
-                        : parseInputSequence("\u001bO" + (char) value1);
-            }
-            return keyInput(next);
-        } else {
-            return keyInput(value);
-        }
+    private TuiInput readTuiInput(long timeoutMs) throws IOException {
+        TerminalEvent event = terminal.input().readEvent(timeoutMs);
+        return event == null ? null : tuiInput(event);
     }
 
     /**
@@ -808,100 +611,62 @@ public final class CodingAgentCli {
         if (sequence == null || sequence.isEmpty()) {
             return key(TuiInput.KeyType.UNKNOWN);
         }
-        if (sequence.length() == 1 && sequence.charAt(0) != 0x1b) {
-            return keyInput(sequence.charAt(0));
-        }
-        if (sequence.equals("\u001b")) {
-            return key(TuiInput.KeyType.ESCAPE);
-        }
-        if (sequence.startsWith("\u001b[")) {
-            return csiInput(sequence.substring(2));
-        }
-        if (sequence.startsWith("\u001bO") && sequence.length() == 3) {
-            return switch (sequence.charAt(2)) {
-                case 'A' -> key(TuiInput.KeyType.UP);
-                case 'B' -> key(TuiInput.KeyType.DOWN);
-                case 'C' -> key(TuiInput.KeyType.RIGHT);
-                case 'D' -> key(TuiInput.KeyType.LEFT);
-                default -> key(TuiInput.KeyType.UNKNOWN);
-            };
-        }
-        return key(TuiInput.KeyType.UNKNOWN);
+        return tuiInput(KeyParser.parse(sequence));
     }
 
-    private static TuiInput csiInput(String sequence) {
-        // A selector may consume keys queued before the editor paused reporting.
-        String legacy = ENHANCED_KEY_ALIASES.get("\u001b[" + sequence);
-        if (legacy != null) return parseInputSequence(legacy);
-        return switch (sequence) {
-            case "A" -> key(TuiInput.KeyType.UP);
-            case "B" -> key(TuiInput.KeyType.DOWN);
-            case "C" -> key(TuiInput.KeyType.RIGHT);
-            case "D" -> key(TuiInput.KeyType.LEFT);
-            case "H", "1~", "7~" -> key(TuiInput.KeyType.HOME);
-            case "F", "4~", "8~" -> key(TuiInput.KeyType.END);
-            case "3~" -> key(TuiInput.KeyType.DELETE);
-            case "5~" -> key(TuiInput.KeyType.PAGE_UP);
-            case "6~" -> key(TuiInput.KeyType.PAGE_DOWN);
-            default -> {
-                TuiInput result;
-                Matcher matcher = SGR_MOUSE.matcher(sequence);
-                if (!matcher.matches()) {
-                    result = key(TuiInput.KeyType.UNKNOWN);
-                } else {
-                    int code = Integer.parseInt(matcher.group(1));
-                    int x = Integer.parseInt(matcher.group(2));
-                    int y = Integer.parseInt(matcher.group(3));
-                    if ((code & 64) != 0) {
-                        result = new TuiInput.Mouse(
-                                (code & 1) == 0 ? TuiInput.MouseAction.SCROLL_UP : TuiInput.MouseAction.SCROLL_DOWN,
-                                code & 3,
-                                x,
-                                y);
-                    } else {
-                        TuiInput.MouseAction action;
-                        if (matcher.group(4).equals("m") || (code & 3) == 3) {
-                            action = TuiInput.MouseAction.RELEASE;
-                        } else if ((code & 32) != 0) {
-                            action = TuiInput.MouseAction.DRAG;
-                        } else {
-                            action = TuiInput.MouseAction.PRESS;
-                        }
-                        result = new TuiInput.Mouse(action, code & 3, x, y);
-                    }
-                }
-                yield result;
-            }
+    /**
+     * Maps a decoded terminal event to component input. Legacy control bytes and
+     * their kitty-protocol encodings decode to the same key, so a selector
+     * handles keys queued while the editor had enhanced reporting enabled.
+     */
+    static TuiInput tuiInput(TerminalEvent event) {
+        return switch (event) {
+            case TerminalEvent.EndOfInput ignored -> key(TuiInput.KeyType.CANCEL);
+            case TerminalEvent.Paste paste -> new TuiInput.Key(TuiInput.KeyType.PASTE, paste.text());
+            case TerminalEvent.Mouse mouse -> new TuiInput.Mouse(
+                    TuiInput.MouseAction.valueOf(mouse.action().name()), mouse.button(), mouse.x(), mouse.y());
+            case TerminalEvent.Key key -> tuiKey(key);
         };
     }
 
-    private static TuiInput keyInput(int value) {
-        TuiInput.KeyType applicationType = null;
-        if (appKeyMatches(value, "exit")) {
-            applicationType = TuiInput.KeyType.EXIT;
-        } else if (appKeyMatches(value, "interrupt")) {
-            applicationType = TuiInput.KeyType.CANCEL;
-        } else if (appKeyMatches(value, "suspend")) {
-            applicationType = TuiInput.KeyType.SUSPEND;
-        } else if (appKeyMatches(value, "expandTools")) {
-            applicationType = TuiInput.KeyType.EXPAND_TOOLS;
-        } else if (appKeyMatches(value, "toggleThinking")) {
-            applicationType = TuiInput.KeyType.TOGGLE_THINKING;
-        }
-        if (applicationType != null) {
-            return key(applicationType);
-        }
-        return switch (value) {
-            case 3 -> key(TuiInput.KeyType.CANCEL);
-            case 8, 127 -> key(TuiInput.KeyType.BACKSPACE);
-            case 9 -> key(TuiInput.KeyType.TAB);
-            case 10, 13 -> key(TuiInput.KeyType.ENTER);
-            case 14 -> key(TuiInput.KeyType.DOWN);
-            case 16 -> key(TuiInput.KeyType.UP);
-            case 21 -> key(TuiInput.KeyType.CLEAR);
-            default -> value >= 32
-                    ? new TuiInput.Key(TuiInput.KeyType.CHARACTER, Character.toString(value))
-                    : key(TuiInput.KeyType.UNKNOWN);
+    private static TuiInput tuiKey(TerminalEvent.Key key) {
+        if (appKeyMatches(key, "exit")) return key(TuiInput.KeyType.EXIT);
+        if (appKeyMatches(key, "suspend")) return key(TuiInput.KeyType.SUSPEND);
+        if (appKeyMatches(key, "expandTools")) return key(TuiInput.KeyType.EXPAND_TOOLS);
+        if (appKeyMatches(key, "toggleThinking")) return key(TuiInput.KeyType.TOGGLE_THINKING);
+        int modifiers = key.modifiers();
+        return switch (key.type()) {
+            case CHARACTER -> {
+                if (modifiers == TerminalEvent.CTRL) {
+                    yield switch (key.codePoint()) {
+                        case 'c' -> key(TuiInput.KeyType.CANCEL);
+                        case 'h' -> key(TuiInput.KeyType.BACKSPACE);
+                        case 'i' -> key(TuiInput.KeyType.TAB);
+                        case 'j', 'm' -> key(TuiInput.KeyType.ENTER);
+                        case 'n' -> key(TuiInput.KeyType.DOWN);
+                        case 'p' -> key(TuiInput.KeyType.UP);
+                        case 'u' -> key(TuiInput.KeyType.CLEAR);
+                        default -> key(TuiInput.KeyType.UNKNOWN);
+                    };
+                }
+                yield (modifiers & (TerminalEvent.CTRL | TerminalEvent.SUPER)) == 0
+                        ? new TuiInput.Key(TuiInput.KeyType.CHARACTER, Character.toString(key.codePoint()))
+                        : key(TuiInput.KeyType.UNKNOWN);
+            }
+            case ENTER -> key(TuiInput.KeyType.ENTER);
+            case TAB -> modifiers == 0 ? key(TuiInput.KeyType.TAB) : key(TuiInput.KeyType.UNKNOWN);
+            case BACKSPACE -> key(TuiInput.KeyType.BACKSPACE);
+            case ESCAPE -> key(TuiInput.KeyType.ESCAPE);
+            case UP -> key(TuiInput.KeyType.UP);
+            case DOWN -> key(TuiInput.KeyType.DOWN);
+            case LEFT -> key(TuiInput.KeyType.LEFT);
+            case RIGHT -> key(TuiInput.KeyType.RIGHT);
+            case HOME -> key(TuiInput.KeyType.HOME);
+            case END -> key(TuiInput.KeyType.END);
+            case PAGE_UP -> key(TuiInput.KeyType.PAGE_UP);
+            case PAGE_DOWN -> key(TuiInput.KeyType.PAGE_DOWN);
+            case DELETE -> key(TuiInput.KeyType.DELETE);
+            default -> key(TuiInput.KeyType.UNKNOWN);
         };
     }
 
@@ -1191,53 +956,37 @@ public final class CodingAgentCli {
 
     // ------------------------------------------------------------ tui runtime
 
-    /**
-     * Hosts a component on the alternate screen until it completes.
-     */
-
     private static int tuiWidth(TuiRuntime runtime) {
-        int columns = runtime.terminal.getColumns();
-        return columns > 0 ? columns : TuiRuntime.DEFAULT_COLUMNS;
+        return runtime.terminal.columns();
     }
 
     private static int tuiHeight(TuiRuntime runtime) {
-        int rows = runtime.terminal.getRows();
-        return rows > 0 ? rows : TuiRuntime.DEFAULT_ROWS;
+        return runtime.terminal.rows();
     }
 
+    /** Switches to the alternate screen in raw mode with mouse reporting and bracketed paste. */
     private void startTuiRuntime(TuiRuntime runtime) {
-        runtime.originalAttributes = runtime.terminal.enterRawMode();
-        if (!runtime.terminal.puts(Capability.enter_ca_mode)) {
-            runtime.terminal.writer().write("\u001b[?1049h");
-        }
-        runtime.terminal.puts(Capability.keypad_xmit);
-        runtime.terminal.trackMouse(Terminal.MouseTracking.Button);
-        if (!runtime.terminal.puts(Capability.cursor_invisible)) {
-            runtime.terminal.writer().write("\u001b[?25l");
-        }
+        runtime.originalMode = runtime.terminal.enterRawMode();
+        runtime.pasteWasEnabled = runtime.terminal.bracketedPaste();
+        runtime.terminal.alternateScreen(true);
+        runtime.terminal.mouseTracking(true);
+        runtime.terminal.bracketedPaste(true);
+        runtime.terminal.cursorVisible(false);
         runtime.active = true;
         resetAnsiRenderer(runtime.renderer);
         clearTuiScreen(runtime);
-        runtime.terminal.flush();
     }
 
     private void stopTuiRuntime(TuiRuntime runtime) {
         if (!runtime.active) {
             return;
         }
-        runtime.terminal.trackMouse(Terminal.MouseTracking.Off);
-        if (!runtime.terminal.puts(Capability.cursor_normal)) {
-            runtime.terminal.writer().write("\u001b[?25h");
-        }
-        runtime.terminal.puts(Capability.keypad_local);
-        if (!runtime.terminal.puts(Capability.exit_ca_mode)) {
-            runtime.terminal.writer().write("\u001b[?1049l");
-        }
-        runtime.terminal.flush();
-        if (runtime.originalAttributes != null) {
-            runtime.terminal.setAttributes(runtime.originalAttributes);
-        }
         runtime.active = false;
+        runtime.terminal.mouseTracking(false);
+        runtime.terminal.bracketedPaste(runtime.pasteWasEnabled);
+        runtime.terminal.cursorVisible(true);
+        runtime.terminal.alternateScreen(false);
+        runtime.terminal.setMode(runtime.originalMode);
     }
 
     private void renderTuiFrame(
@@ -1254,24 +1003,23 @@ public final class CodingAgentCli {
         for (int index = 0; index < common; index++) {
             if (!runtime.renderer.previousLines.get(index).equals(next.get(index))) {
                 ansiMoveTo(output, index);
-                output.append("\u001b[2K").append(next.get(index));
+                output.append(Ansi.ERASE_LINE).append(next.get(index));
             }
         }
         for (int index = common; index < next.size(); index++) {
             ansiMoveTo(output, index);
-            output.append("\u001b[2K").append(next.get(index));
+            output.append(Ansi.ERASE_LINE).append(next.get(index));
         }
         for (int index = next.size(); index < runtime.renderer.previousLines.size(); index++) {
             ansiMoveTo(output, index);
-            output.append("\u001b[2K");
+            output.append(Ansi.ERASE_LINE);
         }
         runtime.renderer.previousLines = next;
-        runtime.terminal.writer().write(output.toString());
-        runtime.terminal.flush();
+        runtime.terminal.write(output);
     }
 
     private void clearTuiScreen(TuiRuntime runtime) {
-        runtime.terminal.writer().write("\u001b[2J\u001b[H");
+        runtime.terminal.write("\u001b[2J\u001b[H");
     }
 
     // --------------------------------------------------------------- suspend
@@ -1292,276 +1040,47 @@ public final class CodingAgentCli {
     // --------------------------------------------------- interactive terminal
 
     /**
-     * Wires the line editor, signal handlers, and keybindings onto an existing terminal.
+     * Wires the line editor, status line, and signal handlers onto a terminal.
      */
     public void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
         screenDocument = new StringBuilder();
-        statusBar = null;
         statusActivity = null;
         statusAccent = StatusAccent.NONE;
         statusLeft = null;
         statusRight = null;
-        fullScreenResumeAttributes = null;
+        fullScreenResumeMode = null;
         managedSuspend = false;
-        suspendedBuffer = null;
-        suspendedCursor = -1;
-        restoreCursor = -1;
         commandSuggestionsActive = false;
-        dynamicPost = null;
-        jlineTerminal = terminal;
-        resetsCharacterSet = DEC_SPECIAL_GRAPHICS_INTO_G0.equals(
-                Curses.tputs(terminal.getStringCapability(Capability.enter_alt_charset_mode)));
-        resetTerminalCharacterSet();
-        int columns = terminal.getColumns();
-        int rows = terminal.getRows();
-        if (columns <= 0 || rows <= 0) {
-            terminal.setSize(Size.of(
-                    columns > 0 ? columns : DEFAULT_COLUMNS,
-                    rows > 0 ? rows : DEFAULT_ROWS));
-        }
+        enhancedKeyboardReporting = false;
+        this.terminal = terminal;
+        this.editor = new LineEditor(terminal);
+        this.editorLock = editor.lock();
+        this.statusLine = new StatusLine(terminal);
         this.suspendAction = suspendAction;
         this.supportsSuspend = supportsSuspend;
-        shellAttributes = new Attributes(terminal.getAttributes());
-        this.reader = new LineReaderImpl(jlineTerminal, this.jlineTerminal.getName(), null) {
-            { editorLock = lock; }
-            @Override
-            protected <T> T doReadBinding(KeyMap<T> keys, KeyMap<T> local) {
-                if (!commandSuggestionsActive) return super.doReadBinding(keys, local);
-                while (true) {
-                    boolean held = lock.isHeldByCurrentThread();
-                    if (!held) lock.lock();
-                    try { showPendingQuestions(); }
-                    finally { if (!held) lock.unlock(); }
-                    // Only the editor thread consumes input. Poll before starting a key sequence
-                    // so a question can arrive while the user is idle without injecting keystrokes.
-                    if (held) lock.unlock();
-                    int next;
-                    try { next = bindingReader.peekCharacter(100); }
-                    finally { if (held) lock.lock(); }
-                    if (next != NonBlockingReader.READ_EXPIRED) return super.doReadBinding(keys, local);
-                }
+        this.shellMode = terminal.mode();
+        resetTerminalCharacterSet();
+        signalRegistrations.add(terminal.handle(Terminal.Signal.WINCH, () -> {
+            synchronized (this) {
+                statusLine.resize();
+                renderStatusBar();
             }
-            @Override
-            public String getLastBinding() {
-                String binding = super.getLastBinding();
-                // JLine also inspects the original bytes (not just the widget),
-                // notably for EOF on Ctrl-D and completion on Tab.
-                return binding == null ? null : enhancedBindingAliases.getOrDefault(binding, binding);
-            }
-
-            @Override
-            public AttributedString getDisplayedBufferWithPrompts(List<AttributedString> secondaryPrompts) {
-                if (CodingAgentCli.this.dynamicPost == null || post != null) {
-                    return super.getDisplayedBufferWithPrompts(secondaryPrompts);
-                }
-                AttributedString rendered = CodingAgentCli.this.dynamicPost.get();
-                if (rendered == null || rendered.isEmpty()) {
-                    return super.getDisplayedBufferWithPrompts(secondaryPrompts);
-                }
-                Supplier<AttributedString> previousPost = post;
-                post = () -> rendered;
-                try {
-                    return super.getDisplayedBufferWithPrompts(secondaryPrompts);
-                } finally {
-                    post = previousPost;
-                }
-            }
-
-            @Override
-            protected void doCleanup(boolean newline) {
-                Supplier<AttributedString> previousDynamicPost = CodingAgentCli.this.dynamicPost;
-                CodingAgentCli.this.dynamicPost = null;
-                try {
-                    super.doCleanup(newline);
-                } finally {
-                    CodingAgentCli.this.dynamicPost = previousDynamicPost;
-                }
-            }
-        };
-        this.reader.setHistory(new DefaultHistory());
-        LineReaderImpl reader = this.reader;
-        String newlineWidgetName = "codingagent-insert-newline";
-        reader.getWidgets().put(newlineWidgetName, () -> {
-            reader.getBuffer().write('\n');
-            return true;
-        });
-        Reference insertNewline = new Reference(newlineWidgetName);
-        String[] newlineSequences = editorKeySequences("newline").toArray(String[]::new);
-
-        String submitWidgetName = "codingagent-submit-or-insert-pasted-newline";
-        reader.getWidgets().put(submitWidgetName, () -> {
-            LineReaderImpl reader1 = this.reader;
-            int next = reader1.peekCharacter(PASTE_LOOKAHEAD_MILLIS);
-            // Preserve multiline paste detection even when the pasted first line
-            // happens to look like a slash command. A queued CR is instead treated
-            // as the user's second Enter after choosing a command.
-            if (next >= 0 && next != '\r') {
-                if (next == '\n') reader1.readCharacter();
-                reader1.getBuffer().write('\n');
-                return true;
-            }
-            boolean result = false;
-            if (commandSuggestionsActive) {
-                String command = null;
-                String buffer = this.reader.getBuffer().toString();
-                synchronizeCommandSuggestions(buffer);
-                if (!matches.isEmpty()) {
-                    String selected = matches.get(selectedIndex);
-                    dismissedBuffer = selected;
-                    command = selected;
-                }
-                if (command != null) {
-                    this.reader.getBuffer().clear();
-                    this.reader.getBuffer().write(command);
-                    result = true;
-                }
-            }
-            if (result) return true;
-            if (next >= 0) {
-                reader1.getBuffer().write('\n');
-                return true;
-            }
-            reader1.callWidget(LineReader.ACCEPT_LINE);
-            return true;
-        });
-        Reference submit = new Reference(submitWidgetName);
-        String[] submitSequences = editorKeySequences("submit").toArray(String[]::new);
-
-        String suggestionUpWidgetName = "codingagent-previous-command-suggestion";
-        reader.getWidgets().put(
-                suggestionUpWidgetName,
-                () -> this.moveSuggestionOrFallback(-1, LineReader.UP_LINE_OR_SEARCH));
-        Reference suggestionUp = new Reference(suggestionUpWidgetName);
-        String suggestionDownWidgetName = "codingagent-next-command-suggestion";
-        reader.getWidgets().put(
-                suggestionDownWidgetName,
-                () -> this.moveSuggestionOrFallback(1, LineReader.DOWN_LINE_OR_SEARCH));
-        Reference suggestionDown = new Reference(suggestionDownWidgetName);
-        String terminalUp = KeyMap.key(jlineTerminal, Capability.key_up);
-        String terminalDown = KeyMap.key(jlineTerminal, Capability.key_down);
-
-        reader.getWidgets().put(LineReader.BEGIN_PASTE, () -> {
-            StringBuilder content = new StringBuilder();
-            while (true) {
-                int value = this.reader.readCharacter();
-                if (value < 0) break;
-                content.append((char) value);
-                boolean result = true;
-                if (content.length() < BRACKETED_PASTE_END.length()) {
-                    result = false;
-                } else {
-                    int offset = content.length() - BRACKETED_PASTE_END.length();
-                    for (int index = 0; index < BRACKETED_PASTE_END.length(); index++) {
-                        if (content.charAt(offset + index) != BRACKETED_PASTE_END.charAt(index)) {
-                            result = false;
-                            break;
-                        }
-                    }
-                }
-                if (result) {
-                    content.setLength(content.length() - BRACKETED_PASTE_END.length());
-                    break;
-                }
-            }
-            this.reader.getBuffer().write(content.toString().replace("\r\n", "\n").replace('\r', '\n'));
-            return true;
-        });
-        for (var keyMap1 : reader.getKeyMaps().values()) {
-            keyMap1.bind(insertNewline, newlineSequences);
-            keyMap1.bind(submit, submitSequences);
-            bindNavigationKey(keyMap1, suggestionUp, terminalUp, "\u001b[A", "\u001bOA");
-            bindNavigationKey(keyMap1, suggestionDown, terminalDown, "\u001b[B", "\u001bOB");
-        }
-        String modeWidget = "codingagent-toggleAgentMode";
-        reader.getWidgets().put(modeWidget, () -> {
-            if (!commandSuggestionsActive) return reader.getBuiltinWidgets().get(LineReader.EXPAND_OR_COMPLETE).apply();
-            changeAgentMode(runtime.agentMode() == AgentMode.PLAN ? AgentMode.BUILD : AgentMode.PLAN, true);
-            return true;
-        });
-        previousContinueHandler = supportsSuspend
-                ? terminal.handle(Terminal.Signal.CONT, signal -> {
-            try {
-                if (previousContinueHandler != null
-                    && previousContinueHandler != Terminal.SignalHandler.SIG_DFL
-                    && previousContinueHandler != Terminal.SignalHandler.SIG_IGN) {
-                    previousContinueHandler.handle(signal);
-                }
-            } finally {
-                if (!managedSuspend) repaintScreen();
-            }
-        })
-                : null;
-        previousResizeHandler =
-                terminal.handle(Terminal.Signal.WINCH, signal -> {
-                    if (previousResizeHandler != null
-                            && previousResizeHandler != Terminal.SignalHandler.SIG_DFL
-                            && previousResizeHandler != Terminal.SignalHandler.SIG_IGN) {
-                        previousResizeHandler.handle(signal);
-                    }
-                    synchronized (this) {
-                        if (statusBar != null) {
-                            statusBar.resize();
-                            renderStatusBar();
-                        }
-                    }
-                });
+        }));
         if (supportsSuspend) {
-            this.reader.getWidgets().compute(LineReader.CALLBACK_INIT, (_, previousInit) -> () -> {
-                boolean initialized = previousInit == null || previousInit.apply();
-                if (restoreCursor >= 0) {
-                    this.reader
-                            .getBuffer()
-                            .cursor(Math.min(restoreCursor, this.reader.getBuffer().length()));
-                    restoreCursor = -1;
+            signalRegistrations.add(terminal.handle(Terminal.Signal.CONT, () -> {
+                // Resumed by something other than our own suspend: the shell drew over the screen.
+                if (managedSuspend) return;
+                editorLock.lock();
+                try {
+                    synchronized (this) {
+                        if (!managedSuspend) repaintScreen();
+                    }
+                } finally {
+                    editorLock.unlock();
                 }
-                return initialized;
-            });
-            this.reader.getWidgets().put("suspend-process", () -> {
-                suspendedBuffer = this.reader.getBuffer().toString();
-                suspendedCursor = this.reader.getBuffer().cursor();
-                throw SUSPEND_REQUESTED;
-            });
-            Reference suspend = new Reference("suspend-process");
-            for (var keyMap : this.reader.getKeyMaps().values()) {
-                keyMap.bind(suspend, appKeySequence("suspend"));
-            }
+            }));
         }
-    }
-
-    private void bindNavigationKey(
-            KeyMap<Binding> keyMap,
-            Reference widget,
-            String terminalSequence,
-            String... fallbackSequences) {
-        if (terminalSequence != null && !terminalSequence.isEmpty()) {
-            keyMap.bind(widget, terminalSequence);
-        }
-        keyMap.bind(widget, fallbackSequences);
-    }
-
-    private boolean moveSuggestionOrFallback(int delta, String fallbackWidget) {
-        if (commandSuggestionsActive) {
-            boolean result = true;
-            String buffer = reader.getBuffer().toString();
-            synchronizeCommandSuggestions(buffer);
-            if (matches.isEmpty()) {
-                result = false;
-            } else {
-                selectedIndex = Math.floorMod(selectedIndex + delta, matches.size());
-                if (selectedIndex < visibleStart) {
-                    visibleStart = selectedIndex;
-                } else if (selectedIndex >= visibleStart + VISIBLE_COMMANDS) {
-                    visibleStart = selectedIndex - VISIBLE_COMMANDS + 1;
-                }
-                visibleStart = Math.clamp(matches.size() - VISIBLE_COMMANDS, 0, visibleStart);
-            }
-            if (result) {
-                return true;
-            }
-        }
-        reader.callWidget(fallbackWidget);
-        return true;
     }
 
     /**
@@ -1606,117 +1125,140 @@ public final class CodingAgentCli {
     }
 
     private String readLineInternal(String prompt, String initialBuffer, Character mask, boolean suggestionsEnabled) {
-        while (true) {
-            try {
-                String result;
-                String background = TerminalStyle.PROMPT_BACKGROUND;
-                reader.setVariable(
-                        LineReader.SECONDARY_PROMPT_PATTERN,
-                        background.isEmpty()
-                                ? SECONDARY_PROMPT
-                                : hiddenForJLine(background + TerminalStyle.CLEAR_TO_END_OF_LINE)
-                                  + SECONDARY_PROMPT);
-                String editorPrompt;
-                if (background.isEmpty()) {
-                    editorPrompt = prompt;
-                } else {
-                    int activeLineOffset = activePromptLineOffset(prompt);
-                    editorPrompt = prompt.substring(0, activeLineOffset)
-                            + hiddenForJLine(background + TerminalStyle.CLEAR_TO_END_OF_LINE)
-                            + prompt.substring(activeLineOffset);
-                }
-                commandSuggestionsActive = suggestionsEnabled;
-                dynamicPost =
-                        !suggestionsEnabled ? null : () -> {
-                            int columns = jlineTerminal.getColumns() > 0
-                                    ? jlineTerminal.getColumns()
-                                    : DEFAULT_COLUMNS;
-                            List<String> lines;
-                            String buffer = reader.getBuffer().toString();
-                            synchronizeCommandSuggestions(buffer);
-                            if (matches.isEmpty()) {
-                                lines = List.of();
-                            } else {
-                                int visibleEnd = Math.min(
-                                        matches.size(), visibleStart + VISIBLE_COMMANDS);
-                                List<String> visible = matches.subList(visibleStart, visibleEnd);
-                                int longestCommand = visible.stream()
-                                        .mapToInt(CodingAgentCli::visibleWidth)
-                                        .max()
-                                        .orElse(1);
-                                int innerWidth = Math.max(1, Math.clamp(columns - 2, 1, longestCommand + 2));
-                                String border = "─".repeat(innerWidth);
-                                List<String> lines1 = new ArrayList<>(visible.size() + 2);
-                                lines1.add(styleMuted("╭" + border + "╮"));
-                                for (int index = visibleStart; index < visibleEnd; index++) {
-                                    boolean selected = index == selectedIndex;
-                                    String content = (selected ? "› " : "  ") + matches.get(index);
-                                    content = truncatePlain(content, innerWidth);
-                                    content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
-                                    String styledContent = selected
-                                            ? TerminalStyle.HEADING + content + TerminalStyle.RESET
-                                            : content;
-                                    lines1.add(styleMuted("│") + styledContent + styleMuted("│"));
-                                }
-                                lines1.add(styleMuted("╰" + border + "╯"));
-                                lines = lines1;
-                            }
-
-                            return lines.isEmpty()
-                                   ? new AttributedString("")
-                                   : AttributedString.fromAnsi(String.join("\n", lines));
-                        };
-                Map<KeyMap<Binding>, Binding> previousModeBindings = new LinkedHashMap<>();
-                if (suggestionsEnabled) for (var keyMap : reader.getKeyMaps().values()) {
-                    if (previousModeBindings.containsKey(keyMap)) continue;
-                    previousModeBindings.put(keyMap, keyMap.getBound(appKeySequence("toggleAgentMode")));
-                    keyMap.bind(new Reference("codingagent-toggleAgentMode"), appKeySequence("toggleAgentMode"));
-                }
-                try {
-                    bindEnhancedKeyAliases();
-                    resetTerminalCharacterSet();
-                    lineEditorReading = true;
-                    pushEnhancedKeyboardReporting();
-                    result = reader.readLine(editorPrompt, null, mask, initialBuffer);
-                } finally {
-                    // Also runs before the suspend hook: readLine unwinds first.
-                    popEnhancedKeyboardReporting();
-                    previousModeBindings.forEach((keyMap, binding) -> {
-                        if (binding == null) keyMap.unbind(appKeySequence("toggleAgentMode"));
-                        else keyMap.bind(binding, appKeySequence("toggleAgentMode"));
-                    });
-                    lineEditorReading = false;
-                    dynamicPost = null;
-                    commandSuggestionsActive = false;
-                    resetPromptBackground();
-                }
-                String line =
-                        result;
-                rememberCompletedLine(prompt, line, mask);
-                return line;
-            } catch (CancellationException signal) {
-                if (signal != SUSPEND_REQUESTED) {
-                    throw signal;
-                }
-                initialBuffer = suspendedBuffer;
-                restoreCursor = suspendedCursor;
-                suspendInteractive(null);
-            } catch (UserInterruptException ignored) {
+        int activeLineOffset = activePromptLineOffset(prompt);
+        LineEditor.Options options = new LineEditor.Options();
+        options.header = prompt.substring(0, activeLineOffset);
+        options.prompt = prompt.substring(activeLineOffset);
+        options.continuationPrompt = SECONDARY_PROMPT;
+        options.rowStyle = TerminalStyle.PROMPT_BACKGROUND + TerminalStyle.CLEAR_TO_END_OF_LINE;
+        options.initialBuffer = initialBuffer;
+        options.mask = mask;
+        options.keys = key -> handleEditorKey(key, suggestionsEnabled);
+        options.repaint = () -> {
+            synchronized (this) {
+                repaintScreen();
+            }
+        };
+        if (suggestionsEnabled) {
+            options.below = this::commandSuggestionLines;
+            options.beforeAccept = this::insertSelectedCommand;
+            // Questions open only from the main prompt, between key sequences.
+            options.idle = this::showPendingQuestions;
+        }
+        LineEditor.Result result;
+        Terminal.Mode previousMode = terminal.mode();
+        try {
+            commandSuggestionsActive = suggestionsEnabled;
+            terminal.enterRawMode();
+            resetTerminalCharacterSet();
+            lineEditorReading = true;
+            pushEnhancedKeyboardReporting();
+            result = editor.readLine(options);
+        } catch (IOException error) {
+            throw new UncheckedIOException(error);
+        } finally {
+            popEnhancedKeyboardReporting();
+            lineEditorReading = false;
+            commandSuggestionsActive = false;
+            terminal.setMode(previousMode);
+            resetPromptBackground();
+        }
+        return switch (result.outcome()) {
+            case ACCEPTED -> {
+                rememberCompletedLine(prompt, result.line(), mask);
+                yield result.line();
+            }
+            case INTERRUPTED -> {
                 rememberCompletedLine(prompt, "", mask);
-                return "";
-            } catch (EndOfFileException ignored) {
+                yield "";
+            }
+            case END_OF_INPUT -> {
                 synchronized (this) {
-                    int activeLineOffset = activePromptLineOffset(prompt);
                     remember(prompt.substring(0, activeLineOffset));
                     remember(promptArea(prompt.substring(activeLineOffset)));
                 }
-                return null;
+                yield null;
             }
-        }
+        };
     }
 
-    private static String hiddenForJLine(String value) {
-        return "%{" + value + "%}";
+    /** Application shortcuts and command-panel navigation, consulted before the editor's own keys. */
+    private boolean handleEditorKey(TerminalEvent.Key key, boolean suggestionsEnabled) {
+        if (supportsSuspend && appKeyMatches(key, "suspend")) {
+            suspendInteractive();
+            return true;
+        }
+        for (Map.Entry<String, Runnable> action : appActions.entrySet()) {
+            if (appKeyMatches(key, action.getKey())) {
+                resetPromptBackground();
+                try {
+                    action.getValue().run();
+                } finally {
+                    editor.requestRedraw();
+                }
+                return true;
+            }
+        }
+        if (suggestionsEnabled) {
+            if (appKeyMatches(key, "toggleAgentMode")) {
+                changeAgentMode(runtime.agentMode() == AgentMode.PLAN ? AgentMode.BUILD : AgentMode.PLAN, true);
+                return true;
+            }
+            if (key.is(TerminalEvent.KeyType.UP)) return moveSuggestion(-1);
+            if (key.is(TerminalEvent.KeyType.DOWN)) return moveSuggestion(1);
+        }
+        return false;
+    }
+
+    private boolean moveSuggestion(int delta) {
+        synchronizeCommandSuggestions(editor.buffer());
+        if (matches.isEmpty()) return false;
+        selectedIndex = Math.floorMod(selectedIndex + delta, matches.size());
+        if (selectedIndex < visibleStart) {
+            visibleStart = selectedIndex;
+        } else if (selectedIndex >= visibleStart + VISIBLE_COMMANDS) {
+            visibleStart = selectedIndex - VISIBLE_COMMANDS + 1;
+        }
+        visibleStart = Math.clamp(matches.size() - VISIBLE_COMMANDS, 0, visibleStart);
+        return true;
+    }
+
+    /** On Enter, replaces a partial slash command with the highlighted suggestion instead of submitting. */
+    private boolean insertSelectedCommand() {
+        synchronizeCommandSuggestions(editor.buffer());
+        if (matches.isEmpty()) return false;
+        String selected = matches.get(selectedIndex);
+        dismissedBuffer = selected;
+        editor.setBuffer(selected, selected.length());
+        return true;
+    }
+
+    private List<String> commandSuggestionLines() {
+        int columns = terminal.columns();
+        synchronizeCommandSuggestions(editor.buffer());
+        if (matches.isEmpty()) return List.of();
+        int visibleEnd = Math.min(matches.size(), visibleStart + VISIBLE_COMMANDS);
+        List<String> visible = matches.subList(visibleStart, visibleEnd);
+        int longestCommand = visible.stream()
+                .mapToInt(CodingAgentCli::visibleWidth)
+                .max()
+                .orElse(1);
+        int innerWidth = Math.max(1, Math.clamp(columns - 2, 1, longestCommand + 2));
+        String border = "─".repeat(innerWidth);
+        List<String> lines = new ArrayList<>(visible.size() + 2);
+        lines.add(styleMuted("╭" + border + "╮"));
+        for (int index = visibleStart; index < visibleEnd; index++) {
+            boolean selected = index == selectedIndex;
+            String content = (selected ? "› " : "  ") + matches.get(index);
+            content = truncatePlain(content, innerWidth);
+            content += " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
+            String styledContent = selected
+                    ? TerminalStyle.HEADING + content + TerminalStyle.RESET
+                    : content;
+            lines.add(styleMuted("│") + styledContent + styleMuted("│"));
+        }
+        lines.add(styleMuted("╰" + border + "╯"));
+        return lines;
     }
 
     private static int activePromptLineOffset(String prompt) {
@@ -1728,9 +1270,9 @@ public final class CodingAgentCli {
      */
     public <T> T runComponent(TuiComponent<T> component)
             throws IOException {
-        // Selectors read directly, may nest inside a JLine widget, and can suspend
-        // without unwinding readLine. Leave their alternate screen (and the shell)
-        // in legacy mode; restore reporting only after returning to the editor.
+        // Components may open from an editor shortcut and can suspend the process.
+        // Leave their alternate screen (and the shell) in legacy key mode; restore
+        // enhanced reporting only after returning to the editor.
         boolean resumeReporting = enhancedKeyboardReporting;
         popEnhancedKeyboardReporting();
         try {
@@ -1741,24 +1283,23 @@ public final class CodingAgentCli {
     }
 
     private <T> T runComponentInternal(TuiComponent<T> component) throws IOException {
-        if (reader.isReading()) resetPromptBackground();
+        if (editor.isReading()) resetPromptBackground();
         synchronized (this) {
             componentOpen = true;
-            if (statusBar != null) statusBar.suspend();
+            statusLine.suspend();
         }
         try {
             TuiRuntime runtime = new TuiRuntime(
-                    jlineTerminal,
+                    terminal,
                     supportsSuspend
                             ? () -> {
-                        fullScreenResumeAttributes =
-                        new Attributes(jlineTerminal.getAttributes());
-                        jlineTerminal.setAttributes(shellAttributes);
+                        fullScreenResumeMode = terminal.mode();
+                        terminal.setMode(shellMode);
                         managedSuspend = true;
                         try {
                             callSuspendAction(suspendAction);
                         } catch (IOException | RuntimeException | Error error) {
-                            restoreFullScreenAttributes();
+                            restoreFullScreenMode();
                             managedSuspend = false;
                             throw error;
                         }
@@ -1770,7 +1311,7 @@ public final class CodingAgentCli {
                             try {
                                 repaintScreen();
                             } finally {
-                                restoreFullScreenAttributes();
+                                restoreFullScreenMode();
                                 managedSuspend = false;
                             }
                         }
@@ -1782,7 +1323,7 @@ public final class CodingAgentCli {
                 handleComponentInput(component, new TuiInput.Resize(width, height));
                 renderTuiFrame(runtime, component, width, height);
                 while (!component.complete.getAsBoolean()) {
-                    TuiInput input = readTuiInput(runtime.terminal.reader(), 100);
+                    TuiInput input = readTuiInput(100);
                     int nextWidth = tuiWidth(runtime);
                     int nextHeight = tuiHeight(runtime);
                     if (nextWidth != width || nextHeight != height) {
@@ -1822,27 +1363,14 @@ public final class CodingAgentCli {
 
         } finally {
             synchronized (this) {
-                if (statusBar != null) {
-                    statusBar.restore();
-                    if (statusBar.size() > 0) {
-                        // Alternate-screen switches can drop the scroll region on some terminals.
-                        int rows = jlineTerminal.getRows() > 0
-                                ? jlineTerminal.getRows()
-                                : DEFAULT_ROWS;
-                        jlineTerminal.puts(Capability.save_cursor);
-                        jlineTerminal.puts(
-                                Capability.change_scroll_region, 0, rows - 1 - statusBar.size());
-                        jlineTerminal.puts(Capability.restore_cursor);
-                        renderStatusBar();
-                        jlineTerminal.flush();
-                    }
-                }
+                // Reserve the status row again: the alternate screen shared the scroll region.
+                statusLine.restore();
             }
             synchronized (this) {
                 componentOpen = false;
                 if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
             }
-            if (reader.isReading()) reader.callWidget(LineReader.REDRAW_LINE);
+            if (editor.isReading()) editor.requestRedraw();
         }
     }
 
@@ -1855,13 +1383,13 @@ public final class CodingAgentCli {
             throws IOException, InterruptedException {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(interruptHandler, "interruptHandler");
-        Attributes originalAttributes = jlineTerminal.enterRawMode();
+        Terminal.Mode originalMode = terminal.enterRawMode();
         FutureTask<T> task = new FutureTask<>(operation);
         Thread worker = Thread.ofVirtual().name("codingagent-interactive-operation").start(task);
         boolean interruptRequested = false;
         try {
             while (!task.isDone()) {
-                TuiInput input = readTuiInput(jlineTerminal.reader(), 50);
+                TuiInput input = readTuiInput(50);
                 if (input instanceof TuiInput.Key key
                         && (key.type == TuiInput.KeyType.ESCAPE || key.type == TuiInput.KeyType.CANCEL)
                         && !interruptRequested
@@ -1871,7 +1399,7 @@ public final class CodingAgentCli {
                 } else if (input instanceof TuiInput.Key key
                         && key.type == TuiInput.KeyType.SUSPEND
                         && supportsSuspend) {
-                    suspendInteractive(originalAttributes);
+                    suspendInteractive();
                 }
             }
             try {
@@ -1891,25 +1419,49 @@ public final class CodingAgentCli {
             }
             throw error;
         } finally {
-            jlineTerminal.setAttributes(originalAttributes);
+            terminal.setMode(originalMode);
         }
     }
 
-    private void suspendInteractive(Attributes restoreBefore) {
-        if (restoreBefore != null) jlineTerminal.setAttributes(restoreBefore);
+    /**
+     * Hands the terminal to the shell in its own mode, stops the process group,
+     * and on resume restores the mode, key reporting, status row, screen, and
+     * any draft in the line editor.
+     */
+    private void suspendInteractive() {
+        boolean resumeReporting = enhancedKeyboardReporting;
+        if (editor.isReading()) {
+            resetPromptBackground();
+            synchronized (this) {
+                editor.detach();
+            }
+        }
+        popEnhancedKeyboardReporting();
+        boolean pasteWasEnabled = terminal.bracketedPaste();
+        terminal.bracketedPaste(false);
+        Terminal.Mode resumeMode = terminal.mode();
+        synchronized (this) {
+            statusLine.suspend();
+        }
+        terminal.setMode(shellMode);
         managedSuspend = true;
+        IOException failure = null;
         try {
             callSuspendAction(suspendAction);
         } catch (IOException error) {
-            println("Could not suspend process: " + error.getMessage());
+            failure = error;
         } finally {
+            terminal.setMode(resumeMode);
+            terminal.bracketedPaste(pasteWasEnabled);
+            if (resumeReporting) pushEnhancedKeyboardReporting();
             synchronized (this) {
                 managedSuspend = false;
+                statusLine.restore();
                 if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
                 else repaintScreen();
             }
-            if (restoreBefore != null) jlineTerminal.enterRawMode();
         }
+        if (failure != null) println("Could not suspend process: " + failure.getMessage());
     }
 
     /**
@@ -1917,20 +1469,9 @@ public final class CodingAgentCli {
      */
     public void bindAppAction(String action, Runnable handler) {
         Objects.requireNonNull(handler, "handler");
-        String widgetName = "codingagent-" + action;
-        reader.getWidgets().put(widgetName, () -> {
-            resetPromptBackground();
-            try {
-                handler.run();
-            } finally {
-                reader.callWidget(LineReader.REDRAW_LINE);
-            }
-            return true;
-        });
-        Reference reference = new Reference(widgetName);
-        for (var keyMap : reader.getKeyMaps().values()) {
-            keyMap.bind(reference, appKeySequence(action));
-        }
+        // Resolve the binding now so an unsupported one fails at startup.
+        appKeyMatches(TerminalEvent.Key.of(TerminalEvent.KeyType.UNKNOWN), action);
+        appActions.put(action, handler);
     }
 
     /**
@@ -1940,9 +1481,13 @@ public final class CodingAgentCli {
         if (editorLock != null) editorLock.lock();
         try {
             synchronized (this) {
-                if (reader.isReading()) resetPromptBackground();
-                reader.printAbove(text);
                 remember(text + System.lineSeparator());
+                if (editor.isReading()) {
+                    resetPromptBackground();
+                    repaintScreen();
+                } else {
+                    terminal.write(text + System.lineSeparator());
+                }
             }
         } finally { if (editorLock != null) editorLock.unlock(); }
     }
@@ -1953,13 +1498,10 @@ public final class CodingAgentCli {
             synchronized (this) {
                 String value = String.valueOf(text);
                 remember(value);
-                if (reader != null && reader.isReading()) {
+                if (editor != null && editor.isReading()) {
                     repaintScreen();
-                    reader.callWidget(LineReader.REDRAW_LINE);
-                    reader.callWidget(LineReader.REDISPLAY);
                 } else {
-                    jlineTerminal.writer().print(value);
-                    jlineTerminal.writer().flush();
+                    terminal.write(value);
                 }
             }
         } finally { if (editorLock != null) editorLock.unlock(); }
@@ -1993,12 +1535,9 @@ public final class CodingAgentCli {
 
     private void renderStatusBar() {
         if (statusLeft == null && statusRight == null) return;
-        if (statusBar == null) statusBar = Status.getStatus(jlineTerminal);
-        if (statusBar == null) return;
-        int columns = jlineTerminal.getColumns();
-        int width = columns > 0 ? columns : DEFAULT_COLUMNS;
-        statusBar.update(List.of(AttributedString.fromAnsi(statusBarLine(
-                statusActivity, statusAccent, statusLeft, statusRight, width))));
+        if (statusLine == null) return;
+        statusLine.update(statusBarLine(
+                statusActivity, statusAccent, statusLeft, statusRight, terminal.columns()));
     }
 
     /**
@@ -2063,59 +1602,66 @@ public final class CodingAgentCli {
         }
     }
 
-    private void restoreFullScreenAttributes() {
-        if (fullScreenResumeAttributes != null) {
-            jlineTerminal.setAttributes(fullScreenResumeAttributes);
-            fullScreenResumeAttributes = null;
+    private void restoreFullScreenMode() {
+        if (fullScreenResumeMode != null) {
+            terminal.setMode(fullScreenResumeMode);
+            fullScreenResumeMode = null;
         }
     }
 
     private void resetPromptBackground() {
-        jlineTerminal.writer().print(TerminalStyle.RESET);
-        jlineTerminal.writer().flush();
+        terminal.write(TerminalStyle.RESET);
     }
 
     /**
-     * Returns the terminal to the character-set state JLine assumes when it draws borders.
-     *
-     * <p>JLine renders ─ and │ as DEC Special Graphics designated into G0. If earlier output in
-     * this terminal (another program, or a stray SO before tool output was sanitized) left G1
-     * invoked, or left line drawing designated into G0, the command panel and status bar would
-     * show q and x instead of lines until the user ran {@code reset}.
+     * Returns the terminal to G0/ASCII. Earlier output in this terminal (another
+     * program, or a stray SO before tool output was sanitized) can leave G1 or DEC
+     * line drawing selected, which would garble the prompt and status until the
+     * user ran {@code reset}.
      */
     private void resetTerminalCharacterSet() {
-        if (!resetsCharacterSet) return;
-        jlineTerminal.writer().print(RESET_CHARACTER_SET);
-        jlineTerminal.writer().flush();
+        terminal.write(RESET_CHARACTER_SET);
     }
 
+    /** Clears the screen and scrollback, then redraws the status row, the document, and any active prompt. */
     private void repaintScreen() {
         synchronized (this) {
-            jlineTerminal.writer().print(TerminalStyle.RESET);
-            jlineTerminal.writer().print(BEGIN_SYNCHRONIZED_OUTPUT);
-            boolean redrawStatusBar = statusBar != null && statusBar.size() > 0;
-            // Release the status rows so the redrawn document starts on a clean screen.
-            if (redrawStatusBar) statusBar.update(List.of());
-            jlineTerminal.writer().print(CLEAR_SCREEN_AND_SCROLLBACK);
-            // Re-reserve the bottom row before printing so the document scrolls above it.
-            if (redrawStatusBar) renderStatusBar();
-            jlineTerminal.writer().print(screenDocument);
-            jlineTerminal.writer().print(END_SYNCHRONIZED_OUTPUT);
-            jlineTerminal.writer().flush();
+            terminal.beginUpdate();
+            try {
+                terminal.write(TerminalStyle.RESET);
+                boolean redrawStatus = statusLine.isShown();
+                // Release the status row so the redrawn document starts on a clean screen.
+                if (redrawStatus) statusLine.suspend();
+                terminal.write(CLEAR_SCREEN_AND_SCROLLBACK);
+                // Re-reserve the bottom row before printing so the document scrolls above it.
+                if (redrawStatus) statusLine.restore();
+                terminal.write(screenDocument);
+                if (editor.isReading()) {
+                    editor.screenReset();
+                    editor.redisplay();
+                }
+            } finally {
+                terminal.endUpdate();
+            }
         }
     }
 
     /**
-     * Restores the signal handlers this terminal replaced and closes JLine.
+     * Removes this shell's signal handlers, releases the status row, and restores the terminal.
      */
     public void closeTerminal() throws IOException {
-        if (previousContinueHandler != null) {
-            jlineTerminal.handle(Terminal.Signal.CONT, previousContinueHandler);
+        for (AutoCloseable registration : signalRegistrations) {
+            try {
+                registration.close();
+            } catch (Exception ignored) {
+                // Unregistering a handler cannot fail meaningfully.
+            }
         }
-        if (previousResizeHandler != null) {
-            jlineTerminal.handle(Terminal.Signal.WINCH, previousResizeHandler);
+        signalRegistrations.clear();
+        synchronized (this) {
+            if (statusLine != null) statusLine.close();
         }
-        jlineTerminal.close();
+        terminal.close();
     }
 
     // ------------------------------------------------------------------- cli
@@ -2418,11 +1964,18 @@ public final class CodingAgentCli {
                 }
             }
             Settings settings = runtime.loadSettings();
+            // Fail clearly on unsupported platforms or redirected streams before starting MCP servers.
+            Terminal systemTerminal = Terminal.system();
             Path workspace = Path.of(".").toAbsolutePath().normalize();
-            runtime.mcpLoadDefaultManager(workspace);
+            try {
+                runtime.mcpLoadDefaultManager(workspace);
+            } catch (IOException | RuntimeException error) {
+                systemTerminal.close();
+                throw error;
+            }
             try {
                 newInteractiveTerminal(
-                        TerminalBuilder.builder().system(true).name(APP_NAME).build(),
+                        systemTerminal,
                         () -> {
                             Process process =
                                     new ProcessBuilder("/bin/kill", "-TSTP", "0").redirectErrorStream(true).start();
@@ -2439,7 +1992,7 @@ public final class CodingAgentCli {
                             }
                             return null;
                         },
-                        !System.getProperty("os.name").startsWith("Windows"));
+                        true);
                 try {
                     this.settings = settings;
                     runtime.questions().setInteractive(true);
@@ -4479,7 +4032,7 @@ public final class CodingAgentCli {
                     int width1 = 0;
                     for (int index = 0; index < sourceLine.length(); ) {
                         int codePoint = sourceLine.codePointAt(index);
-                        int codePointWidth = Math.max(0, WCWidth.wcwidth(codePoint));
+                        int codePointWidth = Math.max(0, Cells.width(codePoint));
                         if (!line.isEmpty() && width1 + codePointWidth > maximumWidth) {
                             lines.add(line.toString());
                             line.setLength(0);
@@ -4627,7 +4180,7 @@ public final class CodingAgentCli {
 
     private void reportCheckpointFailure(IOException error) {
         String message = "Warning: session progress could not be saved for resume: " + error.getMessage();
-        if (jlineTerminal == null) System.err.println(message);
+        if (terminal == null) System.err.println(message);
         else shellNotifications.add(() -> println(message));
     }
 }

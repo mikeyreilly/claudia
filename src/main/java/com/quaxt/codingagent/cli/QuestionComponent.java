@@ -1,10 +1,10 @@
 package com.quaxt.codingagent.cli;
 
 import com.quaxt.codingagent.agent.QuestionBroker;
+import com.quaxt.codingagent.terminal.Cells;
 import com.quaxt.codingagent.tui.*;
 import java.util.*;
 import java.util.function.BooleanSupplier;
-import org.jline.utils.AttributedString;
 import static com.quaxt.codingagent.CodingAgentCli.stripAnsi;
 
 /** Single-choice question with an always-available, editable custom answer. */
@@ -84,14 +84,14 @@ public final class QuestionComponent {
         int start = Math.max(0, Math.min(selectedLine - available + 1, body.size() - available));
         List<String> lines = new ArrayList<>(body.subList(start, Math.min(body.size(), start + available)));
         String footer = "Up/Down choose; type a custom answer; Enter submits; Esc declines";
-        lines.add(new AttributedString(footer).columnSubSequence(0, width).toString());
+        lines.add(Cells.truncate(footer, width));
         return lines;
     }
 
     private static void addWrapped(List<String> lines, String text, int width) {
         for (String line : clean(text).split("\n", -1)) {
             if (line.isEmpty()) lines.add("");
-            else new AttributedString(line).columnSplitLength(width).forEach(part -> lines.add(part.toString()));
+            else lines.addAll(Cells.wrap(line, width));
         }
     }
 

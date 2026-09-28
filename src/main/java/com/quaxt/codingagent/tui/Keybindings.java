@@ -4,8 +4,9 @@ import java.util.Map;
 
 /**
  * Default editor and application binding data, exposed for future user
- * settings. The terminal sequences each binding expands to are resolved by the
- * static operations in CodingAgentCli.
+ * settings. CodingAgentCli matches decoded keys against the application
+ * bindings; the editor bindings describe the defaults built into
+ * {@code com.quaxt.codingagent.terminal.LineEditor}.
  */
 public final class Keybindings {
 	public static final Map<String, String> DEFAULT_EDITOR_KEYBINDINGS = Map.of(

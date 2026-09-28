@@ -1,0 +1,32 @@
+{
+  "reflection": [
+    {
+      "type": "com.quaxt.codingagent.CodingAgentCli",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true
+    }
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "int",
+        "parameterTypes": ["int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["int", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["int", "int", "void*"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["int", "long", "void*"],
+        "options": {
+          "firstVariadicArg": 2
+        }
+      }
+    ]
+  }
+}
