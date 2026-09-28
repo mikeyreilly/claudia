@@ -86,6 +86,7 @@ import org.jline.terminal.Size;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.AttributedString;
+import org.jline.utils.Curses;
 import org.jline.utils.InfoCmp.Capability;
 import org.jline.utils.NonBlockingReader;
 import org.jline.utils.Status;
@@ -196,6 +197,10 @@ public final class CodingAgentCli {
     private static final int DEFAULT_ROWS = 24;
     private static final String BEGIN_SYNCHRONIZED_OUTPUT = "\u001b[?2026h";
     private static final String END_SYNCHRONIZED_OUTPUT = "\u001b[?2026l";
+    /** JLine draws ─ and │ by designating DEC Special Graphics into G0 when smacs is this sequence. */
+    private static final String DEC_SPECIAL_GRAPHICS_INTO_G0 = "\u001b(0";
+    /** SI (invoke G0 into GL), then designate ASCII into G0: the state JLine assumes before it draws. */
+    static final String RESET_CHARACTER_SET = "\u000f\u001b(B";
     private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
     private static final String SECONDARY_PROMPT = "%M> ";
     private static final String BRACKETED_PASTE_END = "\u001b[201~";
@@ -338,6 +343,7 @@ public final class CodingAgentCli {
     private boolean enhancedKeyboardReporting;
     private final Map<String, String> enhancedBindingAliases = new LinkedHashMap<>(ENHANCED_KEY_ALIASES);
     private Supplier<AttributedString> dynamicPost;
+    private boolean resetsCharacterSet;
 
     // CommandSuggestions fields
     private List<String> commands;
@@ -413,6 +419,26 @@ public final class CodingAgentCli {
 
     public static String stripAnsi(String value) {
         return TERMINAL_ANSI.matcher(value).replaceAll("");
+    }
+
+    /**
+     * Makes untrusted text (model output, tool arguments and results) safe to write to the terminal.
+     * ANSI escape sequences are removed and other control characters, except newline and tab, are
+     * dropped: the terminal would otherwise act on them. A stray SO (0x0E) from binary tool output,
+     * for example, shifts the terminal to its G1 character set so that line drawing appears as
+     * letters until the terminal is reset.
+     */
+    static String terminalSafeText(String value) {
+        String stripped = stripAnsi(value == null ? "" : value);
+        StringBuilder safe = new StringBuilder(stripped.length());
+        for (int index = 0; index < stripped.length(); ) {
+            int codePoint = stripped.codePointAt(index);
+            if (codePoint == '\n' || codePoint == '\t' || !Character.isISOControl(codePoint)) {
+                safe.appendCodePoint(codePoint);
+            }
+            index += Character.charCount(codePoint);
+        }
+        return safe.toString();
     }
 
     // ------------------------------------------------------------ styling
@@ -1284,6 +1310,9 @@ public final class CodingAgentCli {
         commandSuggestionsActive = false;
         dynamicPost = null;
         jlineTerminal = terminal;
+        resetsCharacterSet = DEC_SPECIAL_GRAPHICS_INTO_G0.equals(
+                Curses.tputs(terminal.getStringCapability(Capability.enter_alt_charset_mode)));
+        resetTerminalCharacterSet();
         int columns = terminal.getColumns();
         int rows = terminal.getRows();
         if (columns <= 0 || rows <= 0) {
@@ -1645,6 +1674,7 @@ public final class CodingAgentCli {
                 }
                 try {
                     bindEnhancedKeyAliases();
+                    resetTerminalCharacterSet();
                     lineEditorReading = true;
                     pushEnhancedKeyboardReporting();
                     result = reader.readLine(editorPrompt, null, mask, initialBuffer);
@@ -2042,6 +2072,20 @@ public final class CodingAgentCli {
 
     private void resetPromptBackground() {
         jlineTerminal.writer().print(TerminalStyle.RESET);
+        jlineTerminal.writer().flush();
+    }
+
+    /**
+     * Returns the terminal to the character-set state JLine assumes when it draws borders.
+     *
+     * <p>JLine renders ─ and │ as DEC Special Graphics designated into G0. If earlier output in
+     * this terminal (another program, or a stray SO before tool output was sanitized) left G1
+     * invoked, or left line drawing designated into G0, the command panel and status bar would
+     * show q and x instead of lines until the user ran {@code reset}.
+     */
+    private void resetTerminalCharacterSet() {
+        if (!resetsCharacterSet) return;
+        jlineTerminal.writer().print(RESET_CHARACTER_SET);
         jlineTerminal.writer().flush();
     }
 
@@ -3418,17 +3462,17 @@ public final class CodingAgentCli {
         for (Message message : messages) {
             switch (message) {
                 case UserMessage user -> screen.append('\n')
-                        .append(promptArea("> " + text(user)))
+                        .append(promptArea("> " + terminalSafeText(text(user))))
                         .append('\n');
                 case AssistantMessage assistant -> {
                     for (AssistantContent content : assistant.content) {
                         if (content instanceof ThinkingContent thinking) {
                             if (!hideThinking && !thinking.thinking.isBlank()) {
                                 screen.append("\n").append(TerminalStyle.MUTED).append("Thinking:").append(TerminalStyle.RESET).append('\n');
-                                screen.append(TerminalStyle.MUTED).append(thinking.thinking).append(TerminalStyle.RESET).append('\n');
+                                screen.append(TerminalStyle.MUTED).append(terminalSafeText(thinking.thinking)).append(TerminalStyle.RESET).append('\n');
                             }
                         } else if (content instanceof TextContent text) {
-                            screen.append(text.text).append('\n');
+                            screen.append(terminalSafeText(text.text)).append('\n');
                         } else if (content instanceof ToolCall call) {
                             screen.append("\n[")
                                     .append(call.name)
@@ -3443,7 +3487,7 @@ public final class CodingAgentCli {
                         }
                     }
                     if (assistant.errorMessage != null) {
-                        screen.append("Error: ").append(assistant.errorMessage).append('\n');
+                        screen.append("Error: ").append(terminalSafeText(assistant.errorMessage)).append('\n');
                     }
                 }
                 case ToolResultMessage result -> {
@@ -3712,7 +3756,7 @@ public final class CodingAgentCli {
                                     this.streamOutput = StreamOutput.THINKING;
                                     this.streamedThinkingCharacters = 0;
                                 }
-                                print(TerminalStyle.MUTED + delta.delta + TerminalStyle.RESET);
+                                print(TerminalStyle.MUTED + terminalSafeText(delta.delta) + TerminalStyle.RESET);
                                 this.streamedThinkingCharacters += delta.delta.length();
                             }
                         }
@@ -3720,7 +3764,7 @@ public final class CodingAgentCli {
                             if (!this.hideThinkingBlock
                                     && this.streamOutput == StreamOutput.THINKING) {
                                 if (this.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-                                    print(TerminalStyle.MUTED + end.content + TerminalStyle.RESET);
+                                    print(TerminalStyle.MUTED + terminalSafeText(end.content) + TerminalStyle.RESET);
                                 }
                                 finishShellStreamOutput();
                             }
@@ -3734,7 +3778,7 @@ public final class CodingAgentCli {
                                 finishShellStreamOutput();
                                 this.streamOutput = StreamOutput.TEXT;
                             }
-                            print(delta.delta);
+                            print(terminalSafeText(delta.delta));
                             this.emittedText = true;
                         }
                         case AssistantMessageEvent.TextEnd ignored -> finishShellStreamOutput();
@@ -3746,7 +3790,7 @@ public final class CodingAgentCli {
                 case AgentEvent.MessageEnd end -> {
                     if (end.message instanceof AssistantMessage assistant) {
                         String finalOutput = finalAssistantOutput(assistant, emittedText);
-                        if (finalOutput != null) println(finalOutput);
+                        if (finalOutput != null) println(terminalSafeText(finalOutput));
                         finishShellStreamOutput();
                         refreshShellStatus();
                     }
@@ -4068,6 +4112,7 @@ public final class CodingAgentCli {
      */
     public static String toolCallDescription(String toolName, ObjectNode arguments) {
         return com.quaxt.codingagent.cli.tools.LocalTools.describeCall(toolName, arguments)
+                .map(CodingAgentCli::terminalSafeText)
                 .orElseGet(() -> abbreviateShellText(arguments.toString(), 240));
     }
 
@@ -4098,7 +4143,7 @@ public final class CodingAgentCli {
     }
 
     private static String abbreviateShellText(String value, int maximumLength) {
-        String normalized = value.replaceAll("\\s+", " ").trim();
+        String normalized = terminalSafeText(value.replaceAll("\\s+", " ")).replaceAll("\\s+", " ").trim();
         return normalized.length() <= maximumLength ? normalized : normalized.substring(0, maximumLength) + "...";
     }
 
@@ -4577,16 +4622,7 @@ public final class CodingAgentCli {
     }
 
     private static String turnDetailsSafePlain(String value) {
-        String stripped = stripAnsi(value == null ? "" : value);
-        StringBuilder safe = new StringBuilder(stripped.length());
-        for (int index = 0; index < stripped.length(); ) {
-            int codePoint = stripped.codePointAt(index);
-            if (codePoint == '\n' || codePoint == '\t' || (!Character.isISOControl(codePoint) && codePoint != 0x1b)) {
-                safe.appendCodePoint(codePoint);
-            }
-            index += Character.charCount(codePoint);
-        }
-        return safe.toString();
+        return terminalSafeText(value);
     }
 
     private void reportCheckpointFailure(IOException error) {

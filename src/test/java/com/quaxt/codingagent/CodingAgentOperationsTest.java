@@ -570,6 +570,24 @@ class CodingAgentOperationsTest {
 	}
 
 	@Test
+	void loadsGitHubCopilotClaudeOpus55Metadata() {
+		Model opus = loadBundledModelCatalog().requireCatalogModel("github-copilot", "claude-opus-5.5");
+
+		assertEquals("Claude Opus 5.5", opus.name);
+		assertEquals("anthropic-messages", opus.api);
+		assertTrue(opus.reasoning);
+		assertEquals(List.of("text", "image"), opus.input);
+		assertEquals(1_000_000, opus.contextWindow);
+		assertEquals(128_000, opus.maxTokens);
+		assertEquals(new ModelCost(4, 20, 0.2, 5, List.of()), opus.cost);
+		Compat.AnthropicMessages compat = assertInstanceOf(Compat.AnthropicMessages.class, opus.compat);
+		assertEquals(Boolean.TRUE, compat.forceAdaptiveThinking);
+		assertEquals(
+				List.of(ThinkingLevel.LOW, ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.XHIGH, ThinkingLevel.MAX),
+				CodingAgentOperations.getSupportedThinkingLevels(opus));
+	}
+
+	@Test
 	void loadsGpt6AstraMetadata() {
 		Model astra = loadBundledModelCatalog().requireCatalogModel("openai", "gpt-6-astra");
 

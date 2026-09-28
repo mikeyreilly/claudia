@@ -3072,7 +3072,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                     ObjectNode target = tools1.addObject();
                     target.put("name", tool1.name);
                     target.put("description", tool1.description);
-                    target.set("input_schema", tool1.parameters);
+                    target.set("input_schema", anthropicInputSchema(tool1.parameters));
                 }
             }
             postJsonSse(
@@ -3224,6 +3224,19 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 ? configuredAnthropicBaseUrl(System.getenv())
                 : null;
         return configuredBaseUrl == null ? model.baseUrl : configuredBaseUrl;
+    }
+
+    /**
+     * Anthropic rejects input schemas with a top-level oneOf, allOf, or anyOf;
+     * drop them and rely on the tool's own argument validation.
+     */
+    public static ObjectNode anthropicInputSchema(ObjectNode schema) {
+        if (schema == null || !(schema.has("oneOf") || schema.has("allOf") || schema.has("anyOf"))) {
+            return schema;
+        }
+        ObjectNode copy = schema.deepCopy();
+        copy.remove(List.of("oneOf", "allOf", "anyOf"));
+        return copy;
     }
 
     private void anthropicAppendContent(ArrayNode target, List<? extends UserContent> content) {
