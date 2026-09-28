@@ -53,6 +53,11 @@ class TaskStateTest {
             assertTrue(hasRequired(updateSchema, "id"));
             assertEquals(4, updateSchema.path("anyOf").size());
             assertEquals("^#[1-9][0-9]*$", updateSchema.path("properties").path("id").path("pattern").asText());
+            ObjectNode anthropicSchema = CodingAgentOperations.anthropicInputSchema(schema);
+            assertFalse(anthropicSchema.has("oneOf"));
+            assertEquals(schema.path("properties"), anthropicSchema.path("properties"));
+            assertEquals(schema.path("required"), anthropicSchema.path("required"));
+            assertEquals(8, schema.path("oneOf").size());
             assertTrue(call(runtime, tool, action("add_task").put("description", "Inspect repository"))
                     .contains("#1 [todo] Inspect repository"));
             ObjectNode second = action("add_task").put("description", "Implement change");

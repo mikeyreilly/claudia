@@ -424,6 +424,52 @@ class CodingAgentCliTest {
 	}
 
 	@Test
+	void toolOutputCannotSendControlSequencesToTheTerminal() {
+		// Binary output such as a Mach-O header contains SO (0x0E), which leaves the terminal in its
+		// G1 character set so that later line drawing shows as q and x.
+		String binary = "\u00cf\u00fa\u00ed\u00fe\u0000\u0007\u000e\u0001 \u000f/usr/lib/dyld\u0000";
+		String escapes = "\u001b]0;pwned\u0007\u001b[2Jcleared\u001b(0q\r\u009bdone";
+		var shell = CodingAgentOperations.jsonObject().put("command", "printf '\u000e' # \u001b[31mred");
+
+		String binarySummary = CodingAgentCli.toolResultSummary("shell", CodingAgentOperations.toolResultText(binary));
+		String escapeSummary = CodingAgentCli.toolResultSummary("shell", CodingAgentOperations.toolResultText(escapes));
+		String description = CodingAgentCli.toolCallDescription("shell", shell);
+
+		assertEquals("\u00cf\u00fa\u00ed\u00fe /usr/lib/dyld", binarySummary);
+		assertEquals("cleared(0q done", escapeSummary);
+		assertEquals("printf '' # red", description);
+		for (String text : List.of(binarySummary, escapeSummary, description)) {
+			assertTrue(text.codePoints().noneMatch(Character::isISOControl), text);
+		}
+	}
+
+	@Test
+	void resumedTranscriptDropsControlCharactersFromSavedMessages() {
+		Model model = model("gpt-5.4");
+		AssistantMessage toolUse = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
+		toolUse.content.add(new TextContent("Reading \u000ethe binary\u001b[0m.", null));
+		toolUse.content.add(new ToolCall(
+				"call-1", "shell", CodingAgentOperations.jsonObject().put("command", "cat a.out"), null));
+		List<Message> messages = List.of(
+				CodingAgentOperations.userMessage("Show \u000fit"),
+				toolUse,
+				new ToolResultMessage(
+						"call-1",
+						"shell",
+						List.of(new TextContent("\u00cf\u00fa\u00ed\u00fe\u000e\u0001/usr/lib/dyld", null)),
+						null,
+						false,
+						System.currentTimeMillis()));
+
+		String plain = CodingAgentCli.stripAnsi(new CodingAgentCli().renderSessionScreen(model, messages, false));
+
+		assertTrue(plain.contains("> Show it"));
+		assertTrue(plain.contains("Reading the binary."));
+		assertTrue(plain.contains("Done: \u00cf\u00fa\u00ed\u00fe/usr/lib/dyld"));
+		assertTrue(plain.codePoints().noneMatch(c -> c != '\n' && Character.isISOControl(c)));
+	}
+
+	@Test
 	void formatsModelThinkingLevelAndContextUseForTheStatusBar() {
 		Model model = new Model();
 		model.id = "gpt-5.6-sol";
@@ -840,6 +886,11 @@ class CodingAgentCliTest {
 			assertTrue(written.contains("╭"));
 			assertTrue(written.contains("/compact"));
 			assertTrue(written.contains("/details"));
+			// JLine draws ─ and │ as ESC ( 0 line drawing; a terminal left shifted by earlier
+			// output must be returned to G0/ASCII first or the borders render as q and x.
+			int reset = written.indexOf(CodingAgentCli.RESET_CHARACTER_SET);
+			assertTrue(reset >= 0);
+			assertTrue(reset < written.indexOf("\u001b(0"));
 		} finally {
 			interactive.closeTerminal();
 		}
