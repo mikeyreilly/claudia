@@ -114,6 +114,108 @@ class LineEditorTest {
     }
 
     @Test
+    void reverseSearchFindsOlderSubstringMatchesAndSubmitsOnEnter() throws Exception {
+        assertEquals("deploy api", line("deploy api\r"));
+        assertEquals("status", line("status\r"));
+        assertEquals("deploy web", line("deploy web\r"));
+        assertEquals("deploy api", line("draft\u0012deploy\u0012\r"));
+        assertEquals(List.of("deploy api", "status", "deploy web", "deploy api"), editor.history());
+    }
+
+    @Test
+    void reverseSearchRefinesTheSelectedOlderMatchAndReturnsToDraftFromHistory() throws Exception {
+        assertEquals("build one older", line("build one older\r"));
+        assertEquals("build one newer", line("build one newer\r"));
+        assertEquals("build one older", line("draft\u0012build\u0012 one\r"));
+        assertEquals("draft", line("draft\u0012older\u001b[27u\u000e\r"));
+    }
+
+    @Test
+    void reverseSearchShowsMatchesAndRestoresTheDraftOnCtrlG() throws Exception {
+        terminal.setSize(80, ROWS);
+        assertEquals("alpha", line("alpha\r"));
+        assertEquals("beta", line("beta\r"));
+        CompletableFuture<LineEditor.Result> result = readAsync(prompt());
+        type("draft");
+        waitUntil(() -> editor.buffer().equals("draft"));
+        type("\u0012alp");
+        waitUntil(() -> screen(80).allLines().getLast().contains("(reverse-i-search)`alp': alpha"));
+        assertEquals("draft", editor.buffer(), "Searching must not alter the draft");
+        type("z");
+        waitUntil(() -> screen(80).allLines().getLast().contains("(failed reverse-i-search)`alpz':"));
+        type("\u007f");
+        waitUntil(() -> screen(80).allLines().getLast().contains("(reverse-i-search)`alp': alpha"));
+        type("\u0007"); // Ctrl-G cancels, retaining the original draft and cursor.
+        waitUntil(() -> screen(80).allLines().getLast().equals("> draft"));
+        type("!\r");
+        assertEquals("draft!", result.get(5, TimeUnit.SECONDS).line());
+    }
+
+    @Test
+    void reverseSearchEscapeAcceptsForEditingAndBypassesApplicationKeysAndSuggestions() throws Exception {
+        assertEquals("first", line("first\r"));
+        assertEquals("second", line("second\r"));
+        AtomicInteger appKeys = new AtomicInteger();
+        LineEditor.Options options = prompt();
+        options.keys = key -> {
+            if (key.is(TerminalEvent.KeyType.ESCAPE)) {
+                appKeys.incrementAndGet();
+                return true;
+            }
+            return false;
+        };
+        options.below = () -> List.of("suggestions");
+        options.beforeAccept = () -> {
+            throw new AssertionError("Search Enter must not insert a slash-command suggestion");
+        };
+        CompletableFuture<LineEditor.Result> result = readAsync(options);
+        type("draft\u0012fir");
+        waitUntil(() -> output.toString(UTF_8).contains("(reverse-i-search)"));
+        assertFalse(screen(COLUMNS).allLines().contains("suggestions"), "Suggestions must be hidden during search");
+        type("\u001b");
+        waitUntil(() -> editor.buffer().equals("first"));
+        assertEquals(0, appKeys.get(), "Search keys must bypass the application Escape binding");
+        type("!\u0003"); // Ctrl-C still interrupts normally.
+        assertEquals(new LineEditor.Result(Outcome.INTERRUPTED, "first!"), result.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void reverseSearchNoMatchDoesNotSubmitTheDraftAndCanBeRevised() throws Exception {
+        assertEquals("😀 item", line("😀 item\r"));
+        assertEquals("😀 item", line("draft\u0012😀z\u007f\r"));
+        // An unmatched query must not submit a different draft.
+        terminal.setSize(80, ROWS);
+        CompletableFuture<LineEditor.Result> result = readAsync(prompt());
+        type("pending\u0012missing");
+        waitUntil(() -> screen(80).allLines().getLast().contains("(failed reverse-i-search)`missing':"));
+        type("\r");
+        waitUntil(() -> screen(80).allLines().getLast().equals("> pending"));
+        type("!\r");
+        assertEquals("pending!", result.get(5, TimeUnit.SECONDS).line());
+    }
+
+    @Test
+    void reverseSearchEnterBypassesTheCommandSuggestionAcceptHook() throws Exception {
+        assertEquals("/help", line("/help\r"));
+        LineEditor.Options options = prompt();
+        options.below = () -> List.of("suggestions");
+        options.beforeAccept = () -> {
+            throw new AssertionError("Search Enter must not insert a slash-command suggestion");
+        };
+        assertEquals("/help", read(options, "\u0012help\r").line());
+    }
+
+    @Test
+    void reverseSearchIgnoresMaskedPromptsAndResetsOnNextRead() throws Exception {
+        assertEquals("public", line("public\r"));
+        LineEditor.Options masked = prompt();
+        masked.mask = '*';
+        assertEquals("secret", read(masked, "\u0012secret\r").line());
+        assertEquals("", line("\u0012\u0007\r"));
+        assertEquals(List.of("public"), editor.history());
+    }
+
+    @Test
     void insertsNewlinesFromEveryModifiedEnterForm() throws Exception {
         assertEquals("a\nb\nc\nd\ne\nf", line("a\u001b[13;2ub\u001b[27;2;13~c\u001b[13;5ud\ne\u001b\rf\r"));
         assertEquals("go", line("go\u001b[13u"));

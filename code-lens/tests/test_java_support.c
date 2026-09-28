@@ -211,6 +211,7 @@ static int test_java_index(void)
     char *context;
     char *static_context;
     char *class_context;
+    char *excluded_class_context;
     char *qualified_class_context;
     char *rows;
     char *stale;
@@ -381,6 +382,17 @@ static int test_java_index(void)
                               (strstr(class_context, "verifiesService") != nullptr),
                           "class context returns a type-aware semantic dossier");
 
+    {
+        CodeLensContextOptions exclude_tests = {.exclude_tests = true};
+
+        excluded_class_context = code_lens_context_symbol_ex(repo, "Service", &exclude_tests);
+        failed |= java_assert((excluded_class_context != nullptr) &&
+                                  (strstr(excluded_class_context, "Class Dossier") != nullptr) &&
+                                  (strstr(excluded_class_context, "verifiesService") == nullptr) &&
+                                  (strstr(excluded_class_context, "Service.create()") != nullptr),
+                              "excluding test methods keeps non-test Java class usages");
+    }
+
     qualified_class_context =
         code_lens_context_symbol(repo, "demo.lib.Service");
     failed |= java_assert((qualified_class_context != nullptr) &&
@@ -427,6 +439,15 @@ static int test_java_index(void)
     }
     failed |= java_assert(stats.file_count == 4U,
                           "incremental refresh adds a Java file");
+    {
+        CodeLensContextOptions exclude_tests = {.exclude_tests = true};
+
+        excluded_class_context = code_lens_context_symbol_ex(repo, "Service", &exclude_tests);
+        failed |= java_assert((excluded_class_context != nullptr) &&
+                                  (strstr(excluded_class_context, "verifiesService") == nullptr) &&
+                                  (strstr(excluded_class_context, "Service.create()") != nullptr),
+                              "test filtering also works after incremental refresh");
+    }
     fresh = code_lens_query_symbols(repo, "Extra", 5);
     failed |= java_assert((fresh != nullptr) && (strstr(fresh, "Extra|class|") != nullptr),
                           "new Java class is queryable after refresh");
