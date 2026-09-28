@@ -21750,8 +21750,9 @@ static int class_dossier_load_usages(CodeLensDb *db,
         "ELSE r.targetNamespace END, "
         "CASE WHEN instr(lower(replace(f.path, '\\', '/')), '/test/')>0 "
         "OR instr(lower(replace(f.path, '\\', '/')), '/tests/')>0 "
-        "OR EXISTS (SELECT 1 FROM Symbol tst WHERE tst.repo=f.repo "
-        "AND tst.filePath=f.path AND tst.kind='test' "
+        "OR EXISTS (SELECT 1 FROM Symbol tst "
+        "WHERE tst.rowid BETWEEN f.symbolFirst AND f.symbolFirst+f.symbolCount-1 "
+        "AND tst.repo=f.repo AND tst.filePath=f.path AND tst.kind='test' "
         "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine) THEN 1 ELSE 0 END "
         "FROM Ref r JOIN File f ON f.rowid=r.fileId "
         "LEFT JOIN DependencyFile df ON df.repo=f.repo AND df.filePath=f.path "
@@ -21766,8 +21767,12 @@ static int class_dossier_load_usages(CodeLensDb *db,
         "AND r.fileId IN (SELECT fileId FROM type_files))) "
         "AND (?3=0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/')=0 "
         "AND instr(lower(replace(f.path, '\\', '/')), '/tests/')=0 "
-        "AND NOT EXISTS (SELECT 1 FROM Symbol tst WHERE tst.repo=f.repo "
-        "AND tst.filePath=f.path AND tst.kind='test' "
+        /* A File's symbols occupy a contiguous rowid range, including after an
+         * incremental refresh. Without the range SQLite scans every Symbol
+         * for each Ref when exclude-tests is enabled. */
+        "AND NOT EXISTS (SELECT 1 FROM Symbol tst "
+        "WHERE tst.rowid BETWEEN f.symbolFirst AND f.symbolFirst+f.symbolCount-1 "
+        "AND tst.repo=f.repo AND tst.filePath=f.path AND tst.kind='test' "
         "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine))) "
         "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, "
         "CASE WHEN r.targetNamespace=?2 THEN 0 ELSE 1 END, f.path, r.lineNumber, "

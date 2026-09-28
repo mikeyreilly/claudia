@@ -24,6 +24,8 @@ import java.util.function.Supplier;
  * Ctrl/Alt-arrows move by word, Ctrl-K/U kill to the line end/start, Ctrl-W
  * and Alt/Ctrl-Backspace kill the previous word, Alt-D kills the next word,
  * Ctrl-Y yanks, Up/Down (Ctrl-P/N) move between lines and then through history,
+ * Ctrl-R searches history backwards (repeat to find older matches, Escape to
+ * edit the match, Ctrl-G to restore the draft, Enter to submit the match),
  * Shift/Ctrl/Alt-Enter and Ctrl-J insert a newline, Ctrl-L repaints, Ctrl-C
  * interrupts, and Ctrl-D deletes forward or ends input on an empty buffer.
  */
@@ -94,6 +96,9 @@ public final class LineEditor {
     private Terminal.Size lastSize;
     private int historyIndex;
     private String historyDraft;
+    private StringBuilder searchQuery;
+    private int searchIndex;
+    private String searchDraft;
     private String killed = "";
 
     public LineEditor(Terminal terminal) {
@@ -193,6 +198,7 @@ public final class LineEditor {
             cursor = buffer.length();
             historyIndex = history.size();
             historyDraft = null;
+            searchQuery = null;
             displayed = false;
             displayedFrame = null;
             redrawRequested = false;
@@ -226,6 +232,7 @@ public final class LineEditor {
             } finally {
                 reading = false;
                 displayed = false;
+                searchQuery = null;
                 options = null;
                 terminal.bracketedPaste(pasteWasEnabled);
             }
@@ -275,13 +282,21 @@ public final class LineEditor {
     private Result dispatch(TerminalEvent event) throws IOException {
         switch (event) {
             case TerminalEvent.EndOfInput ignored -> {
+                searchQuery = null;
                 return new Result(Outcome.END_OF_INPUT, null);
             }
-            case TerminalEvent.Paste paste -> insert(paste.text().replace("\r\n", "\n").replace('\r', '\n'));
+            case TerminalEvent.Paste paste -> {
+                String text = paste.text().replace("\r\n", "\n").replace('\r', '\n');
+                if (searchQuery != null) search(text);
+                else insert(text);
+            }
             case TerminalEvent.Mouse ignored -> {
                 // The prompt does not track the mouse.
             }
             case Key key -> {
+                // Search owns its keys before application shortcuts (including Escape)
+                // or the slash-command panel can consume them.
+                if (searchQuery != null) return searchKey(key);
                 if (options.keys != null && options.keys.handle(key)) return null;
                 return key(key);
             }
@@ -351,6 +366,7 @@ public final class LineEditor {
             }
             case 'n' -> down();
             case 'p' -> up();
+            case 'r' -> startSearch();
             case 'u' -> kill(lineStart(cursor), cursor);
             case 'w' -> {
                 int start = cursor;
@@ -362,6 +378,97 @@ public final class LineEditor {
             default -> {
                 // Unbound control keys are ignored rather than inserted.
             }
+        }
+        return null;
+    }
+
+    private void startSearch() {
+        if (options.mask != null) return; // Never reveal history in a masked prompt.
+        searchDraft = buffer.toString();
+        searchQuery = new StringBuilder();
+        findSearch(history.size() - 1);
+    }
+
+    /** Finds the newest matching entry at or before start, with no wraparound. */
+    private void findSearch(int start) {
+        searchIndex = -1;
+        for (int index = start; index >= 0; index--) {
+            if (history.get(index).contains(searchQuery)) {
+                searchIndex = index;
+                break;
+            }
+        }
+    }
+
+    private void search(String text) {
+        if (text.isEmpty()) return;
+        int start = searchIndex < 0 ? history.size() - 1 : searchIndex;
+        searchQuery.append(text);
+        findSearch(start);
+    }
+
+    private void endSearch(boolean accept) {
+        if (accept && searchIndex >= 0) {
+            historyIndex = searchIndex;
+            historyDraft = searchDraft;
+            replaceWith(history.get(searchIndex));
+        }
+        searchQuery = null;
+        searchDraft = null;
+    }
+
+    private Result searchKey(Key key) throws IOException {
+        if (key.isCtrl('r')) {
+            if (searchIndex >= 0) findSearch(searchIndex - 1);
+            return null;
+        }
+        if (key.isCtrl('g')) {
+            endSearch(false);
+            return null;
+        }
+        if (key.isCtrl('c')) {
+            endSearch(false);
+            return new Result(Outcome.INTERRUPTED, buffer.toString());
+        }
+        if (key.isCtrl('l')) {
+            if (options.repaint != null) options.repaint.run();
+            render(true);
+            return null;
+        }
+        if (key.isCtrl('u')) {
+            searchQuery.setLength(0);
+            findSearch(history.size() - 1);
+            return null;
+        }
+        if (key.isCtrl('h') || key.is(TerminalEvent.KeyType.BACKSPACE)) {
+            if (!searchQuery.isEmpty()) {
+                searchQuery.setLength(searchQuery.offsetByCodePoints(searchQuery.length(), -1));
+            }
+            findSearch(history.size() - 1);
+            return null;
+        }
+        if (key.is(TerminalEvent.KeyType.ENTER) || key.isCtrl('m')) {
+            boolean matched = searchIndex >= 0;
+            endSearch(true);
+            return matched ? enter(true) : null;
+        }
+        if (key.is(TerminalEvent.KeyType.ESCAPE)) {
+            endSearch(true);
+            return null;
+        }
+        if (key.type() == TerminalEvent.KeyType.CHARACTER
+                && (key.modifiers() == 0 || key.modifiers() == TerminalEvent.SHIFT)) {
+            search(Character.toString(key.codePoint()));
+            return null;
+        }
+        // Navigation accepts the match for editing; don't send it to the
+        // application's command panel until search has ended.
+        if (switch (key.type()) {
+            case LEFT, RIGHT, HOME, END, UP, DOWN -> true;
+            default -> false;
+        }) {
+            endSearch(true);
+            return key(key);
         }
         return null;
     }
@@ -378,18 +485,24 @@ public final class LineEditor {
     }
 
     private Result enter() throws IOException {
-        InputReader input = terminal.input();
-        int next = input.peek(PASTE_LOOKAHEAD_MILLIS);
-        // Queued text right after Enter is an unbracketed paste: keep its line break.
-        if (next >= 0 && next != '\r') {
-            if (next == '\n') input.read(0);
-            insert("\n");
-            return null;
-        }
-        if (options.beforeAccept != null && options.beforeAccept.getAsBoolean()) return null;
-        if (next >= 0) {
-            insert("\n");
-            return null;
+        return enter(false);
+    }
+
+    private Result enter(boolean fromSearch) throws IOException {
+        if (!fromSearch) {
+            InputReader input = terminal.input();
+            int next = input.peek(PASTE_LOOKAHEAD_MILLIS);
+            // Queued text right after Enter is an unbracketed paste: keep its line break.
+            if (next >= 0 && next != '\r') {
+                if (next == '\n') input.read(0);
+                insert("\n");
+                return null;
+            }
+            if (options.beforeAccept != null && options.beforeAccept.getAsBoolean()) return null;
+            if (next >= 0) {
+                insert("\n");
+                return null;
+            }
         }
         String line = buffer.toString();
         if (options.mask == null && !line.isBlank() && (history.isEmpty() || !history.getLast().equals(line))) {
@@ -538,6 +651,13 @@ public final class LineEditor {
 
     /** Lays out the prompt rows, wrapping at the terminal width, then the lines below. */
     private Frame layout(boolean withBelow, boolean cursorAtEnd) {
+        boolean searching = searchQuery != null;
+        String text = searching ? searchQuery + "': " + (searchIndex < 0 ? "" : history.get(searchIndex))
+                : buffer.toString();
+        String prompt = searching
+                ? (searchIndex < 0 ? "(failed reverse-i-search)`" : "(reverse-i-search)`")
+                : options.prompt;
+        int target = cursorAtEnd ? text.length() : searching ? searchQuery.length() : cursor;
         int width = Math.max(1, terminal.columns());
         String style = options.rowStyle == null ? "" : options.rowStyle;
         String rowEnd = style.isEmpty() ? "" : Ansi.RESET;
@@ -546,9 +666,8 @@ public final class LineEditor {
         int column = 0;
         int cursorRow = -1;
         int cursorColumn = 0;
-        int target = cursorAtEnd ? buffer.length() : cursor;
 
-        for (String piece : plainPieces(options.prompt)) {
+        for (String piece : plainPieces(prompt)) {
             int cells = Cells.width(piece);
             if (column + cells > width && column > 0) {
                 rows.add(row.append(rowEnd).toString());
@@ -558,9 +677,9 @@ public final class LineEditor {
             row.append(piece);
             column += cells;
         }
-        for (int index = 0; index <= buffer.length(); ) {
+        for (int index = 0; index <= text.length(); ) {
             boolean atCursor = index == target && cursorRow < 0;
-            int codePoint = index < buffer.length() ? buffer.codePointAt(index) : -1;
+            int codePoint = index < text.length() ? text.codePointAt(index) : -1;
             String display = codePoint < 0 || codePoint == '\n' ? "" : display(codePoint);
             int cells = Cells.width(display);
             if (column + cells > width && column > 0 || (atCursor && column >= width)) {
@@ -590,7 +709,7 @@ public final class LineEditor {
         }
         rows.add(row.append(rowEnd).toString());
         int terminalRows = rows.size();
-        if (withBelow && options.below != null) {
+        if (withBelow && !searching && options.below != null) {
             List<String> below = options.below.get();
             if (below != null) {
                 for (String line : below) {

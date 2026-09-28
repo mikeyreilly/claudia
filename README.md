@@ -201,9 +201,12 @@ Shift-Enter, Ctrl-Enter, Alt-Enter, or Ctrl-J inserts a newline; Ctrl-A/Ctrl-E
 Ctrl/Alt-Left/Right) move by word; Ctrl-K/Ctrl-U kill to the end/start of the
 line, Ctrl-W and Alt-Backspace kill the previous word, Alt-D kills the next
 word, and Ctrl-Y yanks; Up/Down move between lines of a multiline prompt and
-then through this session's prompt history; Ctrl-L repaints the screen. Pasted
-text keeps its line breaks. Ctrl-C clears the input, Escape interrupts an
-active agent turn, Ctrl-D on an empty prompt closes the shell, and Ctrl-Z
+then through this session's prompt history; Ctrl-R searches prompt history as
+you type (repeat Ctrl-R for older matches, Backspace to revise the query,
+Escape to edit the match, Ctrl-G to restore the draft, Enter to submit it);
+Ctrl-L repaints the screen. Pasted text keeps its line breaks. Ctrl-C clears
+the input, Escape interrupts an active agent turn, Ctrl-D on an empty prompt
+closes the shell, and Ctrl-Z
 suspends the foreground job.
 A status bar on the bottom terminal row starts with the shell's live activity,
 followed by the working directory (with the home directory abbreviated to `~`),
