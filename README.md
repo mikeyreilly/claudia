@@ -93,11 +93,24 @@ Anthropic Messages request to the proxy. When `ANTHROPIC_BASE_URL` is set,
 `/models` does not refresh GitHub Copilot entitlements, avoiding a JDK HTTP
 client interaction that can break subsequent proxy streaming responses.
 
-Start the interactive codingagent TUI shell (backed by JLine) with:
+Start the interactive codingagent TUI shell with:
 
 ```bash
 java -jar target/codingagent.jar
 ```
+
+The interactive shell supports [Ghostty](https://ghostty.org) on macOS and
+Linux (x86_64 and aarch64). Its terminal layer (`com.quaxt.codingagent.terminal`)
+controls the tty directly through termios and uses Ghostty's key reporting,
+bracketed paste, synchronized output, and SGR mouse modes; other
+xterm-compatible terminals may work but are not tested. On other operating
+systems, or when standard input or output is not a terminal, interactive mode
+exits with an error. `--print`, `--mode json`, and `--mode rpc` do not use the
+terminal and work anywhere Java runs. The runnable JAR's manifest enables
+native access for the terminal layer; when running from a classpath instead,
+pass `--enable-native-access=ALL-UNNAMED` to avoid the JDK's warning. Native
+executables support interactive mode on Linux and on Apple silicon Macs, where
+GraalVM supports foreign-function calls.
 
 Then run `/login` and choose GitHub Copilot, OpenAI API key, or ChatGPT
 Plus/Pro. GitHub Copilot and ChatGPT Plus/Pro display a device-login URL and
@@ -182,10 +195,16 @@ session after you submit the name.
 
 Typing `/` opens a four-row, alphabetized command panel below the prompt; continue
 typing to prefix-filter it, use Up/Down to navigate, and press Enter to insert
-the selected command. JLine provides standard line editing: Enter submits,
-Shift-Enter inserts a newline, Ctrl-C cancels input, Escape interrupts an active
-agent turn, Ctrl-D closes the shell, and Ctrl-Z suspends the foreground job on
-Unix.
+the selected command. The prompt editor uses Emacs-style keys: Enter submits;
+Shift-Enter, Ctrl-Enter, Alt-Enter, or Ctrl-J inserts a newline; Ctrl-A/Ctrl-E
+(or Home/End) move to the start/end of the line; Alt-B/Alt-F (or
+Ctrl/Alt-Left/Right) move by word; Ctrl-K/Ctrl-U kill to the end/start of the
+line, Ctrl-W and Alt-Backspace kill the previous word, Alt-D kills the next
+word, and Ctrl-Y yanks; Up/Down move between lines of a multiline prompt and
+then through this session's prompt history; Ctrl-L repaints the screen. Pasted
+text keeps its line breaks. Ctrl-C clears the input, Escape interrupts an
+active agent turn, Ctrl-D on an empty prompt closes the shell, and Ctrl-Z
+suspends the foreground job.
 A status bar on the bottom terminal row starts with the shell's live activity,
 followed by the working directory (with the home directory abbreviated to `~`),
 the checked-out Git branch, the current named session when present, and the
@@ -475,7 +494,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Plan/Build modes and local clarification questions in the terminal and RPC | Implemented |
 | Manual and automatic context compaction | Implemented |
 | JSON event mode and core JSONL RPC automation | Implemented |
-| Interactive JLine prompt shell and streamed output | Implemented |
+| Interactive prompt shell and streamed output (Ghostty on macOS and Linux) | Implemented |
 | Differential rendering, fuzzy selectors, mouse input, OSC 8 link primitives, fixed terminal styling, keybinding defaults | Implemented |
 
 Extensions, Node-compatible data formats, non-core providers, and the Node

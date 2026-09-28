@@ -34,9 +34,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
-import org.jline.terminal.Attributes.LocalFlag;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.impl.DumbTerminal;
+import com.quaxt.codingagent.terminal.Ansi;
+import com.quaxt.codingagent.terminal.LineEditor;
+import com.quaxt.codingagent.terminal.ScreenEmulator;
+import com.quaxt.codingagent.terminal.Terminal;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -769,7 +770,6 @@ class CodingAgentCliTest {
 	void escapeInterruptsARunningOperationAndRestoresTerminalMode() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
-		setCanonicalAttributes(terminal);
 		CountDownLatch started = new CountDownLatch(1);
 		CountDownLatch interrupted = new CountDownLatch(1);
 		CountDownLatch inputMayFinish = new CountDownLatch(1);
@@ -793,7 +793,7 @@ class CodingAgentCliTest {
 				result = assertTimeoutPreemptively(
 						Duration.ofSeconds(5),
 						() -> interactive.runInterruptibly(() -> {
-									assertFalse(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
+									assertTrue(terminal.mode().raw());
 									started.countDown();
 									assertTrue(interrupted.await(5, TimeUnit.SECONDS));
 									return "stopped";
@@ -804,8 +804,7 @@ class CodingAgentCliTest {
 			input.join();
 
 			assertEquals("stopped", result);
-			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
-			assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+			assertFalse(terminal.mode().raw());
 		} finally {
 			interactive.closeTerminal();
 		}
@@ -814,13 +813,13 @@ class CodingAgentCliTest {
 	@Test
 	void suppliesFallbackDimensionsWhenTheTerminalReportsZeroSize() throws Exception {
 		TerminalFixture fixture = terminal();
-		fixture.terminal().setSize(org.jline.terminal.Size.of(0, 0));
+		fixture.terminal().setSize(0, 0);
 
 		CodingAgentCli ignored = newInteractiveTerminal(
 				fixture.terminal(), () -> null, false);
 		try {
-			assertEquals(80, fixture.terminal().getColumns());
-			assertEquals(24, fixture.terminal().getRows());
+			assertEquals(80, fixture.terminal().columns());
+			assertEquals(24, fixture.terminal().rows());
 		} finally {
 			ignored.closeTerminal();
 		}
@@ -886,11 +885,11 @@ class CodingAgentCliTest {
 			assertTrue(written.contains("╭"));
 			assertTrue(written.contains("/compact"));
 			assertTrue(written.contains("/details"));
-			// JLine draws ─ and │ as ESC ( 0 line drawing; a terminal left shifted by earlier
-			// output must be returned to G0/ASCII first or the borders render as q and x.
+			// A terminal left shifted to G1 or DEC line drawing by earlier output must be
+			// returned to G0/ASCII before the panel is drawn.
 			int reset = written.indexOf(CodingAgentCli.RESET_CHARACTER_SET);
 			assertTrue(reset >= 0);
-			assertTrue(reset < written.indexOf("\u001b(0"));
+			assertTrue(reset < written.indexOf("╭"));
 		} finally {
 			interactive.closeTerminal();
 		}
@@ -921,10 +920,6 @@ class CodingAgentCliTest {
     @Test
     void scopesEnhancedKeyboardReportingToEveryReadAndCleansUpAllExitPaths() throws Exception {
         TerminalFixture fixture = terminal();
-        var attributes = fixture.terminal().getAttributes();
-        attributes.setControlChar(org.jline.terminal.Attributes.ControlChar.VINTR, 3);
-        attributes.setControlChar(org.jline.terminal.Attributes.ControlChar.VEOF, 4);
-        fixture.terminal().setAttributes(attributes);
         CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
         try {
             assertFalse(fixture.output().toString(StandardCharsets.UTF_8).contains(KEYBOARD_PUSH));
@@ -969,7 +964,7 @@ class CodingAgentCliTest {
     }
 
     @Test
-    void enhancedControlsUseCurrentJlineAndApplicationBindings() throws Exception {
+    void enhancedControlsUseEditorAndApplicationBindings() throws Exception {
         TerminalFixture fixture = terminal();
         CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
         var actions = new java.util.ArrayList<String>();
@@ -977,32 +972,15 @@ class CodingAgentCliTest {
             cli.bindAppAction("expandTools", () -> actions.add("details"));
             cli.bindAppAction("toggleThinking", () -> actions.add("thinking"));
             cli.bindAppAction("interrupt", () -> actions.add("escape"));
-            var editor = (org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader");
-            // A tab alias must invoke the existing binding, not insert CSI text.
-            editor.getWidgets().put("test-tab", () -> {
-                assertEquals("\t", editor.getLastBinding());
-                actions.add("tab");
-                return true;
-            });
-            editor.getWidgets().put("test-prefix", () -> {
-                assertEquals("\u0018\u0015", editor.getLastBinding());
-                actions.add("prefix");
-                return true;
-            });
-            editor.getKeyMaps().values().forEach(map -> {
-                map.bind(new org.jline.reader.Reference("test-tab"), "\t");
-                map.bind(new org.jline.reader.Reference("test-prefix"), "\u0018\u0015");
-            });
             for (String submit : List.of("\r", "\u001b[13u", "\u001b[13;1u", "\u001b[109;5u")) {
                 fixture.input().write(("discard\u001b[97;5u\u001b[107;5u" // Ctrl-A, Ctrl-K
                         + "abX\u001b[127uY\u001b[127;1u" // Backspace, both forms
                         + "\u001b[111;5u\u001b[116;5u\u001b[27u\u001b[27;1u"
-                        + "\u001b[9u\u001b[9;1u"
-                        + "\u001b[120;5u\u001b[117;5u\u0018\u001b[117;5u"
+                        + "\u001b[9u\u001b[9;1u" // Tab has no prompt binding and inserts nothing
                         + "\u001b[13;2ucd\u001b[13;5uef" + submit).getBytes(StandardCharsets.UTF_8));
                 fixture.input().flush();
                 assertEquals("ab\ncd\nef", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
-                assertEquals(List.of("details", "thinking", "escape", "escape", "tab", "tab", "prefix", "prefix"), actions);
+                assertEquals(List.of("details", "thinking", "escape", "escape"), actions);
                 actions.clear();
             }
         } finally { cli.closeTerminal(); }
@@ -1123,14 +1101,12 @@ class CodingAgentCliTest {
 	void restoresLineEditorScreenAndInputBufferAfterSuspend() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
-		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
 		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+					assertFalse(terminal.mode().raw());
                     String written = fixture.output().toString(StandardCharsets.UTF_8);
                     assertEquals(1, count(written, KEYBOARD_PUSH));
                     assertEquals(1, count(written, KEYBOARD_POP));
@@ -1247,14 +1223,12 @@ class CodingAgentCliTest {
 	void restoresShellModeWhenNestedFullScreenIsSuspendedFromTheLineEditor() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
-		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
 		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+					assertFalse(terminal.mode().raw());
                     String written = fixture.output().toString(StandardCharsets.UTF_8);
                     assertEquals(1, count(written, KEYBOARD_PUSH));
                     assertEquals(1, count(written, KEYBOARD_POP));
@@ -1300,14 +1274,12 @@ class CodingAgentCliTest {
 	void restoresFullScreenStateAroundSuspendAndContinuesTheSelector() throws Exception {
 		TerminalFixture fixture = terminal();
 		Terminal terminal = fixture.terminal();
-		setCanonicalAttributes(terminal);
 		AtomicBoolean suspended = new AtomicBoolean();
 
 		CodingAgentCli interactive = newInteractiveTerminal(
 				terminal,
 				() -> {
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ICANON));
-					assertTrue(terminal.getAttributes().getLocalFlag(LocalFlag.ECHO));
+					assertFalse(terminal.mode().raw());
 					suspended.set(true);
 					fixture.output().writeBytes("shell activity in full screen\n".getBytes(StandardCharsets.UTF_8));
 					fixture.input().write('\r');
@@ -1417,7 +1389,7 @@ class CodingAgentCliTest {
 	}
 
 	@Test
-	void statusBarUpdatesAreIgnoredOnTerminalsWithoutCursorAddressing() throws Exception {
+	void statusBarUpdatesDoNotDisturbConversationOutput() throws Exception {
 		TerminalFixture fixture = terminal();
 
 		CodingAgentCli interactive = newInteractiveTerminal(
@@ -1437,6 +1409,76 @@ class CodingAgentCliTest {
         CodingAgentCli cli = new CodingAgentCli();
         cli.newInteractiveTerminal(terminal, suspendAction, supportsSuspend);
         return cli;
+    }
+
+    @Test
+    void resizeWhileEditingRepaintsTheConversationAndKeepsTheDraft() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        cli.println("conversation line");
+        var line = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("\n> "));
+        try {
+            fixture.input().write("draft".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+            waitUntil(() -> ((LineEditor) getCliField(cli, "editor")).buffer().equals("draft"));
+            fixture.terminal().setSize(40, 12);
+            waitUntil(() -> ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 40, 12)
+                    .lines().subList(0, 3).equals(List.of("conversation line", "", "> draft")));
+            fixture.input().write(" more\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
+            assertEquals("draft more", line.get(3, TimeUnit.SECONDS));
+        } finally { fixture.input().close(); cli.closeTerminal(); }
+    }
+
+    @Test
+    void releasesTheStatusRowForSelectorsAndReservesItAgain() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        try {
+            cli.setStatus("● Ready", CodingAgentCli.StatusAccent.READY, "~/project", "Model (0%)");
+            cli.println("conversation");
+            String before = fixture.output().toString(StandardCharsets.UTF_8);
+            assertTrue(ScreenEmulator.render(before, 80, 24).line(23).startsWith("● Ready"));
+
+            cli.runComponent(immediateComponent());
+
+            String all = fixture.output().toString(StandardCharsets.UTF_8);
+            String written = all.substring(before.length());
+            int enter = written.indexOf("\u001b[?1049h");
+            int exit = written.indexOf("\u001b[?1049l");
+            assertTrue(written.indexOf(Ansi.RESET_SCROLL_REGION) < enter, "The selector gets the whole screen");
+            assertTrue(written.lastIndexOf(Ansi.scrollRegion(1, 23)) > exit);
+            ScreenEmulator screen = ScreenEmulator.render(all, 80, 24);
+            assertEquals("conversation", screen.line(0));
+            assertTrue(screen.line(23).startsWith("● Ready"));
+        } finally { cli.closeTerminal(); }
+        ScreenEmulator closed = ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 80, 24);
+        assertEquals("", closed.line(23), "Closing hands the bottom row back to the shell");
+        assertFalse(fixture.terminal().mode().raw());
+    }
+
+    @Test
+    void selectorsOpenedFromTheEditorConsumeOnlyTheirKeysFromTheSharedInput() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        var chosen = new java.util.ArrayList<String>();
+        try {
+            cli.bindAppAction("expandTools", () -> {
+                try {
+                    chosen.add(cli.runComponent(CodingAgentCli.fuzzySelectorComponent(CodingAgentCli.fuzzySelector("Pick",
+                            List.of(new SelectItem<>("alpha", "alpha", "", "alpha"), new SelectItem<>("beta", "beta", "", "beta")),
+                            0, true))));
+                } catch (java.io.IOException error) {
+                    throw new java.io.UncheckedIOException(error);
+                }
+            });
+            // Everything is queued before the editor starts: legacy and enhanced Ctrl-O both open
+            // the selector, which takes its filter text and Enter/Escape and leaves the rest.
+            fixture.input().write("draft\u000fbe\r tail\u001b[111;5u\u001b[27u\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("draft tail", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("\n> ")));
+            assertEquals(java.util.Arrays.asList("beta", null), chosen);
+            ScreenEmulator screen = ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 80, 24);
+            assertEquals(List.of("", "> draft tail"), screen.allLines());
+        } finally { cli.closeTerminal(); }
     }
 
     @Test
@@ -1544,12 +1586,12 @@ class CodingAgentCliTest {
         var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> "));
         try {
             fixture.input().write("unfinished".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
-            waitUntil(() -> ((org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader")).getBuffer().toString().equals("unfinished"));
+            waitUntil(() -> ((LineEditor) getCliField(cli, "editor")).buffer().equals("unfinished"));
             // The UI event pump takes this lock before rendering on a background tick.
             var lock = (java.util.concurrent.locks.ReentrantLock) getCliField(cli, "editorLock");
             lock.lock();
             try { cli.println("streamed output"); } finally { lock.unlock(); }
-            fixture.terminal().setSize(org.jline.terminal.Size.of(60, 20));
+            fixture.terminal().setSize(60, 20);
             fixture.input().write(" prompt\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
             assertEquals("unfinished prompt", reader.get(3, TimeUnit.SECONDS));
             assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("streamed output"));
@@ -1567,8 +1609,8 @@ class CodingAgentCliTest {
             var line = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("> ", CodingAgentCli.slashCommands()));
             try {
                 fixture.input().write(("draft tail" + "\u0002".repeat(5)).getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
-                var editor = (org.jline.reader.impl.LineReaderImpl) getCliField(cli, "reader");
-                waitUntil(() -> editor.getBuffer().toString().equals("draft tail") && editor.getBuffer().cursor() == 5);
+                var editor = (LineEditor) getCliField(cli, "editor");
+                waitUntil(() -> editor.buffer().equals("draft tail") && editor.cursor() == 5);
                 var answer = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                     try { return runtime.questions().ask("main", "Which scope?",
                             List.of(new com.quaxt.codingagent.agent.QuestionBroker.Option("Small", "Less work")),
@@ -1580,11 +1622,11 @@ class CodingAgentCliTest {
                 fixture.input().write("Custom scope\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 assertEquals("Custom scope", answer.get(3, TimeUnit.SECONDS).answer());
                 waitUntil(() -> Boolean.FALSE.equals(getCliField(cli, "componentOpen")));
-                assertEquals("draft tail", editor.getBuffer().toString());
-                assertEquals(5, editor.getBuffer().cursor());
+                assertEquals("draft tail", editor.buffer());
+                assertEquals(5, editor.cursor());
                 fixture.input().write("\u001b[9;2u".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 waitUntil(() -> runtime.agentMode() == com.quaxt.codingagent.agent.AgentMode.PLAN);
-                assertEquals(5, editor.getBuffer().cursor());
+                assertEquals(5, editor.cursor());
                 assertTrue(getCliField(cli, "statusActivity").toString().contains("[Plan]"));
                 fixture.input().write(" new\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 assertEquals("draft new tail", line.get(3, TimeUnit.SECONDS));
@@ -1685,19 +1727,11 @@ class CodingAgentCliTest {
     }
 
     private static TerminalFixture terminal(String type) throws Exception {
-		PipedInputStream input = new PipedInputStream();
+		PipedInputStream input = new PipedInputStream(1 << 16);
 		PipedOutputStream inputWriter = new PipedOutputStream(input);
 		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		Terminal terminal = new DumbTerminal("test", type, input, output, StandardCharsets.UTF_8);
-		terminal.setSize(org.jline.terminal.Size.of(80, 24));
+		Terminal terminal = Terminal.streams(type, input, output, 80, 24);
 		return new TerminalFixture(terminal, inputWriter, output);
-	}
-
-	private static void setCanonicalAttributes(Terminal terminal) {
-		var attributes = terminal.getAttributes();
-		attributes.setLocalFlag(LocalFlag.ICANON, true);
-		attributes.setLocalFlag(LocalFlag.ECHO, true);
-		terminal.setAttributes(attributes);
 	}
 
 	private static int count(String value, String target) {

@@ -1,8 +1,7 @@
 package com.quaxt.codingagent.tui;
 
+import com.quaxt.codingagent.terminal.Terminal;
 import java.util.concurrent.Callable;
-import org.jline.terminal.Attributes;
-import org.jline.terminal.Terminal;
 
 /**
  * State of the alternate-screen host: the terminal it draws on, the optional
@@ -11,15 +10,18 @@ import org.jline.terminal.Terminal;
  * CodingAgentCli.
  */
 public final class TuiRuntime {
-	public static final int DEFAULT_COLUMNS = 80;
-	public static final int DEFAULT_ROWS = 24;
+	public static final int DEFAULT_COLUMNS = Terminal.DEFAULT_COLUMNS;
+	public static final int DEFAULT_ROWS = Terminal.DEFAULT_ROWS;
 
 	public Terminal terminal;
 	/** Null when the host platform cannot suspend the process group. */
 	public Callable<Void> suspendAction;
 	public Runnable resumeMainScreen;
 	public AnsiRenderer renderer = new AnsiRenderer();
-	public Attributes originalAttributes;
+	/** The mode to restore when leaving the alternate screen. */
+	public Terminal.Mode originalMode;
+	/** Whether bracketed paste was enabled before the alternate screen. */
+	public boolean pasteWasEnabled;
 	public boolean active;
 
 	public TuiRuntime(Terminal terminal, Callable<Void> suspendAction, Runnable resumeMainScreen) {

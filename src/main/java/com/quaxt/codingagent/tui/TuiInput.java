@@ -4,7 +4,8 @@ import java.util.Objects;
 
 /**
  * Normalized keyboard, mouse, and resize input carriers for Java TUI
- * components. Parsing lives in CodingAgentCli.
+ * components. The terminal package decodes key sequences; CodingAgentCli maps
+ * them to these carriers and applies the application shortcuts.
  */
 public sealed interface TuiInput {
 	enum KeyType {
