@@ -1350,6 +1350,56 @@ class CodingAgentOperationsTest {
 		}
 	}
 
+	@Test
+	void treatsAbsentAnthropicToolInputAsAnEmptyObject() throws Exception {
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> writeCopilotSse(exchange, """
+				event: message_start
+				data: {"message":{"id":"a","usage":{"input_tokens":1}}}
+
+				event: content_block_start
+				data: {"index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"parameterless_tool"}}
+
+				event: content_block_stop
+				data: {"index":0}
+
+				event: message_delta
+				data: {"delta":{"stop_reason":"tool_use"}}
+
+				event: message_stop
+				data: {}
+
+				"""));
+		server.start();
+		try {
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			Model model = copilotModel("anthropic", "anthropic-messages", base);
+			CodingAgentOperations store = runtime;
+			store.fileCredentialStore(
+					Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
+			runtime.modifyCredential(
+					store,
+					CodingAgentOperations.GITHUB_COPILOT_PROVIDER_ID,
+					ignored -> new Credential.OAuthCredential(
+							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
+			ProviderState provider = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			runtime.gitHubCopilotAuth(
+					provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			runtime.newGitHubCopilotProvider(provider, List.of(model));
+
+			AssistantMessage result =
+					CodingAgentOperations.result(runtime.stream(provider, model, new Context(), copilotOptions(null)));
+
+			assertEquals(StopReason.TOOL_USE, result.stopReason);
+			assertEquals(1, CodingAgentOperations.toolCalls(result).size());
+			assertEquals("toolu_1", CodingAgentOperations.toolCalls(result).getFirst().id);
+			assertEquals("parameterless_tool", CodingAgentOperations.toolCalls(result).getFirst().name);
+			assertTrue(CodingAgentOperations.toolCalls(result).getFirst().arguments.isEmpty());
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	private static Model copilotModel(String id, String api, String baseUrl) {
 		Model model = new Model();
 		model.id = id;
