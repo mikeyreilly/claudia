@@ -3262,7 +3262,15 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (tool == null) {
             return;
         }
-        JsonNode parsed = Json.MAPPER.readTree(tool.arguments.toString());
+        String rawArguments = tool.arguments.toString();
+        JsonNode parsed;
+        if (rawArguments.isBlank()) {
+            // Anthropic emits no input_json_delta events at all for parameterless
+            // tool calls, leaving the accumulator empty instead of holding "{}".
+            parsed = jsonObject();
+        } else {
+            parsed = Json.MAPPER.readTree(rawArguments);
+        }
         if (!(parsed instanceof ObjectNode arguments)) {
             throw new IOException("Anthropic tool input must be a JSON object");
         }
