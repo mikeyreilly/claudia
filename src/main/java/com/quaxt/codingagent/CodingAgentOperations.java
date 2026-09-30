@@ -4109,6 +4109,15 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         return filterEnabledCopilotModels(state, enabled);
     }
 
+    /** Returns only last-known account entitlements, without refreshing tokens or making HTTP requests. */
+    List<Model> gitHubCopilotCachedAvailableModels(ProviderState state) throws IOException {
+        Credential credential = readCredential(state.credentials, GITHUB_COPILOT_PROVIDER_ID).orElse(null);
+        if (!(credential instanceof Credential.OAuthCredential oauth) || oauth.availableModelIds == null) {
+            return List.of();
+        }
+        return filterEnabledCopilotModels(state, oauth.availableModelIds);
+    }
+
     /**
      * Enables catalog model policies, then refreshes the account's enabled-model list.
      */

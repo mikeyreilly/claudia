@@ -204,6 +204,8 @@ public final class CodingAgentCli {
     // InteractiveShell fields
     private Settings settings;
     private boolean agentConfigured;
+    // Also remember a successful login when its initial model selector was cancelled.
+    private String shellModelProvider;
     private boolean recordingSession;
     private String sessionName;
     private Path cwd = Path.of(".").toAbsolutePath().normalize();
@@ -2045,10 +2047,13 @@ public final class CodingAgentCli {
                                         ProviderState copilot = (ProviderState)
                                                 runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                         try {
-                                            model = runtime.gitHubCopilotHasCredential(copilot)
-                                                    ? findModelIn(
-                                                            runtime.gitHubCopilotAvailableModels(copilot), model.provider, model.id)
-                                                    : null;
+                                            if (runtime.gitHubCopilotHasCredential(copilot)) {
+                                                shellModelProvider = GITHUB_COPILOT_PROVIDER_ID;
+                                                model = findModelIn(
+                                                        runtime.gitHubCopilotAvailableModels(copilot), model.provider, model.id);
+                                            } else {
+                                                model = null;
+                                            }
                                             if (model == null) {
                                                 println("Saved GitHub Copilot model is not enabled for this account; selecting a fallback.");
                                             }
@@ -2075,9 +2080,12 @@ public final class CodingAgentCli {
                                 ProviderState chatGpt = (ProviderState)
                                         runtime.requireCoreProvider(CHATGPT_PROVIDER_ID);
                                 try {
-                                    if (runtime.chatGptHasCredential(chatGpt) && !chatGpt.models.isEmpty()) {
-                                        configureShellModel(preferredChatGptModel(chatGpt.models), true);
-                                        break restore;
+                                    if (runtime.chatGptHasCredential(chatGpt)) {
+                                        shellModelProvider = CHATGPT_PROVIDER_ID;
+                                        if (!chatGpt.models.isEmpty()) {
+                                            configureShellModel(preferredChatGptModel(chatGpt.models), true);
+                                            break restore;
+                                        }
                                     }
                                 } catch (IOException error) {
                                     println("ChatGPT login needs attention: " + error.getMessage());
@@ -2086,6 +2094,7 @@ public final class CodingAgentCli {
                                         runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
                                 try {
                                     if (!runtime.gitHubCopilotHasCredential(copilot)) break restore;
+                                    shellModelProvider = GITHUB_COPILOT_PROVIDER_ID;
                                     Model fallback = preferredCopilotModel(runtime.gitHubCopilotAvailableModels(copilot));
                                     if (fallback == null) {
                                         println("GitHub Copilot has no enabled coding models. Run /login to refresh access.");
@@ -2416,6 +2425,7 @@ public final class CodingAgentCli {
                                 println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                 println("Waiting for GitHub authorization...");
                                 runtime.gitHubCopilotCompleteLogin(copilot, device);
+                                shellModelProvider = GITHUB_COPILOT_PROVIDER_ID;
                                 println("Enabling GitHub Copilot models...");
                                 CopilotModelAccess access =
                                         runtime.gitHubCopilotEnableAndRefreshModels(copilot);
@@ -2441,6 +2451,7 @@ public final class CodingAgentCli {
                                             runtime.defaultCredentialStore(),
                                             "openai",
                                             ignored -> new Credential.ApiKeyCredential(apiKey.trim(), Map.of()));
+                                    shellModelProvider = "openai";
                                     List<Model> models1 = providerModels(runtime.requireCoreProvider("openai"));
                                     Model model = shellSavedModelIn(models1);
                                     if (model == null) {
@@ -2462,6 +2473,7 @@ public final class CodingAgentCli {
                                 println("Open " + device.verificationUri + " and enter code " + device.userCode + ".");
                                 println("Waiting for ChatGPT authorization...");
                                 runtime.chatGptCompleteLogin(chatGpt, device);
+                                shellModelProvider = CHATGPT_PROVIDER_ID;
                                 List<Model> models1 = chatGpt.models;
                                 Model model = shellSavedModelIn(models1);
                                 if (model == null) {
@@ -2482,14 +2494,18 @@ public final class CodingAgentCli {
                 case LOGOUT -> {
                     boolean hadAgent = agentConfigured;
                     try {
-                        if (agentConfigured && runtime.state().model().provider.equals(CHATGPT_PROVIDER_ID)) {
+                        if (CHATGPT_PROVIDER_ID.equals(shellModelProvider)) {
                             runtime.chatGptLogout(
                                     (ProviderState) runtime.requireCoreProvider(CHATGPT_PROVIDER_ID));
-                            agentConfigured = false;
+                            if (agentConfigured && runtime.state().model().provider.equals(CHATGPT_PROVIDER_ID)) {
+                                agentConfigured = false;
+                            }
                             println("ChatGPT credentials removed. Run /login or /resume to continue.");
-                        } else if (agentConfigured && runtime.state().model().provider.equals("openai")) {
+                        } else if ("openai".equals(shellModelProvider)) {
                             runtime.deleteCredential(runtime.defaultCredentialStore(), "openai");
-                            agentConfigured = false;
+                            if (agentConfigured && runtime.state().model().provider.equals("openai")) {
+                                agentConfigured = false;
+                            }
                             println("OpenAI API key removed. Run /login or /resume to continue.");
                         } else {
                             runtime.gitHubCopilotLogout((ProviderState)
@@ -2502,6 +2518,7 @@ public final class CodingAgentCli {
                                 println("GitHub Copilot credentials removed.");
                             }
                         }
+                        shellModelProvider = agentConfigured ? runtime.state().model().provider : null;
                     } finally {
                         if (hadAgent && !agentConfigured) {
                             closeShellSubscription();
@@ -2513,32 +2530,15 @@ public final class CodingAgentCli {
                     }
                 }
                 case MODELS -> {
-                    List<Model> models2 = new ArrayList<>();
-                    for (Model model1 : runtime.allCatalogModels()) {
-                        if (!model1.provider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
-                            models2.add(model1);
-                        }
+                    if (shellModelProvider == null) {
+                        println("No provider is selected. Run /login first or start with --model or --provider.");
+                        break;
                     }
-                    ProviderState copilot = (ProviderState)
-                            runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
-                    try {
-                        if (isAnthropicProxyConfigured()) {
-                            // Keep proxy streaming isolated from the JDK's prior Copilot HTTP/2 traffic.
-                            models2.addAll(copilot.models);
-                        } else if (runtime.gitHubCopilotHasCredential(copilot)) {
-                            println("Refreshing GitHub Copilot models...");
-                            models2.addAll(
-                                    runtime.gitHubCopilotEnableAndRefreshModels(copilot).models);
-                        } else {
-                            models2.addAll(copilot.models);
-                        }
-                    } catch (IOException error) {
-                        println("Could not refresh GitHub Copilot model access: " + error.getMessage());
-                        models2.addAll(copilot.models);
+                    List<Model> models1 = shellSelectableModels();
+                    if (models1.isEmpty()) {
+                        println("No selectable models for " + shellModelProvider + ". Run /login to refresh access.");
+                        break;
                     }
-                    models2.addAll(((ProviderState)
-                            runtime.requireCoreProvider(CHATGPT_PROVIDER_ID)).models);
-                    List<Model> models1 = List.copyOf(models2);
                     List<SelectItem<Model>> items =
                             models1.stream().map(CodingAgentCli::shellModelItem).toList();
                     int currentIndex;
@@ -3222,6 +3222,7 @@ public final class CodingAgentCli {
         });
         cwd = configuredCwd.toAbsolutePath().normalize();
         agentConfigured = true;
+        shellModelProvider = model.provider;
         recordingSession = recordingEnabled;
         sessionName = nextSessionName;
         if (activity.phase != ActivityStatus.Phase.RUNNING_COMMAND) {
@@ -3564,6 +3565,25 @@ public final class CodingAgentCli {
     private void syncShellMcpTools() {
         if (!agentConfigured || runtime.state().streaming()) return;
         runtime.syncMcpTools();
+    }
+
+    private List<Model> shellSelectableModels() throws IOException {
+        if (shellModelProvider == null) return List.of();
+        if (!shellModelProvider.equals(GITHUB_COPILOT_PROVIDER_ID)) {
+            return providerModels(runtime.requireCoreProvider(shellModelProvider));
+        }
+        ProviderState copilot = (ProviderState) runtime.requireCoreProvider(GITHUB_COPILOT_PROVIDER_ID);
+        if (!runtime.gitHubCopilotHasCredential(copilot)) return List.of();
+        if (!isAnthropicProxyConfigured()) {
+            try {
+                println("Refreshing GitHub Copilot models...");
+                return runtime.gitHubCopilotEnableAndRefreshModels(copilot).models;
+            } catch (IOException error) {
+                println("Could not refresh GitHub Copilot model access: " + error.getMessage());
+            }
+        }
+        // Preserve known entitlements without HTTP traffic or exposing the entire catalog.
+        return runtime.gitHubCopilotCachedAvailableModels(copilot);
     }
 
     private Model shellSavedModelIn(List<Model> models) {
