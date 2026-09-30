@@ -58,6 +58,14 @@ public class Terminal implements Closeable {
     private final OutputStream out;
     private final InputReader input;
     private final Object outputLock = new Object();
+    /**
+     * Guards changing the mode and applying it to the line discipline. Resuming
+     * after a stop reapplies the mode from a signal thread while the main thread
+     * may be restoring its own; without this the signal thread could read the old
+     * mode and apply it after the new one, leaving the tty cooked while this
+     * terminal reports raw.
+     */
+    private final Object modeLock = new Object();
     private final Map<Signal, List<Runnable>> handlers = new ConcurrentHashMap<>();
     private final Mode initialMode;
     private volatile Size size;
@@ -150,15 +158,20 @@ public class Terminal implements Closeable {
 
     /** Enters raw mode and returns the previous mode for {@link #setMode(Mode)}. */
     public Mode enterRawMode() {
-        Mode previous = mode;
-        if (!previous.raw()) setMode(rawVariant(previous));
-        return previous;
+        synchronized (modeLock) {
+            Mode previous = mode;
+            if (!previous.raw()) setMode(rawVariant(previous));
+            return previous;
+        }
     }
 
     public void setMode(Mode next) {
-        if (next == null || next == mode) return;
-        applyMode(next);
-        mode = next;
+        if (next == null) return;
+        synchronized (modeLock) {
+            if (next == mode) return;
+            applyMode(next);
+            mode = next;
+        }
     }
 
     /** The mode in effect when this terminal was opened. */
@@ -176,7 +189,9 @@ public class Terminal implements Closeable {
 
     /** Re-applies the tracked mode, for example after the shell changed it while the process was stopped. */
     protected void reapplyMode() {
-        applyMode(mode);
+        synchronized (modeLock) {
+            applyMode(mode);
+        }
     }
 
     /** Registers a handler; returns a handle that unregisters it. */
