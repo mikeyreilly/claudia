@@ -281,6 +281,52 @@ questions are not automatically reopened on resume. Print/JSON mode cannot
 collect answers: the tool returns `unavailable` and instructs the model to present
 the unresolved question in its response, without waiting for stdin.
 
+## Java debugger tools
+
+In the JVM CLI (`java -jar target/codingagent.jar`), ask the agent to use
+`debug_launch` with exactly one of `main_class` (a Java class, for example
+`com.example.Main`) or `test_selector` (for example
+`com.example.CalculatorTest#adds`). For a main class, compiled classes in
+`target/classes` are used by default when present; supply `classpath` and
+`arguments` as needed. Set `stop_on_entry: true` to inspect the initial stop
+before execution proceeds. Otherwise, set a breakpoint with
+`debug_breakpoints` (`action: add`, with a source path and line or class and
+method) and use the returned `session_id` to track the target. Breakpoints can
+be pending until their class loads; check their reported resolution.
+
+At a stop, get the current `stop_id` from `debug_status` or `debug_wait`.
+Pass it with `session_id` to `debug_continue`; then call `debug_wait` to wait
+up to its finite `wait_ms` for an event. Inspect a stopped target with
+`debug_threads`, `debug_stack`, `debug_variables`, `debug_object`,
+`debug_source`, or `debug_exception`. Use `debug_events` and `debug_output`
+with cursors for event and captured stdout/stderr pages. A `stop_id` becomes
+stale after resuming; get the new one before inspecting the next stop. Finish
+with `debug_detach` (`leave_running: true` to leave the JVM running, or
+`terminate: true, leave_running: false` for a launched target only). Set `close_session: true`
+after reading the final status/output to release its retained record. Detaching
+an attached JVM never terminates it.
+
+Limits: these tools debug Java JVM processes from the JVM CLI only; the
+GraalVM native executable does not support JDI debugging. `test_selector`
+uses a single-project Maven Surefire/JUnit Jupiter setup and an already
+compiled top-level test class in `target/test-classes`: use a fully qualified
+class or `class#method` for an unambiguous zero-argument `@Test`, not a JUnit
+unique ID. Only the Surefire goal runs (not the entire Maven test lifecycle).
+It does not support arbitrary test engines, nested tests, or
+reactor-child selection. To attach instead of launching, use `debug_attach`
+with an explicit JDWP-enabled JVM `pid` and `consent: true`; target-selector
+lookup is not supported. JDI cannot retrieve stdout/stderr from an attached JVM;
+use its existing logs. `debug_evaluate` supports only limited read-only
+expressions on a stopped frame, not method calls, mutations, or arbitrary
+Java evaluation; unsupported expressions are rejected, even if
+`allow_side_effects` is supplied. Events, output, source windows, and
+inspection results are bounded and may require paging; they are not an
+unlimited transcript. Custom attach source roots/path mappings and arbitrary
+collection enumeration are not supported yet. Captured output redacts known sensitive environment
+values, and sensitive variable/field names are hidden by default. Arbitrary
+target memory and expressions can still contain secrets: do not request a value
+you would not want in the agent transcript.
+
 ## Interactive scripts
 
 You can ask codingagent to run a script and supply information when it asks:
