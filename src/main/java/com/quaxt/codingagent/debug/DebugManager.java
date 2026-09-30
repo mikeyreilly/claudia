@@ -1228,68 +1228,21 @@ public final class DebugManager implements AutoCloseable {
         }
         return out;
     }
-    private static final java.util.regex.Pattern EXPRESSION=java.util.regex.Pattern.compile(
-        "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*(?:\\s*(?:==|!=|<=|>=|<|>)\\s*(?:-?\\d+(?:\\.\\d+)?|true|false|null|[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*))?|true|false|null|-?\\d+(?:\\.\\d+)?");
     private static void validateExpression(String expr) {
-        if(expr.length()>256 || !EXPRESSION.matcher(expr.strip()).matches())
-            throw fail("unsafe_expression","Only read-only literals, local/this field paths, and simple comparisons are supported; no calls or assignment");
+        try { ReadOnlyExpression.validate(expr); }
+        catch(ReadOnlyExpression.Failure invalid) { throw fail(invalid.code,invalid.getMessage()); }
     }
-    private static Value evaluateValue(StackFrame frame,String expression) {
-        String expr=expression.strip(); validateExpression(expr);
-        java.util.regex.Matcher comparisonExpression=java.util.regex.Pattern
-            .compile("^(.+?)\\s*(==|!=|<=|>=|<|>)\\s*(.+)$").matcher(expr);
-        if(comparisonExpression.matches()) {
-            String operator=comparisonExpression.group(2);
-            Value l=atom(frame,comparisonExpression.group(1).strip()),
-                r=atom(frame,comparisonExpression.group(3).strip());
-            boolean equality;
-            Integer comparison=null;
-            if(l==null || r==null) equality=l==r;
-            else if(l instanceof ObjectReference first && r instanceof ObjectReference second)
-                equality=first.uniqueID()==second.uniqueID();
-            else if(l instanceof BooleanValue first && r instanceof BooleanValue second)
-                equality=first.value()==second.value();
-            else if(l instanceof PrimitiveValue && r instanceof PrimitiveValue) {
-                try {
-                    comparison=new java.math.BigDecimal(l.toString()).compareTo(new java.math.BigDecimal(r.toString()));
-                    equality=comparison==0;
-                } catch(NumberFormatException invalid) {
-                    throw fail("invalid_expression","Numeric comparison cannot represent this primitive value safely");
-                }
-            } else throw fail("invalid_expression","Comparison operands have incompatible types");
-            if(comparison==null && !operator.equals("==") && !operator.equals("!="))
-                throw fail("invalid_expression","Ordering requires numeric operands");
-            boolean match=switch(operator) { case "==" -> equality; case "!=" -> !equality;
-                case "<" -> comparison<0; case ">" -> comparison>0;
-                case "<=" -> comparison<=0; default -> comparison>=0; };
-            return frame.virtualMachine().mirrorOf(match);
-        }
-        return atom(frame,expr);
+    private static ReadOnlyExpression.Result evaluateValue(StackFrame frame,String expression) {
+        try { return ReadOnlyExpression.evaluate(frame,expression); }
+        catch(ReadOnlyExpression.Failure invalid) { throw fail(invalid.code,invalid.getMessage()); }
     }
-    private static Value atom(StackFrame frame,String expr) {
-        VirtualMachine vm=frame.virtualMachine();
-        if(expr.equals("null")) return null;
-        if(expr.equals("true")||expr.equals("false")) return vm.mirrorOf(Boolean.parseBoolean(expr));
-        try { if(expr.contains(".")) return vm.mirrorOf(Double.parseDouble(expr)); return vm.mirrorOf(Long.parseLong(expr)); }
-        catch(NumberFormatException ignored) { }
-        String[] parts=expr.split("\\."); Value result;
-        if(parts[0].equals("this")) result=frame.thisObject();
-        else {
-            try {
-                List<LocalVariable> local=frame.visibleVariables().stream().filter(x->x.name().equals(parts[0])).toList();
-                if(local.size()!=1) throw fail("variable_unavailable","Variable "+parts[0]+" is missing or ambiguous; compile with local-variable debug information");
-                result=frame.getValue(local.getFirst());
-            } catch(AbsentInformationException ex) { throw fail("variable_unavailable","Local variable metadata is unavailable"); }
-        }
-        for(int i=1;i<parts.length;i++) {
-            if(!(result instanceof ObjectReference obj)) throw fail("invalid_expression","Cannot read field "+parts[i]+" from null or primitive");
-            Field field=obj.referenceType().fieldByName(parts[i]);
-            if(field==null) throw fail("field_not_found","No field "+parts[i]+" on "+obj.referenceType().name());
-            result=field.isStatic()?field.declaringType().getValue(field):obj.getValue(field);
-        }
-        return result;
+    private static ObjectNode value(Session s,ReadOnlyExpression.Result result) {
+        if(result.literalString()==null) return value(s,result.value());
+        String text=result.literalString();
+        return Json.MAPPER.createObjectNode().put("type","java.lang.String").put("availability","available")
+            .put("preview",text.substring(0,Math.min(256,text.length()))).put("truncated",text.length()>256);
     }
-    private static boolean truth(Value v) { return v instanceof BooleanValue b && b.booleanValue(); }
+    private static boolean truth(ReadOnlyExpression.Result v) { return v.value() instanceof BooleanValue b && b.booleanValue(); }
     private static ObjectNode evaluate(Session s,ObjectNode a) {
         String expr=str(a,"expression",null); required(expr,"expression");
         if(bool(a,"allow_side_effects",false)) throw fail("unsupported","Mutation/method invocation is not implemented; read-only evaluation is available without allow_side_effects");

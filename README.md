@@ -329,10 +329,16 @@ It does not support arbitrary test engines, nested tests, or
 reactor-child selection. To attach instead of launching, use `debug_attach`
 with an explicit JDWP-enabled JVM `pid` and `consent: true`; target-selector
 lookup is not supported. JDI cannot retrieve stdout/stderr from an attached JVM;
-use its existing logs. `debug_evaluate` supports only limited read-only
-expressions on a stopped frame, not method calls, mutations, or arbitrary
-Java evaluation; unsupported expressions are rejected, even if
-`allow_side_effects` is supplied. Events, output, source windows, and
+use its existing logs. `debug_evaluate` supports bounded read-only inspection:
+local/`this` field paths, array subscripts (including local indices and nested
+arrays), array `.length`, literals (including escaped double-quoted strings),
+and simple comparisons. Examples: `numbers[index]`, `items[0].provider`,
+`matrix[0].length`, and `model.provider == "openai"`. Strings compare by content;
+other object references compare by identity. String literals stay in the
+debugger rather than allocating objects in the target. The same grammar applies
+to breakpoint conditions and log expressions. Expressions are limited to 256
+characters and 16 nested subscripts; calls, mutation, arithmetic, and arbitrary
+Java evaluation remain unsupported, even if `allow_side_effects` is supplied. Events, output, source windows, and
 inspection results are bounded and may require paging; they are not an
 unlimited transcript. Custom attach source roots/path mappings and arbitrary
 collection enumeration are not supported yet. Captured output redacts known sensitive environment
