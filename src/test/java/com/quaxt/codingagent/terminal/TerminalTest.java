@@ -10,6 +10,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class TerminalTest {
@@ -35,6 +38,53 @@ class TerminalTest {
         assertSame(raw, terminal.enterRawMode(), "Entering raw mode again changes nothing");
         terminal.setMode(cooked);
         assertFalse(terminal.mode().raw());
+    }
+
+    /**
+     * On resume the SIGCONT handler reapplies the mode while the main thread
+     * restores raw mode. If the handler read the old cooked mode and applied it
+     * after the main thread's raw mode reached the tty, the tty stayed cooked
+     * with kitty key reporting on: Ctrl-C, Ctrl-D, and Ctrl-Z were echoed as
+     * {@code ^[[99;5u} and friends instead of acting.
+     */
+    @Test
+    void reapplyingTheModeOnResumeCannotUndoAConcurrentModeChange() throws Exception {
+        Thread main = Thread.currentThread();
+        AtomicReference<Terminal.Mode> tty = new AtomicReference<>();
+        CountDownLatch rawApplied = new CountDownLatch(1);
+        CountDownLatch reapplied = new CountDownLatch(1);
+        Terminal racing = new Terminal("xterm-ghostty", new ByteArrayInputStream(new byte[0]), output,
+                new Terminal.Size(20, 6), terminal.mode()) {
+            @Override
+            protected void applyMode(Mode next) {
+                tty.set(next);
+                if (next.raw() && Thread.currentThread() == main) {
+                    // The line discipline is raw but the tracked mode is not yet updated.
+                    rawApplied.countDown();
+                    try {
+                        reapplied.await(200, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        };
+        Thread resume = Thread.ofPlatform().start(() -> {
+            try {
+                rawApplied.await();
+            } catch (InterruptedException interrupted) {
+                return;
+            }
+            racing.reapplyMode();
+            reapplied.countDown();
+        });
+
+        racing.enterRawMode();
+        resume.join(5_000);
+
+        assertFalse(resume.isAlive());
+        assertTrue(racing.mode().raw());
+        assertSame(racing.mode(), tty.get(), "The tty must end in the mode the terminal reports");
     }
 
     @Test
