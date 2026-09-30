@@ -12,7 +12,7 @@ The debugger never starts, attaches to, modifies, or terminates a process withou
 - Results have a stable `status` (`ok`, `running`, `stopped`, `completed`, or `error`), a concise human-readable `summary`, and structured data. Errors have a machine-readable `code`, actionable `message`, and, where useful, suggested valid choices. Never report a timeout or an unsupported capability as an empty result.
 - A `stop_id` identifies one suspension. Stop-specific reads and execution controls take that ID and reject stale calls after execution resumes or a newer stop occurs. Frame, variable, and object references are scoped to the stop and cannot silently refer to a different state.
 - Locations carry the best available `source_path`, 1-based `line`, declaring class, method signature, and bytecode location when source is unavailable. Ambiguous files, overloaded methods, and multiple loaded classes are reported as choices rather than guessed.
-- All collections are bounded, searchable/filterable where useful, and paginated with `limit` and `cursor`. Responses say whether results were truncated and how to fetch more. Strings and object graphs are size/depth limited, with explicit truncation markers. The default response is a focused summary, not an entire heap or stack dump.
+- All collections are bounded, searchable/filterable where useful, and paginated with `limit` and `cursor`. Cursors are nonnegative JSON integers (0 through 2147483647), not strings; omitted or zero starts at the beginning. Responses say whether results were truncated and how to fetch more. Strings and object graphs are size/depth limited, with explicit truncation markers. The default response is a focused summary, not an entire heap or stack dump.
 - Calls that wait accept `wait_ms`; a wait expiring returns the current state and a way to continue waiting, without implicitly resuming, cancelling, or ending the debug session. Target output and debugger events are separate streams with ordered cursors so the agent can retrieve missed information without repeated giant responses.
 - Read operations are safe to retry. State-changing operations accept an idempotency key and return the resulting state, so a retried call cannot accidentally step twice, resume twice, or launch another target.
 
@@ -39,7 +39,7 @@ Supported stop specifications:
 - Field access or modification: declaring class and field, with old/new values when available; clearly signal unsupported targets.
 - Explicit `stop_on_entry` and manual `debug_pause`.
 
-Breakpoints explain if an exact line cannot be bound, show the actual executable location(s), and never silently move to another line. Conditions and log expressions follow the evaluation safety rules below; an unsafe expression cannot run merely because it was put in a breakpoint.
+Breakpoints explain if an exact line cannot be bound, show the actual executable location(s), and never silently move to another line. Pending source diagnostics distinguish an unloaded class from missing source/line-number debug information, a source or method/signature mismatch, and a loaded source line with no executable location. Updated diagnostics generate `breakpoint_pending` events; unrelated class loads do not replace evidence from the matching class. Conditions and log expressions follow the evaluation safety rules below; an unsafe expression cannot run merely because it was put in a breakpoint.
 
 ## Drive execution
 
@@ -55,7 +55,7 @@ Execution calls return promptly with either a stop or `running` plus an event cu
 | `debug_stack` | What frames are on this thread's stack? Returns frame IDs, locations, source context, and optional compact arguments; supports paging and frame filters (including library-frame suppression). |
 | `debug_variables` | What arguments, locals, `this`, and captured values are visible in a frame? Returns name, declared/runtime type, value preview, availability status, and expandable reference, with paging. Optimized-away or unavailable values are distinguished from `null`. |
 | `debug_object` | What is behind a value reference? Inspect fields (including inherited/static on request), array slices, collection entries, and string ranges with bounded depth and paging. Preserve object identity and cycles without expanding them indefinitely. |
-| `debug_source` | What source corresponds to this frame/location? Returns a small requested line window with path and line numbers, or explains why source is unavailable or mismatched. |
+| `debug_source` | What source corresponds to this frame/location? Omitted `line` or `line: 0` uses the stopped frame's line; a positive value requests that 1-based line. Returns a small requested line window with path and line numbers, or explains why source/line information is unavailable or mismatched. |
 | `debug_exception` | What exception caused this stop? Returns type, message, throw site, stack, cause/suppressed chain, and expandable exception reference with bounds. |
 | `debug_evaluate` | What does an expression evaluate to in a chosen frame? Returns typed value/reference or a precise evaluation error, with a stated safety level and time limit. |
 | `debug_output` | What did the target write to stdout/stderr since a cursor? Returns separately identified streams, timestamps/order where known, byte/line limits, and truncation information. |
