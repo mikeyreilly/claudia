@@ -41,6 +41,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -57,6 +58,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -1755,6 +1758,99 @@ class CodingAgentOperationsTest {
 		void handle(HttpExchange exchange) throws Exception;
 	}
 
+	private static void writeCompatibleSseChunk(OutputStream body, String data) throws IOException {
+		body.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
+		body.flush();
+	}
+
+	private AssistantMessage streamCompatible(HttpServer server, int timeoutMs) throws InterruptedException {
+		Model model = compatibleModel(compatibleUrl(server));
+		ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
+		Context context = new Context();
+		context.messages.add(CodingAgentOperations.userMessage("hello"));
+		StreamOptions options = compatibleOptions("test-key");
+		options.timeoutMs = timeoutMs;
+		return CodingAgentOperations.result(runtime.stream(provider, model, context, options));
+	}
+
+	@Test
+	void keepsStreamingPastTheTimeoutWhileDataKeepsArriving() throws Exception {
+		// JDK 26 extended HttpRequest.Builder.timeout to cover the whole response
+		// body, which cut off long but active model streams with "closed".
+		HttpServer server = compatibleServer(exchange -> {
+			exchange.getResponseHeaders().set("content-type", "text/event-stream");
+			exchange.sendResponseHeaders(200, 0);
+			OutputStream body = exchange.getResponseBody();
+			for (int i = 0; i < 8; i++) {
+				writeCompatibleSseChunk(body, "{\"choices\":[{\"delta\":{\"content\":\"" + i + "\"}}]}");
+				Thread.sleep(100);
+			}
+			writeCompatibleSseChunk(body, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}");
+			writeCompatibleSseChunk(body, "[DONE]");
+		});
+		try {
+			AssistantMessage response = streamCompatible(server, 400);
+
+			assertEquals(StopReason.STOP, response.stopReason, response.errorMessage);
+			assertEquals("01234567", CodingAgentOperations.text(response));
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void failsStalledStreamWithRetryableIdleTimeout() throws Exception {
+		CountDownLatch release = new CountDownLatch(1);
+		HttpServer server = compatibleServer(exchange -> {
+			exchange.getResponseHeaders().set("content-type", "text/event-stream");
+			exchange.sendResponseHeaders(200, 0);
+			writeCompatibleSseChunk(
+					exchange.getResponseBody(), "{\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}");
+			release.await(10, TimeUnit.SECONDS);
+		});
+		try {
+			long start = System.nanoTime();
+			AssistantMessage response = streamCompatible(server, 300);
+			long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+			assertEquals(StopReason.ERROR, response.stopReason);
+			assertTrue(response.errorMessage.contains("no data received for 300 ms"), response.errorMessage);
+			assertTrue(CodingAgentOperations.isRetryableAssistantError(response), response.errorMessage);
+			assertTrue(elapsedMs < 5_000, "stalled stream took " + elapsedMs + " ms to fail");
+		} finally {
+			release.countDown();
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void failsWhenResponseHeadersDoNotArriveWithinTheTimeout() throws Exception {
+		CountDownLatch release = new CountDownLatch(1);
+		HttpServer server = compatibleServer(exchange -> release.await(10, TimeUnit.SECONDS));
+		try {
+			AssistantMessage response = streamCompatible(server, 300);
+
+			assertEquals(StopReason.ERROR, response.stopReason);
+			assertTrue(response.errorMessage.contains("timed out after 300 ms waiting for response headers"),
+					response.errorMessage);
+			assertTrue(CodingAgentOperations.isRetryableAssistantError(response), response.errorMessage);
+		} finally {
+			release.countDown();
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void displayErrorIncludesCausesHiddenByTheWrapperMessage() {
+		IOException bodyFailure = new IOException("closed", new IOException("Connection reset"));
+		assertEquals("closed: Connection reset", CodingAgentOperations.displayError(bodyFailure));
+
+		IOException wrapped = new IOException(new java.net.ConnectException("Connection refused"));
+		assertEquals("java.net.ConnectException: Connection refused", CodingAgentOperations.displayError(wrapped));
+
+		assertEquals("java.io.IOException", CodingAgentOperations.displayError(new IOException()));
+	}
+
 	// OpenAiResponsesProvider
 
 	private static StreamOptions responsesOptions(String apiKey) {
@@ -2674,6 +2770,87 @@ class CodingAgentOperationsTest {
 	}
 
 	// McpRemote
+
+	@Test
+	void fallsBackToALegacySseServerAndCallsToolsOverItsEventStream() throws Exception {
+		java.util.concurrent.BlockingQueue<String> events = new java.util.concurrent.LinkedBlockingQueue<>();
+		AtomicBoolean stopped = new AtomicBoolean();
+		HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		http.setExecutor(java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
+		http.createContext("/mcp", exchange -> {
+			try (exchange) {
+				if (!exchange.getRequestMethod().equals("GET")) {
+					// Legacy SSE servers reject the streamable HTTP POST.
+					exchange.sendResponseHeaders(405, -1);
+					return;
+				}
+				exchange.getResponseHeaders().set("content-type", "text/event-stream");
+				exchange.sendResponseHeaders(200, 0);
+				OutputStream body = exchange.getResponseBody();
+				body.write("event: endpoint\ndata: /messages\n\n".getBytes(StandardCharsets.UTF_8));
+				body.flush();
+				while (!stopped.get()) {
+					String message = events.poll(50, TimeUnit.MILLISECONDS);
+					if (message != null) {
+						body.write(("event: message\ndata: " + message + "\n\n").getBytes(StandardCharsets.UTF_8));
+						body.flush();
+					}
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		http.createContext("/messages", exchange -> {
+			try (exchange) {
+				JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+				if (request.has("id")) {
+					ObjectNode response = CodingAgentOperations.jsonObject().put("jsonrpc", "2.0");
+					response.set("id", request.get("id"));
+					switch (request.path("method").asText()) {
+						case "initialize" -> {
+							ObjectNode result = response.putObject("result");
+							result.put("protocolVersion", "2024-11-05");
+							result.putObject("capabilities").putObject("tools");
+							result.putObject("serverInfo").put("name", "legacy").put("version", "test");
+						}
+						case "tools/list" -> {
+							ObjectNode tool = response.putObject("result").putArray("tools").addObject();
+							tool.put("name", "echo");
+							tool.putObject("inputSchema").put("type", "object")
+									.putObject("properties").putObject("value").put("type", "string");
+						}
+						case "tools/call" -> response.putObject("result").putArray("content").addObject()
+								.put("type", "text")
+								.put("text", request.path("params").path("arguments").path("value").asText());
+						default -> response.putObject("error").put("code", -32601).put("message", "not found");
+					}
+					events.add(Json.MAPPER.writeValueAsString(response));
+				}
+				exchange.sendResponseHeaders(202, -1);
+			}
+		});
+		http.start();
+		try {
+			var remote = new McpServerConfig.Remote(
+					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
+					Map.of(), null, true, 5_000L, List.of(), List.of());
+			runtime.mcpCreateManager(new McpConfiguration(Map.of("legacy", remote), List.of()), tempDir);
+			try {
+				runtime.mcpAwaitReady();
+				assertEquals(CodingAgentOperations.McpState.CONNECTED, runtime.mcpStatus("legacy").state);
+				AgentTool tool = runtime.mcpTools().getFirst();
+				AgentTool.ToolResult result = runtime.executeTool(
+						tool, "id", CodingAgentOperations.jsonObject().put("value", "over sse"),
+						new AbortSignal(), ignored -> {});
+				assertEquals("over sse", ((TextContent) result.content.getFirst()).text);
+			} finally {
+				runtime.mcpCloseManager();
+			}
+		} finally {
+			stopped.set(true);
+			http.stop(0);
+		}
+	}
 
 	@Test
 	void connectsToAStreamableHttpServer() throws Exception {

@@ -12,6 +12,7 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +38,8 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -87,6 +90,7 @@ import com.quaxt.codingagent.ai.auth.CredentialStore;
 import com.quaxt.codingagent.ai.auth.EnvApiKeys;
 import com.quaxt.codingagent.ai.http.HttpException;
 import com.quaxt.codingagent.ai.http.HttpTransport;
+import com.quaxt.codingagent.ai.http.IdleTimeoutInputStream;
 import com.quaxt.codingagent.ai.http.SseReader;
 import com.quaxt.codingagent.ai.json.Json;
 import com.quaxt.codingagent.ai.providers.AnthropicProvider;
@@ -743,6 +747,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private static final String MCP_OAUTH_DEFAULT_CALLBACK_PATH = "/mcp/oauth/callback";
     private static final Duration MCP_OAUTH_DEFAULT_CALLBACK_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration MCP_OAUTH_HTTP_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration MCP_SSE_OPEN_TIMEOUT = Duration.ofSeconds(30);
     private static final long MCP_OAUTH_REFRESH_SKEW_SECONDS = 30;
     private static final String MCP_OAUTH_PROTOCOL_VERSION = "2025-11-25";
     private static final Pattern MCP_OAUTH_AUTH_PARAMETER = Pattern.compile(
@@ -1377,7 +1382,6 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .timeout(Duration.ofMillis(timeoutMs != null ? timeoutMs : HttpTransport.DEFAULT_TIMEOUT_MS))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body));
         builder.header("content-type", contentType);
         for (Map.Entry<String, String> header : headers.entrySet()) {
@@ -1385,7 +1389,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 builder.header(header.getKey(), header.getValue());
             }
         }
-        return httpSend(client, builder.build(), signal);
+        return httpSend(client, builder.build(), timeoutMs, signal);
     }
 
     private HttpTransport.Response httpGet(
@@ -1397,17 +1401,29 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             HttpClient client, String url, Map<String, String> headers, Integer timeoutMs, AbortSignal signal) throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .timeout(Duration.ofMillis(timeoutMs != null ? timeoutMs : HttpTransport.DEFAULT_TIMEOUT_MS))
                 .GET();
         for (Map.Entry<String, String> header : headers.entrySet()) {
             if (header.getValue() != null) {
                 builder.header(header.getKey(), header.getValue());
             }
         }
-        return httpSend(client, builder.build(), signal);
+        return httpSend(client, builder.build(), timeoutMs, signal);
     }
 
-    private HttpTransport.Response httpSend(HttpClient client, HttpRequest request, AbortSignal signal) throws IOException {
+    /**
+     * Sends a request whose body is consumed as a stream. The timeout bounds
+     * the wait for response headers and then each read of the body, but never
+     * the total response time: model streams can legitimately run for longer
+     * than any single timeout. This deliberately avoids
+     * HttpRequest.Builder.timeout, which since JDK 26 (JDK-8208693) also caps
+     * the time spent consuming the whole body.
+     */
+    private HttpTransport.Response httpSend(
+            HttpClient client, HttpRequest request, Integer timeoutMs, AbortSignal signal) throws IOException {
+        long timeout = timeoutMs != null ? timeoutMs : HttpTransport.DEFAULT_TIMEOUT_MS;
+        if (timeout <= 0) {
+            throw new IllegalArgumentException("timeoutMs must be positive: " + timeout);
+        }
         if (signal != null && isAborted(signal)) {
             throw new HttpTransport.AbortedException();
         }
@@ -1418,7 +1434,11 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         }
         HttpResponse<InputStream> response;
         try {
-            response = future.get();
+            response = future.get(timeout, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new HttpTimeoutException("Request to " + request.uri().getHost()
+                    + " timed out after " + timeout + " ms waiting for response headers");
         } catch (CancellationException e) {
             throw new HttpTransport.AbortedException();
         } catch (InterruptedException e) {
@@ -1442,14 +1462,16 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             }
         });
 
+        InputStream bodyStream = response.body() == null
+                ? null
+                : new IdleTimeoutInputStream(response.body(), timeout, request.uri().getHost());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             String errorBody;
-            InputStream stream = response.body();
-            if (stream == null) {
+            if (bodyStream == null) {
                 errorBody = "";
             } else {
-                try (stream) {
-                    errorBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+                try (bodyStream) {
+                    errorBody = new String(bodyStream.readAllBytes(), StandardCharsets.UTF_8);
                 }
             }
             int status = response.statusCode();
@@ -1463,7 +1485,6 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             throw new HttpException(
                     status, errorBody, trimmed.isEmpty() ? prefix + " (no body)" : prefix + ": " + detail);
         }
-        InputStream bodyStream = response.body();
         if (bodyStream == null) {
             throw new IOException("No response body from " + request.uri().getHost()
                     + " (status " + response.statusCode() + "). The request may have been blocked by a sandbox or proxy.");
@@ -2867,7 +2888,26 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     // ------------------------------------------------------ shared provider
 
-    private static String displayError(Exception error) {
+    /**
+     * Error text for an assistant message. Appends cause messages that the
+     * outer message hides: the JDK HTTP client, for example, reports every
+     * mid-body transport failure as "closed" with the real reason attached as
+     * the cause, which retry classification needs to see.
+     */
+    static String displayError(Throwable error) {
+        StringBuilder message = new StringBuilder(errorText(error));
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        seen.add(error);
+        for (Throwable cause = error.getCause(); cause != null && seen.add(cause); cause = cause.getCause()) {
+            String detail = errorText(cause);
+            if (!detail.isBlank() && message.indexOf(detail) < 0) {
+                message.append(": ").append(detail);
+            }
+        }
+        return message.toString();
+    }
+
+    private static String errorText(Throwable error) {
         return error.getMessage() == null ? error.toString() : error.getMessage();
     }
 
@@ -5854,9 +5894,12 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             transport.endpoint.completeExceptionally(error);
             return;
         }
+        // The GET body is the long-lived event stream. Since JDK 26 an
+        // HttpRequest timeout also caps consuming the body, so bound only the
+        // wait for response headers.
         HttpRequest request = mcpHttpRequestBuilder(
                 transport.url,
-                Duration.ofSeconds(30),
+                null,
                 bearer,
                 transport.headers,
                 transport.sessionId,
@@ -5864,8 +5907,17 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 .setHeader("Accept", "text/event-stream")
                 .GET()
                 .build();
-        transport.opening = transport.client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
-        transport.opening.whenComplete((response, error) -> {
+        CompletableFuture<HttpResponse<InputStream>> opening =
+                transport.client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
+        transport.opening = opening;
+        CompletableFuture.delayedExecutor(MCP_SSE_OPEN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).execute(() -> {
+            if (!opening.isDone()) {
+                transport.endpoint.completeExceptionally(new HttpTimeoutException(
+                        "Timed out after " + MCP_SSE_OPEN_TIMEOUT.toSeconds() + " s opening MCP SSE event stream"));
+                opening.cancel(true);
+            }
+        });
+        opening.whenComplete((response, error) -> {
             if (transport.closed) {
                 if (response != null) {
                     try {
