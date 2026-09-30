@@ -28,6 +28,7 @@ import com.quaxt.codingagent.ai.types.StopReason;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.types.ThinkingContent;
 import com.quaxt.codingagent.ai.types.ThinkingLevel;
+import com.quaxt.codingagent.ai.types.Tool;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.ai.types.Usage;
@@ -632,7 +633,8 @@ class CodingAgentOperationsTest {
 				"gpt-5.3-chat-latest",
 				"gpt-6-astra",
 				"gpt-6-luna",
-				"gpt-6-sol")));
+				"gpt-6-sol",
+				"gpt-6.1-sol")));
 		assertTrue(models.stream().allMatch(model -> model.provider.equals("chatgpt")));
 		assertTrue(models.stream().allMatch(model -> model.baseUrl.equals(
 				CodingAgentOperations.CHATGPT_CODEX_API_BASE_URL.toString())));
@@ -653,6 +655,7 @@ class CodingAgentOperationsTest {
 		assertTrue(chatGptIds.contains("gpt-6-astra"));
 		assertTrue(chatGptIds.contains("gpt-6-luna"));
 		assertTrue(chatGptIds.contains("gpt-6-sol"));
+		assertTrue(chatGptIds.contains("gpt-6.1-sol"));
 		assertTrue(operations.coreProviderModels("google").stream()
 				.allMatch(model -> model.provider.equals("google")));
 		assertTrue(operations.coreProviderModels("github-copilot").stream()
@@ -1852,6 +1855,56 @@ class CodingAgentOperationsTest {
 	}
 
 	// OpenAiResponsesProvider
+
+	@Test
+	void streamsGpt61SolToolsWithSupportedReasoningAcrossProviders() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = responsesServer(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeResponsesSse(exchange, """
+					data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"list_files"}}
+
+					data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{}"}
+
+					data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-6.1-sol","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+
+					""");
+		});
+		try {
+			runtime.initializeCoreProviders();
+			for (String providerId : List.of("openai", "chatgpt")) {
+				Model model = runtime.coreProviderModels(providerId).stream()
+						.filter(candidate -> candidate.id.equals("gpt-6.1-sol"))
+						.findFirst().orElseThrow();
+				OpenAiResponsesProvider.RequestProfile profile = providerId.equals("chatgpt")
+						? OpenAiResponsesProvider.RequestProfile.CODEX
+						: OpenAiResponsesProvider.RequestProfile.STANDARD;
+				OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+						providerId, providerId, List.of(model), List.of(), null, profile);
+				Context context = new Context("Inspect the workspace.");
+				context.messages.add(userMessage("List the files"));
+				context.tools.add(new Tool("list_files", "List workspace files",
+						jsonObject().put("type", "object").set("properties", jsonObject())));
+				for (ThinkingLevel requested : List.of(ThinkingLevel.OFF, ThinkingLevel.MINIMAL, ThinkingLevel.MAX)) {
+					ThinkingLevel effective = CodingAgentOperations.clampThinkingLevel(model, requested);
+					StreamOptions options = responsesOptions("test-key", effective);
+					options.baseUrl = responsesUrl(server);
+					AssistantMessage result = CodingAgentOperations.result(runtime.stream(provider, model, context, options));
+
+					JsonNode body = Json.MAPPER.readTree(request.get());
+					assertEquals("gpt-6.1-sol", body.path("model").asText());
+					assertEquals(requested == ThinkingLevel.MAX ? "max" : "low",
+							body.path("reasoning").path("effort").asText());
+					assertEquals("function", body.path("tools").get(0).path("type").asText());
+					assertEquals("list_files", body.path("tools").get(0).path("name").asText());
+					assertEquals(StopReason.TOOL_USE, result.stopReason);
+					assertEquals("list_files", CodingAgentOperations.toolCalls(result).getFirst().name);
+				}
+			}
+		} finally {
+			server.stop(0);
+		}
+	}
 
 	private static StreamOptions responsesOptions(String apiKey) {
 		StreamOptions options = new StreamOptions();

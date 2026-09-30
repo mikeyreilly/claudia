@@ -1964,7 +1964,7 @@ public final class CodingAgentCli {
                 }
             }
             Settings settings = runtime.loadSettings();
-            // Fail clearly on unsupported platforms or redirected streams before starting MCP servers.
+            // Check the console before starting MCP servers.
             Terminal systemTerminal = Terminal.system();
             Path workspace = Path.of(".").toAbsolutePath().normalize();
             try {
@@ -1974,9 +1974,11 @@ public final class CodingAgentCli {
                 throw error;
             }
             try {
+                boolean canSuspend = !System.getProperty("os.name", "")
+                        .toLowerCase(java.util.Locale.ROOT).startsWith("windows");
                 newInteractiveTerminal(
                         systemTerminal,
-                        () -> {
+                        canSuspend ? () -> {
                             Process process =
                                     new ProcessBuilder("/bin/kill", "-TSTP", "0").redirectErrorStream(true).start();
                             try {
@@ -1991,8 +1993,8 @@ public final class CodingAgentCli {
                                 throw new IOException("Interrupted while suspending process", error);
                             }
                             return null;
-                        },
-                        true);
+                        } : null,
+                        canSuspend);
                 try {
                     this.settings = settings;
                     runtime.questions().setInteractive(true);

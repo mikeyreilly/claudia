@@ -7,6 +7,7 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -14,7 +15,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * A terminal: one UTF-8 input path, UTF-8 output, a size, a line discipline
  * mode, and resize/continue notifications. This base class is backed by
- * streams, which tests use directly; {@link #system()} returns the POSIX tty.
+ * streams, which tests use directly; {@link #system()} opens the host console.
  *
  * <p>Output features that change the terminal's state for other programs
  * (keyboard-protocol flags, alternate screen, mouse reporting, bracketed paste,
@@ -98,10 +99,13 @@ public class Terminal implements Closeable {
     /**
      * The controlling terminal on standard input and output.
      *
-     * @throws IOException with a user-facing message when the platform is not
-     *     macOS or Linux, or standard input/output is not a terminal
+     * @throws IOException with a user-facing message when the platform is unsupported,
+     *     or standard input/output is not a terminal
      */
     public static Terminal system() throws IOException {
+        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+            return WindowsTerminal.open();
+        }
         return PosixTerminal.open();
     }
 

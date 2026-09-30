@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -62,7 +63,9 @@ public final class MavenTestLaunch {
         inspect(file, className, method);
 
         String debug = "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:" + port;
-        return new ProcessBuilder("mvn", "-N", "-Dtest=" + selector,
+        String maven = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")
+                ? "mvn.cmd" : "mvn";
+        return new ProcessBuilder(maven, "-N", "-Dtest=" + selector,
                 "-DfailIfNoTests=true", "-Dsurefire.failIfNoSpecifiedTests=true",
                 "-DskipTests=false", "-Dmaven.surefire.debug=" + debug, "surefire:test")
                 .directory(cwd.toFile()).start();

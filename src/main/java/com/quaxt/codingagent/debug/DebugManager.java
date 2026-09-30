@@ -154,6 +154,21 @@ public final class DebugManager implements AutoCloseable {
                 List<ProcessHandle> forks=process.descendants().filter(handle -> handle.info().arguments()
                     .map(argv->Arrays.stream(argv).anyMatch(arg->arg.startsWith("-agentlib:jdwp=")
                         && arg.contains("address=127.0.0.1:"+port))).orElse(false)).toList();
+                if (forks.isEmpty() && System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+                    // Windows commonly omits arguments from ProcessHandle.Info. Maven's
+                    // JVM has one suspended Surefire JVM below it; identify that Java leaf.
+                    List<ProcessHandle> javaProcesses = process.descendants()
+                        .filter(handle -> handle.info().command()
+                            .map(command -> command.toLowerCase(Locale.ROOT).endsWith("\\java.exe")
+                                || command.toLowerCase(Locale.ROOT).endsWith("\\javaw.exe"))
+                            .orElse(false)).toList();
+                    forks = javaProcesses.stream().filter(handle -> javaProcesses.stream()
+                        .anyMatch(other -> other.pid() != handle.pid()
+                            && other.descendants().anyMatch(child -> child.pid() == handle.pid())))
+                        .filter(handle -> javaProcesses.stream()
+                            .noneMatch(other -> other.pid() != handle.pid()
+                                && handle.descendants().anyMatch(child -> child.pid() == other.pid()))).toList();
+                }
                 if(forks.size()!=1) throw fail("ambiguous_target","Cannot uniquely identify the selected Surefire fork PID; candidates: "
                     +forks.stream().map(ProcessHandle::pid).toList());
                 debuggeePid=forks.getFirst().pid();
