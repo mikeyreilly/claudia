@@ -55,7 +55,7 @@ public final class DebugTools {
                     "session_id stop_id thread_id frame_id source_path line before after"),
             tool("debug_exception", "Inspect the exception at a stop and its bounded cause and suppressed chain.",
                     "session_id stop_id thread_id depth limit cursor suppressed_cursor"),
-            tool("debug_evaluate", "Evaluate an expression in a stopped frame; side effects require explicit authorization.",
+            tool("debug_evaluate", "Evaluate a bounded read-only expression in a stopped frame: literals, field paths, array indexing/length, and comparisons. Method calls and mutation are rejected.",
                     "session_id stop_id thread_id frame_id expression allow_side_effects timeout_ms idempotency_key"),
             tool("debug_output", "Retrieve bounded target stdout and stderr since a cursor, including after exit.",
                     "session_id cursor stream suppress_output limit byte_limit line_limit")));
@@ -94,7 +94,7 @@ public final class DebugTools {
             case "session_id" -> text(name, "Existing debug session ID.");
             case "stop_id" -> text(name, "Current stop ID; stale stops are rejected.");
             case "action" -> text(name, "Breakpoint action: list, add, update, enable, disable, or remove.");
-            case "expression" -> text(name, "Expression to evaluate in the selected stopped frame.");
+            case "expression" -> text(name, "Read-only inspection expression (maximum 256 characters). Strings compare by content; other object references compare by identity. No calls, assignment, or arithmetic.");
             case "main_class", "test_selector" -> optionalText(name, "Java entry point or single selected test (choose one).", null);
             case "cursor" -> integer(name, "Nonnegative paging offset or event/output cursor; omitted or 0 starts at the beginning.", 0, Integer.MAX_VALUE, 0);
             case "limit" -> integer(name, "Maximum items (1-100).", 1, 100, 20);
