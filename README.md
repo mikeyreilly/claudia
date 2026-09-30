@@ -120,9 +120,12 @@ included Codex usage. The OpenAI API-key option is separate and uses Platform
 API billing. GitHub Copilot selects GPT-5.4 when it is enabled for the account,
 otherwise it selects the first enabled coding model. Credentials are stored in
 `~/.codingagent/auth.json`; `/logout` removes the credential for the active model.
-Use `/models` to open the searchable model selector; type to fuzzy-filter
-models and use Up/Down and Enter to select. Enabled Copilot models are filtered
-to the signed-in account.
+Use `/models` to open the searchable model selector for the current provider
+(or the provider just chosen through `/login`); type to fuzzy-filter models and
+use Up/Down and Enter to select. Log in to another provider or start with
+`--provider` or `--model` to switch providers. Enabled Copilot models are filtered
+to the signed-in account; if refreshing access fails, only the last-known enabled
+models are shown.
 GPT-6.1 Sol is available as `openai/gpt-6.1-sol` with an OpenAI API key or
 `chatgpt/gpt-6.1-sol` with ChatGPT login. It supports thinking levels `low`,
 `medium`, `high`, `xhigh`, and `max`.
