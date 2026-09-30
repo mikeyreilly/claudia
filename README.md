@@ -299,14 +299,20 @@ In the JVM CLI (`java -jar target/codingagent.jar`), ask the agent to use
 before execution proceeds. Otherwise, set a breakpoint with
 `debug_breakpoints` (`action: add`, with a source path and line or class and
 method) and use the returned `session_id` to track the target. Breakpoints can
-be pending until their class loads; check their reported resolution.
+be pending until their class loads; check their reported resolution. Once a
+matching class loads, pending reasons distinguish unavailable debug information,
+source/method mismatches, and lines without executable code; breakpoints never
+silently move to a nearby line.
 
 At a stop, get the current `stop_id` from `debug_status` or `debug_wait`.
 Pass it with `session_id` to `debug_continue`; then call `debug_wait` to wait
 up to its finite `wait_ms` for an event. Inspect a stopped target with
 `debug_threads`, `debug_stack`, `debug_variables`, `debug_object`,
 `debug_source`, or `debug_exception`. Use `debug_events` and `debug_output`
-with cursors for event and captured stdout/stderr pages. A `stop_id` becomes
+with nonnegative integer cursors for event and captured stdout/stderr pages;
+use the returned `next_cursor` for the next page. `debug_source` uses the stopped
+frame's line when `line` is omitted or `0`; a positive value requests a specific
+1-based line. A `stop_id` becomes
 stale after resuming; get the new one before inspecting the next stop. Finish
 with `debug_detach` (`leave_running: true` to leave the JVM running, or
 `terminate: true, leave_running: false` for a launched target only). Set `close_session: true`

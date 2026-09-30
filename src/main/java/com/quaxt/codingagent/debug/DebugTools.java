@@ -96,13 +96,15 @@ public final class DebugTools {
             case "action" -> text(name, "Breakpoint action: list, add, update, enable, disable, or remove.");
             case "expression" -> text(name, "Expression to evaluate in the selected stopped frame.");
             case "main_class", "test_selector" -> optionalText(name, "Java entry point or single selected test (choose one).", null);
+            case "cursor" -> integer(name, "Nonnegative paging offset or event/output cursor; omitted or 0 starts at the beginning.", 0, Integer.MAX_VALUE, 0);
             case "limit" -> integer(name, "Maximum items (1-100).", 1, 100, 20);
             case "wait_ms" -> integer(name, "Finite wait in milliseconds (0-30000).", 0, 30000, 1000);
             case "before", "after" -> integer(name, "Context lines (0-30).", 0, 30, 3);
             case "depth" -> integer(name, "Maximum requested depth (1 is supported for object expansion).", 1, 8, 1);
             case "byte_limit" -> integer(name, "Maximum UTF-8 output bytes (1-51200).", 1, 51200, 51200);
             case "line_limit" -> integer(name, "Maximum output lines (1-2000).", 1, 2000, 2000);
-            case "start", "length", "line", "suppressed_cursor", "timeout_ms", "launch_timeout_ms", "pid", "hit_count" ->
+            case "line" -> integer(name, "1-based source line; debug_source uses the stopped line when omitted or 0. Source breakpoints require a positive line.", 0, Integer.MAX_VALUE, 0);
+            case "start", "length", "suppressed_cursor", "timeout_ms", "launch_timeout_ms", "pid", "hit_count" ->
                     integer(name, "Nonnegative count, 1-based line, PID, or timeout in milliseconds.", 0, Integer.MAX_VALUE, 0);
             case "capture_output", "leave_running", "caught", "uncaught", "enabled", "modification",
                     "include_library_frames", "include_inherited" -> flagWithDefault(name, "Boolean option (default true).", true);

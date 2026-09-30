@@ -746,7 +746,13 @@ public final class DebugManager implements AutoCloseable {
             case "field" -> { required(bp.className,"class_name"); required(bp.field,"field_name"); }
             default -> throw fail("unsupported","Breakpoint type "+bp.type+" is unsupported");
         }
+        if(bp.type.equals("source")) bp.pending=unloadedSourceReason(bp);
         return bp;
+    }
+    private static String unloadedSourceReason(Breakpoint bp) {
+        return bp.className==null
+            ? "No matching source class is loaded yet for "+bp.path+"; waiting for class preparation"
+            : "Class "+bp.className+" is not loaded yet; waiting for class preparation";
     }
     private static ObjectNode breakpointData(Session s,Breakpoint bp) {
         ObjectNode o=Json.MAPPER.createObjectNode().put("breakpoint_id",bp.id).put("type",bp.type).put("enabled",bp.enabled)
@@ -846,6 +852,7 @@ public final class DebugManager implements AutoCloseable {
                 s.breakpoints.put(bp.id,bp);
                 clearRequests(s,bp);
                 if(bp.enabled) {
+                    if(bp.type.equals("source")) bp.pending=unloadedSourceReason(bp);
                     if(bp.type.equals("exception")) resolve(s,bp,null);
                     else for(ReferenceType type:s.vm.allClasses()) resolve(s,bp,type);
                 } else bp.pending="Disabled";
@@ -863,7 +870,7 @@ public final class DebugManager implements AutoCloseable {
     private static List<Location> findLocations(Session s,List<ReferenceType> types,Breakpoint bp) {
         List<Location> found=new ArrayList<>();
         for(ReferenceType type:types) {
-            if(bp.className!=null && !type.name().equals(bp.className)) continue;
+            if(bp.className!=null && !type.name().equals(bp.className) || !type.isPrepared()) continue;
             if(bp.type.equals("source")) {
                 try {
                     for(Location loc:type.locationsOfLine(bp.line)) {
@@ -880,14 +887,50 @@ public final class DebugManager implements AutoCloseable {
         return found;
     }
     private static boolean matchesPath(Session s,String requested,Location loc) {
+        try { return matchesPath(s,requested,loc.sourcePath()); }
+        catch(AbsentInformationException ignored) { return false; }
+    }
+    private static boolean matchesPath(Session s,String requested,String sourcePath) {
         try {
-            Path actual=Path.of(loc.sourcePath()); Path want=path(s.cwd,requested);
+            Path actual=Path.of(sourcePath); Path want=path(s.cwd,requested);
             if(!want.getFileName().equals(actual.getFileName())) return false;
             // Package-relative JDI paths are resolved against explicit conventional source roots.
             for(String root:List.of("src/main/java","src/test/java"))
                 if(path(s.cwd,root).resolve(actual).normalize().equals(want)) return true;
             return !Path.of(requested).isAbsolute() && Path.of(requested).normalize().equals(actual.normalize());
-        } catch(AbsentInformationException | IllegalArgumentException ignored) { return false; }
+        } catch(IllegalArgumentException ignored) { return false; }
+    }
+    private static void sourcePending(Session s,Breakpoint bp,ReferenceType type) {
+        // Unrelated class preparations must not erase evidence from the matching loaded class.
+        if(!bp.requests.isEmpty() || !type.isPrepared() || bp.className!=null && !bp.className.equals(type.name())) return;
+        String reason;
+        try {
+            List<String> paths=type.sourcePaths(null);
+            if(paths.stream().noneMatch(source->matchesPath(s,bp.path,source))) {
+                if(bp.className==null) return;
+                reason="Requested source "+bp.path+" does not match loaded class "+type.name()+" source paths: "+paths;
+            } else {
+                try {
+                    List<Location> lines=type.allLineLocations();
+                    if(lines.isEmpty()) {
+                        reason="Line-number debug information is unavailable for loaded class "+type.name()+"; compile with line-number debug information";
+                    } else if(lines.stream().noneMatch(loc->loc.lineNumber()==bp.line && matchesPath(s,bp.path,loc))) {
+                        reason="No executable location at line "+bp.line+" of "+bp.path+" in loaded class "+type.name()+"; choose an executable line (the breakpoint remains pending for further class loads)";
+                    } else {
+                        reason="Line "+bp.line+" of "+bp.path+" in loaded class "+type.name()+" does not match the requested method/signature";
+                    }
+                } catch(AbsentInformationException missingLines) {
+                    reason="Line-number debug information is unavailable for loaded class "+type.name()+"; compile with line-number debug information";
+                }
+            }
+        } catch(AbsentInformationException missingSource) {
+            if(bp.className==null) return;
+            reason="Source debug information is unavailable for loaded class "+type.name()+"; compile with source and line-number debug information";
+        }
+        if(!reason.equals(bp.pending)) {
+            bp.pending=reason;
+            event(s,"breakpoint_pending",breakpointData(s,bp));
+        }
     }
     private static void resolve(Session s,Breakpoint bp,ReferenceType type) {
         if(!bp.enabled) return;
@@ -900,7 +943,9 @@ public final class DebugManager implements AutoCloseable {
         }
         int prior=bp.requests.size();
         if(bp.type.equals("source")) {
+            if(!type.isPrepared()) return;
             List<Location> found=findLocations(s,List.of(type),bp);
+            if(found.isEmpty()) { sourcePending(s,bp,type); return; }
             if(found.size()>1) { clearRequests(s,bp); bp.pending="Ambiguous executable locations; specify class/method/signature"; return; }
             for(Location loc:found) {
                 if(bp.locations.contains(loc)) continue;
@@ -1112,7 +1157,11 @@ public final class DebugManager implements AutoCloseable {
     }
     private static ObjectNode source(Session s,ObjectNode a) {
         Location loc=frame(s,a).location(); String requested=str(a,"source_path",null);
-        int line=num(a,"line",Math.max(1,loc.lineNumber()),Integer.MAX_VALUE);
+        int line=num(a,"line",0,Integer.MAX_VALUE);
+        if(line==0) {
+            line=loc.lineNumber();
+            if(line<1) throw fail("source_unavailable","Stopped frame has no line-number information; provide a positive line");
+        }
         String relative;
         try { relative=loc.sourcePath(); } catch(AbsentInformationException e) { throw fail("source_unavailable","This frame has no source information; use its bytecode location"); }
         List<Path> matches=new ArrayList<>();
