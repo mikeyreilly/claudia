@@ -321,8 +321,9 @@ public final class SubagentManager implements AutoCloseable {
             for (Entry entry : closing) cancelEntry(entry);
         }
         for (Entry entry : closing) {
-            if (entry.worker != null && entry.worker != Thread.currentThread()) {
-                try { entry.worker.join(2000); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            Thread worker = entry.worker;
+            if (worker != null && worker != Thread.currentThread()) {
+                try { worker.join(2000); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
             }
             if (entry.runtime != null && entry.runtime != root) entry.runtime.close();
         }

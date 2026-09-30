@@ -8,6 +8,8 @@ import com.quaxt.codingagent.agent.ToolDefinition;
 import com.quaxt.codingagent.agent.ToolParameters;
 import com.quaxt.codingagent.agent.ToolRegistry;
 import com.quaxt.codingagent.agent.QuestionBroker;
+import com.quaxt.codingagent.debug.DebugManager;
+import com.quaxt.codingagent.debug.DebugTools;
 import com.quaxt.codingagent.ai.types.TextContent;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.shell.ShellCommandLine;
@@ -73,8 +75,16 @@ public final class LocalTools {
                 Objects.requireNonNull(questions), Objects.requireNonNull(agentId), Objects.requireNonNull(taskState)));
     }
 
+    public static List<AgentTool> bind(Path cwd, Consumer<Path> onPathAccess, String gitExecutable,
+            ShellSessionManager shellSessions, QuestionBroker questions, String agentId, TaskState taskState,
+            DebugManager debugger) {
+        List<AgentTool> tools = new ArrayList<>(bind(cwd, onPathAccess, gitExecutable, shellSessions, questions, agentId, taskState));
+        tools.addAll(DebugTools.bind(debugger, cwd));
+        return List.copyOf(tools);
+    }
+
     public static Optional<String> describeCall(String name, ObjectNode arguments) {
-        return REGISTRY.describeCall(name, arguments);
+        return REGISTRY.describeCall(name, arguments).or(() -> DebugTools.describeCall(name, arguments));
     }
 
     private static ToolDefinition<Environment> taskState() {

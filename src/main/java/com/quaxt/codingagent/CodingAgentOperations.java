@@ -408,6 +408,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 mcpCloseManager();
             } finally {
                 shellSessions.close();
+                debugger.close();
                 listeners.clear();
             }
         }
@@ -660,6 +661,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private boolean recordingSession;
     private Consumer<IOException> persistenceFailure = ignored -> {};
     private final ShellSessionManager shellSessions = new ShellSessionManager();
+    private final com.quaxt.codingagent.debug.DebugManager debugger = new com.quaxt.codingagent.debug.DebugManager();
     /** Current conversation metadata and a read-only copy of the message list. */
     public record AgentSnapshot(
             Model model,
@@ -4502,6 +4504,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (childRuntime) requireIdleAgent(); else requireIdleGroup();
         if (subagents != null) { subagents.close(); subagents = null; }
         closeShellSessions();
+        debugger.closeSessions();
         agentWorkspace = cwd.toAbsolutePath().normalize();
         baseInstructions = systemPrompt;
         transcript.clear();
@@ -5062,7 +5065,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
 
     /** Binds registered built-in tools to this runtime's workspace and process manager. */
     public List<AgentTool> builtInTools(Path cwd, Consumer<Path> onPathAccess) {
-        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions, questions(), questionAgentId, taskState);
+        return LocalTools.bind(cwd, onPathAccess, executable, shellSessions, questions(), questionAgentId, taskState, debugger);
     }
 
     // ------------------------------------------------------------ mcp tools
