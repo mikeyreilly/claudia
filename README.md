@@ -100,12 +100,13 @@ java -jar target/codingagent.jar
 ```
 
 The interactive shell supports [Ghostty](https://ghostty.org) on macOS and
-Linux (x86_64 and aarch64). Its terminal layer (`com.quaxt.codingagent.terminal`)
-controls the tty directly through termios and uses Ghostty's key reporting,
-bracketed paste, synchronized output, and SGR mouse modes; other
-xterm-compatible terminals may work but are not tested. On other operating
-systems, or when standard input or output is not a terminal, interactive mode
-exits with an error. `--print`, `--mode json`, and `--mode rpc` do not use the
+Linux (x86_64 and aarch64), and Windows consoles with virtual terminal input
+and output (for example Windows Terminal). Its terminal layer
+(`com.quaxt.codingagent.terminal`) controls POSIX ttys through termios and
+Windows consoles through the Win32 console API. Other xterm-compatible
+terminals may work but are not tested. Windows has no process-group suspend
+shortcut. When standard input or output is redirected, interactive mode exits
+with an error. `--print`, `--mode json`, and `--mode rpc` do not use the
 terminal and work anywhere Java runs. The runnable JAR's manifest enables
 native access for the terminal layer; when running from a classpath instead,
 pass `--enable-native-access=ALL-UNNAMED` to avoid the JDK's warning. Native
@@ -122,6 +123,9 @@ otherwise it selects the first enabled coding model. Credentials are stored in
 Use `/models` to open the searchable model selector; type to fuzzy-filter
 models and use Up/Down and Enter to select. Enabled Copilot models are filtered
 to the signed-in account.
+GPT-6.1 Sol is available as `openai/gpt-6.1-sol` with an OpenAI API key or
+`chatgpt/gpt-6.1-sol` with ChatGPT login. It supports thinking levels `low`,
+`medium`, `high`, `xhigh`, and `max`.
 Model and thinking-level selections are saved in
 `~/.codingagent/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
