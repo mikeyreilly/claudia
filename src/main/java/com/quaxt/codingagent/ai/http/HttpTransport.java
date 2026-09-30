@@ -21,6 +21,7 @@ import com.quaxt.codingagent.CodingAgentOperations;
  * response carrier.
  */
 public final class HttpTransport {
+	/** Default wait for response headers and for each read of a response body. */
 	public static final int DEFAULT_TIMEOUT_MS = 600_000;
 
 	public static final HttpClient CLIENT;
