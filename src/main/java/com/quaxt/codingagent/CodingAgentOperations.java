@@ -4570,6 +4570,25 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         syncMcpTools();
     }
 
+    /** Changes the active model without resetting the conversation, tools, or session recorder. */
+    public void setModel(Model model) {
+        Objects.requireNonNull(model, "model");
+        synchronized (groupLock()) {
+            if (childRuntime) requireIdleAgent(); else requireIdleGroup();
+            if (selectedModel == null) throw new IllegalStateException("No agent configured");
+            Provider provider = selectedModel.provider.equals(model.provider)
+                    ? agentProvider : requireCoreProvider(model.provider);
+            boolean changed = !selectedModel.provider.equals(model.provider) || !selectedModel.id.equals(model.id);
+            agentProvider = provider;
+            selectedModel = model;
+            thinkingLevel = clampThinkingLevel(model, thinkingLevel);
+            if (changed && recordingSession) try {
+                appendSessionEntry(sessionId, "model_change",
+                        jsonObject().put("provider", model.provider).put("model", model.id));
+            } catch (IOException error) { persistenceFailure.accept(error); }
+        }
+    }
+
     /** Restores the conversation after selecting its model and session recorder. */
     public void restoreMessages(List<Message> restored) {
         requireIdleAgent();
@@ -8226,6 +8245,10 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             if (entry.type.equals("agent_mode_change")) savedMode = sessionAgentMode(entry.payload);
             if (entry.type.equals("workspace_change")) {
                 cwdText = requiredSessionPayloadText(entry.payload, "cwd", sessionId);
+            }
+            if (entry.type.equals("model_change")) {
+                provider = requiredSessionPayloadText(entry.payload, "provider", sessionId);
+                model = requiredSessionPayloadText(entry.payload, "model", sessionId);
             }
             if (entry.type.equals("task_state")) {
                 if (!(entry.payload instanceof ObjectNode object)) throw new IOException("Invalid task_state entry in " + sessionId);

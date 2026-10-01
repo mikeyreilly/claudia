@@ -2558,7 +2558,7 @@ public final class CodingAgentCli {
                     Model model = select("Select a model", items, currentIndex, true);
                     if (model != null) {
                         configureShellModel(model, true);
-                        println("Using " + model + " in a new agent session.");
+                        println("Using " + model + ". Continuing current session.");
                     }
                 }
                 case MCP -> {
@@ -3085,9 +3085,15 @@ public final class CodingAgentCli {
     }
 
     private void configureShellModel(Model model, boolean persistModel) {
-        IOException persistenceFailure = startFreshShellSession(model, cwd);
-        if (persistenceFailure != null) {
-            println("Model configured, but session persistence is unavailable: " + persistenceFailure.getMessage());
+        if (agentConfigured) {
+            runtime.setModel(model);
+            shellModelProvider = model.provider;
+            refreshShellStatus();
+        } else {
+            IOException persistenceFailure = startFreshShellSession(model, cwd);
+            if (persistenceFailure != null) {
+                println("Model configured, but session persistence is unavailable: " + persistenceFailure.getMessage());
+            }
         }
         if (persistModel) {
             settings = withSettingsDefaultModel(settings, model.provider, model.id);
