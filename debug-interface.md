@@ -2,19 +2,64 @@
 
 ## Purpose
 
-Give a coding agent a precise, low-noise way to reproduce a Java failure, stop at the relevant code, inspect evidence, test a hypothesis, and return control to the user. The interface is a set of structured tool calls and structured results, not a terminal-oriented debugger transcript. It should work equally well for a short-lived test and a long-running service, including code running on virtual threads.
+Give a coding agent a precise, low-noise way to reproduce a Java
+failure, stop at the relevant code, inspect evidence, test a
+hypothesis, and return control to the user. The interface is a set of
+structured tool calls and structured results, not a terminal-oriented
+debugger transcript. It should work equally well for a short-lived
+test and a long-running service, including code running on virtual
+threads.
 
-The debugger never starts, attaches to, modifies, or terminates a process without an explicit request. Observations are read-only by default; evaluating code with side effects and changing program state require explicit authorization. The agent can always identify *which process, thread, frame, source location, and stop* an observation belongs to.
+The debugger never starts, attaches to, modifies, or terminates a
+process without an explicit request. Observations are read-only by
+default; evaluating code with side effects and changing program state
+require explicit authorization. The agent can always identify *which
+process, thread, frame, source location, and stop* an observation
+belongs to.
 
 ## Shared contract
 
-- Every call identifies a `session_id`. A running or suspended target is still a live session; a completed target remains available for its final status and captured output until the session is closed.
-- Results have a stable `status` (`ok`, `running`, `stopped`, `completed`, or `error`), a concise human-readable `summary`, and structured data. Errors have a machine-readable `code`, actionable `message`, and, where useful, suggested valid choices. Never report a timeout or an unsupported capability as an empty result.
-- A `stop_id` identifies one suspension. Stop-specific reads and execution controls take that ID and reject stale calls after execution resumes or a newer stop occurs. Frame, variable, and object references are scoped to the stop and cannot silently refer to a different state.
-- Locations carry the best available `source_path`, 1-based `line`, declaring class, method signature, and bytecode location when source is unavailable. Ambiguous files, overloaded methods, and multiple loaded classes are reported as choices rather than guessed.
-- All collections are bounded, searchable/filterable where useful, and paginated with `limit` and `cursor`. Cursors are nonnegative JSON integers (0 through 2147483647), not strings; omitted or zero starts at the beginning. Responses say whether results were truncated and how to fetch more. Strings and object graphs are size/depth limited, with explicit truncation markers. The default response is a focused summary, not an entire heap or stack dump.
-- Calls that wait accept `wait_ms`; a wait expiring returns the current state and a way to continue waiting, without implicitly resuming, cancelling, or ending the debug session. Target output and debugger events are separate streams with ordered cursors so the agent can retrieve missed information without repeated giant responses.
-- Read operations are safe to retry. State-changing operations accept an idempotency key and return the resulting state, so a retried call cannot accidentally step twice, resume twice, or launch another target.
+
+- Every call identifies a `session_id`. A running or suspended target
+  is still a live session; a completed target remains available for
+  its final status and captured output until the session is closed.
+
+- Results have a stable `status` (`ok`, `running`, `stopped`,
+  `completed`, or `error`), a concise human-readable `summary`, and
+  structured data. Errors have a machine-readable `code`, actionable
+  `message`, and, where useful, suggested valid choices. Never report
+  a timeout or an unsupported capability as an empty result.
+
+- A `stop_id` identifies one suspension. Stop-specific reads and
+  execution controls take that ID and reject stale calls after
+  execution resumes or a newer stop occurs. Frame, variable, and
+  object references are scoped to the stop and cannot silently refer
+  to a different state.
+
+- Locations carry the best available `source_path`, 1-based `line`,
+  declaring class, method signature, and bytecode location when source
+  is unavailable. Ambiguous files, overloaded methods, and multiple
+  loaded classes are reported as choices rather than guessed.
+
+- All collections are bounded, searchable/filterable where useful, and
+  paginated with `limit` and `cursor`. Cursors are nonnegative JSON
+  integers (0 through 2147483647), not strings; omitted or zero starts
+  at the beginning. Responses say whether results were truncated and
+  how to fetch more. Strings and object graphs are size/depth limited,
+  with explicit truncation markers. The default response is a focused
+  summary, not an entire heap or stack dump.
+
+- Calls that wait accept `wait_ms`; a wait expiring returns the
+  current state and a way to continue waiting, without implicitly
+  resuming, cancelling, or ending the debug session. Target output and
+  debugger events are separate streams with ordered cursors so the
+  agent can retrieve missed information without repeated giant
+  responses.
+
+- Read operations are safe to retry. State-changing operations accept
+  an idempotency key and return the resulting state, so a retried call
+  cannot accidentally step twice, resume twice, or launch another
+  target.
 
 ## Start and end a session
 
