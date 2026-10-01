@@ -8,6 +8,11 @@
 #include <unistd.h>
 
 size_t code_lens_test_classpath_entry_count(const char *classpath, char separator);
+char *code_lens_test_context_with_query_budget(const char *repo_name,
+                                                const char *symbol_name,
+                                                const CodeLensContextOptions *options,
+                                                unsigned int maximum_steps,
+                                                unsigned int *out_steps);
 
 static int java_assert(bool condition, const char *message)
 {
@@ -186,6 +191,79 @@ static int java_write_file(const char *directory, const char *name, const char *
     return fclose(file) == 0 ? 0 : -1;
 }
 
+/* Keep this independent of wall-clock speed: unrelated imports/references
+ * must not turn the class dossier's probes into repeated full-table scans. */
+static int java_dossier_usage_scaling(const char *repo, const char *app_dir)
+{
+    const char *names[] = {"Service", "Helpers"};
+    char *before[2][2] = {{nullptr}};
+    CodeLensIndexStats stats = {0};
+    FILE *file;
+    char *path;
+    int failed = 0;
+
+    for (size_t type = 0U; type < 2U; type++) {
+        for (size_t exclude = 0U; exclude < 2U; exclude++) {
+            CodeLensContextOptions options = {.exclude_tests = exclude != 0U};
+            unsigned int steps;
+
+            before[type][exclude] = code_lens_test_context_with_query_budget(
+                repo, names[type], &options, 8000000U, &steps);
+            if (before[type][exclude] == nullptr) {
+                return java_assert(false, "baseline class dossier fits its query-work budget");
+            }
+        }
+    }
+    failed |= java_assert(strstr(before[1][0], "make();") != nullptr,
+                          "class usages include explicit and wildcard static imports");
+
+    path = code_lens_join_path(app_dir, "UnrelatedImports.java");
+    file = path == nullptr ? nullptr : fopen(path, "w");
+    if (file == nullptr) {
+        return 1;
+    }
+    (void)fputs("package demo.app;\n", file);
+    for (unsigned int i = 0U; i < 1024U; i++) {
+        (void)fprintf(file, "import static unrelated.Type%u.*;\n", i);
+    }
+    (void)fputs("class UnrelatedImports {}\n", file);
+    if (fclose(file) != 0) {
+        return 1;
+    }
+    path = code_lens_join_path(app_dir, "unrelated.c");
+    file = path == nullptr ? nullptr : fopen(path, "w");
+    if (file == nullptr) {
+        return 1;
+    }
+    for (unsigned int i = 0U; i < 256U; i++) {
+        (void)fprintf(file, "int unrelated_value_%u;\n", i);
+    }
+    (void)fputs("void unrelated(void) {\n", file);
+    for (unsigned int i = 0U; i < 4096U; i++) {
+        (void)fputs("  unknown_call();\n", file);
+    }
+    (void)fputs("}\n", file);
+    if ((fclose(file) != 0) || (code_lens_index_repository(repo, &stats) != 0)) {
+        return 1;
+    }
+    failed |= java_assert(stats.reference_count > 4096U && stats.symbol_count > 256U,
+                          "scaling fixture has many unrelated references and symbols");
+    for (size_t type = 0U; type < 2U; type++) {
+        for (size_t exclude = 0U; exclude < 2U; exclude++) {
+            CodeLensContextOptions options = {.exclude_tests = exclude != 0U};
+            unsigned int steps;
+            char *after = code_lens_test_context_with_query_budget(
+                repo, names[type], &options, 8000000U, &steps);
+
+            failed |= java_assert(after != nullptr,
+                                  "unrelated imports/references fit the class dossier query-work budget");
+            failed |= java_assert(after != nullptr && strcmp(before[type][exclude], after) == 0,
+                                  "unrelated data does not change class dossier results or test filtering");
+        }
+    }
+    return failed;
+}
+
 static int test_java_index(void)
 {
     char template_buffer[PATH_MAX];
@@ -297,6 +375,7 @@ static int test_java_index(void)
                          "package demo.app;\n"
                          "import demo.lib.Service;\n"
                          "import static demo.util.Helpers.*;\n"
+                         "import static demo.util.Helpers.make;\n"
                          "public class App {\n"
                          "  private final Service service;\n"
                          "  public App(Service service) { this.service = service; }\n"
@@ -451,6 +530,7 @@ static int test_java_index(void)
     fresh = code_lens_query_symbols(repo, "Extra", 5);
     failed |= java_assert((fresh != nullptr) && (strstr(fresh, "Extra|class|") != nullptr),
                           "new Java class is queryable after refresh");
+    failed |= java_dossier_usage_scaling(repo, app_dir);
 
 done:
     if (had_incremental) {
