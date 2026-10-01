@@ -250,6 +250,23 @@ public class Terminal implements Closeable {
         }
     }
 
+    /** Whether this terminal last enabled mouse reporting. */
+    public boolean mouseTracking() {
+        synchronized (outputLock) {
+            return mouseTracking;
+        }
+    }
+
+    /**
+     * Writes the mouse-reporting mode again, for example after another program
+     * ran in this terminal while the process was stopped and may have reset it.
+     */
+    public void reassertMouseTracking() {
+        synchronized (outputLock) {
+            if (mouseTracking) write(Ansi.MOUSE_ON);
+        }
+    }
+
     public void bracketedPaste(boolean enabled) {
         synchronized (outputLock) {
             if (enabled == bracketedPaste) return;

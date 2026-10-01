@@ -2,7 +2,9 @@ package com.quaxt.codingagent;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quaxt.codingagent.ai.json.Json;
+import com.quaxt.codingagent.agent.AgentEvent;
 import com.quaxt.codingagent.ai.types.AssistantMessage;
+import com.quaxt.codingagent.ai.types.AssistantMessageEvent;
 import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.Model;
 import com.quaxt.codingagent.ai.types.ModelCost;
@@ -13,6 +15,7 @@ import com.quaxt.codingagent.ai.types.ThinkingLevel;
 import com.quaxt.codingagent.ai.types.ToolCall;
 import com.quaxt.codingagent.ai.types.ToolResultMessage;
 import com.quaxt.codingagent.cli.ActivityStatus;
+import com.quaxt.codingagent.cli.Transcript;
 import com.quaxt.codingagent.cli.TurnDetailsComponent;
 import com.quaxt.codingagent.tui.FuzzySelector;
 import com.quaxt.codingagent.tui.Keybindings;
@@ -33,6 +36,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import com.quaxt.codingagent.terminal.Ansi;
 import com.quaxt.codingagent.terminal.LineEditor;
@@ -336,7 +340,7 @@ class CodingAgentCliTest {
 	void rebuildsTheVisibleTranscriptWhenResumingASession() {
 		Model model = model("gpt-5.4", true);
 		AssistantMessage toolUse = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
-		toolUse.content.add(new ThinkingContent("Inspect the project", null, false));
+		toolUse.content.add(new ThinkingContent("Inspect the project\nstep 2\nstep 3\nstep 4\nstep 5", null, false));
 		toolUse.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 		AssistantMessage answer = new AssistantMessage("faux", "github-copilot", "gpt-5.4");
@@ -353,19 +357,20 @@ class CodingAgentCliTest {
 						System.currentTimeMillis()),
 				answer);
 
-		String visible = new CodingAgentCli().renderSessionScreen(model, messages, false);
-		String hidden = new CodingAgentCli().renderSessionScreen(model, messages, true);
-		String styled = new CodingAgentCli().renderSessionScreen(model, messages, true);
+		Transcript expanded = new CodingAgentCli().renderSessionScreen(model, messages, false);
+		Transcript collapsed = new CodingAgentCli().renderSessionScreen(model, messages, true);
+		String visible = expanded.plainText();
+		String styled = expanded.rows(200).stream().map(Transcript.Row::text).collect(Collectors.joining("\n"));
 
 		assertTrue(visible.startsWith("codingagent "));
 		assertTrue(visible.contains("/clear"));
-		assertTrue(CodingAgentCli.stripAnsi(visible).contains("\n> Check the project\n"));
-		assertTrue(CodingAgentCli.stripAnsi(visible).contains("Thinking:\nInspect the project"));
-		assertTrue(visible.contains("[read] Reading README.md"));
-		assertTrue(visible.contains("Done: Read 2 line(s)."));
+		assertTrue(visible.contains("\n> Check the project\n"));
+		assertTrue(visible.contains("\u25bc Thinking\n    Inspect the project\n    step 2\n    step 3\n    step 4\n    step 5\n"));
+		assertTrue(visible.contains("\n\n\u25b6 [read] Reading README.md (from line 1)\n    Done: line one\n          line two\n"), visible);
 		assertTrue(visible.contains("The project is ready."));
-		assertFalse(hidden.contains("Inspect the project"));
+		assertTrue(collapsed.plainText().contains("\u25b6 Thinking\n    Inspect the project\n    step 2\n    step 3\n    \u2026 2 more lines\n"));
 		assertTrue(styled.contains("\u001b[48;5;236m\u001b[K> Check the project\u001b[0m"));
+		assertTrue(expanded.rows(200).stream().anyMatch(row -> "call-1".equals(row.toggle())));
 	}
 
 	@Test
@@ -396,32 +401,34 @@ class CodingAgentCliTest {
 		failed.content.add(new ToolCall(
 				"call-1", "read", CodingAgentOperations.jsonObject().put("path", "README.md"), null));
 
-		String screen = new CodingAgentCli().renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false);
+		String screen = new CodingAgentCli().renderSessionScreen(model, List.of(CodingAgentOperations.userMessage("Check it"), failed), false).plainText();
 
 		assertTrue(screen.contains("Checking the source."));
-		assertTrue(screen.contains("[read] Reading README.md"));
+		assertTrue(screen.contains("\u25b6 [read] Reading README.md (from line 1)\n    Running\u2026\n"), screen);
 		assertTrue(screen.contains("Error: OpenAI tool call arguments must be a JSON object"));
 	}
 
 	@Test
-	void describesToolWorkAndSummarizesResults() {
+	void describesToolWorkWithoutShorteningIt() {
 		var read = CodingAgentOperations.jsonObject()
 				.put("path", "src/main/java/com.quaxt.codingagent/cli/Main.java")
 				.put("offset", 10)
 				.put("limit", 20);
 		var shell = CodingAgentOperations.jsonObject().put("command", "mvn test");
+		String longCommand = "echo " + "x".repeat(400) + "\n  && true";
+		var mcp = CodingAgentOperations.jsonObject().put("query", "q".repeat(400));
 
 		assertEquals(
 				"Reading src/main/java/com.quaxt.codingagent/cli/Main.java (lines 10-29)",
 				CodingAgentCli.toolCallDescription("read", read));
 		assertEquals("mvn test", CodingAgentCli.toolCallDescription("shell", shell));
+		assertEquals("echo " + "x".repeat(400) + " && true",
+				CodingAgentCli.toolCallDescription("shell", CodingAgentOperations.jsonObject().put("command", longCommand)));
+		assertEquals("{\"query\":\"" + "q".repeat(400) + "\"}", CodingAgentCli.toolCallDescription("remote_search", mcp));
 		assertEquals(
-				"Read 2 line(s).",
-				CodingAgentCli.toolResultSummary(
-						"read", CodingAgentOperations.toolResultText("package works.earendil;\npublic final class Main {}")));
-		assertEquals(
-				"Build completed successfully.",
-				CodingAgentCli.toolResultSummary("shell", CodingAgentOperations.toolResultText("Build completed successfully.")));
+				"package works.earendil;\npublic final class Main {}",
+				CodingAgentCli.toolResultOutput(
+						CodingAgentOperations.toolResultText("package works.earendil;\npublic final class Main {}")));
 	}
 
 	@Test
@@ -432,14 +439,16 @@ class CodingAgentCliTest {
 		String escapes = "\u001b]0;pwned\u0007\u001b[2Jcleared\u001b(0q\r\u009bdone";
 		var shell = CodingAgentOperations.jsonObject().put("command", "printf '\u000e' # \u001b[31mred");
 
-		String binarySummary = CodingAgentCli.toolResultSummary("shell", CodingAgentOperations.toolResultText(binary));
-		String escapeSummary = CodingAgentCli.toolResultSummary("shell", CodingAgentOperations.toolResultText(escapes));
+		String binaryOutput = CodingAgentCli.terminalSafeText(
+				CodingAgentCli.toolResultOutput(CodingAgentOperations.toolResultText(binary)));
+		String escapeOutput = CodingAgentCli.terminalSafeText(
+				CodingAgentCli.toolResultOutput(CodingAgentOperations.toolResultText(escapes)));
 		String description = CodingAgentCli.toolCallDescription("shell", shell);
 
-		assertEquals("\u00cf\u00fa\u00ed\u00fe /usr/lib/dyld", binarySummary);
-		assertEquals("cleared(0q done", escapeSummary);
+		assertEquals("\u00cf\u00fa\u00ed\u00fe /usr/lib/dyld", binaryOutput);
+		assertEquals("cleared(0qdone", escapeOutput);
 		assertEquals("printf '' # red", description);
-		for (String text : List.of(binarySummary, escapeSummary, description)) {
+		for (String text : List.of(binaryOutput, escapeOutput, description)) {
 			assertTrue(text.codePoints().noneMatch(Character::isISOControl), text);
 		}
 	}
@@ -462,7 +471,7 @@ class CodingAgentCliTest {
 						false,
 						System.currentTimeMillis()));
 
-		String plain = CodingAgentCli.stripAnsi(new CodingAgentCli().renderSessionScreen(model, messages, false));
+		String plain = new CodingAgentCli().renderSessionScreen(model, messages, false).plainText();
 
 		assertTrue(plain.contains("> Show it"));
 		assertTrue(plain.contains("Reading the binary."));
@@ -1107,6 +1116,7 @@ class CodingAgentCliTest {
 				terminal,
 				() -> {
 					assertFalse(terminal.mode().raw());
+					assertFalse(terminal.mouseTracking(), "The shell never receives mouse reports");
                     String written = fixture.output().toString(StandardCharsets.UTF_8);
                     assertEquals(1, count(written, KEYBOARD_PUSH));
                     assertEquals(1, count(written, KEYBOARD_POP));
@@ -1125,6 +1135,9 @@ class CodingAgentCliTest {
 
 			assertEquals("abcd", line);
 			assertTrue(suspended.get());
+			String resumed = fixture.output().toString(StandardCharsets.UTF_8);
+			assertTrue(resumed.lastIndexOf(Ansi.MOUSE_ON) > resumed.indexOf("shell activity"),
+					"Mouse reporting resumes with the prompt");
 			String written = fixture.output().toString(StandardCharsets.UTF_8);
             assertEquals(2, count(written, KEYBOARD_PUSH));
             assertEquals(2, count(written, KEYBOARD_POP));
@@ -1523,6 +1536,84 @@ class CodingAgentCliTest {
     }
 
     @Test
+    void aLiveTurnShowsReasoningAndToolContainersThatClicksExpand(@TempDir Path workspace) throws Exception {
+        for (int index = 1; index <= 6; index++) Files.writeString(workspace.resolve("file" + index + ".txt"), "x");
+        TerminalFixture fixture = terminal();
+        try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+            var model = model("faux-1");
+            model.api = "faux"; model.provider = "faux"; model.contextWindow = 100_000;
+            var provider = new com.quaxt.codingagent.ai.providers.FauxProvider("faux", "faux", List.of(model));
+            runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+            runtime.coreProviders(java.util.Map.of("faux", provider));
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            setCliField(cli, "settings", new CodingAgentOperations.Settings(null, null, ThinkingLevel.OFF, false));
+            setCliField(cli, "activity", readyActivity(System.nanoTime()));
+            var configure = CodingAgentCli.class.getDeclaredMethod("configureShellAgent", Model.class, Path.class, boolean.class, String.class);
+            configure.setAccessible(true); configure.invoke(cli, model, workspace, false, null);
+            provider.pendingResponses.add(new com.quaxt.codingagent.ai.providers.FauxProvider.ResponseStep.Factory(request -> {
+                AssistantMessage response = SubagentManagerTest.answer("");
+                response.content.clear();
+                response.content.add(new ThinkingContent("plan 1\nplan 2\nplan 3\nplan 4", null, false));
+                response.content.add(new ToolCall("list-1", "ls", CodingAgentOperations.jsonObject(), null));
+                response.stopReason = StopReason.TOOL_USE;
+                return response;
+            }));
+            provider.pendingResponses.add(new com.quaxt.codingagent.ai.providers.FauxProvider.ResponseStep.Message(
+                    SubagentManagerTest.answer("All six files are listed.")));
+            var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("\n> "));
+            try {
+                waitUntil(() -> fixture.terminal().mouseTracking());
+                runtime.subagents().submit(SubagentManager.MAIN, "list the files").get(3, TimeUnit.SECONDS);
+                invokeCli(cli, "drainShellEvents");
+                ScreenEmulator screen = screen(fixture);
+                List<String> rows = screen.lines();
+                int thinking = rows.indexOf("\u25bc Thinking");
+                int tool = rows.indexOf("\u25b6 [ls] Listing .");
+                assertTrue(thinking >= 0 && tool > thinking, rows.toString());
+                assertEquals("    plan 4", rows.get(thinking + 4));
+                assertTrue(rows.get(tool + 1).startsWith("    Done: "), rows.toString());
+                assertTrue(rows.get(tool + 4).startsWith("    \u2026 "), rows.toString());
+                assertTrue(rows.contains("All six files are listed."));
+
+                fixture.input().write(("\u001b[<0;1;" + (thinking + 1) + "M").getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                waitUntil(() -> screen(fixture).lines().contains("\u25b6 Thinking"));
+                int collapsedTool = screen(fixture).lines().indexOf("\u25b6 [ls] Listing .");
+                assertEquals("    \u2026 1 more line", screen(fixture).line(thinking + 4));
+                fixture.input().write(("\u001b[<0;2;" + (collapsedTool + 1) + "M").getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                waitUntil(() -> screen(fixture).lines().contains("\u25bc [ls] Listing ."));
+                List<String> expanded = screen(fixture).lines();
+                assertTrue(expanded.contains("    file6.txt"), expanded.toString());
+
+                // Switching away and back rebuilds the conversation with the states chosen by clicking.
+                var redraw = CodingAgentCli.class.getDeclaredMethod("redrawSelectedConversation", boolean.class);
+                redraw.setAccessible(true);
+                var lock = (java.util.concurrent.locks.ReentrantLock) getCliField(cli, "editorLock");
+                lock.lock();
+                try {
+                    synchronized (cli) {
+                        redraw.invoke(cli, false);
+                    }
+                } finally {
+                    lock.unlock();
+                }
+                Transcript rebuilt = (Transcript) getCliField(cli, "transcript");
+                assertTrue(rebuilt.isExpanded("list-1"));
+                assertTrue(rebuilt.plainText().contains("\u25bc [ls] Listing .\n    Arguments\n"), rebuilt.plainText());
+                fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
+                fixture.input().flush();
+                assertEquals("", reader.get(3, TimeUnit.SECONDS));
+            } finally {
+                fixture.input().close();
+                invokeCli(cli, "closeShellSubscription");
+                cli.closeTerminal();
+            }
+        }
+    }
+
+    @Test
     void navigatesLiveAgentsAndBuffersSelectorOutputWithoutLosingTypedInput(@TempDir Path workspace) throws Exception {
         TerminalFixture fixture = terminal();
         try (CodingAgentOperations runtime = new CodingAgentOperations()) {
@@ -1556,7 +1647,7 @@ class CodingAgentCliTest {
                 assertFalse(fixture.output().toString(StandardCharsets.UTF_8).contains("child secret answer"));
                 fixture.input().write("Worker\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 waitUntil(() -> id.equals(getCliField(cli, "selectedAgent")));
-                assertTrue(getCliField(cli, "screenDocument").toString().contains("child secret answer"));
+                assertTrue(getCliField(cli, "transcript").toString().contains("child secret answer"));
                 invokeCommand(cli, "/clear");
                 assertEquals(2, runtime.subagents().list().size(), "Group changes require Main to be selected");
                 fixture.input().write(" suffix\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
@@ -1565,11 +1656,11 @@ class CodingAgentCliTest {
                 provider.pendingResponses.add(new com.quaxt.codingagent.ai.providers.FauxProvider.ResponseStep.Message(SubagentManagerTest.answer("parent background answer")));
                 runtime.subagents().submit(SubagentManager.MAIN, "parent task").get(3, TimeUnit.SECONDS);
                 invokeCli(cli, "drainShellEvents");
-                assertFalse(getCliField(cli, "screenDocument").toString().contains("parent background answer"));
+                assertFalse(getCliField(cli, "transcript").toString().contains("parent background answer"));
                 fixture.input().write("Main\r".getBytes(StandardCharsets.UTF_8)); fixture.input().flush();
                 invokeCli(cli, "showSubagents");
-                assertTrue(getCliField(cli, "screenDocument").toString().contains("parent background answer"));
-                assertFalse(getCliField(cli, "screenDocument").toString().contains("child secret answer"));
+                assertTrue(getCliField(cli, "transcript").toString().contains("parent background answer"));
+                assertFalse(getCliField(cli, "transcript").toString().contains("child secret answer"));
             } finally {
                 release.countDown();
                 fixture.input().close();
@@ -1596,6 +1687,199 @@ class CodingAgentCliTest {
             assertEquals("unfinished prompt", reader.get(3, TimeUnit.SECONDS));
             assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains("streamed output"));
         } finally { fixture.input().close(); cli.closeTerminal(); }
+    }
+
+    @Test
+    void clickingAToolToggleExpandsItWhereItWasShown() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        setCliField(cli, "activity", readyActivity(System.nanoTime()));
+        var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("\n> "));
+        try {
+            waitUntil(() -> fixture.terminal().mouseTracking());
+            assertTrue(fixture.output().toString(StandardCharsets.UTF_8).contains(Ansi.MOUSE_ON));
+            cli.println("conversation");
+            deliver(cli, new AgentEvent.ToolExecutionStart(
+                    "call-1", "shell", CodingAgentOperations.jsonObject().put("command", "mvn test")));
+            deliver(cli, new AgentEvent.ToolExecutionEnd("call-1", "shell", CodingAgentOperations.toolResultText(
+                    IntStream.rangeClosed(1, 8).mapToObj(index -> "line " + index).collect(Collectors.joining("\n")))));
+            ScreenEmulator before = screen(fixture);
+            int header = before.lines().indexOf("\u25b6 [shell] mvn test");
+            assertTrue(header >= 0, before.lines().toString());
+            assertEquals(List.of("    Done: line 1", "          line 2", "          line 3", "    \u2026 5 more lines"),
+                    before.lines().subList(header + 1, header + 5));
+            assertFalse(before.lines().contains("    line 8"));
+
+            String row = String.valueOf(header + 1);
+            // A click beside the toggle does nothing; a click on it expands the container in place.
+            fixture.input().write(("\u001b[<0;5;" + row + "M\u001b[<0;5;" + row + "m"
+                    + "\u001b[<0;1;" + row + "M\u001b[<0;1;" + row + "m").getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> screen(fixture).line(header).equals("\u25bc [shell] mvn test"));
+            ScreenEmulator after = screen(fixture);
+            assertEquals("    Arguments", after.line(header + 1));
+            assertTrue(after.lines().contains("    line 8"), after.lines().toString());
+
+            fixture.input().write("go\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("go", reader.get(3, TimeUnit.SECONDS));
+            assertFalse(fixture.terminal().mouseTracking(), "Mouse reports stop when the prompt stops reading");
+            Transcript transcript = (Transcript) getCliField(cli, "transcript");
+            assertTrue(transcript.isExpanded("call-1"));
+        } finally {
+            fixture.input().close();
+            cli.closeTerminal();
+        }
+    }
+
+    @Test
+    void wheelAndPageKeysScrollTheConversationAndTheStatusShowsMoreBelow() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        setCliField(cli, "activity", readyActivity(System.nanoTime()));
+        cli.setStatus("\u25cf Ready", CodingAgentCli.StatusAccent.READY, "~/project", "Model (0%)");
+        for (int index = 1; index <= 60; index++) cli.println("line " + index);
+        var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("\n> "));
+        try {
+            waitUntil(() -> fixture.terminal().mouseTracking() && screen(fixture).lines().contains("> ".strip()));
+            ScreenEmulator bottom = screen(fixture);
+            assertTrue(bottom.lines().contains("line 60"));
+            int first = lineNumber(bottom.line(0));
+
+            fixture.input().write("\u001b[<64;10;5M".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> screen(fixture).line(0).equals("line " + (first - 3)));
+            waitUntil(() -> screen(fixture).line(23).contains("\u2193 more below"));
+            assertFalse(screen(fixture).lines().contains("line 60"));
+
+            fixture.input().write("\u001b[5~".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> lineNumber(screen(fixture).line(0)) < first - 3);
+
+            fixture.input().write("\u001b[6~\u001b[6~\u001b[6~\u001b[<65;10;5M".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> screen(fixture).lines().contains("line 60") && !screen(fixture).line(23).contains("\u2193"));
+            assertEquals(first, lineNumber(screen(fixture).line(0)));
+
+            fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("", reader.get(3, TimeUnit.SECONDS));
+        } finally {
+            fixture.input().close();
+            cli.closeTerminal();
+        }
+    }
+
+    @Test
+    void conversationMouseReportingSurvivesAFullScreenComponent() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        AtomicBoolean afterComponent = new AtomicBoolean();
+        try {
+            cli.bindAppAction("expandTools", () -> {
+                try {
+                    cli.runComponent(immediateComponent());
+                } catch (java.io.IOException error) {
+                    throw new java.io.UncheckedIOException(error);
+                }
+                afterComponent.set(fixture.terminal().mouseTracking());
+            });
+            fixture.input().write("\u000fok\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("ok", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
+            assertTrue(afterComponent.get(), "Closing a selector keeps the conversation's mouse reporting");
+            assertFalse(fixture.terminal().mouseTracking());
+        } finally {
+            cli.closeTerminal();
+        }
+    }
+
+    @Test
+    void exitLeavesTheWholeConversationInTheScrollback() throws Exception {
+        TerminalFixture fixture = terminal();
+        CodingAgentCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        cli.setStatus("\u25cf Ready", CodingAgentCli.StatusAccent.READY, "~/project", "Model (0%)");
+        List<String> lines = IntStream.rangeClosed(1, 40).mapToObj(index -> "line " + index).toList();
+        for (String line : lines) cli.println(line);
+        assertFalse(ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 80, 24)
+                .allLines().contains("line 1"), "The viewport shows only the end while running");
+        cli.closeTerminal();
+        assertEquals(lines, ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 80, 24).allLines());
+    }
+
+    @Test
+    void reasoningStreamsExpandedAndCtrlTCollapsesEveryReasoningContainer(@TempDir Path workspace) throws Exception {
+        TerminalFixture fixture = terminal();
+        try (CodingAgentOperations runtime = new CodingAgentOperations()) {
+            runtime.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+            CodingAgentCli cli = new CodingAgentCli(runtime);
+            cli.newInteractiveTerminal(fixture.terminal(), () -> null, false);
+            try {
+                setCliField(cli, "settings", runtime.loadSettings());
+                setCliField(cli, "activity", readyActivity(System.nanoTime()));
+                String steps = "step 1\nstep 2\nstep 3\nstep 4\nstep 5";
+                AssistantMessage first = new AssistantMessage("faux", "faux", "faux-1");
+                streamThinking(cli, first, steps);
+                Transcript transcript = (Transcript) getCliField(cli, "transcript");
+                String firstKey = CodingAgentCli.thinkingKey(first, 0);
+                assertTrue(transcript.isExpanded(firstKey), "Visible reasoning stays expanded");
+                assertTrue(transcript.plainText().contains("\u25bc Thinking\n    step 1\n"));
+
+                var toggleThinking = CodingAgentCli.class.getDeclaredMethod("setShellHideThinkingBlock", boolean.class, boolean.class);
+                toggleThinking.setAccessible(true);
+                toggleThinking.invoke(cli, true, false);
+                assertFalse(transcript.isExpanded(firstKey));
+                assertTrue(transcript.plainText().contains(
+                        "\u25b6 Thinking\n    step 1\n    step 2\n    step 3\n    \u2026 2 more lines\n"), transcript.plainText());
+                assertTrue(transcript.plainText().contains("Thinking blocks: collapsed"));
+                assertTrue(runtime.loadSettings().hideThinkingBlock, "The choice persists");
+
+                AssistantMessage second = new AssistantMessage("faux", "faux", "faux-1");
+                second.timestamp = first.timestamp + 1;
+                deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingStart(0, second)));
+                deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingDelta(0, steps, second)));
+                String secondKey = CodingAgentCli.thinkingKey(second, 0);
+                assertTrue(transcript.isStreaming(secondKey));
+                assertTrue(transcript.isExpanded(secondKey), "Reasoning is shown while it streams");
+                deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingEnd(0, steps, second)));
+                assertFalse(transcript.isExpanded(secondKey), "Finished reasoning takes the Ctrl-T state");
+
+                toggleThinking.invoke(cli, false, false);
+                assertTrue(transcript.isExpanded(firstKey));
+                assertTrue(transcript.isExpanded(secondKey));
+            } finally {
+                cli.closeTerminal();
+            }
+        }
+    }
+
+    private static void streamThinking(CodingAgentCli cli, AssistantMessage message, String text) throws Exception {
+        deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingStart(0, message)));
+        deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingDelta(0, text, message)));
+        deliver(cli, new AgentEvent.MessageUpdate(new AssistantMessageEvent.ThinkingEnd(0, text, message)));
+    }
+
+    /** Delivers an agent event the way the UI event pump does, holding the editor and screen locks. */
+    private static void deliver(CodingAgentCli cli, AgentEvent event) throws Exception {
+        var handle = CodingAgentCli.class.getDeclaredMethod("handleShellAgentEvent", AgentEvent.class);
+        handle.setAccessible(true);
+        var lock = (java.util.concurrent.locks.ReentrantLock) getCliField(cli, "editorLock");
+        lock.lock();
+        try {
+            synchronized (cli) {
+                handle.invoke(cli, event);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private static ScreenEmulator screen(TerminalFixture fixture) {
+        return ScreenEmulator.render(fixture.output().toString(StandardCharsets.UTF_8), 80, 24);
+    }
+
+    private static int lineNumber(String row) {
+        return row.startsWith("line ") ? Integer.parseInt(row.substring(5)) : -1;
     }
 
     @Test

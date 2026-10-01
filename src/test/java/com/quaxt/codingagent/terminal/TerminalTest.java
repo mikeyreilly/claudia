@@ -156,6 +156,20 @@ class TerminalTest {
     }
 
     @Test
+    void tracksMouseReportingAndReassertsItOnlyWhileEnabled() {
+        assertFalse(terminal.mouseTracking());
+        terminal.reassertMouseTracking();
+        assertEquals("", output.toString(UTF_8));
+        terminal.mouseTracking(true);
+        assertTrue(terminal.mouseTracking());
+        output.reset();
+        terminal.reassertMouseTracking();
+        assertEquals(Ansi.MOUSE_ON, output.toString(UTF_8));
+        terminal.mouseTracking(false);
+        assertFalse(terminal.mouseTracking());
+    }
+
+    @Test
     void closeAfterFeaturesWereTurnedOffWritesNothing() throws Exception {
         terminal.pushKeyboardFlags(1);
         terminal.popKeyboardFlags();

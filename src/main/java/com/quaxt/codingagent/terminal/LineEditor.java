@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.IntPredicate;
 import java.util.function.Supplier;
 
 /**
@@ -68,6 +70,17 @@ public final class LineEditor {
          * without it the editor only redraws its own region.
          */
         public Runnable repaint;
+        /** Receives mouse reports, which the editor itself does not use. */
+        public Consumer<TerminalEvent.Mouse> mouse;
+        /**
+         * Consulted before the editor draws its region, with the rows the region
+         * will occupy (see {@link #regionRows()}). Returns true when the host has
+         * instead repainted the screen, including this region through
+         * {@link #screenReset()} and {@link #redisplay()}, for example because
+         * the region's height changed and output above it must be laid out again.
+         * Not consulted for the draw made from within the host's repaint.
+         */
+        public IntPredicate beforeDraw;
     }
 
     public enum Outcome {
@@ -89,6 +102,7 @@ public final class LineEditor {
     private volatile boolean reading;
     private volatile boolean redrawRequested;
     private volatile boolean resetPending;
+    private boolean consultingHost;
     private boolean displayed;
     private int displayedRows;
     private int displayedCursorRow;
@@ -172,6 +186,30 @@ public final class LineEditor {
      */
     public void redisplay() {
         if (lock.isHeldByCurrentThread() && reading && options != null) render(true);
+    }
+
+    /**
+     * Rows the region occupies for the current state: the header's line breaks,
+     * the prompt and wrapped buffer, and the lines below it. The region starts
+     * on the cursor's row when the editor begins drawing. Zero when not reading.
+     */
+    public int regionRows() {
+        lock.lock();
+        try {
+            if (!reading || options == null) return 0;
+            return headerRows() + layout(true, false).terminalRows();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private int headerRows() {
+        String header = options.header == null ? "" : options.header;
+        int rows = 0;
+        for (int index = 0; index < header.length(); index++) {
+            if (header.charAt(index) == '\n') rows++;
+        }
+        return rows;
     }
 
     /**
@@ -290,8 +328,9 @@ public final class LineEditor {
                 if (searchQuery != null) search(text);
                 else insert(text);
             }
-            case TerminalEvent.Mouse ignored -> {
-                // The prompt does not track the mouse.
+            case TerminalEvent.Mouse mouse -> {
+                // The prompt does not track the mouse; the host may (for example to scroll output).
+                if (options.mouse != null) options.mouse.accept(mouse);
             }
             case Key key -> {
                 // Search owns its keys before application shortcuts (including Escape)
@@ -493,13 +532,15 @@ public final class LineEditor {
             InputReader input = terminal.input();
             int next = input.peek(PASTE_LOOKAHEAD_MILLIS);
             // Queued text right after Enter is an unbracketed paste: keep its line break.
-            if (next >= 0 && next != '\r') {
+            // An escape sequence (another key or a mouse report) is not pasted text.
+            boolean pasted = next >= 0 && next != 0x1b;
+            if (pasted && next != '\r') {
                 if (next == '\n') input.read(0);
                 insert("\n");
                 return null;
             }
             if (options.beforeAccept != null && options.beforeAccept.getAsBoolean()) return null;
-            if (next >= 0) {
+            if (pasted) {
                 insert("\n");
                 return null;
             }
@@ -613,6 +654,16 @@ public final class LineEditor {
         takeReset();
         Frame frame = layout(true, false);
         if (displayed && !force && frame.equals(displayedFrame)) return;
+        if (options.beforeDraw != null && !consultingHost) {
+            consultingHost = true;
+            try {
+                if (options.beforeDraw.test(headerRows() + frame.terminalRows())) return;
+            } finally {
+                consultingHost = false;
+            }
+            // The host may have reset the screen without redrawing.
+            takeReset();
+        }
         draw(frame);
     }
 
