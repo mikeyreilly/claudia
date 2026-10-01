@@ -21736,43 +21736,44 @@ static int class_dossier_load_usages(CodeLensDb *db,
                                      size_t *out_count,
                                      bool *out_more)
 {
+    /* Cache type-specific membership and test ranges once. Correlating Ref
+     * rows directly with Referred or every symbol in their File made mixed
+     * repositories quadratic, even when the dossier had only a few usages. */
     static const char sql[] =
         "WITH type_files(fileId) AS MATERIALIZED ("
         "SELECT DISTINCT tr.fileId FROM Ref tr "
-        "WHERE tr.symbolBase=?4 AND tr.targetNamespace=?2) "
+        "WHERE tr.symbolBase=?4 AND tr.targetNamespace=?2), "
+        "referred_symbols(filePath, symbol) AS MATERIALIZED ("
+        "SELECT DISTINCT filePath, symbol FROM Referred WHERE repo=?1 AND namespace=?2), "
+        "member_names(name) AS MATERIALIZED ("
+        "SELECT DISTINCT name FROM Symbol WHERE repo=?1 AND namespace=?2 "
+        "AND kind IN ('method','test','field','enum_constant')), "
+        "test_ranges(filePath, startLine, endLine) AS MATERIALIZED ("
+        "SELECT filePath, startLine, endLine FROM Symbol WHERE repo=?1 AND kind='test') "
         "SELECT f.path, r.lineNumber, r.columnNumber, r.startByte, r.endByte, "
         "r.symbol, r.symbolBase, "
         "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END, "
         "COALESCE(da.coordinate, ''), "
-        "CASE WHEN r.targetNamespace='' AND EXISTS (SELECT 1 FROM Referred erf "
-        "WHERE erf.repo=f.repo AND erf.filePath=f.path AND erf.namespace=?2 "
+        "CASE WHEN r.targetNamespace='' AND EXISTS (SELECT 1 FROM referred_symbols erf "
+        "WHERE erf.filePath=f.path "
         "AND (erf.symbol=r.symbolBase OR erf.symbol=':all')) THEN ?2 "
         "ELSE r.targetNamespace END, "
         "CASE WHEN instr(lower(replace(f.path, '\\', '/')), '/test/')>0 "
         "OR instr(lower(replace(f.path, '\\', '/')), '/tests/')>0 "
-        "OR EXISTS (SELECT 1 FROM Symbol tst "
-        "WHERE tst.rowid BETWEEN f.symbolFirst AND f.symbolFirst+f.symbolCount-1 "
-        "AND tst.repo=f.repo AND tst.filePath=f.path AND tst.kind='test' "
+        "OR EXISTS (SELECT 1 FROM test_ranges tst WHERE tst.filePath=f.path "
         "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine) THEN 1 ELSE 0 END "
         "FROM Ref r JOIN File f ON f.rowid=r.fileId "
         "LEFT JOIN DependencyFile df ON df.repo=f.repo AND df.filePath=f.path "
         "LEFT JOIN DependencyArtifact da ON da.id=df.artifactId "
         "WHERE f.repo=?1 AND (r.targetNamespace=?2 OR "
-        "(r.targetNamespace='' AND EXISTS (SELECT 1 FROM Referred rf "
-        "WHERE rf.repo=f.repo AND rf.filePath=f.path AND rf.namespace=?2 "
+        "(r.targetNamespace='' AND EXISTS (SELECT 1 FROM referred_symbols rf "
+        "WHERE rf.filePath=f.path "
         "AND (rf.symbol=r.symbolBase OR rf.symbol=':all'))) OR "
-        "(r.targetNamespace='' AND EXISTS (SELECT 1 FROM Symbol ms "
-        "WHERE ms.repo=f.repo AND ms.namespace=?2 AND ms.name=r.symbolBase "
-        "AND ms.kind IN ('method','test','field','enum_constant')) "
+        "(r.targetNamespace='' AND r.symbolBase IN (SELECT name FROM member_names) "
         "AND r.fileId IN (SELECT fileId FROM type_files))) "
         "AND (?3=0 OR (instr(lower(replace(f.path, '\\', '/')), '/test/')=0 "
         "AND instr(lower(replace(f.path, '\\', '/')), '/tests/')=0 "
-        /* A File's symbols occupy a contiguous rowid range, including after an
-         * incremental refresh. Without the range SQLite scans every Symbol
-         * for each Ref when exclude-tests is enabled. */
-        "AND NOT EXISTS (SELECT 1 FROM Symbol tst "
-        "WHERE tst.rowid BETWEEN f.symbolFirst AND f.symbolFirst+f.symbolCount-1 "
-        "AND tst.repo=f.repo AND tst.filePath=f.path AND tst.kind='test' "
+        "AND NOT EXISTS (SELECT 1 FROM test_ranges tst WHERE tst.filePath=f.path "
         "AND r.lineNumber BETWEEN tst.startLine AND tst.endLine))) "
         "ORDER BY CASE WHEN df.id IS NULL THEN 0 ELSE 1 END, "
         "CASE WHEN r.targetNamespace=?2 THEN 0 ELSE 1 END, f.path, r.lineNumber, "
@@ -23025,6 +23026,46 @@ char *code_lens_context_symbol(const char *repo_name, const char *symbol_name)
 
     return code_lens_context_symbol_ex(repo_name, symbol_name, &options);
 }
+
+#ifdef CODE_LENS_NO_MAIN
+/* Deterministic query-work budget for context scalability regressions. */
+typedef struct {
+    unsigned int steps;
+    unsigned int maximum;
+} ContextQueryBudget;
+
+static int context_test_query_progress(void *ctx)
+{
+    ContextQueryBudget *budget = ctx;
+
+    budget->steps += 1000U;
+    return budget->steps > budget->maximum ? 1 : 0;
+}
+
+char *code_lens_test_context_with_query_budget(const char *repo_name,
+                                                const char *symbol_name,
+                                                const CodeLensContextOptions *options,
+                                                unsigned int maximum_steps,
+                                                unsigned int *out_steps)
+{
+    CodeLensDb db;
+    ContextQueryBudget budget = {.maximum = maximum_steps};
+    char *db_path;
+    char *result;
+
+    *out_steps = 0U;
+    repo_name = resolve_repo_id(repo_name);
+    db_path = repo_name == nullptr ? nullptr : repo_db_path(repo_name);
+    if ((db_path == nullptr) || (code_lens_db_open_read(&db, db_path) != 0)) {
+        return nullptr;
+    }
+    sqlite3_progress_handler(db.handle, 1000, context_test_query_progress, &budget);
+    result = context_symbol_ex_internal(repo_name, symbol_name, options, &db);
+    *out_steps = budget.steps;
+    code_lens_db_close(&db);
+    return result;
+}
+#endif
 
 char *code_lens_run_sql_ex(const char *repo_name,
                             const char *sql,
