@@ -133,7 +133,10 @@ Model and thinking-level selections are saved in
 `~/.codingagent/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
 model through the interactive selector, including one opened by `--provider`,
-updates the saved default. You can select another provider explicitly:
+updates the saved default. Changing models with `/models` continues the current
+session, preserving conversation history, task state, subagents, and the session
+file; resumed sessions use the latest selected model. Use `/clear` to start a
+fresh conversation. You can select another provider explicitly:
 
 ```bash
 java -jar target/codingagent.jar \

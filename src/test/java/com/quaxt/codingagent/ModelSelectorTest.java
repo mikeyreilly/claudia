@@ -2,7 +2,11 @@ package com.quaxt.codingagent;
 
 import com.quaxt.codingagent.ai.auth.Credential;
 import com.quaxt.codingagent.ai.providers.ProviderState;
+import com.quaxt.codingagent.ai.types.Message;
 import com.quaxt.codingagent.ai.types.Model;
+import com.quaxt.codingagent.ai.types.ThinkingLevel;
+import com.quaxt.codingagent.ai.types.UserMessage;
+import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.terminal.Terminal;
 import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayOutputStream;
@@ -18,6 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import static com.quaxt.codingagent.CodingAgentOperations.jsonObject;
+import static com.quaxt.codingagent.CodingAgentOperations.text;
+import static com.quaxt.codingagent.CodingAgentOperations.userMessage;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -56,17 +63,117 @@ class ModelSelectorTest {
         try (Fixture fixture = new Fixture()) {
             Model current = fixture.configure("chatgpt");
             Model next = fixture.runtime.coreProviderModels("chatgpt").get(1);
-            fixture.runtime.restoreMessages(List.of(CodingAgentOperations.userMessage("old session")));
+            fixture.runtime.restoreMessages(List.of(userMessage("existing conversation")));
+            fixture.runtime.setThinkingLevel(ThinkingLevel.HIGH);
+            var thinkingLevel = fixture.runtime.state().thinkingLevel();
+            fixture.addTask();
+            var tasks = fixture.runtime.taskStateSnapshot();
+            var manager = fixture.runtime.subagents();
+            var subscription = getField(fixture.cli, "shellSubscription");
             fixture.send("\u001b[B\r");
             invokeCommand(fixture.cli, "/models");
 
             assertNotEquals(current.id, next.id);
             assertEquals("chatgpt", fixture.runtime.state().model().provider);
             assertEquals(next.id, fixture.runtime.state().model().id);
-            assertTrue(fixture.runtime.state().messages().isEmpty());
+            assertEquals(1, fixture.runtime.state().messages().size());
+            assertEquals("existing conversation", text((UserMessage) fixture.runtime.state().messages().getFirst()));
+            assertEquals("existing conversation", text((UserMessage) fixture.runtime.transcript().getFirst()));
+            assertEquals(tasks, fixture.runtime.taskStateSnapshot());
+            assertSame(manager, fixture.runtime.subagents());
+            assertSame(subscription, getField(fixture.cli, "shellSubscription"));
+            assertEquals(CodingAgentOperations.clampThinkingLevel(next, thinkingLevel),
+                    fixture.runtime.state().thinkingLevel());
+            assertNull(fixture.runtime.state().sessionId(), "--no-session must not create a recorder");
             assertEquals("chatgpt", fixture.runtime.loadSettings().defaultProvider);
             assertEquals(next.id, fixture.runtime.loadSettings().defaultModel);
             assertTrue(fixture.rendered().contains("* current"));
+            assertTrue(fixture.rendered().contains("Continuing current session."));
+            assertFalse(fixture.rendered().contains("in a new agent session"));
+        }
+    }
+
+    @Test
+    void modelSelectionKeepsTheNamedRecorderAndPersistsTheNewModel() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            Model current = fixture.configure("chatgpt");
+            Model next = fixture.runtime.coreProviderModels("chatgpt").get(1);
+            fixture.runtime.defaultSessionStore();
+            fixture.runtime.createSessionRecorder(workspace, current.provider, current.id, "Ongoing work");
+            fixture.runtime.setSessionRecording(true, error -> fail(error));
+            setField(fixture.cli, "noSession", false);
+            setField(fixture.cli, "recordingSession", true);
+            setField(fixture.cli, "sessionName", "Ongoing work");
+            var history = List.<Message>of(userMessage("before switching"));
+            fixture.runtime.restoreMessages(history);
+            fixture.runtime.appendSessionMessages(history);
+            fixture.addTask();
+            var tasks = fixture.runtime.taskStateSnapshot();
+            String id = fixture.runtime.state().sessionId();
+            var before = fixture.runtime.sessionSnapshot(id);
+
+            fixture.send("\u001b[B\r");
+            invokeCommand(fixture.cli, "/models");
+
+            assertEquals(id, fixture.runtime.state().sessionId());
+            assertEquals("Ongoing work", getField(fixture.cli, "sessionName"));
+            assertEquals(true, getField(fixture.cli, "recordingSession"));
+            assertEquals(1, fixture.runtime.listSessions(workspace).size());
+            fixture.runtime.appendSessionMessages(List.of(userMessage("after switching")));
+            var saved = fixture.runtime.sessionSnapshot(id);
+            assertEquals(before.path, saved.path);
+            assertEquals(before.created, saved.created);
+            assertEquals("Ongoing work", saved.name);
+            assertEquals(next.provider, saved.provider);
+            assertEquals(next.id, saved.model);
+            assertEquals(tasks, saved.taskState);
+            assertEquals(2, saved.messages.size());
+            assertEquals("before switching", text((UserMessage) saved.messages.getFirst()));
+            assertEquals("after switching", text((UserMessage) saved.messages.getLast()));
+            assertEquals(1, fixture.runtime.readSession(id).stream()
+                    .filter(entry -> entry.type.equals("model_change")).count());
+
+            // A new runtime must see the new model in the same saved session, not just a changed default.
+            try (var resumed = new CodingAgentOperations()) {
+                resumed.applicationPaths(new CodingAgentPaths(workspace.resolve("home")));
+                resumed.defaultSessionStore();
+                var snapshot = resumed.sessionSnapshot(id);
+                assertEquals(next.id, snapshot.model);
+                assertEquals(2, snapshot.messages.size());
+            }
+        }
+    }
+
+    @Test
+    void selectingCurrentModelOrCancellingKeepsTheConversation() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            Model current = fixture.configure("chatgpt");
+            fixture.runtime.restoreMessages(List.of(userMessage("keep this history")));
+            var manager = fixture.runtime.subagents();
+            for (String keys : List.of("\r", "\u001b[27u")) {
+                fixture.send(keys);
+                invokeCommand(fixture.cli, "/models");
+                assertEquals(current.id, fixture.runtime.state().model().id);
+                assertEquals(1, fixture.runtime.state().messages().size());
+                assertSame(manager, fixture.runtime.subagents());
+            }
+        }
+    }
+
+    @Test
+    void firstModelSelectionStillStartsAndRecordsTheConversation() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            setField(fixture.cli, "cwd", workspace);
+            setField(fixture.cli, "noSession", false);
+            setField(fixture.cli, "shellModelProvider", "chatgpt");
+            fixture.send("\r");
+            invokeCommand(fixture.cli, "/models");
+
+            assertEquals("chatgpt", fixture.runtime.state().model().provider);
+            assertEquals(true, getField(fixture.cli, "agentConfigured"));
+            assertEquals(true, getField(fixture.cli, "recordingSession"));
+            assertNotNull(fixture.runtime.state().sessionId());
+            assertEquals(1, fixture.runtime.listSessions(workspace).size());
         }
     }
 
@@ -249,6 +356,16 @@ class ModelSelectorTest {
             configure.setAccessible(true);
             configure.invoke(cli, model, workspace, false, null);
             return model;
+        }
+
+        void addTask() throws Exception {
+            var tool = runtime.builtInTools(workspace, ignored -> {}).stream()
+                    .filter(candidate -> CodingAgentOperations.toolName(candidate).equals("task_state"))
+                    .findFirst().orElseThrow();
+            var result = runtime.executeTool(tool, "model-task",
+                    jsonObject().put("action", "add_task").put("description", "Continue existing work"),
+                    new AbortSignal(), ignored -> {});
+            assertFalse(result.isError);
         }
 
         ProviderState copilot() { return (ProviderState) runtime.requireCoreProvider("github-copilot"); }

@@ -163,6 +163,39 @@ class CodingAgentOperationsTest {
     }
 
     @Test
+    void changingModelUsesTheNewModelForTheNextTurnWithoutResettingContextOrListeners() throws Exception {
+        FauxProvider provider = configure(100_000);
+        List<AgentEvent> events = new ArrayList<>();
+        runtime.subscribe(events::add);
+        enqueue(provider, "Previous answer");
+        runtime.prompt("Previous question");
+        int previousEvents = events.size();
+        var manager = runtime.subagents();
+        Model next = runtime.state().model();
+        next.id = "faux-2";
+
+        runtime.setModel(next);
+        provider.pendingResponses.add(new FauxProvider.ResponseStep.Factory(request -> {
+            assertEquals("faux-2", request.model.id);
+            assertEquals(3, request.context.messages.size());
+            assertEquals("Previous question", text((UserMessage) request.context.messages.getFirst()));
+            assertEquals("Previous answer", text((AssistantMessage) request.context.messages.get(1)));
+            assertEquals("Continue", text((UserMessage) request.context.messages.getLast()));
+            assertThrows(IllegalStateException.class, () -> runtime.setModel(next),
+                    "A model change must not race an active turn");
+            AssistantMessage response = answer("New answer");
+            response.model = next.id;
+            return response;
+        }));
+        runtime.prompt("Continue");
+
+        assertEquals(4, runtime.state().messages().size());
+        assertEquals(4, runtime.transcript().size());
+        assertTrue(events.size() > previousEvents, "Existing listeners must still receive events");
+        assertSame(manager, runtime.subagents());
+    }
+
+    @Test
     void exposesConversationSnapshotsAndDiscardsOldListenersWhenReconfigured() throws Exception {
         configure(100_000);
         List<Message> restored = new ArrayList<>(List.of(userMessage("Restored question")));
