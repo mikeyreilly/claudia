@@ -237,9 +237,33 @@ After `fg`, the conversation screen, terminal mode, prompt, and partially
 entered input are restored; shell output produced while codingagent was
 suspended is replaced by the redrawn codingagent screen.
 
+The conversation scrolls inside codingagent rather than in the terminal's
+scrollback: while the prompt is active, codingagent receives mouse reports, so
+the mouse wheel scrolls the conversation by three rows and PgUp/PgDn scroll by
+a page. New output does not move a view that has been scrolled up, and the status
+bar shows `↓ more below` until you scroll back to the end or submit a prompt.
+To select text natively, hold Shift while dragging (Ghostty's default
+`mouse-shift-capture`); selection covers the rows on screen. When codingagent
+exits, the whole conversation, as currently expanded, is written to the terminal
+so it remains in the scrollback.
+
+Each tool call and each reasoning block is a container with a toggle in its
+top-left cell: ▼ when expanded, ▶ when collapsed. Click the toggle (or the space
+after it) to expand or collapse that container in place; its header stays on the
+same row. A collapsed tool call shows its call on one row, cut at the terminal
+edge, then the first three lines of its result (`Done:` or `Error:`, or
+`Running…` while it runs) and `… N more lines`. Expanded, it shows the full
+description, the call's arguments as JSON, and the complete result exactly as
+the model received it. Tool calls start collapsed. Expanded or collapsed states
+chosen by clicking survive redraws, resizes, and switching agents with
+`/subagents`; `/clear` and `/resume` reset them, and they are not saved.
+
 Reasoning-capable models default to medium thinking, and reasoning summaries
-stream in a muted block before each answer or tool call. Ctrl-T hides or shows
-those blocks and persists the choice. Ctrl-O (or `/details`) opens the latest
+stream in a reasoning container before each answer or tool call. A reasoning
+container is expanded while it streams. Collapsed, it shows its first three
+lines; short blocks have no toggle because nothing is hidden. Ctrl-T expands or
+collapses every reasoning container, sets whether finished reasoning is
+collapsed, and persists the choice. Ctrl-O (or `/details`) opens the latest
 turn's reasoning/tool-step inspector: use Up/Down to select a step and Enter to
 expand only that step; Ctrl-T and Ctrl-O inside the inspector toggle all
 thinking and tool sections, respectively.
@@ -566,6 +590,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Manual and automatic context compaction | Implemented |
 | JSON event mode and core JSONL RPC automation | Implemented |
 | Interactive prompt shell and streamed output (Ghostty on macOS and Linux) | Implemented |
+| Collapsible tool-call and reasoning containers with mouse toggles and in-app conversation scrolling | Implemented |
 | Differential rendering, fuzzy selectors, mouse input, OSC 8 link primitives, fixed terminal styling, keybinding defaults | Implemented |
 
 Extensions, Node-compatible data formats, non-core providers, and the Node

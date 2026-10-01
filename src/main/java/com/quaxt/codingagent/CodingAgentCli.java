@@ -60,6 +60,7 @@ import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.cli.ActivityStatus;
 import com.quaxt.codingagent.cli.McpSelector;
 import com.quaxt.codingagent.cli.TurnDetailsComponent;
+import com.quaxt.codingagent.cli.Transcript;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
 import com.quaxt.codingagent.tui.AnsiRenderer;
 import com.quaxt.codingagent.tui.FuzzyMatcher;
@@ -180,6 +181,9 @@ public final class CodingAgentCli {
     }
 
     private static final int VISIBLE_COMMANDS = 4;
+    /** Conversation rows one mouse-wheel step scrolls. */
+    private static final int WHEEL_ROWS = 3;
+    private static final String THINKING_KEY_PREFIX = "thinking:";
     /** SI (invoke G0 into GL), then designate ASCII into G0, undoing stray character-set shifts. */
     static final String RESET_CHARACTER_SET = "\u000f\u001b(B";
     private static final String CLEAR_SCREEN_AND_SCROLLBACK = "\u001b[2J\u001b[H\u001b[3J";
@@ -213,6 +217,10 @@ public final class CodingAgentCli {
     private boolean hideThinkingBlock;
     private StreamOutput streamOutput = StreamOutput.NONE;
     private int streamedThinkingCharacters;
+    /** The reasoning container receiving the current thinking stream. */
+    private String streamingThinkingKey;
+    /** Expanded states chosen by clicking a toggle, keyed by agent and container. */
+    private final Map<String, Boolean> containerOverrides = new java.util.concurrent.ConcurrentHashMap<>();
     private Object activityLock = new Object();
     private ScheduledExecutorService statusTicker;
     private volatile ActivityStatus activity;
@@ -243,7 +251,7 @@ public final class CodingAgentCli {
                     else handleShellAgentEvent(event.event());
                 }
                 if (redraw) {
-                    redrawSelectedConversation();
+                    redrawSelectedConversation(true);
                     restoredLiveTurn = selectedState().streaming();
                 }
                 Runnable notice;
@@ -278,13 +286,19 @@ public final class CodingAgentCli {
                 emittedText = false;
                 streamOutput = StreamOutput.NONE;
                 streamedThinkingCharacters = 0;
+                streamingThinkingKey = null;
                 activity = agentActivities.getOrDefault(selected, readyActivity(System.nanoTime()));
-                redrawSelectedConversation();
+                redrawSelectedConversation(false);
             }
         }
     }
 
-    private void redrawSelectedConversation() {
+    /**
+     * Rebuilds the selected agent's conversation from its messages. A redraw of
+     * the same conversation keeps the viewport where it was; another agent's
+     * conversation opens at its end.
+     */
+    private void redrawSelectedConversation(boolean keepViewport) {
         if (!agentConfigured) return;
         shellEvents.clear();
         var agent = runtime.subagents().snapshot(selectedAgent);
@@ -294,7 +308,11 @@ public final class CodingAgentCli {
         if (agent.state().streaming() && !active.isEmpty() && active.getLast() instanceof AssistantMessage partial
                 && partial.stopReason == StopReason.PENDING) visible.add(partial);
         if (!active.isEmpty() && active.getLast() instanceof AssistantMessage last) emittedText = !text(last).isEmpty();
-        replaceScreen(renderSessionScreen(agent.state().model(), visible, hideThinkingBlock));
+        Transcript rebuilt = renderSessionScreen(agent.state().model(), visible, hideThinkingBlock);
+        synchronized (this) {
+            if (keepViewport) rebuilt.keepViewportOf(transcript);
+            replaceScreen(rebuilt, keepViewport);
+        }
         refreshShellStatus();
     }
 
@@ -307,7 +325,16 @@ public final class CodingAgentCli {
     /** The line discipline the shell uses; restored whenever the process is suspended. */
     private Terminal.Mode shellMode;
     private final List<AutoCloseable> signalRegistrations = new ArrayList<>();
-    private StringBuilder screenDocument = new StringBuilder();
+    /** The main-screen conversation, drawn through an app-managed viewport above the prompt. */
+    private volatile Transcript transcript = new Transcript();
+    /** Rows of the line editor's region when the viewport was last laid out. */
+    private int paintedEditorRows;
+    /** Whether the screen may no longer match the last laid-out viewport. */
+    private boolean viewportStale = true;
+    /** Whether the line editor wants mouse reports for the conversation. */
+    private boolean conversationMouse;
+    /** Whether the status bar reflects a viewport that shows the conversation's end. */
+    private boolean followingShown = true;
     private StatusLine statusLine;
     private String statusActivity;
     private StatusAccent statusAccent = StatusAccent.NONE;
@@ -970,6 +997,7 @@ public final class CodingAgentCli {
     private void startTuiRuntime(TuiRuntime runtime) {
         runtime.originalMode = runtime.terminal.enterRawMode();
         runtime.pasteWasEnabled = runtime.terminal.bracketedPaste();
+        runtime.mouseWasEnabled = runtime.terminal.mouseTracking();
         runtime.terminal.alternateScreen(true);
         runtime.terminal.mouseTracking(true);
         runtime.terminal.bracketedPaste(true);
@@ -984,7 +1012,7 @@ public final class CodingAgentCli {
             return;
         }
         runtime.active = false;
-        runtime.terminal.mouseTracking(false);
+        runtime.terminal.mouseTracking(runtime.mouseWasEnabled);
         runtime.terminal.bracketedPaste(runtime.pasteWasEnabled);
         runtime.terminal.cursorVisible(true);
         runtime.terminal.alternateScreen(false);
@@ -1046,7 +1074,10 @@ public final class CodingAgentCli {
      */
     public void newInteractiveTerminal(
             Terminal terminal, Callable<Void> suspendAction, boolean supportsSuspend) {
-        screenDocument = new StringBuilder();
+        transcript = new Transcript();
+        paintedEditorRows = 0;
+        viewportStale = true;
+        conversationMouse = false;
         statusActivity = null;
         statusAccent = StatusAccent.NONE;
         statusLeft = null;
@@ -1076,7 +1107,11 @@ public final class CodingAgentCli {
                 editorLock.lock();
                 try {
                     synchronized (this) {
-                        if (!managedSuspend) repaintScreen();
+                        if (!managedSuspend) {
+                            // Programs run meanwhile may have turned mouse reporting off.
+                            terminal.reassertMouseTracking();
+                            repaintScreen();
+                        }
                     }
                 } finally {
                     editorLock.unlock();
@@ -1141,6 +1176,16 @@ public final class CodingAgentCli {
                 repaintScreen();
             }
         };
+        options.mouse = this::handleConversationMouse;
+        // Lay the conversation out again whenever the prompt region changes height, so the
+        // prompt never scrolls the viewport and clicks map to the rows that are shown.
+        options.beforeDraw = rows -> {
+            synchronized (this) {
+                if (!viewportStale && rows == paintedEditorRows) return false;
+                repaintScreen();
+                return true;
+            }
+        };
         if (suggestionsEnabled) {
             options.below = this::commandSuggestionLines;
             options.beforeAccept = this::insertSelectedCommand;
@@ -1155,10 +1200,16 @@ public final class CodingAgentCli {
             resetTerminalCharacterSet();
             lineEditorReading = true;
             pushEnhancedKeyboardReporting();
+            enableConversationMouse();
+            synchronized (this) {
+                // The first draw lays the conversation out for the prompt's height.
+                viewportStale = true;
+            }
             result = editor.readLine(options);
         } catch (IOException error) {
             throw new UncheckedIOException(error);
         } finally {
+            disableConversationMouse();
             popEnhancedKeyboardReporting();
             lineEditorReading = false;
             commandSuggestionsActive = false;
@@ -1168,6 +1219,9 @@ public final class CodingAgentCli {
         return switch (result.outcome()) {
             case ACCEPTED -> {
                 rememberCompletedLine(prompt, result.line(), mask);
+                synchronized (this) {
+                    transcript.scrollToEnd();
+                }
                 yield result.line();
             }
             case INTERRUPTED -> {
@@ -1188,6 +1242,13 @@ public final class CodingAgentCli {
     private boolean handleEditorKey(TerminalEvent.Key key, boolean suggestionsEnabled) {
         if (supportsSuspend && appKeyMatches(key, "suspend")) {
             suspendInteractive();
+            return true;
+        }
+        if (key.is(TerminalEvent.KeyType.PAGE_UP) || key.is(TerminalEvent.KeyType.PAGE_DOWN)) {
+            synchronized (this) {
+                int page = transcript.pageRows();
+                scrollConversation(key.is(TerminalEvent.KeyType.PAGE_UP) ? -page : page);
+            }
             return true;
         }
         for (Map.Entry<String, Runnable> action : appActions.entrySet()) {
@@ -1345,6 +1406,8 @@ public final class CodingAgentCli {
                             && input instanceof TuiInput.Key key
                             && key.type == TuiInput.KeyType.SUSPEND) {
                         stopTuiRuntime(runtime);
+                        // Never leave mouse reporting on for the shell.
+                        runtime.terminal.mouseTracking(false);
                         callSuspendAction(runtime.suspendAction);
                         runtime.resumeMainScreen.run();
                         startTuiRuntime(runtime);
@@ -1368,9 +1431,11 @@ public final class CodingAgentCli {
                 // Reserve the status row again: the alternate screen shared the scroll region.
                 statusLine.restore();
             }
+            // A suspend from the component turned mouse reporting off for the shell.
+            if (conversationMouse) terminal.mouseTracking(true);
             synchronized (this) {
                 componentOpen = false;
-                if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
+                if (componentDirty) { componentDirty = false; redrawSelectedConversation(true); }
             }
             if (editor.isReading()) editor.requestRedraw();
         }
@@ -1441,6 +1506,8 @@ public final class CodingAgentCli {
         popEnhancedKeyboardReporting();
         boolean pasteWasEnabled = terminal.bracketedPaste();
         terminal.bracketedPaste(false);
+        boolean mouseWasEnabled = terminal.mouseTracking();
+        terminal.mouseTracking(false);
         Terminal.Mode resumeMode = terminal.mode();
         synchronized (this) {
             statusLine.suspend();
@@ -1455,11 +1522,12 @@ public final class CodingAgentCli {
         } finally {
             terminal.setMode(resumeMode);
             terminal.bracketedPaste(pasteWasEnabled);
+            terminal.mouseTracking(mouseWasEnabled);
             if (resumeReporting) pushEnhancedKeyboardReporting();
             synchronized (this) {
                 managedSuspend = false;
                 statusLine.restore();
-                if (componentDirty) { componentDirty = false; redrawSelectedConversation(); }
+                if (componentDirty) { componentDirty = false; redrawSelectedConversation(true); }
                 else repaintScreen();
             }
         }
@@ -1480,31 +1548,15 @@ public final class CodingAgentCli {
      * Prints a status line without losing the active line-editor buffer.
      */
     public void printAbove(String text) {
-        if (editorLock != null) editorLock.lock();
-        try {
-            synchronized (this) {
-                remember(text + System.lineSeparator());
-                if (editor.isReading()) {
-                    resetPromptBackground();
-                    repaintScreen();
-                } else {
-                    terminal.write(text + System.lineSeparator());
-                }
-            }
-        } finally { if (editorLock != null) editorLock.unlock(); }
+        print(text + System.lineSeparator());
     }
 
     private void print(String text) {
         if (editorLock != null) editorLock.lock();
         try {
             synchronized (this) {
-                String value = String.valueOf(text);
-                remember(value);
-                if (editor != null && editor.isReading()) {
-                    repaintScreen();
-                } else {
-                    terminal.write(value);
-                }
+                remember(String.valueOf(text));
+                showTranscript();
             }
         } finally { if (editorLock != null) editorLock.unlock(); }
     }
@@ -1518,10 +1570,95 @@ public final class CodingAgentCli {
      */
     public void replaceScreen(String document) {
         synchronized (this) {
-            screenDocument.setLength(0);
-            screenDocument.append(document == null ? "" : document);
+            transcript.clear();
+            transcript.append(document == null ? "" : document);
             repaintScreen();
         }
+    }
+
+    /** Replaces the main-screen conversation, showing its end. */
+    public void replaceScreen(Transcript document) {
+        replaceScreen(document, false);
+    }
+
+    private void replaceScreen(Transcript document, boolean keepViewport) {
+        synchronized (this) {
+            transcript = Objects.requireNonNull(document, "document");
+            if (!keepViewport) transcript.scrollToEnd();
+            repaintScreen();
+        }
+    }
+
+    /** Redraws the conversation after it changed, unless another screen owns the terminal. */
+    private void showTranscript() {
+        synchronized (this) {
+            if (componentOpen || managedSuspend) {
+                viewportStale = true;
+                return;
+            }
+            repaintScreen();
+        }
+    }
+
+    /** Applies a change to the conversation's containers and redraws it. */
+    private void updateTranscript(java.util.function.Consumer<Transcript> change) {
+        if (editorLock != null) editorLock.lock();
+        try {
+            synchronized (this) {
+                change.accept(transcript);
+                showTranscript();
+            }
+        } finally { if (editorLock != null) editorLock.unlock(); }
+    }
+
+    /** Wheel scrolling and toggle clicks in the conversation, reported while the prompt reads. */
+    private void handleConversationMouse(TerminalEvent.Mouse mouse) {
+        synchronized (this) {
+            switch (mouse.action()) {
+                case SCROLL_UP -> scrollConversation(-WHEEL_ROWS);
+                case SCROLL_DOWN -> scrollConversation(WHEEL_ROWS);
+                case PRESS -> {
+                    if (mouse.button() != 0 || viewportStale) return;
+                    // Viewport rows start at the top screen row.
+                    String key = transcript.toggleAt(mouse.y() - 1, mouse.x() - 1);
+                    if (key == null) return;
+                    containerOverrides.put(containerScope(key), transcript.toggle(key));
+                    repaintScreen();
+                }
+                default -> {
+                    // Releases and drags leave the conversation unchanged.
+                }
+            }
+        }
+    }
+
+    private void scrollConversation(int rows) {
+        synchronized (this) {
+            transcript.scroll(rows);
+            repaintScreen();
+        }
+    }
+
+    /** Keys a container's expanded state by agent, since each agent has its own transcript. */
+    private String containerScope(String key) {
+        return selectedAgent + '\u0000' + key;
+    }
+
+    private boolean containerExpanded(String key, boolean otherwise) {
+        return containerOverrides.getOrDefault(containerScope(key), otherwise);
+    }
+
+    private void enableConversationMouse() {
+        String type = terminal.type();
+        if (type == null || Terminal.TYPE_DUMB.equals(type) || Terminal.TYPE_DUMB_COLOR.equals(type)) return;
+        conversationMouse = true;
+        terminal.mouseTracking(true);
+    }
+
+    private void disableConversationMouse() {
+        if (!conversationMouse) return;
+        conversationMouse = false;
+        terminal.mouseTracking(false);
     }
 
     /** Shows activity first so it remains visible when metadata must be truncated. */
@@ -1600,7 +1737,7 @@ public final class CodingAgentCli {
 
     private void remember(String text) {
         synchronized (this) {
-            screenDocument.append(text);
+            transcript.append(text);
         }
     }
 
@@ -1625,7 +1762,12 @@ public final class CodingAgentCli {
         terminal.write(RESET_CHARACTER_SET);
     }
 
-    /** Clears the screen and scrollback, then redraws the status row, the document, and any active prompt. */
+    /**
+     * Clears the screen and scrollback, then redraws the status row, the visible
+     * part of the conversation, and any active prompt below it. The viewport is
+     * sized so that the prompt region, which starts on the conversation's last
+     * row, ends just above the status row.
+     */
     private void repaintScreen() {
         synchronized (this) {
             terminal.beginUpdate();
@@ -1637,8 +1779,29 @@ public final class CodingAgentCli {
                 terminal.write(CLEAR_SCREEN_AND_SCROLLBACK);
                 // Re-reserve the bottom row before printing so the document scrolls above it.
                 if (redrawStatus) statusLine.restore();
-                terminal.write(screenDocument);
-                if (editor.isReading()) {
+                boolean reading = editor.isReading();
+                boolean editorOwned = reading && editorLock.isHeldByCurrentThread();
+                // Without the editor's lock its height is unknown; the editor lays out again when it redraws.
+                int editorRows = !reading ? 0 : editorOwned ? editor.regionRows() : paintedEditorRows;
+                List<Transcript.Row> rows = viewportRows(editorRows);
+                if (followingShown != transcript.following()) {
+                    followingShown = transcript.following();
+                    if (activity != null) {
+                        boolean statusShown = statusLine.isShown();
+                        renderShellStatus();
+                        // Showing the status for the first time takes a row from the viewport.
+                        if (statusLine.isShown() != statusShown) rows = viewportRows(editorRows);
+                    }
+                }
+                StringBuilder output = new StringBuilder();
+                for (int index = 0; index < rows.size(); index++) {
+                    if (index > 0) output.append("\r\n");
+                    output.append(rows.get(index).text());
+                }
+                terminal.write(output);
+                paintedEditorRows = editorRows;
+                viewportStale = reading && !editorOwned;
+                if (reading) {
                     editor.screenReset();
                     editor.redisplay();
                 }
@@ -1646,6 +1809,24 @@ public final class CodingAgentCli {
                 terminal.endUpdate();
             }
         }
+    }
+
+    /** The conversation rows that fit above a prompt region of the given height and the status row. */
+    private List<Transcript.Row> viewportRows(int editorRows) {
+        int height = terminal.rows() - (statusLine.isShown() ? 1 : 0) - Math.max(0, editorRows - 1);
+        return transcript.frame(terminal.columns(), Math.max(1, height));
+    }
+
+    /** Writes the whole conversation, as currently expanded, so it stays in the terminal's scrollback. */
+    private void writeTranscriptToScrollback() {
+        List<Transcript.Row> rows = transcript.rows(terminal.columns());
+        StringBuilder output = new StringBuilder(TerminalStyle.RESET).append(CLEAR_SCREEN_AND_SCROLLBACK);
+        for (int index = 0; index < rows.size(); index++) {
+            if (index > 0) output.append("\r\n");
+            output.append(rows.get(index).text());
+        }
+        if (!rows.isEmpty() && !rows.getLast().plain().isEmpty()) output.append("\r\n");
+        terminal.write(output);
     }
 
     /**
@@ -1662,6 +1843,8 @@ public final class CodingAgentCli {
         signalRegistrations.clear();
         synchronized (this) {
             if (statusLine != null) statusLine.close();
+            // The conversation was drawn in a managed viewport; leave all of it in the scrollback.
+            if (!transcript.isEmpty() && !terminal.isClosed()) writeTranscriptToScrollback();
         }
         terminal.close();
     }
@@ -2240,6 +2423,7 @@ public final class CodingAgentCli {
                     }
                     Model model = runtime.state().model();
                     IOException persistenceFailure = startFreshShellSession(model, cwd);
+                    containerOverrides.clear();
                     replaceScreen(sessionScreenHeader(model));
                     println("Started a new session.");
                     if (persistenceFailure != null) {
@@ -2391,6 +2575,7 @@ public final class CodingAgentCli {
                             runtime.setSessionRecording(true, this::reportCheckpointFailure);
                             recordingSession = true;
                             refreshShellStatus();
+                            containerOverrides.clear();
                             replaceScreen(renderSessionScreen(
                                     model,
                                     selected.transcriptMessages,
@@ -3004,11 +3189,14 @@ public final class CodingAgentCli {
     }
 
     /**
-     * Rebuilds the visible transcript for a resumed session.
+     * Rebuilds the visible conversation for a resumed session or another agent.
+     * Reasoning containers start collapsed when {@code collapseThinking} is set;
+     * containers whose toggle was used keep that state.
      */
-    public String renderSessionScreen(
-            Model model, List<Message> messages, boolean hideThinking) {
-        StringBuilder screen = new StringBuilder(sessionScreenHeader(model));
+    public Transcript renderSessionScreen(
+            Model model, List<Message> messages, boolean collapseThinking) {
+        Transcript screen = new Transcript();
+        screen.append(sessionScreenHeader(model));
         Map<String, ToolResultMessage> toolResults = new LinkedHashMap<>();
         for (Message message : messages) {
             if (message instanceof ToolResultMessage result) toolResults.put(result.toolCallId, result);
@@ -3016,41 +3204,45 @@ public final class CodingAgentCli {
         Set<String> renderedToolResults = new HashSet<>();
         for (Message message : messages) {
             switch (message) {
-                case UserMessage user -> screen.append('\n')
-                        .append(promptArea("> " + terminalSafeText(text(user))))
-                        .append('\n');
+                case UserMessage user -> screen.append("\n" + promptArea("> " + terminalSafeText(text(user))) + "\n");
                 case AssistantMessage assistant -> {
-                    for (AssistantContent content : assistant.content) {
+                    for (int index = 0; index < assistant.content.size(); index++) {
+                        AssistantContent content = assistant.content.get(index);
                         if (content instanceof ThinkingContent thinking) {
-                            if (!hideThinking && !thinking.thinking.isBlank()) {
-                                screen.append("\n").append(TerminalStyle.MUTED).append("Thinking:").append(TerminalStyle.RESET).append('\n');
-                                screen.append(TerminalStyle.MUTED).append(terminalSafeText(thinking.thinking)).append(TerminalStyle.RESET).append('\n');
+                            if (!thinking.thinking.isBlank()) {
+                                String key = thinkingKey(assistant, index);
+                                boolean expanded = containerExpanded(key, !collapseThinking);
+                                screen.addThinking(key, expanded);
+                                screen.appendThinking(key, terminalSafeText(thinking.thinking));
+                                screen.finishThinking(key, expanded);
                             }
                         } else if (content instanceof TextContent text) {
-                            screen.append(terminalSafeText(text.text)).append('\n');
+                            screen.append(terminalSafeText(text.text) + "\n");
                         } else if (content instanceof ToolCall call) {
-                            screen.append("\n[")
-                                    .append(call.name)
-                                    .append("] ")
-                                    .append(toolCallDescription(call.name, call.arguments))
-                                    .append('\n');
+                            screen.addTool(call.id, call.name, toolCallDescription(call.name, call.arguments),
+                                    terminalSafeText(call.arguments.toPrettyString()), containerExpanded(call.id, false));
                             ToolResultMessage result = toolResults.get(call.id);
                             if (result != null) {
                                 renderedToolResults.add(result.toolCallId);
-                                appendSessionToolResult(screen, result);
+                                screen.finishTool(call.id, terminalSafeText(text(result)), result.isError);
                             }
                         }
                     }
                     if (assistant.errorMessage != null) {
-                        screen.append("Error: ").append(terminalSafeText(assistant.errorMessage)).append('\n');
+                        screen.append("Error: " + terminalSafeText(assistant.errorMessage) + "\n");
                     }
                 }
                 case ToolResultMessage result -> {
-                    if (renderedToolResults.add(result.toolCallId)) appendSessionToolResult(screen, result);
+                    if (renderedToolResults.add(result.toolCallId)) {
+                        // A result whose call is no longer visible, for example after compaction.
+                        screen.addTool(result.toolCallId, result.toolName, "", "",
+                                containerExpanded(result.toolCallId, false));
+                        screen.finishTool(result.toolCallId, terminalSafeText(text(result)), result.isError);
+                    }
                 }
             }
         }
-        return screen.toString();
+        return screen;
     }
 
     private static String sessionScreenHeader(Model model) {
@@ -3059,17 +3251,9 @@ public final class CodingAgentCli {
         header.append('\n');
         header.append(model == null
                 ? "Run /login to choose a provider. Shift-Tab toggles Plan/Build. Commands: /help, /plan, /build, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Shift-Tab toggles Plan/Build. Ctrl-O inspects steps; Ctrl-T toggles thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Shift-Tab toggles Plan/Build. Click ▶/▼ to expand or collapse; wheel or PgUp/PgDn scrolls; Shift-drag selects. Ctrl-O inspects steps; Ctrl-T expands or collapses thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
-    }
-
-    private void appendSessionToolResult(StringBuilder screen, ToolResultMessage result) {
-        screen.append("  ")
-                .append(result.isError ? "Error" : "Done")
-                .append(": ")
-                .append(toolResultSummary(result.toolName, text(result), result.isError))
-                .append('\n');
     }
 
     private static String sessionDisplayName(SessionSnapshot session) {
@@ -3261,6 +3445,7 @@ public final class CodingAgentCli {
 
             switch ((AgentEvent) event) {
                 case AgentEvent.AgentStart ignored -> {
+                    if (streamOutput == StreamOutput.THINKING) finishShellStreamOutput();
                     emittedText = false; streamOutput = StreamOutput.NONE; streamedThinkingCharacters = 0;
                     setShellActivity(activeActivity(ActivityStatus.Phase.WAITING_FOR_MODEL, System.nanoTime()));
                 }
@@ -3303,30 +3488,26 @@ public final class CodingAgentCli {
                         }
                     }
                     switch (update.providerEvent) {
-                        case AssistantMessageEvent.ThinkingStart ignored -> {
-                            if (!this.hideThinkingBlock) {
-                                finishShellStreamOutput();
-                                print("\n" + TerminalStyle.MUTED + "Thinking:" + TerminalStyle.RESET + "\n");
-                                this.streamOutput = StreamOutput.THINKING;
-                                this.streamedThinkingCharacters = 0;
-                            }
+                        case AssistantMessageEvent.ThinkingStart start -> {
+                            finishShellStreamOutput();
+                            beginShellThinking(thinkingKey(start.partial, start.contentIndex));
                         }
                         case AssistantMessageEvent.ThinkingDelta delta -> {
-                            if (!this.hideThinkingBlock) {
-                                if (this.streamOutput != StreamOutput.THINKING) {
-                                    print("\n" + TerminalStyle.MUTED + "Thinking:" + TerminalStyle.RESET + "\n");
-                                    this.streamOutput = StreamOutput.THINKING;
-                                    this.streamedThinkingCharacters = 0;
-                                }
-                                print(TerminalStyle.MUTED + terminalSafeText(delta.delta) + TerminalStyle.RESET);
-                                this.streamedThinkingCharacters += delta.delta.length();
+                            if (this.streamOutput != StreamOutput.THINKING) {
+                                finishShellStreamOutput();
+                                beginShellThinking(thinkingKey(delta.partial, delta.contentIndex));
                             }
+                            String key = streamingThinkingKey;
+                            String text = terminalSafeText(delta.delta);
+                            updateTranscript(document -> document.appendThinking(key, text));
+                            this.streamedThinkingCharacters += delta.delta.length();
                         }
                         case AssistantMessageEvent.ThinkingEnd end -> {
-                            if (!this.hideThinkingBlock
-                                    && this.streamOutput == StreamOutput.THINKING) {
+                            if (this.streamOutput == StreamOutput.THINKING) {
                                 if (this.streamedThinkingCharacters == 0 && !end.content.isBlank()) {
-                                    print(TerminalStyle.MUTED + terminalSafeText(end.content) + TerminalStyle.RESET);
+                                    String key = streamingThinkingKey;
+                                    String text = terminalSafeText(end.content);
+                                    updateTranscript(document -> document.appendThinking(key, text));
                                 }
                                 finishShellStreamOutput();
                             }
@@ -3378,12 +3559,22 @@ public final class CodingAgentCli {
                     setShellActivity(activeActivity(
                             ActivityStatus.Phase.RUNNING_TOOL, start.toolName, System.nanoTime()));
                     finishShellStreamOutput();
-                    println("\n[" + start.toolName + "] "
-                            + toolCallDescription(start.toolName, start.arguments));
+                    String key = start.toolCallId;
+                    String description = toolCallDescription(start.toolName, start.arguments);
+                    String arguments = terminalSafeText(start.arguments.toPrettyString());
+                    boolean expanded = containerExpanded(key, false);
+                    updateTranscript(document -> document.addTool(key, start.toolName, description, arguments, expanded));
                 }
                 case AgentEvent.ToolExecutionEnd end -> {
-                    String label = end.result.isError ? "Error" : "Done";
-                    println("  " + label + ": " + toolResultSummary(end.toolName, end.result));
+                    String key = end.toolCallId;
+                    String output = terminalSafeText(toolResultOutput(end.result));
+                    updateTranscript(document -> {
+                        // A result without a started container (for example after a redraw) still appears.
+                        if (!document.contains(key)) {
+                            document.addTool(key, end.toolName, "", "", containerExpanded(key, false));
+                        }
+                        document.finishTool(key, output, end.result.isError);
+                    });
                 }
                 default -> {
                     // Turn-end and low-level update events do not change the presentation phase.
@@ -3428,7 +3619,9 @@ public final class CodingAgentCli {
         boolean waiting = runtime.questions().pending().stream()
                 .anyMatch(question -> question.agentId().equals(selectedAgent) || SubagentManager.MAIN.equals(selectedAgent));
         String label = waiting ? "Waiting for answer" : activityLabel(current, System.nanoTime());
-        setStatus(label + " [" + runtime.agentMode().label + "]", waiting ? StatusAccent.ACTIVE : activityAccent(current), statusLocation, statusModel);
+        // The conversation viewport is scrolled away from new output.
+        String scrolled = transcript.following() ? "" : "  \u2193 more below";
+        setStatus(label + " [" + runtime.agentMode().label + "]" + scrolled, waiting ? StatusAccent.ACTIVE : activityAccent(current), statusLocation, statusModel);
     }
 
     private void changeAgentMode(AgentMode mode, boolean editorActive) {
@@ -3667,7 +3860,10 @@ public final class CodingAgentCli {
                 settings.defaultModel,
                 settings.defaultThinkingLevel,
                 hidden);
-        String status = "Thinking blocks: " + (hidden ? "hidden" : "visible");
+        // The shortcut chooses the state of every reasoning container, replacing earlier clicks.
+        containerOverrides.keySet().removeIf(key -> key.contains('\u0000' + THINKING_KEY_PREFIX));
+        updateTranscript(document -> document.expandThinking(!hidden));
+        String status = "Thinking blocks: " + (hidden ? "collapsed" : "expanded");
         try {
             runtime.saveHideThinkingBlock(hidden);
         } catch (IOException error) {
@@ -3681,26 +3877,50 @@ public final class CodingAgentCli {
         else println(status);
     }
 
+    /** Identifies a reasoning block by its message and position, both live and when rebuilt from history. */
+    static String thinkingKey(AssistantMessage message, int contentIndex) {
+        return THINKING_KEY_PREFIX + message.timestamp + ":" + contentIndex;
+    }
+
+    private void beginShellThinking(String key) {
+        streamOutput = StreamOutput.THINKING;
+        streamedThinkingCharacters = 0;
+        streamingThinkingKey = key;
+        // Reasoning is shown while it streams unless its toggle was used.
+        boolean expanded = containerExpanded(key, true);
+        updateTranscript(document -> document.addThinking(key, expanded));
+    }
+
     private void finishShellStreamOutput() {
-        if (streamOutput != StreamOutput.NONE) {
-            println("");
-            streamOutput = StreamOutput.NONE;
+        switch (streamOutput) {
+            case THINKING -> {
+                String key = streamingThinkingKey;
+                streamingThinkingKey = null;
+                if (key != null) {
+                    boolean expanded = containerExpanded(key, !hideThinkingBlock);
+                    updateTranscript(document -> document.finishThinking(key, expanded));
+                }
+            }
+            case TEXT -> println("");
+            case NONE -> {
+                // Nothing is streaming.
+            }
         }
+        streamOutput = StreamOutput.NONE;
     }
 
     /**
-     * One-line description of the work a tool call is about to perform.
+     * Description of the work a tool call performs. The conversation cuts it to
+     * one row while its container is collapsed.
      */
     public static String toolCallDescription(String toolName, ObjectNode arguments) {
         return com.quaxt.codingagent.cli.tools.LocalTools.describeCall(toolName, arguments)
                 .map(CodingAgentCli::terminalSafeText)
-                .orElseGet(() -> abbreviateShellText(arguments.toString(), 240));
+                .orElseGet(() -> terminalSafeText(arguments.toString()));
     }
 
-    /**
-     * One-line summary of a completed tool result.
-     */
-    public static String toolResultSummary(String toolName, AgentTool.ToolResult result) {
+    /** The text blocks of a tool result, as the model receives them. */
+    public static String toolResultOutput(AgentTool.ToolResult result) {
         StringBuilder text = new StringBuilder();
         for (UserContent block : result.content) {
             if (block instanceof TextContent value) {
@@ -3710,17 +3930,7 @@ public final class CodingAgentCli {
                 text.append(value.text);
             }
         }
-        return toolResultSummary(toolName, text.toString(), result.isError);
-    }
-
-    private static String toolResultSummary(String toolName, String output, boolean error) {
-        if (output.isBlank()) {
-            return error ? "Tool failed without an error message." : "Completed.";
-        }
-        if (toolName.equals("read") && !error) {
-            return "Read " + output.lines().count() + " line(s).";
-        }
-        return abbreviateShellText(output, error ? 480 : 320);
+        return text.toString();
     }
 
     private static String abbreviateShellText(String value, int maximumLength) {

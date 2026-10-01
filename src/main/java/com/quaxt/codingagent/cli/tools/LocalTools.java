@@ -355,7 +355,7 @@ public final class LocalTools {
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;
                     return local.shellSessions.execute(local.cwd, SHELL, args.get(commandArg), args.get(timeoutArg), args.get(yieldMsArg), () -> isAborted(signal));
-                }, raw -> abbreviate(textArgument(raw, "command", "")));
+                }, raw -> singleLine(textArgument(raw, "command", "")));
     }
 
     private static ToolDefinition<Environment> shellInput() {
@@ -398,7 +398,7 @@ public final class LocalTools {
                         args.get(inheritEnvironment), args.get(stdoutLog) == null ? null : localToolPath(local, args.get(stdoutLog)),
                         args.get(stderrLog) == null ? null : localToolPath(local, args.get(stderrLog)),
                         args.get(timeout), args.get(yieldMs), () -> isAborted(invocation.signal)),
-                raw -> "Running " + abbreviate(textArgument(raw, "executable", "")));
+                raw -> "Running " + singleLine(textArgument(raw, "executable", "")));
     }
 
     private static ToolDefinition<Environment> preflightPosix() {
@@ -892,8 +892,8 @@ public final class LocalTools {
         return value != null && value.isTextual() ? value.asText() : fallback;
     }
 
-    private static String abbreviate(String value) {
-        String normalized = value.replaceAll("\\s+", " ").trim();
-        return normalized.length() <= 240 ? normalized : normalized.substring(0, 240) + "...";
+    /** Joins whitespace runs, including line breaks, so a description reads as one line. */
+    private static String singleLine(String value) {
+        return value.replaceAll("\\s+", " ").trim();
     }
 }

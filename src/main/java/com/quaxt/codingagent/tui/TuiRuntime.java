@@ -22,6 +22,8 @@ public final class TuiRuntime {
 	public Terminal.Mode originalMode;
 	/** Whether bracketed paste was enabled before the alternate screen. */
 	public boolean pasteWasEnabled;
+	/** Whether mouse reporting was enabled before the alternate screen, for example by the conversation view. */
+	public boolean mouseWasEnabled;
 	public boolean active;
 
 	public TuiRuntime(Terminal terminal, Callable<Void> suspendAction, Runnable resumeMainScreen) {

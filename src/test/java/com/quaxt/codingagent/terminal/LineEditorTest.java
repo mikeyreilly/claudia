@@ -392,4 +392,64 @@ class LineEditorTest {
         assertEquals("/details", result.get(5, TimeUnit.SECONDS).line());
         assertEquals(List.of("ctrl-a"), seen);
     }
+
+    @Test
+    void handsMouseReportsToTheHostAndKeepsEditing() throws Exception {
+        List<TerminalEvent.Mouse> reports = new ArrayList<>();
+        LineEditor.Options options = prompt();
+        options.mouse = reports::add;
+        CompletableFuture<LineEditor.Result> result = readAsync(options);
+        type("ab\u001b[<0;3;1M\u001b[<65;4;2Mcd");
+        waitUntil(() -> editor.buffer().equals("abcd"));
+        type("\r");
+        assertEquals("abcd", result.get(5, TimeUnit.SECONDS).line());
+        assertEquals(List.of(
+                new TerminalEvent.Mouse(TerminalEvent.MouseAction.PRESS, 0, 3, 1),
+                new TerminalEvent.Mouse(TerminalEvent.MouseAction.SCROLL_DOWN, 1, 4, 2)), reports);
+    }
+
+    @Test
+    void aMouseReportQueuedAfterEnterDoesNotTurnEnterIntoAPastedNewline() throws Exception {
+        LineEditor.Options options = prompt();
+        options.mouse = ignored -> { };
+        LineEditor.Result result = read(options, "go\r\u001b[<64;1;1M");
+        assertEquals(Outcome.ACCEPTED, result.outcome());
+        assertEquals("go", result.line());
+    }
+
+    @Test
+    void reportsItsRegionHeightAndLetsTheHostRepaintWhenItChanges() throws Exception {
+        List<Integer> consulted = new ArrayList<>();
+        AtomicInteger repaints = new AtomicInteger();
+        int[] painted = {-1};
+        LineEditor.Options options = prompt();
+        options.header = "\n";
+        options.below = () -> editor.buffer().endsWith("!") ? List.of("[panel]") : List.of();
+        options.beforeDraw = rows -> {
+            consulted.add(rows);
+            if (rows == painted[0]) return false;
+            painted[0] = editor.regionRows();
+            terminal.write("\u001b[2J\u001b[H[host]");
+            editor.screenReset();
+            editor.redisplay();
+            repaints.incrementAndGet();
+            return true;
+        };
+        assertEquals(0, editor.regionRows(), "Not reading");
+        CompletableFuture<LineEditor.Result> result = readAsync(options);
+        waitUntil(() -> repaints.get() == 1);
+        assertEquals(2, editor.regionRows(), "Header line break and the prompt row");
+        assertEquals(List.of("[host]", ">"), screen(COLUMNS).lines().subList(0, 2));
+        type("abc");
+        waitUntil(() -> editor.buffer().equals("abc"));
+        assertEquals(1, repaints.get(), "Typing within one row keeps the region height");
+        type("!");
+        waitUntil(() -> repaints.get() == 2);
+        assertEquals(3, editor.regionRows());
+        assertEquals(List.of("[host]", "> abc!", "[panel]"), screen(COLUMNS).lines().subList(0, 3));
+        type("\u007f\r");
+        assertEquals("abc", result.get(5, TimeUnit.SECONDS).line());
+        assertEquals(3, repaints.get());
+        assertTrue(consulted.size() >= 4);
+    }
 }
