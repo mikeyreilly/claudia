@@ -344,12 +344,23 @@ silently move to a nearby line.
 At a stop, get the current `stop_id` from `debug_status` or `debug_wait`.
 Pass it with `session_id` to `debug_continue`, `debug_step`, or `debug_run_to`.
 These execution calls wait for the next stop or exit for up to `wait_ms`
-(0–30000 milliseconds, default 1000); `0` returns without waiting. If the wait
-expires, the response is `running` with `wait_expired: true`: the tool stops
+(0–30000 milliseconds, default 1000); `0` returns without waiting. A stop or exit
+within that budget is returned directly, so no separate wait call is needed.
+The budget covers waiting after resume, not synchronous JDI setup or tool
+scheduling. If the wait expires, the response is `running` with `wait_expired: true`: the tool stops
 waiting, but **does not pause or terminate the target**. Cancelling an execution
 wait likewise leaves the already-resumed target alone. Call `debug_wait` to
 wait again without changing execution; `event_types` can filter matching events
-(for example, `["stop", "exit"]`). Execution, pause, and wait responses contain
+(for example, `["stop", "exit"]`). `debug_wait.event_available` reports whether
+a retained event newer than the supplied `cursor` actually matches the filters.
+Already-stopped/completed targets return their current state immediately, without
+claiming a new matching event. A lost event-history range returns `gap: true`
+without waiting for the budget to expire; inspect `debug_events` for retained
+history. `wait_expired` means a running target reached the budget without a match
+or history gap. `debug_pause` synchronously suspends the target; its legacy
+`wait_ms` option does not impose a JDI suspension deadline.
+
+Execution, pause, and wait responses contain
 compact state, current stop/exit information, and output/event cursors. Use
 `debug_status` for detailed launch arguments, configured breakpoints, and
 capabilities. Debugger calls within one agent remain serialized, so a pending
@@ -357,6 +368,20 @@ wait must return or be cancelled before another call runs. `debug_run_to`
 currently requires a loaded executable `source_path`/`line` location; optional
 class/method/signature filters disambiguate it. Pending or method-only run-to
 locations are not yet supported.
+
+For example, a normal continue returns only dynamic state:
+
+```json
+{"status":"stopped","summary":"Target stopped","session_id":"...","pid":1234,"output_cursor":0,"output_complete":false,"event_cursor":7,"stop":{"stop_id":"...:2","reason":"breakpoint","thread_id":"1","location":{"class_name":"example.Main","line":42}},"wait_expired":false}
+```
+
+These changes require a newly started JVM; replacing a JAR cannot update tools
+already loaded in a running session. To stage a build without replacing a
+Windows-locked `target/codingagent.jar`, run
+`mvn -Dmaven.antrun.skip=true -DskipTests package`, then start
+`java -jar target/codingagent.next.jar` with your usual CLI arguments. Resume a
+saved session if needed; do not terminate an active session just to publish a JAR.
+
 Inspect a stopped target with
 `debug_threads`, `debug_stack`, `debug_variables`, `debug_object`,
 `debug_source`, or `debug_exception`. Use `debug_events` and `debug_output`

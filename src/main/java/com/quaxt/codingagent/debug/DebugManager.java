@@ -639,27 +639,31 @@ public final class DebugManager implements AutoCloseable {
     }
     private ObjectNode waitEvent(Session s,ObjectNode a,java.util.function.BooleanSupplier cancelled) throws InterruptedException {
         long since=cursor(a), end=System.nanoTime()+num(a,"wait_ms",1000,30000)*1_000_000L;
-        while(!relevantEvent(s,since,a) && s.state.equals("running")) {
+        List<String> types=strings(a,"event_types"); validateEventTypes(types);
+        String thread=str(a,"thread_id",null);
+        while(s.state.equals("running") && !eventGap(s,since) && !matchingEvent(s,since,types,thread)) {
             if(cancelled.getAsBoolean()) throw fail("cancelled","Wait cancelled; target execution was not changed");
             long remaining=end-System.nanoTime(); if(remaining<=0) break;
-            s.wait(Math.max(1,Math.min(100,remaining/1_000_000L)));
+            long slice=Math.min(remaining,100_000_000L);
+            s.wait(slice/1_000_000L,(int)(slice%1_000_000L));
         }
-        boolean available=relevantEvent(s,since,a);
-        ObjectNode out=executionState(s,available?"New matching event available":s.state.equals("running")?"Wait expired; target is still running":"Target state unchanged");
-        out.put("wait_expired",!available && s.state.equals("running"));
+        boolean available=matchingEvent(s,since,types,thread), gap=eventGap(s,since);
+        boolean expired=!available && !gap && s.state.equals("running");
+        String summary=gap?"Event history gap; inspect debug_events":available?"New matching event available":
+            expired?"Wait expired; target is still running":"Target state unchanged; no new matching event";
+        ObjectNode out=executionState(s,summary).put("event_available",available).put("wait_expired",expired);
+        if(gap) out.put("gap",true);
         out.put("next_event_cursor",s.eventCursor); return out;
     }
     private static void validateEventTypes(List<String> types) {
         for(String type:types) if(!EVENT_TYPES.contains(type))
             throw fail("invalid_argument","Unknown event type "+type+"; choices: "+EVENT_TYPES);
     }
-    private static boolean relevantEvent(Session s,long since,JsonNode a) {
-        List<String> types=strings(a,"event_types"); validateEventTypes(types);
-        String thread=str(a,"thread_id",null);
-        if(!s.state.equals("running")) return true;
+    private static boolean eventGap(Session s,long since) {
+        return !s.events.isEmpty() && since<s.events.getFirst().path("cursor").asLong()-1;
+    }
+    private static boolean matchingEvent(Session s,long since,List<String> types,String thread) {
         if(s.eventCursor<=since) return false;
-        if(!s.events.isEmpty() && since<s.events.getFirst().path("cursor").asLong()-1) return true;
-        if(types.isEmpty() && thread==null) return true;
         for(ObjectNode event:s.events) if(event.path("cursor").asLong()>since
             && (types.isEmpty() || types.contains(event.path("type").asText()))
             && (thread==null || thread.equals(event.path("data").path("thread_id").asText()))) return true;
