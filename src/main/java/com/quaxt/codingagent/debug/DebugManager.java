@@ -97,6 +97,10 @@ public final class DebugManager implements AutoCloseable {
             return remember(replay,args,result);
         } catch (Failure e) { return remember(replay,args,withSession(error(e.code,e.getMessage()),args)); }
         catch (VMDisconnectedException e) { return remember(replay,args,withSession(error("disconnected", "Target disconnected; inspect debug_status or debug_output"),args)); }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return remember(replay,args,withSession(error("cancelled", "Debug wait interrupted; target execution was not paused or terminated"),args));
+        }
         catch (Exception e) { return remember(replay,args,withSession(error("target_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()),args)); }
     }
     private ObjectNode remember(String replay,ObjectNode args,ObjectNode result) {
@@ -111,7 +115,7 @@ public final class DebugManager implements AutoCloseable {
         return error;
     }
     private static String str(JsonNode n,String k,String def) { JsonNode v=n.get(k); return v!=null && v.isTextual() && !v.asText().isBlank()?v.asText():def; }
-    private static int num(JsonNode n,String k,int def,int max) { JsonNode v=n.get(k); if (v==null || v.isNull()) return def; if (!v.isIntegralNumber() || v.asLong()<0 || v.asLong()>max) throw fail("invalid_argument", k+" must be between 0 and "+max); return v.asInt(); }
+    private static int num(JsonNode n,String k,int def,int max) { JsonNode v=n.get(k); if (v==null || v.isNull()) return def; if (!v.isIntegralNumber() || !v.canConvertToInt() || v.asInt()<0 || v.asInt()>max) throw fail("invalid_argument", k+" must be between 0 and "+max); return v.asInt(); }
     private static boolean bool(JsonNode n,String k,boolean def) { JsonNode v=n.get(k); return v==null?def:v.asBoolean(def); }
     private static int limit(JsonNode n) { int l=num(n,"limit",20,MAX_PAGE); return l==0?20:l; }
     private static int cursor(JsonNode n) { return num(n,"cursor",0,Integer.MAX_VALUE); }
@@ -494,12 +498,25 @@ public final class DebugManager implements AutoCloseable {
         out.put("truncated",end<all.size()); if(end<all.size()) out.put("next_cursor",end);
         return out;
     }
+    /** Dynamic state only; execution tools do not repeat launch configuration or capabilities. */
+    private static ObjectNode executionState(Session s,String summary) {
+        synchronized(s) {
+            ObjectNode out=node(s.state,summary).put("session_id",s.id).put("pid",s.pid)
+                .put("output_cursor",s.outputCursor).put("output_complete",s.outputReaders==0)
+                .put("event_cursor",s.eventCursor);
+            if(s.stopId!=null) out.set("stop",stopData(s));
+            if(s.exitCode!=Integer.MIN_VALUE) out.put("exit_code",s.exitCode)
+                .put("exit_code_source",s.runnerPid>0?"maven_runner":"target");
+            if(s.failure!=null) out.put("failure",s.failure);
+            if(s.completionReason!=null) out.put("completion_reason",s.completionReason);
+            if(s.outputWarning!=null) out.put("output_warning",s.outputWarning);
+            return out;
+        }
+    }
     private static ObjectNode status(Session s,String summary) {
         synchronized(s) {
-            ObjectNode out=node(s.state,summary).put("session_id",s.id).put("pid",s.pid).put("target",s.target)
-                .put("ownership",s.launched?"launched":"attached")
-                .put("output_cursor",s.outputCursor).put("output_complete",s.outputReaders==0)
-                .put("event_cursor",s.eventCursor).put("breakpoint_count",s.breakpoints.size());
+            ObjectNode out=executionState(s,summary).put("target",s.target)
+                .put("ownership",s.launched?"launched":"attached").put("breakpoint_count",s.breakpoints.size());
             ArrayNode configured=out.putArray("breakpoints");
             s.breakpoints.values().stream().limit(10).forEach(bp -> configured.addObject()
                 .put("breakpoint_id",bp.id).put("type",bp.type).put("enabled",bp.enabled)
@@ -509,13 +526,7 @@ public final class DebugManager implements AutoCloseable {
             ArrayNode args=out.putArray("arguments"); appendRedactedArguments(args,s.targetArguments);
             ArrayNode opts=out.putArray("jvm_options"); appendRedactedArguments(opts,s.jvmOptions);
             ArrayNode env=out.putArray("environment_overrides"); s.environmentNames.forEach(env::add);
-            if(s.stopId!=null) out.set("stop",stopData(s));
             if(s.runnerPid>0) out.put("runner_pid",s.runnerPid);
-            if(s.exitCode!=Integer.MIN_VALUE) out.put("exit_code",s.exitCode)
-                .put("exit_code_source",s.runnerPid>0?"maven_runner":"target");
-            if(s.failure!=null) out.put("failure",s.failure);
-            if(s.completionReason!=null) out.put("completion_reason",s.completionReason);
-            if(s.outputWarning!=null) out.put("output_warning",s.outputWarning);
             ObjectNode caps=out.putObject("capabilities"); caps.put("jdi",true).put("virtual_threads",true)
                 .put("virtual_thread_carriers",false).put("mutation",false).put("safe_evaluation",true)
                 .put("source_bytecode_validation",false).put("attached_output_capture",false);
@@ -557,9 +568,9 @@ public final class DebugManager implements AutoCloseable {
                     yield detachedResult;
                 }
                 case "debug_breakpoints" -> breakpoints(s,a);
-                case "debug_continue" -> resume(s,a,false);
-                case "debug_step" -> resume(s,a,true);
-                case "debug_run_to" -> runTo(s,a);
+                case "debug_continue" -> resume(s,a,false,cancelled);
+                case "debug_step" -> resume(s,a,true,cancelled);
+                case "debug_run_to" -> runTo(s,a,cancelled);
                 case "debug_pause" -> pause(s,a);
                 case "debug_wait" -> waitEvent(s,a,cancelled);
                 case "debug_events" -> pageQueue(s.events,s.eventCursor,a,"events");
@@ -578,7 +589,7 @@ public final class DebugManager implements AutoCloseable {
                 case "debug_object" -> object(s,a);
                 case "debug_source" -> source(s,a);
                 case "debug_exception" -> exception(s,a);
-                case "debug_evaluate" -> evaluate(s,a);
+                case "debug_evaluate" -> evaluate(s,a,cancelled);
                 default -> throw fail("unsupported","Unknown debugger operation: "+op);
             };
             if(!result.has("session_id")) result.put("session_id",s.id);
@@ -634,7 +645,7 @@ public final class DebugManager implements AutoCloseable {
             s.wait(Math.max(1,Math.min(100,remaining/1_000_000L)));
         }
         boolean available=relevantEvent(s,since,a);
-        ObjectNode out=status(s,available?"New matching event available":s.state.equals("running")?"Wait expired; target is still running":"Target state unchanged");
+        ObjectNode out=executionState(s,available?"New matching event available":s.state.equals("running")?"Wait expired; target is still running":"Target state unchanged");
         out.put("wait_expired",!available && s.state.equals("running"));
         out.put("next_event_cursor",s.eventCursor); return out;
     }
@@ -676,11 +687,12 @@ public final class DebugManager implements AutoCloseable {
             .put("session_id",s.id).put("pid",s.pid).put("terminated",terminated);
     }
     private ObjectNode pause(Session s,ObjectNode a) throws Exception {
-        if(s.state.equals("stopped")) return status(s,"Already stopped");
+        num(a,"wait_ms",1000,30000);
+        if(s.state.equals("stopped")) return executionState(s,"Already stopped");
         if(!s.state.equals("running")) throw fail("invalid_state","Target is not running");
         ThreadReference selected=selectThread(s,str(a,"thread_id",null),false); s.vm.suspend();
         stop(s,null,selected,"pause",null,null,null,null);
-        return status(s,"Paused all threads; no automatic resume");
+        return executionState(s,"Paused all threads; no automatic resume");
     }
     private static ThreadReference selectThread(Session s,String id,boolean stoppedOnly) {
         if(id==null && s.state.equals("stopped") && s.stoppedThread!=null && s.stoppedThread.isSuspended()) return s.stoppedThread;
@@ -689,7 +701,8 @@ public final class DebugManager implements AutoCloseable {
         }
         throw fail("thread_not_found","No matching "+(stoppedOnly?"suspended ":"")+"thread "+id);
     }
-    private ObjectNode resume(Session s,ObjectNode a,boolean stepping) {
+    private ObjectNode resume(Session s,ObjectNode a,boolean stepping,java.util.function.BooleanSupplier cancelled) throws InterruptedException {
+        int waitMs=num(a,"wait_ms",1000,30000); // Reject invalid waits before creating requests or resuming.
         checkStop(s,a);
         if(stepping) {
             ThreadReference t=selectThread(s,str(a,"thread_id",null),true);
@@ -706,9 +719,24 @@ public final class DebugManager implements AutoCloseable {
             .put("scope",s.manuallySuspended || s.suspendedSet==null || s.suspendedSet.suspendPolicy()==EventRequest.SUSPEND_ALL?"all_threads":"event_thread"));
         if(s.manuallySuspended) s.vm.resume(); else if(s.suspendedSet!=null) s.suspendedSet.resume();
         s.suspendedSet=null; s.manuallySuspended=false;
-        return status(s,"Target resumed; call debug_wait to await next stop");
+        return awaitExecution(s,waitMs,cancelled);
     }
-    private ObjectNode runTo(Session s,ObjectNode a) {
+    private static ObjectNode awaitExecution(Session s,int waitMs,java.util.function.BooleanSupplier cancelled) throws InterruptedException {
+        long end=System.nanoTime()+waitMs*1_000_000L;
+        while(s.state.equals("running")) {
+            if(cancelled.getAsBoolean()) throw fail("cancelled","Execution wait cancelled; target was resumed and was not paused or terminated; inspect debug_status");
+            long remaining=end-System.nanoTime();
+            if(remaining<=0) break;
+            // Release the session monitor so the event loop can publish the next stop/exit.
+            long slice=Math.min(remaining,100_000_000L);
+            s.wait(slice/1_000_000L,(int)(slice%1_000_000L));
+        }
+        boolean expired=s.state.equals("running");
+        return executionState(s,expired?"Wait expired; target is still running":s.state.equals("stopped")?"Target stopped":"Target completed")
+            .put("wait_expired",expired);
+    }
+    private ObjectNode runTo(Session s,ObjectNode a,java.util.function.BooleanSupplier cancelled) throws InterruptedException {
+        num(a,"wait_ms",1000,30000); // Do not install a one-shot breakpoint for an invalid wait.
         checkStop(s,a);
         ObjectNode bp=a.deepCopy(); bp.put("type","source").put("one_shot",true);
         Breakpoint spec=parseBreakpoint(bp); List<Location> found=findLocations(s,s.vm.allClasses(),spec);
@@ -718,7 +746,7 @@ public final class DebugManager implements AutoCloseable {
         if(spec.thread!=null) request.addThreadFilter(selectThread(s,spec.thread,true));
         request.setSuspendPolicy(EventRequest.SUSPEND_ALL); request.enable();
         spec.id="run-to-"+UUID.randomUUID(); spec.requests.add(request); spec.locations.add(found.getFirst()); spec.pending=null;
-        s.breakpoints.put(spec.id,spec); return resume(s,a,false);
+        s.breakpoints.put(spec.id,spec); return resume(s,a,false,cancelled);
     }
     private static Breakpoint parseBreakpoint(JsonNode a) {
         Breakpoint bp=new Breakpoint();
@@ -1243,13 +1271,59 @@ public final class DebugManager implements AutoCloseable {
             .put("preview",text.substring(0,Math.min(256,text.length()))).put("truncated",text.length()>256);
     }
     private static boolean truth(ReadOnlyExpression.Result v) { return v.value() instanceof BooleanValue b && b.booleanValue(); }
-    private static ObjectNode evaluate(Session s,ObjectNode a) {
-        String expr=str(a,"expression",null); required(expr,"expression");
+    private static ObjectNode evaluate(Session s,ObjectNode a,java.util.function.BooleanSupplier cancelled) {
+        boolean single=a.hasNonNull("expression"), batch=a.hasNonNull("expressions");
+        if(single==batch) throw fail("invalid_argument","Specify exactly one expression or expressions");
+        List<String> expressions=new ArrayList<>();
+        if(single) {
+            if(!a.path("expression").isTextual()) throw fail("invalid_argument","expression must be a string");
+            expressions.add(a.path("expression").asText());
+        } else {
+            JsonNode list=a.path("expressions");
+            if(!list.isArray() || list.isEmpty() || list.size()>20)
+                throw fail("invalid_argument","expressions must be an array of 1-20 strings");
+            for(JsonNode item:list) {
+                if(!item.isTextual()) throw fail("invalid_argument","expressions must contain only strings");
+                expressions.add(item.asText());
+            }
+        }
+        // Validate the entire request's size before doing any target reads.
+        for(String expression:expressions) {
+            if(expression.isBlank()) throw fail("invalid_argument","Expressions must not be blank");
+            if(expression.codePointCount(0,expression.length())>256) throw fail("unsafe_expression","Read-only expressions are limited to 256 characters");
+        }
         if(bool(a,"allow_side_effects",false)) throw fail("unsupported","Mutation/method invocation is not implemented; read-only evaluation is available without allow_side_effects");
-        StackFrame f=frame(s,a); ObjectNode out=node("ok","Read-only expression evaluated without method calls or mutation")
-            .put("stop_id",s.stopId).put("thread_id",Long.toString(f.thread().uniqueID()))
-            .put("expression",expr).put("safety_level","read_only");
-        out.set("value",value(s,evaluateValue(f,expr))); return out;
+        int budget=num(a,"timeout_ms",0,30000);
+        long end=budget==0?Long.MAX_VALUE:System.nanoTime()+budget*1_000_000L;
+        StackFrame f=frame(s,a);
+        ObjectNode out=node("ok",single?"Read-only expression evaluated without method calls or mutation":"Read-only expressions evaluated in input order")
+            .put("stop_id",s.stopId).put("thread_id",Long.toString(f.thread().uniqueID())).put("safety_level","read_only");
+        ArrayNode results=single?null:out.putArray("results");
+        int errors=0;
+        for(String expression:expressions) {
+            ObjectNode item;
+            try {
+                if(cancelled.getAsBoolean()) throw fail("cancelled","Evaluation cancelled; target execution was not changed");
+                if(budget>0 && System.nanoTime()>=end) throw fail("timeout","Evaluation scheduling budget expired; target execution was not changed");
+                item=Json.MAPPER.createObjectNode().put("status","ok").put("expression",expression);
+                item.set("value",value(s,evaluateValue(f,expression)));
+            } catch(Failure invalid) {
+                if(single) throw invalid;
+                item=error(invalid.code,invalid.getMessage()).put("expression",expression);
+                item.remove("summary");
+                errors++;
+            } catch(ObjectCollectedException unavailable) {
+                if(single) throw unavailable;
+                item=Json.MAPPER.createObjectNode().put("status","error").put("code","object_collected")
+                    .put("message","Target object was collected; try another expression").put("expression",expression);
+                errors++;
+            }
+            if(single) {
+                out.put("expression",expression); out.set("value",item.path("value"));
+            } else results.add(item);
+        }
+        if(batch) out.put("error_count",errors);
+        return out;
     }
     /** Detaches rather than killing targets on runtime reset or close. An attached JVM is never terminated. */
     public void closeSessions() {

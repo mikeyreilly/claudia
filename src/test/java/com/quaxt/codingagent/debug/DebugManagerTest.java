@@ -204,9 +204,9 @@ class DebugManagerTest {
                     .put("allow_side_effects", true), WORKSPACE).path("code").asText());
             assertEquals("40", ok(manager, "debug_evaluate", frameArgs.deepCopy().put("expression", "sample.count"))
                     .path("value").path("preview").asText(), "Rejected expressions must not mutate the target");
-            ObjectNode stepped = ok(manager, "debug_step", base.deepCopy().put("direction", "over"));
-            assertEquals("running", stepped.path("status").asText(), stepped.toString());
-            ObjectNode next = awaitState(manager, session, "stopped", Duration.ofSeconds(10));
+            ObjectNode stepped = ok(manager, "debug_step", base.deepCopy().put("direction", "over").put("wait_ms", 10000));
+            assertEquals("stopped", stepped.path("status").asText(), stepped.toString());
+            ObjectNode next = stepped;
             assertEquals("step", next.path("stop").path("reason").asText(), next.toString());
             String nextStop = next.path("stop").path("stop_id").asText();
             assertNotEquals(stop, nextStop);
