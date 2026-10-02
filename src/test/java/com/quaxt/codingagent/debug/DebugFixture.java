@@ -24,7 +24,7 @@ public final class DebugFixture {
         Sample sample = new Sample(seed);
         int[] numbers = {seed, seed + 2};
         int answer = sample.count + numbers[1] - seed; // DEBUG_FIXTURE_BREAKPOINT
-        return answer;
+        return answer; // DEBUG_FIXTURE_RETURN
     }
 
     private static final class Sample {

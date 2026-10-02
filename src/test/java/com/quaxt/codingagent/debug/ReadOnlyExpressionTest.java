@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -161,6 +162,101 @@ class ReadOnlyExpressionTest {
                 }
             }
             assertEquals(Map.of("array-log", "4", "literal-log", "ready==go"), logs);
+            assertValue(target, "this.calls", "0");
+        }
+    }
+
+    @Test
+    void batchEvaluationKeepsOrderAndPerItemErrorsInOneUnchangedStop() throws Exception {
+        try (Target target = new Target()) {
+            target.stopAtInspection();
+            ObjectNode request = target.base().put("idempotency_key", "batch-once");
+            List<String> inputs = List.of("numbers[0]", "this.touch()", "numbers[2]", "items[index].name",
+                    "items[0]", "missing", "\"ready==go\"", "numbers[0] = 99");
+            request.set("expressions", Json.MAPPER.valueToTree(inputs));
+            ObjectNode result = target.ok("debug_evaluate", request);
+            assertEquals("read_only", result.path("safety_level").asText());
+            assertEquals(target.stop, result.path("stop_id").asText());
+            assertEquals(inputs.size(), result.path("results").size());
+            assertEquals(4, result.path("error_count").asInt());
+            for (int i = 0; i < inputs.size(); i++) assertEquals(inputs.get(i), result.path("results").get(i).path("expression").asText());
+            assertEquals("40", result.path("results").get(0).path("value").path("preview").asText());
+            assertEquals("unsafe_expression", result.path("results").get(1).path("code").asText());
+            assertEquals("index_out_of_bounds", result.path("results").get(2).path("code").asText());
+            assertEquals("beta", result.path("results").get(3).path("value").path("preview").asText());
+            String reference = result.path("results").get(4).path("value").path("reference").asText();
+            assertFalse(reference.isBlank());
+            assertEquals("variable_unavailable", result.path("results").get(5).path("code").asText());
+            assertEquals("ready==go", result.path("results").get(6).path("value").path("preview").asText());
+            assertFalse(result.path("results").get(6).path("value").has("reference"));
+            assertEquals("unsafe_expression", result.path("results").get(7).path("code").asText());
+            assertFalse(target.ok("debug_object", target.base().put("reference", reference)).path("fields").isEmpty());
+            assertEquals(result, target.ok("debug_evaluate", request.deepCopy()), "Idempotent replay preserves values and references");
+            assertEquals(target.stop, target.ok("debug_status", target.sessionArgs()).path("stop").path("stop_id").asText());
+            assertValue(target, "this.calls", "0");
+            assertValue(target, "numbers[0]", "40");
+            target.continueToExit();
+            ObjectNode stale = target.base();
+            stale.putArray("expressions").add("numbers[0]");
+            assertEquals("stale_stop", target.call("debug_evaluate", stale).path("code").asText());
+        }
+    }
+
+    @Test
+    void batchBoundsAndModeValidationHappenBeforeTargetReads() throws Exception {
+        try (Target target = new Target()) {
+            target.stopAtInspection();
+            assertEquals("invalid_argument", target.call("debug_evaluate", target.base()).path("code").asText());
+            ObjectNode both = target.base().put("expression", "numbers[0]");
+            both.putArray("expressions").add("numbers[1]");
+            assertEquals("invalid_argument", target.call("debug_evaluate", both).path("code").asText());
+            ObjectNode empty = target.base();
+            empty.putArray("expressions");
+            assertEquals("invalid_argument", target.call("debug_evaluate", empty).path("code").asText());
+            ObjectNode tooMany = target.base();
+            for (int i = 0; i < 21; i++) tooMany.withArray("expressions").add("numbers[0]");
+            assertEquals("invalid_argument", target.call("debug_evaluate", tooMany).path("code").asText());
+            ObjectNode tooLong = target.base();
+            tooLong.putArray("expressions").add("numbers[0]").add("a".repeat(257));
+            assertEquals("unsafe_expression", target.call("debug_evaluate", tooLong).path("code").asText());
+            ObjectNode sideEffects = target.base().put("allow_side_effects", true);
+            sideEffects.putArray("expressions").add("numbers[0]");
+            assertEquals("unsupported", target.call("debug_evaluate", sideEffects).path("code").asText());
+            ObjectNode maximum = target.base();
+            for (int i = 0; i < 20; i++) maximum.withArray("expressions").add("numbers[0]");
+            assertEquals(20, target.ok("debug_evaluate", maximum).path("results").size());
+            String unicode = "\"" + "😀".repeat(254) + "\""; // 256 Unicode characters, including quotes.
+            assertDoesNotThrow(() -> ReadOnlyExpression.validate(unicode));
+            assertEquals("ok", target.evaluate(unicode).path("status").asText());
+            assertEquals(target.stop, target.ok("debug_status", target.sessionArgs()).path("stop").path("stop_id").asText());
+            assertValue(target, "this.calls", "0");
+        }
+    }
+
+    @Test
+    void batchCancellationAndSchedulingBudgetNeverChangeTargetExecution() throws Exception {
+        try (Target target = new Target()) {
+            target.stopAtInspection();
+            ObjectNode request = target.base();
+            request.putArray("expressions").add("numbers[0]").add("numbers[1]").add("this.calls");
+            AtomicInteger polls = new AtomicInteger();
+            ObjectNode cancelled = target.manager.call("debug_evaluate", request, WORKSPACE, () -> polls.incrementAndGet() >= 3);
+            assertEquals("ok", cancelled.path("status").asText(), cancelled.toString());
+            assertEquals("40", cancelled.path("results").get(0).path("value").path("preview").asText());
+            assertEquals("cancelled", cancelled.path("results").get(1).path("code").asText());
+            assertEquals("cancelled", cancelled.path("results").get(2).path("code").asText());
+            assertEquals(2, cancelled.path("error_count").asInt());
+            ObjectNode timed = target.manager.call("debug_evaluate", request.deepCopy().put("timeout_ms", 1), WORKSPACE, () -> {
+                // Deterministically exhaust the scheduling budget, without slow target methods or wall-clock assertions.
+                try { Thread.sleep(20); } catch (InterruptedException e) { throw new AssertionError(e); }
+                return false;
+            });
+            assertEquals("ok", timed.path("status").asText(), timed.toString());
+            for (JsonNode item : timed.path("results")) assertEquals("timeout", item.path("code").asText());
+            assertEquals(3, timed.path("error_count").asInt());
+            for (int invalid : List.of(-1, 30001))
+                assertEquals("invalid_argument", target.manager.call("debug_evaluate", request.deepCopy().put("timeout_ms", invalid), WORKSPACE).path("code").asText());
+            assertEquals(target.stop, target.ok("debug_status", target.sessionArgs()).path("stop").path("stop_id").asText());
             assertValue(target, "this.calls", "0");
         }
     }

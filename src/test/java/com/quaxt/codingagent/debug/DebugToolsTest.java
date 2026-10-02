@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -66,6 +67,163 @@ class DebugToolsTest {
     }
 
     @Test
+    void breakpointSchemaIsCompactAndSeparatesAddsFromPartialUpdates() {
+        try (Target target = new Target()) {
+            JsonNode schema = target.tools.get("debug_breakpoints").definition().parameters().schema();
+            assertNoRootCombinators(schema);
+            assertEquals(Set.of("session_id", "action", "breakpoints", "breakpoint_ids", "limit", "cursor", "idempotency_key"),
+                    Json.MAPPER.convertValue(schema.path("properties"), Map.class).keySet());
+            assertEquals(Json.MAPPER.valueToTree(List.of("session_id")), schema.path("required"));
+            JsonNode properties = schema.path("properties");
+            assertEquals("list", properties.path("action").path("default").asText());
+            assertEnum(properties.path("action"), "list", "add", "update", "enable", "disable", "remove");
+            assertEquals(1, properties.path("breakpoints").path("minItems").asInt());
+            assertEquals(64, properties.path("breakpoints").path("maxItems").asInt());
+            assertEquals(1, properties.path("breakpoint_ids").path("minItems").asInt());
+            assertEquals(64, properties.path("breakpoint_ids").path("maxItems").asInt());
+            JsonNode spec = properties.path("breakpoints").path("items");
+            assertTrue(spec.path("required").isEmpty(), "Updates must not require a new location");
+            spec.path("properties").forEach(property -> assertFalse(property.has("default"), "Patch fields must not acquire defaults"));
+            assertEnum(spec.path("properties").path("type"), "source", "method_entry", "method_exit", "exception", "field");
+            assertEnum(spec.path("properties").path("hit_policy"), "after", "exact", "every");
+            assertEnum(spec.path("properties").path("suspension_policy"), "all_threads", "event_thread");
+
+            assertRequired(schema.path("if"), "action"); // Missing action must not accidentally select add.
+            assertEnum(schema.path("if").path("properties").path("action"), "add");
+            assertRequired(schema.path("then"), "breakpoints");
+            JsonNode variants = schema.path("then").path("properties").path("breakpoints").path("items").path("anyOf");
+            assertEquals(4, variants.size(), "Method entry/exit share location requirements, not an action x type product");
+            assertRequired(variants.get(0), "source_path", "line");
+            assertEnum(variants.get(0).path("properties").path("type"), "source");
+            assertEquals(1, variants.get(0).path("properties").path("line").path("minimum").asInt());
+            assertRequired(variants.get(1), "type", "class_name", "method_name");
+            assertEnum(variants.get(1).path("properties").path("type"), "method_entry", "method_exit");
+            assertRequired(variants.get(2), "type"); // exception_class is an optional filter.
+            assertEnum(variants.get(2).path("properties").path("type"), "exception");
+            assertRequired(variants.get(3), "type", "class_name", "field_name");
+            assertEnum(variants.get(3).path("properties").path("type"), "field");
+            JsonNode update = schema.path("else");
+            assertEnum(update.path("if").path("properties").path("action"), "update");
+            assertRequired(update.path("then"), "breakpoints");
+            assertRequired(update.path("then").path("properties").path("breakpoints").path("items"), "breakpoint_id");
+            assertEnum(update.path("else").path("if").path("properties").path("action"), "enable", "disable", "remove");
+            assertRequired(update.path("else").path("then"), "breakpoint_ids");
+        }
+    }
+
+    @Test
+    void minimalBreakpointBindingsAndLegacyFlattenedCallsReachTheManager() throws Exception {
+        try (Target target = new Target()) {
+            var parameters = target.tools.get("debug_breakpoints").definition().parameters();
+            ObjectNode source = obj().put("session_id", "missing").put("action", "add");
+            source.putArray("breakpoints").add(obj().put("source_path", SOURCE).put("line", 1));
+            ObjectNode update = obj().put("session_id", "missing").put("action", "update");
+            update.putArray("breakpoints").add(obj().put("breakpoint_id", "bp").put("enabled", false));
+            ObjectNode legacy = obj().put("session_id", "missing").put("action", "add")
+                    .put("source_path", SOURCE).put("line", 1).put("type", "source");
+            for (ObjectNode arguments : List.of(source, update, legacy, obj().put("session_id", "missing"),
+                    obj().put("session_id", "missing").put("action", "list").put("limit", 1).put("cursor", 0))) {
+                assertDoesNotThrow(() -> parameters.parse(arguments));
+                assertNotEquals("invalid_argument", target.invoke("debug_breakpoints", arguments).path("code").asText());
+            }
+            for (String action : List.of("enable", "disable", "remove")) {
+                ObjectNode ids = obj().put("session_id", "missing").put("action", action);
+                ids.putArray("breakpoint_ids").add("bp");
+                assertDoesNotThrow(() -> parameters.parse(ids));
+                assertNotEquals("invalid_argument", target.invoke("debug_breakpoints", ids).path("code").asText());
+            }
+            ObjectNode invalidPatch = update.deepCopy();
+            ((ObjectNode) invalidPatch.path("breakpoints").get(0)).put("enabled", "false");
+            assertThrows(IllegalArgumentException.class, () -> parameters.parse(invalidPatch));
+            // withSchema changes advertising only; hidden flattened parameters still validate their types.
+            assertThrows(IllegalArgumentException.class, () -> parameters.parse(legacy.deepCopy().put("line", "1")));
+        }
+    }
+
+    @Test
+    void evaluateAdvertisesExactOneSingleOrBoundedBatchAndPreservesTypedParsing() {
+        try (Target target = new Target()) {
+            var parameters = target.tools.get("debug_evaluate").definition().parameters();
+            JsonNode schema = parameters.schema();
+            assertNoRootCombinators(schema);
+            assertRequired(schema, "session_id", "stop_id");
+            assertRequired(schema.path("if"), "expression");
+            assertRequired(schema.path("then").path("not"), "expressions");
+            assertRequired(schema.path("else"), "expressions");
+            JsonNode properties = schema.path("properties");
+            assertEquals(256, properties.path("expression").path("maxLength").asInt());
+            assertEquals("array", properties.path("expressions").path("type").asText());
+            assertEquals(1, properties.path("expressions").path("minItems").asInt());
+            assertEquals(20, properties.path("expressions").path("maxItems").asInt());
+            assertEquals("string", properties.path("expressions").path("items").path("type").asText());
+            assertEquals(256, properties.path("expressions").path("items").path("maxLength").asInt());
+            JsonNode timeout = properties.path("timeout_ms");
+            assertEquals(0, timeout.path("minimum").asInt());
+            assertEquals(30000, timeout.path("maximum").asInt());
+            assertEquals(0, timeout.path("default").asInt());
+            assertTrue(timeout.path("description").asText().contains("Does not interrupt in-flight JDI reads"));
+            ObjectNode base = obj().put("session_id", "missing").put("stop_id", "stop");
+            assertDoesNotThrow(() -> parameters.parse(base.deepCopy().put("expression", "value")));
+            assertDoesNotThrow(() -> parameters.parse(base.deepCopy().put("expression", "x".repeat(256))));
+            assertDoesNotThrow(() -> parameters.parse(base.deepCopy().put("expression", "\uD83D\uDE00".repeat(256))));
+            assertThrows(IllegalArgumentException.class, () -> parameters.parse(base.deepCopy().put("expression", "x".repeat(257))));
+            for (int count : List.of(1, 20)) {
+                ObjectNode batch = base.deepCopy();
+                var expressions = batch.putArray("expressions");
+                for (int i = 0; i < count; i++) expressions.add("x".repeat(256));
+                assertDoesNotThrow(() -> parameters.parse(batch)); // Size limits/exact-one are enforced by the manager.
+            }
+            ObjectNode nonString = base.deepCopy();
+            nonString.putArray("expressions").add(1);
+            assertThrows(IllegalArgumentException.class, () -> parameters.parse(nonString));
+            assertThrows(IllegalArgumentException.class, () -> parameters.parse(base.deepCopy().put("expressions", "value")));
+            for (int budget : List.of(0, 1, 30000))
+                assertDoesNotThrow(() -> parameters.parse(base.deepCopy().put("expression", "value").put("timeout_ms", budget)));
+            for (int budget : List.of(-1, 30001))
+                assertThrows(IllegalArgumentException.class, () -> parameters.parse(base.deepCopy().put("expression", "value").put("timeout_ms", budget)));
+        }
+    }
+
+    @Test
+    void enumsAndResumeWaitContractsAreAdvertised() {
+        try (Target target = new Target()) {
+            for (String operation : List.of("debug_continue", "debug_step", "debug_run_to")) {
+                var definition = target.tools.get(operation).definition();
+                JsonNode wait = definition.parameters().schema().path("properties").path("wait_ms");
+                assertEquals(0, wait.path("minimum").asInt());
+                assertEquals(30000, wait.path("maximum").asInt());
+                assertEquals(1000, wait.path("default").asInt());
+                assertTrue(wait.path("description").asText().contains("Expiry leaves the JVM running"));
+                assertTrue(definition.description().contains("Wait expiry leaves the JVM running"));
+                ObjectNode base = obj().put("session_id", "missing").put("stop_id", "stop");
+                for (int milliseconds : List.of(0, 1000, 30000))
+                    assertDoesNotThrow(() -> definition.parameters().parse(base.deepCopy().put("wait_ms", milliseconds)));
+                for (int milliseconds : List.of(-1, 30001))
+                    assertThrows(IllegalArgumentException.class, () -> definition.parameters().parse(base.deepCopy().put("wait_ms", milliseconds)));
+            }
+            JsonNode direction = target.tools.get("debug_step").definition().parameters().schema().path("properties").path("direction");
+            assertEnum(direction, "into", "over", "out");
+            assertEquals("over", direction.path("default").asText());
+            for (String operation : List.of("debug_wait", "debug_events"))
+                assertEnum(target.tools.get(operation).definition().parameters().schema().path("properties").path("event_types").path("items"),
+                        "launch", "attach", "detach", "exit", "stop", "resume", "breakpoint_resolved", "breakpoint_pending",
+                        "breakpoint_error", "breakpoint_change", "logpoint");
+        }
+    }
+
+    private static void assertNoRootCombinators(JsonNode schema) {
+        for (String combinator : List.of("oneOf", "anyOf", "allOf")) assertFalse(schema.has(combinator));
+    }
+
+    private static void assertRequired(JsonNode schema, String... fields) {
+        assertEquals(Json.MAPPER.valueToTree(List.of(fields)), schema.path("required"));
+    }
+
+    private static void assertEnum(JsonNode schema, String... values) {
+        assertEquals(Json.MAPPER.valueToTree(List.of(values)), schema.path("enum"));
+    }
+
+    @Test
     @Timeout(45)
     void registeredToolsPageLiveInspectionAndUseStoppedSourceLineForZero() throws Exception {
         Path gate = temp.resolve("tools-go");
@@ -75,13 +233,12 @@ class DebugToolsTest {
             String entryStop = entry.path("stop").path("stop_id").asText();
             assertEquals(1, target.ok("debug_sessions", obj().put("cursor", 0).put("limit", 1)).path("sessions").size());
             int line = breakpointLine();
-            target.ok("debug_breakpoints", target.sessionArgs().put("action", "add").put("type", "source")
-                    .put("breakpoint_id", "fixture-line").put("source_path", SOURCE)
-                    .put("class_name", DebugFixture.class.getName()).put("line", line));
+            ObjectNode nestedAdd = target.sessionArgs().put("action", "add");
+            nestedAdd.putArray("breakpoints").add(obj().put("breakpoint_id", "fixture-line").put("source_path", SOURCE).put("line", line));
+            target.ok("debug_breakpoints", nestedAdd);
             target.ok("debug_breakpoints", target.sessionArgs().put("action", "add").put("type", "exception")
                     .put("exception_class", "java.lang.IllegalStateException").put("caught", false));
-            ObjectNode firstBreakpoint = target.ok("debug_breakpoints", target.sessionArgs().put("action", "list")
-                    .put("cursor", 0).put("limit", 1));
+            ObjectNode firstBreakpoint = target.ok("debug_breakpoints", target.sessionArgs().put("cursor", 0).put("limit", 1));
             assertTrue(firstBreakpoint.path("truncated").asBoolean());
             assertEquals(1, target.ok("debug_breakpoints", target.sessionArgs().put("action", "list")
                     .put("cursor", firstBreakpoint.path("next_cursor").asInt())).path("breakpoints").size());

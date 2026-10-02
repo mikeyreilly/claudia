@@ -324,16 +324,40 @@ In the JVM CLI (`java -jar target/codingagent.jar`), ask the agent to use
 `target/classes` are used by default when present; supply `classpath` and
 `arguments` as needed. Set `stop_on_entry: true` to inspect the initial stop
 before execution proceeds. Otherwise, set a breakpoint with
-`debug_breakpoints` (`action: add`, with a source path and line or class and
-method) and use the returned `session_id` to track the target. Breakpoints can
+`debug_breakpoints` (`action: add`, with a `breakpoints` array of source-path/line
+or class/method specifications) and use the returned `session_id` to track the
+target. For example:
+
+```json
+{"session_id":"...","action":"add","breakpoints":[{"source_path":"src/main/java/com/example/Main.java","line":42}]}
+```
+
+Omit `action` to list breakpoints. Use `breakpoint_ids` for `enable`, `disable`,
+or `remove`; use `action: update` with `breakpoints` containing an existing
+`breakpoint_id` and only changed fields. Omitted update fields remain unchanged.
+Legacy flattened breakpoint arguments remain accepted. Breakpoints can
 be pending until their class loads; check their reported resolution. Once a
 matching class loads, pending reasons distinguish unavailable debug information,
 source/method mismatches, and lines without executable code; breakpoints never
 silently move to a nearby line.
 
 At a stop, get the current `stop_id` from `debug_status` or `debug_wait`.
-Pass it with `session_id` to `debug_continue`; then call `debug_wait` to wait
-up to its finite `wait_ms` for an event. Inspect a stopped target with
+Pass it with `session_id` to `debug_continue`, `debug_step`, or `debug_run_to`.
+These execution calls wait for the next stop or exit for up to `wait_ms`
+(0–30000 milliseconds, default 1000); `0` returns without waiting. If the wait
+expires, the response is `running` with `wait_expired: true`: the tool stops
+waiting, but **does not pause or terminate the target**. Cancelling an execution
+wait likewise leaves the already-resumed target alone. Call `debug_wait` to
+wait again without changing execution; `event_types` can filter matching events
+(for example, `["stop", "exit"]`). Execution, pause, and wait responses contain
+compact state, current stop/exit information, and output/event cursors. Use
+`debug_status` for detailed launch arguments, configured breakpoints, and
+capabilities. Debugger calls within one agent remain serialized, so a pending
+wait must return or be cancelled before another call runs. `debug_run_to`
+currently requires a loaded executable `source_path`/`line` location; optional
+class/method/signature filters disambiguate it. Pending or method-only run-to
+locations are not yet supported.
+Inspect a stopped target with
 `debug_threads`, `debug_stack`, `debug_variables`, `debug_object`,
 `debug_source`, or `debug_exception`. Use `debug_events` and `debug_output`
 with nonnegative integer cursors for event and captured stdout/stderr pages;
@@ -364,8 +388,22 @@ and simple comparisons. Examples: `numbers[index]`, `items[0].provider`,
 other object references compare by identity. String literals stay in the
 debugger rather than allocating objects in the target. The same grammar applies
 to breakpoint conditions and log expressions. Expressions are limited to 256
-characters and 16 nested subscripts; calls, mutation, arithmetic, and arbitrary
-Java evaluation remain unsupported, even if `allow_side_effects` is supplied. Events, output, source windows, and
+Unicode characters and 16 nested subscripts; calls, mutation, arithmetic, and
+arbitrary Java evaluation remain unsupported, even if `allow_side_effects` is
+supplied. `debug_evaluate` accepts exactly one `expression` or an `expressions`
+array of 1–20 strings (each at most 256 characters). A batch uses one stopped
+frame and returns ordered `results`, each with its expression and a value or
+error, plus `error_count`; one invalid expression does not discard the others.
+The existing single-expression response shape is unchanged. For example:
+
+```json
+{"session_id":"...","stop_id":"...","expressions":["numbers.length","numbers[0]","model.provider == \"openai\""]}
+```
+
+Optional `timeout_ms` (0–30000, default 0) is a cooperative evaluation scheduling
+budget: expiry prevents further expressions from starting, but cannot interrupt
+an in-flight JDI read. Structural batch limits apply even with no time budget.
+Events, output, source windows, and
 inspection results are bounded and may require paging; they are not an
 unlimited transcript. Custom attach source roots/path mappings and arbitrary
 collection enumeration are not supported yet. Captured output redacts known sensitive environment

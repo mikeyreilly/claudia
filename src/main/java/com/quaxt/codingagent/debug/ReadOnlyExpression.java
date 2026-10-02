@@ -152,7 +152,7 @@ final class ReadOnlyExpression {
         private int position;
 
         Parser(String text) {
-            if (text.length() > MAX_LENGTH) throw fail("unsafe_expression", "Read-only expressions are limited to " + MAX_LENGTH + " characters");
+            if (text.codePointCount(0, text.length()) > MAX_LENGTH) throw fail("unsafe_expression", "Read-only expressions are limited to " + MAX_LENGTH + " characters");
             this.text = text;
         }
 
