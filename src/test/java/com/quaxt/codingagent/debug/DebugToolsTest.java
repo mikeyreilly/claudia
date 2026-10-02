@@ -225,6 +225,50 @@ class DebugToolsTest {
 
     @Test
     @Timeout(45)
+    void registeredExecutionToolsReturnCompactStopsAndExitWithoutSeparateWaits() throws Exception {
+        Path gate = temp.resolve("execution-tools-go");
+        try (Target target = new Target()) {
+            target.launch(gate);
+            ObjectNode entry = target.awaitState("stopped");
+            assertTrue(entry.has("capabilities"), "Explicit status inspection retains detailed metadata");
+            ObjectNode add = target.sessionArgs().put("action", "add");
+            add.putArray("breakpoints").add(obj().put("source_path", SOURCE).put("line", breakpointLine())
+                    .put("class_name", DebugFixture.class.getName()).put("one_shot", true));
+            target.ok("debug_breakpoints", add);
+            Files.createFile(gate);
+            ObjectNode hit = target.ok("debug_continue", target.sessionArgs()
+                    .put("stop_id", entry.path("stop").path("stop_id").asText()).put("wait_ms", 10000));
+            assertCompactExecution(hit, "stopped");
+            int returnLine = sourceLine("DEBUG_FIXTURE_RETURN");
+            ObjectNode runTo = target.ok("debug_run_to", target.sessionArgs()
+                    .put("stop_id", hit.path("stop").path("stop_id").asText()).put("source_path", SOURCE)
+                    .put("class_name", DebugFixture.class.getName()).put("line", returnLine).put("wait_ms", 10000));
+            assertCompactExecution(runTo, "stopped");
+            ObjectNode step = target.ok("debug_step", target.sessionArgs()
+                    .put("stop_id", runTo.path("stop").path("stop_id").asText()).put("direction", "out").put("wait_ms", 10000));
+            assertCompactExecution(step, "stopped");
+            assertEquals("step", step.path("stop").path("reason").asText());
+            ObjectNode completed = target.ok("debug_continue", target.sessionArgs()
+                    .put("stop_id", step.path("stop").path("stop_id").asText()).put("wait_ms", 10000));
+            assertCompactExecution(completed, "completed");
+            assertFalse(completed.has("stop"));
+        }
+    }
+
+    private static void assertCompactExecution(ObjectNode response, String state) {
+        assertEquals(state, response.path("status").asText(), response.toString());
+        assertFalse(response.path("wait_expired").asBoolean());
+        assertTrue(response.has("session_id"));
+        assertTrue(response.has("pid"));
+        assertTrue(response.has("event_cursor"));
+        assertTrue(response.has("output_cursor"));
+        for (String field : List.of("target", "ownership", "arguments", "jvm_options", "environment_overrides",
+                "capabilities", "breakpoints", "breakpoint_count", "breakpoints_truncated", "runner_pid"))
+            assertFalse(response.has(field), "Execution response repeats static metadata: " + field);
+    }
+
+    @Test
+    @Timeout(45)
     void registeredToolsPageLiveInspectionAndUseStoppedSourceLineForZero() throws Exception {
         Path gate = temp.resolve("tools-go");
         try (Target target = new Target()) {
@@ -316,10 +360,12 @@ class DebugToolsTest {
 
     private static ObjectNode obj() { return Json.MAPPER.createObjectNode(); }
 
-    private static int breakpointLine() throws Exception {
+    private static int breakpointLine() throws Exception { return sourceLine("DEBUG_FIXTURE_BREAKPOINT"); }
+
+    private static int sourceLine(String marker) throws Exception {
         List<String> lines = Files.readAllLines(WORKSPACE.resolve(SOURCE));
-        for (int i = 0; i < lines.size(); i++) if (lines.get(i).contains("// DEBUG_FIXTURE_BREAKPOINT")) return i + 1;
-        throw new AssertionError("Missing fixture breakpoint");
+        for (int i = 0; i < lines.size(); i++) if (lines.get(i).contains("// " + marker)) return i + 1;
+        throw new AssertionError("Missing fixture marker: " + marker);
     }
 
     private static JsonNode variable(JsonNode variables, String name) {

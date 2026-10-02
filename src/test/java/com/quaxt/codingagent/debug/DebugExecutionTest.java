@@ -6,8 +6,11 @@ import com.quaxt.codingagent.ai.json.Json;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -103,7 +106,7 @@ class DebugExecutionTest {
     @Test
     void invalidWaitIsRejectedBeforeAnyExecutionOrRunToBreakpointChanges() throws Exception {
         try (Target target = new Target(temp.resolve("invalid-go"))) {
-            for (String operation : List.of("debug_continue", "debug_step", "debug_run_to")) {
+            for (String operation : List.of("debug_continue", "debug_step", "debug_run_to", "debug_wait", "debug_pause")) {
                 for (JsonNode wait : List.<JsonNode>of(Json.MAPPER.valueToTree(-1), Json.MAPPER.valueToTree(30001),
                         Json.MAPPER.valueToTree(new java.math.BigInteger("18446744073709551616")),
                         Json.MAPPER.valueToTree("0"), Json.MAPPER.valueToTree(0.5))) {
@@ -134,6 +137,122 @@ class DebugExecutionTest {
             int resumes = 0;
             for (JsonNode event : events.path("events")) if (event.path("type").asText().equals("resume")) resumes++;
             assertEquals(1, resumes);
+        }
+    }
+
+    @Test
+    void waitDistinguishesExistingStateFromNewMatchingEvents() throws Exception {
+        try (Target target = new Target(temp.resolve("state-go"))) {
+            ObjectNode entry = target.ok("debug_status", target.sessionArgs());
+            int cursor = entry.path("event_cursor").asInt();
+            ObjectNode args = target.sessionArgs().put("cursor", cursor).put("wait_ms", 30000);
+            args.putArray("event_types").add("exit");
+            long started = System.nanoTime();
+            ObjectNode unchanged = target.ok("debug_wait", args);
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000,
+                    "An existing stop must return without waiting for a matching event");
+            assertEquals("stopped", unchanged.path("status").asText());
+            assertEquals(target.stop, unchanged.path("stop").path("stop_id").asText());
+            assertFalse(unchanged.path("event_available").asBoolean());
+            assertFalse(unchanged.path("wait_expired").asBoolean());
+            assertTrue(unchanged.path("summary").asText().contains("no new matching event"));
+            assertCompact(unchanged);
+
+            ObjectNode match = target.ok("debug_wait", target.sessionArgs().put("cursor", 0).put("wait_ms", 0)
+                    .set("event_types", Json.MAPPER.valueToTree(List.of("stop"))));
+            assertTrue(match.path("event_available").asBoolean());
+            assertFalse(match.path("wait_expired").asBoolean());
+            ObjectNode otherThread = target.ok("debug_wait", target.sessionArgs().put("cursor", 0)
+                    .put("thread_id", "missing-thread").put("wait_ms", 0));
+            assertFalse(otherThread.path("event_available").asBoolean());
+
+            Files.createFile(target.gate);
+            ObjectNode completed = target.ok("debug_continue", target.stoppedArgs().put("wait_ms", 10000));
+            assertEquals("completed", completed.path("status").asText());
+            ObjectNode exit = target.ok("debug_wait", target.sessionArgs().put("cursor", cursor).put("wait_ms", 0)
+                    .set("event_types", Json.MAPPER.valueToTree(List.of("exit"))));
+            assertTrue(exit.path("event_available").asBoolean());
+            started = System.nanoTime();
+            ObjectNode noNewExit = target.ok("debug_wait", target.sessionArgs()
+                    .put("cursor", exit.path("event_cursor").asInt()).put("wait_ms", 30000)
+                    .set("event_types", Json.MAPPER.valueToTree(List.of("exit"))));
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000,
+                    "A completed target must return without waiting for a matching event");
+            assertEquals("completed", noNewExit.path("status").asText());
+            assertFalse(noNewExit.path("event_available").asBoolean());
+            assertFalse(noNewExit.path("wait_expired").asBoolean());
+            assertTrue(noNewExit.path("summary").asText().contains("no new matching event"));
+        }
+    }
+
+    @Test
+    void eventHistoryGapDoesNotPretendToBeAMatchingEventOrWaitForTimeout() throws Exception {
+        try (Target target = new Target(temp.resolve("gap-go"))) {
+            // Overflow the bounded event history through public operations, without installing JDI requests.
+            for (int batch = 0; batch < 5; batch++) {
+                ObjectNode add = target.sessionArgs().put("action", "add");
+                ObjectNode remove = target.sessionArgs().put("action", "remove");
+                var specs = add.putArray("breakpoints");
+                var ids = remove.putArray("breakpoint_ids");
+                for (int i = 0; i < 64; i++) {
+                    String id = "gap-" + batch + "-" + i;
+                    specs.add(obj().put("breakpoint_id", id).put("type", "exception").put("enabled", false));
+                    ids.add(id);
+                }
+                target.ok("debug_breakpoints", add);
+                target.ok("debug_breakpoints", remove);
+            }
+            target.ok("debug_continue", target.stoppedArgs().put("wait_ms", 0));
+            ObjectNode args = target.sessionArgs().put("cursor", 0).put("wait_ms", 30000);
+            args.putArray("event_types").add("logpoint");
+            long started = System.nanoTime();
+            ObjectNode gap = target.ok("debug_wait", args);
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000,
+                    "An event history gap must return without waiting for the budget to expire");
+            assertEquals("running", gap.path("status").asText());
+            assertTrue(gap.path("gap").asBoolean());
+            assertFalse(gap.path("event_available").asBoolean());
+            assertFalse(gap.path("wait_expired").asBoolean());
+            assertTrue(gap.path("summary").asText().contains("history gap"));
+            assertTrue(target.process.isAlive());
+            assertCompact(gap);
+        }
+    }
+
+    @Test
+    void interruptedExecutionWaitPreservesInterruptAndDoesNotResumeAgainOnReplay() throws Exception {
+        try (Target target = new Target(temp.resolve("interrupt-go"))) {
+            CountDownLatch waiting = new CountDownLatch(1);
+            AtomicInteger polls = new AtomicInteger();
+            AtomicReference<ObjectNode> response = new AtomicReference<>();
+            AtomicBoolean interruptPreserved = new AtomicBoolean();
+            ObjectNode args = target.stoppedArgs().put("wait_ms", 30000).put("idempotency_key", "interrupt-once");
+            Thread caller = Thread.ofPlatform().name("debug-interrupted-wait-test").unstarted(() -> {
+                response.set(target.manager.call("debug_continue", args, WORKSPACE, () -> {
+                    if (polls.incrementAndGet() > 1) waiting.countDown();
+                    return false;
+                }));
+                interruptPreserved.set(Thread.currentThread().isInterrupted());
+            });
+            caller.start();
+            try {
+                assertTrue(waiting.await(5, TimeUnit.SECONDS), "Execution wait was not reached");
+                caller.interrupt();
+                caller.join(5000);
+                assertFalse(caller.isAlive(), "Interrupted execution call did not return");
+                assertTrue(interruptPreserved.get());
+                assertEquals("cancelled", response.get().path("code").asText());
+                assertEquals("running", target.ok("debug_status", target.sessionArgs()).path("status").asText());
+                assertTrue(target.process.isAlive());
+                assertEquals(response.get(), target.call("debug_continue", args.deepCopy()));
+                int resumes = 0;
+                for (JsonNode event : target.ok("debug_events", target.sessionArgs()).path("events"))
+                    if (event.path("type").asText().equals("resume")) resumes++;
+                assertEquals(1, resumes);
+            } finally {
+                caller.interrupt();
+                caller.join(5000);
+            }
         }
     }
 

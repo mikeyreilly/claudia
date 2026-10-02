@@ -32,15 +32,15 @@ public final class DebugTools {
                     "session_id leave_running terminate close_session idempotency_key"),
             tool("debug_breakpoints", "Manage breakpoints: omit action to list (limit/cursor); add with breakpoints specs; update with breakpoint_id and only changed fields in each spec; enable/disable/remove with breakpoint_ids. Reports resolved and pending locations.",
                     "session_id action breakpoint_id breakpoint_ids breakpoints source_path line class_name method_name signature type exception_class caught uncaught field_name access modification condition hit_count hit_policy thread_id one_shot suspension_policy log_expression enabled limit cursor idempotency_key"),
-            tool("debug_continue", "Resume from the current stop and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running.",
+            tool("debug_continue", "Resume from the current stop and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running. Returns compact state; use debug_status for metadata.",
                     "session_id stop_id thread_id wait_ms idempotency_key"),
-            tool("debug_step", "Step into, over, or out on a selected thread and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running.",
+            tool("debug_step", "Step into, over, or out on a selected thread and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running. Returns compact state; use debug_status for metadata.",
                     "session_id stop_id direction thread_id skip_filters wait_ms idempotency_key"),
-            tool("debug_run_to", "Run to a precise one-shot loaded source path/line location and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running.",
+            tool("debug_run_to", "Run to a precise one-shot loaded source path/line location and wait for stop/exit up to wait_ms (0-30000, default 1000). Wait expiry leaves the JVM running. Returns compact state; use debug_status for metadata.",
                     "session_id stop_id source_path line class_name method_name signature thread_id wait_ms idempotency_key"),
-            tool("debug_pause", "Request a stop in a running target without implicitly resuming it.",
+            tool("debug_pause", "Synchronously pause a running target and return compact stopped state; never implicitly resumes it.",
                     "session_id thread_id wait_ms idempotency_key"),
-            tool("debug_wait", "Wait a bounded time for a stop or other event without changing execution.",
+            tool("debug_wait", "Wait without changing execution; returns compact state and event_available for retained matches. Already stopped/completed targets and history gaps return immediately, even without a matching event.",
                     "session_id wait_ms cursor thread_id event_types"),
             tool("debug_events", "Read ordered debugger events since a cursor.",
                     "session_id cursor limit thread_id event_types"),
@@ -71,7 +71,7 @@ public final class DebugTools {
 
     private static ToolDefinition<Context> tool(String name, String description, String fields) {
         var parameters = new ArrayList<ToolParameters.Parameter<?>>();
-        for (String field : fields.split(" ")) parameters.add(parameter(field));
+        for (String field : fields.split(" ")) parameters.add(parameter(field, name));
         ToolParameters typed = new ToolParameters(parameters.toArray(ToolParameters.Parameter<?>[]::new));
         return new ToolDefinition<>(name, description, typed.withSchema(advertisedSchema(name, typed.schema())),
                 (context, ignored, invocation) -> {
@@ -90,7 +90,7 @@ public final class DebugTools {
                 });
     }
 
-    private static ToolParameters.Parameter<?> parameter(String name) {
+    private static ToolParameters.Parameter<?> parameter(String name, String tool) {
         return switch (name) {
             case "session_id" -> text(name, "Existing debug session ID.");
             case "stop_id" -> text(name, "Current stop ID; stale stops are rejected.");
@@ -100,7 +100,9 @@ public final class DebugTools {
             case "main_class", "test_selector" -> optionalText(name, "Java entry point or single selected test (choose one).", null);
             case "cursor" -> integer(name, "Nonnegative paging offset or event/output cursor; omitted or 0 starts at the beginning.", 0, Integer.MAX_VALUE, 0);
             case "limit" -> integer(name, "Maximum items (1-100).", 1, 100, 20);
-            case "wait_ms" -> integer(name, "Wait for stop/exit (or a matching event for debug_wait) up to 0-30000 milliseconds (default 1000). Expiry leaves the JVM running; 0 returns without waiting.", 0, 30000, 1000);
+            case "wait_ms" -> integer(name, tool.equals("debug_pause")
+                    ? "Compatibility option (0-30000, default 1000); pause is synchronous and this does not impose a JDI suspension deadline."
+                    : "Wait for stop/exit (or a matching event for debug_wait) up to 0-30000 milliseconds (default 1000). Expiry leaves the JVM running; 0 returns without waiting. This budgets waiting, not JDI setup or tool scheduling.", 0, 30000, 1000);
             case "timeout_ms" -> integer(name, "Optional cooperative scheduling budget in milliseconds (0-30000; default 0 means no extra wall-clock budget). Does not interrupt in-flight JDI reads.", 0, 30000, 0);
             case "before", "after" -> integer(name, "Context lines (0-30).", 0, 30, 3);
             case "depth" -> integer(name, "Maximum requested depth (1 is supported for object expansion).", 1, 8, 1);
