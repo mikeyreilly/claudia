@@ -35,6 +35,7 @@ import com.quaxt.codingagent.ai.types.Usage;
 import com.quaxt.codingagent.ai.types.UserMessage;
 import com.quaxt.codingagent.ai.util.AbortSignal;
 import com.quaxt.codingagent.cli.session.SessionSnapshot;
+import com.quaxt.codingagent.mcp.BuiltInMcpServers;
 import com.quaxt.codingagent.mcp.McpConfigLoader;
 import com.quaxt.codingagent.mcp.McpConfiguration;
 import com.quaxt.codingagent.mcp.McpServerConfig;
@@ -58,6 +59,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -2853,6 +2855,137 @@ class CodingAgentOperationsTest {
 
 		assertTrue(config.servers.isEmpty());
 		assertTrue(config.sources.isEmpty());
+	}
+
+	// BuiltInMcpServers
+
+	@Test
+	void locatesCodeLensBuiltInsideTheCodingAgentCheckout() throws Exception {
+		Path jar = Files.createDirectories(tempDir.resolve("checkout/target")).resolve("codingagent.jar");
+		Files.writeString(jar, "");
+		assertTrue(BuiltInMcpServers.codeLensFor(jar, false).isEmpty());
+
+		Path build = Files.createDirectories(tempDir.resolve("checkout/code-lens/build"));
+		Path binary = Files.writeString(build.resolve("code-lens"), "");
+		if (!isWindows()) {
+			assertTrue(BuiltInMcpServers.codeLensFor(jar, false).isEmpty(), "a non-executable file is not a build");
+			assertTrue(binary.toFile().setExecutable(true));
+		}
+		assertEquals(Optional.of(binary), BuiltInMcpServers.codeLensFor(jar, false));
+		// A native image and a staged jar live beside the runnable jar.
+		assertEquals(Optional.of(binary), BuiltInMcpServers.codeLensFor(jar.resolveSibling("codingagent"), false));
+		assertEquals(Optional.of(binary), BuiltInMcpServers.codeLensFor(jar.resolveSibling("codingagent.next.jar"), false));
+
+		assertTrue(BuiltInMcpServers.codeLensFor(jar, true).isEmpty(), "Windows builds are named code-lens.exe");
+		Path exe = Files.writeString(build.resolve("code-lens.exe"), "");
+		if (!isWindows()) assertTrue(exe.toFile().setExecutable(true));
+		assertEquals(Optional.of(exe), BuiltInMcpServers.codeLensFor(jar, true));
+	}
+
+	@Test
+	void doesNotOfferCodeLensFromAClassesDirectory() {
+		// Tests load codingagent from target/classes, which is not a build.
+		assertTrue(BuiltInMcpServers.locateCodeLens().isEmpty());
+	}
+
+	@Test
+	void loadsBuiltInMcpPreferencesSeparatelyFromConfiguredServers() throws Exception {
+		Path settingsPath = tempDir.resolve("home/.codingagent/settings.json");
+		Files.createDirectories(settingsPath.getParent());
+		Files.writeString(settingsPath, """
+				{"builtInMcp":{"code-lens":{"enabled":false,"disabledTools":["sql"]},"retired":{}}}
+				""");
+
+		McpConfiguration config = CodingAgentOperations.mcpLoadConfiguration(
+				new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of()));
+
+		assertTrue(config.servers.isEmpty());
+		assertEquals(new BuiltInMcpServers.Preference(false, List.of("sql")), config.builtInPreferences.get("code-lens"));
+		assertEquals(BuiltInMcpServers.Preference.DEFAULT, config.builtInPreferences.get("retired"));
+	}
+
+	@Test
+	void rejectsInvalidBuiltInMcpPreferences() throws Exception {
+		Path settingsPath = tempDir.resolve("home/.codingagent/settings.json");
+		Files.createDirectories(settingsPath.getParent());
+		for (String settings : List.of(
+				"{\"builtInMcp\":[]}",
+				"{\"builtInMcp\":{\"code-lens\":true}}",
+				"{\"builtInMcp\":{\"code-lens\":{\"enabled\":\"no\"}}}",
+				"{\"builtInMcp\":{\"code-lens\":{\"disabledTools\":[42]}}}")) {
+			Files.writeString(settingsPath, settings);
+			IOException error = assertThrows(IOException.class, () -> CodingAgentOperations.mcpLoadConfiguration(
+					new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of())));
+			assertTrue(error.getMessage().contains("builtInMcp") || error.getMessage().contains("built-in MCP server"),
+					settings + " -> " + error.getMessage());
+		}
+	}
+
+	@Test
+	void registersBuiltInCodeLensOnlyWhenItsBinaryIsPresent() throws Exception {
+		Path home = tempDir.resolve("home");
+		Path settingsPath = new CodingAgentPaths(home).settingsFile();
+		Files.createDirectories(settingsPath.getParent());
+		// Disabled, so registration does not launch the placeholder binary.
+		Files.writeString(settingsPath, """
+				{"builtInMcp":{"code-lens":{"enabled":false}}}
+				""");
+		Path binary = tempDir.resolve("code-lens");
+		try (CodingAgentOperations operations = new CodingAgentOperations()) {
+			operations.applicationPaths(new CodingAgentPaths(home));
+			operations.codeLensLocator(Optional::empty);
+			operations.mcpLoadDefaultManager(workspace);
+			assertTrue(operations.mcpStatuses().isEmpty());
+
+			operations.codeLensLocator(() -> Optional.of(binary));
+			operations.mcpLoadDefaultManager(workspace);
+			CodingAgentOperations.McpServerStatus status = operations.mcpStatus(BuiltInMcpServers.CODE_LENS);
+			assertTrue(status.builtIn);
+			assertEquals(CodingAgentOperations.McpState.DISABLED, status.state);
+			assertEquals(binary + " mcp", status.target);
+		}
+	}
+
+	@Test
+	void savesBuiltInMcpTogglesOutsideTheConfiguredServers() throws Exception {
+		Path home = tempDir.resolve("home");
+		Path settingsPath = new CodingAgentPaths(home).settingsFile();
+		Files.createDirectories(settingsPath.getParent());
+		Files.writeString(settingsPath, """
+				{"builtInMcp":{"code-lens":{"enabled":false}},
+				 "mcp":{"configured":{"type":"local","command":["tool"],"enabled":false}}}
+				""");
+		try (CodingAgentOperations operations = new CodingAgentOperations()) {
+			operations.applicationPaths(new CodingAgentPaths(home));
+			operations.loadSettings();
+			operations.codeLensLocator(() -> Optional.of(tempDir.resolve("code-lens")));
+			operations.mcpLoadDefaultManager(workspace);
+			// Toggles create the built-in's settings when none are stored yet.
+			Files.writeString(settingsPath, """
+					{"mcp":{"configured":{"type":"local","command":["tool"],"enabled":false}}}
+					""");
+
+			operations.saveMcpPreference(BuiltInMcpServers.CODE_LENS, "sql", false);
+			operations.saveMcpPreference(BuiltInMcpServers.CODE_LENS, "query", false);
+			operations.saveMcpPreference(BuiltInMcpServers.CODE_LENS, "sql", true);
+			operations.saveMcpPreference(BuiltInMcpServers.CODE_LENS, null, false);
+			operations.saveMcpPreference("configured", null, true);
+
+			JsonNode saved = Json.MAPPER.readTree(Files.readString(settingsPath));
+			assertEquals(Json.MAPPER.readTree("{\"disabledTools\":[\"query\"],\"enabled\":false}"),
+					saved.path("builtInMcp").path(BuiltInMcpServers.CODE_LENS));
+			assertFalse(saved.path("mcp").has(BuiltInMcpServers.CODE_LENS));
+			assertTrue(saved.path("mcp").path("configured").path("enabled").asBoolean());
+
+			McpConfiguration reloaded = CodingAgentOperations.mcpLoadConfiguration(
+					new McpConfigLoader(settingsPath.toAbsolutePath().normalize(), Map.of()));
+			assertEquals(new BuiltInMcpServers.Preference(false, List.of("query")),
+					reloaded.builtInPreferences.get(BuiltInMcpServers.CODE_LENS));
+		}
+	}
+
+	private static boolean isWindows() {
+		return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows");
 	}
 
 	// McpRemote

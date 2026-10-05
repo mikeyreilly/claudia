@@ -2805,13 +2805,14 @@ public final class CodingAgentCli {
                                             String detail;
                                             if (selector1.view == McpSelector.View.SERVERS) {
                                                 McpServerStatus status = selector1.manager.mcpStatus(selector1.filtered.get(index));
+                                                String label = mcpServerLabel(status);
                                                 detail = switch (status.state) {
                                                     case CONNECTING ->
-                                                            "⋯ " + status.name + "  Connecting";
+                                                            "⋯ " + label + "  Connecting";
                                                     case AUTHENTICATING ->
-                                                            "⋯ " + status.name + "  Waiting for OAuth";
+                                                            "⋯ " + label + "  Waiting for OAuth";
                                                     case AUTH_REQUIRED ->
-                                                            "! " + status.name + "  Authentication required";
+                                                            "! " + label + "  Authentication required";
                                                     case CONNECTED -> {
                                                         String result1;
                                                         if (status.enabledToolCount == status.toolCount) {
@@ -2819,11 +2820,11 @@ public final class CodingAgentCli {
                                                         } else {
                                                             result1 = status.enabledToolCount + "/" + status.toolCount + " tool(s)";
                                                         }
-                                                        yield "✓ " + status.name + "  Enabled · " + result1;
+                                                        yield "✓ " + label + "  Enabled · " + result1;
                                                     }
                                                     case DISABLED ->
-                                                            "○ " + status.name + "  Disabled";
-                                                    case FAILED -> "✗ " + status.name + "  Failed";
+                                                            "○ " + label + "  Disabled";
+                                                    case FAILED -> "✗ " + label + "  Failed";
                                                 };
                                             } else {
                                                 McpToolStatus status1 = selector1.filteredTools.get(index);
@@ -4104,6 +4105,11 @@ public final class CodingAgentCli {
                 : selector.filteredTools.size();
     }
 
+    /** The server's name as listed in /mcp, marking servers codingagent supplies itself. */
+    static String mcpServerLabel(McpServerStatus status) {
+        return status.builtIn ? status.name + " (built-in)" : status.name;
+    }
+
     private void notifyMcpSelectorChange(McpSelector selector, McpSelector.Change change) {
         try {
             selector.onChange.accept(change);
@@ -4144,7 +4150,7 @@ public final class CodingAgentCli {
         if (selector.view == McpSelector.View.SERVERS) {
             selector.filtered = fuzzyFilter(selector.names, selector.query.toString(), name -> {
                 McpServerStatus status = selector.manager.mcpStatus(name);
-                return name + " " + status.state + " " + status.target;
+                return mcpServerLabel(status) + " " + status.state + " " + status.target;
             });
         } else {
             refreshMcpSelectorTools(selector);

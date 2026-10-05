@@ -39,6 +39,36 @@ Each delegated child has its own state.
 
 ## Build and run
 
+### Install script
+
+The quickest setup builds everything in this checkout and writes a
+`codingagent` launcher that runs that build:
+
+```bash
+./install.sh                 # macOS, Linux, other *nix
+```
+
+```bat
+install.cmd                  :: Windows (runs install.ps1)
+```
+
+It needs a JDK 25 or newer (`JAVA_HOME` or `java` on `PATH`) and Maven. It
+builds `target/codingagent.jar` with `mvn -DskipTests package` and the
+[code-lens](code-lens/README.md) MCP server in `code-lens/build/`, then writes
+the launcher to `~/.local/bin/codingagent` (`%USERPROFILE%\.local\bin\codingagent.cmd`
+on Windows) and prints a hint if that directory is not on `PATH`. code-lens
+is optional. If it cannot be built because a toolchain is missing (on *nix:
+`git`, `curl`, `unzip`, `make`, a C23 compiler, and zlib headers; on Windows:
+clang with a Windows SDK, Git for Windows, `curl.exe`, and `tar.exe`) or its
+vendored sources cannot be downloaded, the script prints a `WARNING` and still
+installs codingagent without the code-lens integration. Re-run the script to
+update after pulling changes, or after moving the checkout. Options:
+`--bin-dir DIR`/`-BinDir DIR` moves the launcher, `--native`/`-Native` builds
+and launches the GraalVM native executable, and `--run-tests`/`-RunTests`
+runs the test suites.
+
+### Maven
+
 Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:
 
 ```bash
@@ -482,6 +512,32 @@ keyboard access are not supported.
 
 ## MCP servers
 
+### Built-in code-lens
+
+codingagent includes [code-lens](code-lens/README.md), a semantic code index for
+Clojure, Java, and C, as a built-in MCP server named `code-lens`. It needs no
+configuration. When codingagent runs from a jar or native executable in a
+checkout's `target/` directory, it starts that checkout's
+`code-lens/build/code-lens` (`code-lens.exe` on Windows) as `code-lens mcp` in
+the agent workspace. Its tools are exposed as `code-lens_query`,
+`code-lens_context`, and `code-lens_sql`. If the binary has not been built (for
+example, because the install script could not build it), code-lens is
+not offered at all.
+
+`/mcp` lists it as `code-lens (built-in)`. Enabling or disabling it or any of
+its tools works as for configured servers. These choices are saved under
+`builtInMcp` in `~/.codingagent/settings.json` rather than in its `mcp` object:
+
+```json
+{
+  "builtInMcp": {
+    "code-lens": { "enabled": true, "disabledTools": ["sql"] }
+  }
+}
+```
+
+### Configured servers
+
 codingagent reads MCP server definitions from the `mcp` object in
 `~/.codingagent/settings.json`. Local and remote definitions use the same
 shape as OpenCode, and `{env:NAME}` and `{file:path}` substitutions are
@@ -646,6 +702,7 @@ printf '%s\n' '{"id":"state-1","type":"get_state"}' |
 | Streaming agent loop and sequential tool calls | Implemented |
 | `read`, `write`, `edit`, `shell`, `run_process`, `preflight_posix`, `grep`, `find`, `ls` tools | Implemented |
 | OpenCode-compatible local/remote MCP servers, OAuth 2.1/PKCE, and interactive per-server/per-tool `/mcp` toggles | Implemented |
+| Built-in code-lens MCP server and install scripts for macOS/*nix and Windows | Implemented |
 | Headless `--print`, model listing, credentials, JSONL sessions | Implemented |
 | Native image | Implemented |
 | Interactive `/resume` session listing and restoration | Implemented |
