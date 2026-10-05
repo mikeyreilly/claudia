@@ -197,8 +197,18 @@ class CodingAgentCliTest {
 		assertTrue(help.contains("/clear"));
 		assertTrue(help.contains("/compact"));
 		assertTrue(help.contains("/settings"));
-		assertTrue(help.contains("Shift-Tab toggles Plan/Build"));
+		assertTrue(help.contains("Shift-Tab   toggles Plan/Build."));
 		assertFalse(help.contains("/quit"));
+		List<String> commandLines = help.lines().filter(line -> line.startsWith("/")).toList();
+		assertEquals(CodingAgentCli.slashCommands().stream()
+				.filter(command -> !command.equals("/quit")).toList(),
+				commandLines.stream().map(line -> line.substring(0, 12).strip()).toList());
+		for (String line : commandLines) {
+			// The command is padded to a 12-character column and the description starts in column 12.
+			assertTrue(line.substring(0, 12).matches("/\\w+ +"), line);
+			assertTrue(line.substring(12).matches("\\S.*"), line);
+		}
+		assertTrue(help.contains("/cd         Change the working directory: /cd <directory>."));
 	}
 
 	@Test

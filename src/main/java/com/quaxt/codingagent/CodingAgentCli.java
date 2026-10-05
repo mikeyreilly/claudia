@@ -119,33 +119,35 @@ public final class CodingAgentCli {
 
     // Interactive shell and terminal
     private enum SlashCommand {
-        BUILD("/build"),
-        CD("/cd"),
-        CLEAR("/clear"),
-        COMPACT("/compact"),
-        DETAILS("/details"),
-        EXIT("/exit"),
-        FORK("/fork"),
-        HELP("/help"),
-        LOGIN("/login"),
-        LOGOUT("/logout"),
-        MCP("/mcp"),
-        MODELS("/models"),
-        PLAN("/plan"),
-        QUIT("/quit", false),
-        RESUME("/resume"),
-        SETTINGS("/settings"),
-        SUBAGENTS("/subagents");
+        BUILD("/build", "Switch to Build mode."),
+        CD("/cd", "Change the working directory: /cd <directory>."),
+        CLEAR("/clear", "Start a new session."),
+        COMPACT("/compact", "Summarize the selected agent's conversation to free context space."),
+        DETAILS("/details", "Inspect reasoning and tool steps."),
+        EXIT("/exit", "Exit the interactive shell."),
+        FORK("/fork", "Create a named copy of the current session."),
+        HELP("/help", "Show commands and keyboard shortcuts."),
+        LOGIN("/login", "Log in to a model provider."),
+        LOGOUT("/logout", "Remove credentials for the current provider."),
+        MCP("/mcp", "Manage MCP servers and tools."),
+        MODELS("/models", "Select a model for the current session."),
+        PLAN("/plan", "Switch to Plan mode."),
+        QUIT("/quit", "Exit the interactive shell (alias for /exit).", false),
+        RESUME("/resume", "Resume a saved session from the current folder."),
+        SETTINGS("/settings", "Change the model's thinking level."),
+        SUBAGENTS("/subagents", "View and select agents.");
 
         final String input;
+        final String description;
         final boolean includeInHelp;
 
-        SlashCommand(String input) {
-            this(input, true);
+        SlashCommand(String input, String description) {
+            this(input, description, true);
         }
 
-        SlashCommand(String input, boolean includeInHelp) {
+        SlashCommand(String input, String description, boolean includeInHelp) {
             this.input = input;
+            this.description = description;
             this.includeInHelp = includeInHelp;
         }
 
@@ -160,11 +162,11 @@ public final class CodingAgentCli {
             return List.of(values()).stream().map(command -> command.input).toList();
         }
 
-        static List<String> helpInputs() {
+        static List<String> helpLines() {
             return List.of(values()).stream()
-                    .filter(command -> command.includeInHelp)
-                    .map(command -> command.input)
-                    .toList();
+                .filter(command -> command.includeInHelp)
+                .map(command -> String.format("%-12s%s", command.input, command.description))
+                .toList();
         }
     }
 
@@ -175,9 +177,15 @@ public final class CodingAgentCli {
     }
 
     static String slashCommandHelp() {
-        return "Commands: " + String.join(", ", SlashCommand.helpInputs())
-                + "\nShortcuts: Shift-Enter inserts a newline; Esc interrupts the active turn; "
-                + "Ctrl-O inspects reasoning/tool steps; Ctrl-T shows or hides streamed thinking; Shift-Tab toggles Plan/Build.";
+        return "Commands:\n" + String.join("\n", SlashCommand.helpLines()) + """
+                \n\nShortcuts:
+                Shift-Enter inserts a newline.
+                Esc         interrupts the active turn.
+                Ctrl-O      inspects reasoning/tool steps.
+                Ctrl-T      shows or hides streamed thinking.
+                Shift-Tab   toggles Plan/Build.
+                """;
+
     }
 
     private static final int VISIBLE_COMMANDS = 4;
