@@ -1,16 +1,16 @@
 <#
 .SYNOPSIS
-Builds codingagent and its built-in code-lens MCP server in this checkout and
-writes a codingagent.cmd launcher that runs them in place.
+Builds Claudia and its built-in code-lens MCP server in this checkout and
+writes a claudia.cmd launcher that runs them in place.
 
 .DESCRIPTION
-Builds codingagent (target\codingagent.jar) and code-lens
+Builds Claudia (target\claudia.jar) and code-lens
 (code-lens\build\code-lens.exe) in this checkout, then writes a
-codingagent.cmd launcher that runs this checkout's build. Re-run it to update
+claudia.cmd launcher that runs this checkout's build. Re-run it to update
 after pulling changes, or after moving the checkout.
 
 code-lens is optional: when it cannot be built (no clang/Windows SDK, or its
-vendored sources cannot be downloaded) a WARNING is printed and codingagent is
+vendored sources cannot be downloaded) a WARNING is printed and Claudia is
 still installed, just without the code-lens integration.
 
 Requirements: a JDK 25 or newer (JAVA_HOME or java on PATH) and Maven.
@@ -21,13 +21,13 @@ Run it through install.cmd, or with:
     powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 
 .PARAMETER BinDir
-Directory for the codingagent.cmd launcher (default: %USERPROFILE%\.local\bin).
+Directory for the claudia.cmd launcher (default: %USERPROFILE%\.local\bin).
 
 .PARAMETER Native
 Build the GraalVM native executable and launch it instead of the jar.
 
 .PARAMETER RunTests
-Run the codingagent test suite during the Maven build.
+Run the Claudia test suite during the Maven build.
 #>
 [CmdletBinding()]
 param(
@@ -105,7 +105,7 @@ if (-not $Java) {
 $versionText = Get-JavaVersionText $Java
 if ($versionText -notmatch 'version "(\d+)[^"]*"') { Fail "Could not determine the version of $Java." }
 if ([int]$Matches[1] -lt 25) {
-    Fail "codingagent needs a JDK 25 or newer, but $Java reports: $(($versionText -split "`n")[0].Trim())"
+    Fail "Claudia needs a JDK 25 or newer, but $Java reports: $(($versionText -split "`n")[0].Trim())"
 }
 
 $Maven = Find-Program @('mvn.cmd', 'mvn.bat', 'mvn.exe')
@@ -126,7 +126,7 @@ function Skip-CodeLens([string]$Reason) {
     if (Test-Path -LiteralPath $CodeLensExe -PathType Leaf) {
         Warn 'a code-lens.exe from an earlier build remains in code-lens\build and will still be used'
     } else {
-        Warn 'codingagent will be installed without its built-in code-lens MCP server'
+        Warn 'Claudia will be installed without its built-in code-lens MCP server'
     }
 }
 
@@ -179,7 +179,7 @@ function Build-CodeLens {
     Say 'Building code-lens with clang'
     if ((Invoke-Native (Join-Path $CodeLensDir 'build.bat') @('release')) -ne 0) {
         Skip-CodeLens ('the build failed (see the output above). Clang needs a Windows SDK and MSVC runtime, ' +
-            'for example from Visual Studio Build Tools; a running codingagent session also keeps ' +
+            'for example from Visual Studio Build Tools; a running Claudia session also keeps ' +
             'code-lens\build\code-lens.exe locked, so close it and re-run')
         return
     }
@@ -192,41 +192,41 @@ function Build-CodeLens {
 
 Build-CodeLens
 
-# ------------------------------------------------------------------- codingagent
+# ------------------------------------------------------------------- Claudia
 
 $mavenArguments = @('-B', '-f', (Join-Path $Root 'pom.xml'))
 if (-not $RunTests) { $mavenArguments += '-DskipTests' }
 if ($Native) { $mavenArguments += '-Pnative' }
 $mavenArguments += 'package'
-Say "Building codingagent with Maven (mvn $($mavenArguments -join ' '))"
+Say "Building Claudia with Maven (mvn $($mavenArguments -join ' '))"
 if ((Invoke-Native $Maven $mavenArguments) -ne 0) {
-    Fail ('The Maven build failed; see the output above. If target\codingagent.jar is in use by a running ' +
-        'codingagent session, close it and re-run.')
+    Fail ('The Maven build failed; see the output above. If target\claudia.jar is in use by a running ' +
+        'Claudia session, close it and re-run.')
 }
 
 function Format-BatchValue([string]$Value) { return $Value.Replace('%', '%%') }
 
 if ($Native) {
-    $Program = Join-Path $Root 'target\codingagent.exe'
+    $Program = Join-Path $Root 'target\claudia.exe'
     if (-not (Test-Path -LiteralPath $Program -PathType Leaf)) { Fail "The native build did not produce $Program." }
     # One line: cmd.exe rereads a batch file after each command, so a launcher
     # replaced by a later install must not have anything left to read.
     $launch = "`"$(Format-BatchValue $Program)`" %* & exit /b"
 } else {
-    $Program = Join-Path $Root 'target\codingagent.jar'
+    $Program = Join-Path $Root 'target\claudia.jar'
     if (-not (Test-Path -LiteralPath $Program -PathType Leaf)) { Fail "The Maven build did not produce $Program." }
-    $launch = "set `"CODINGAGENT_JAVA=$(Format-BatchValue $Java)`"`r`n" +
-        "if not exist `"%CODINGAGENT_JAVA%`" set `"CODINGAGENT_JAVA=java`"`r`n" +
-        "`"%CODINGAGENT_JAVA%`" -jar `"$(Format-BatchValue $Program)`" %* & exit /b"
+    $launch = "set `"CLAUDIA_JAVA=$(Format-BatchValue $Java)`"`r`n" +
+        "if not exist `"%CLAUDIA_JAVA%`" set `"CLAUDIA_JAVA=java`"`r`n" +
+        "`"%CLAUDIA_JAVA%`" -jar `"$(Format-BatchValue $Program)`" %* & exit /b"
 }
 
 # ---------------------------------------------------------------------- launcher
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $BinDir = (Resolve-Path -LiteralPath $BinDir).ProviderPath
-$Launcher = Join-Path $BinDir 'codingagent.cmd'
+$Launcher = Join-Path $BinDir 'claudia.cmd'
 $content = "@echo off`r`n" +
-    "rem Generated by install.ps1 in the codingagent checkout; re-run it after moving the checkout.`r`n" +
+    "rem Generated by install.ps1 in the Claudia checkout; re-run it after moving the checkout.`r`n" +
     "rem Runs that checkout's build, which finds its code-lens build.`r`n" +
     "setlocal`r`n" +
     "$launch`r`n"
@@ -258,7 +258,7 @@ if ($current -ceq $content) {
 # ----------------------------------------------------------------------- summary
 
 Write-Host ''
-Say 'codingagent is installed'
+Say 'Claudia is installed'
 Write-Host "    launcher:  $Launcher"
 Write-Host "    runs:      $Program"
 if (Test-Path -LiteralPath $CodeLensExe -PathType Leaf) {

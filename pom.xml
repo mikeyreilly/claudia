@@ -2,11 +2,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>com.quaxt.codingagent</groupId>
-	<artifactId>coding-agent</artifactId>
+	<groupId>com.quaxt.claudia</groupId>
+	<artifactId>claudia</artifactId>
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>jar</packaging>
-	<name>coding-agent</name>
+	<name>claudia</name>
 	<description>Java port of the pi coding agent CLI</description>
 
 	<properties>
@@ -34,7 +34,7 @@
 
 	<build>
 		<!-- Keep the thin JAR away from the runnable JAR's stable path. -->
-		<finalName>codingagent-thin</finalName>
+		<finalName>claudia-thin</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -62,17 +62,17 @@
 						</goals>
 						<configuration>
 							<!--
-								Never write directly to codingagent.jar: a running JVM loads classes
+								Never write directly to claudia.jar: a running JVM loads classes
 								lazily, so mutating that archive can make classes disappear
 								mid-session. Shade writes a temporary file first; the following
 								execution publishes it with a rename, preserving the inode used
 								by any already-running process.
 							-->
-							<outputFile>${project.build.directory}/codingagent.next.jar</outputFile>
+							<outputFile>${project.build.directory}/claudia.next.jar</outputFile>
 							<createDependencyReducedPom>false</createDependencyReducedPom>
 							<transformers>
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<mainClass>com.quaxt.codingagent.CodingAgentCli</mainClass>
+									<mainClass>com.quaxt.claudia.ClaudiaCli</mainClass>
 									<manifestEntries>
 										<!-- The interactive terminal controls the tty through java.lang.foreign. -->
 										<Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
@@ -108,8 +108,8 @@
 						<configuration>
 							<target>
 								<move
-									file="${project.build.directory}/codingagent.next.jar"
-									tofile="${project.build.directory}/codingagent.jar"/>
+									file="${project.build.directory}/claudia.next.jar"
+									tofile="${project.build.directory}/claudia.jar"/>
 							</target>
 						</configuration>
 					</execution>
@@ -138,8 +138,8 @@
 							</execution>
 						</executions>
 						<configuration>
-							<imageName>codingagent</imageName>
-							<mainClass>com.quaxt.codingagent.CodingAgentCli</mainClass>
+							<imageName>claudia</imageName>
+							<mainClass>com.quaxt.claudia.ClaudiaCli</mainClass>
 							<buildArgs>
 								<buildArg>--no-fallback</buildArg>
 								<buildArg>-Os</buildArg>
@@ -149,7 +149,7 @@
 									reachability-metadata.json.
 								-->
 								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
-								<buildArg>-H:IncludeResources=quaxt/codingagent/ai/models/.*\.json</buildArg>
+								<buildArg>-H:IncludeResources=quaxt/claudia/ai/models/.*\.json</buildArg>
 							</buildArgs>
 						</configuration>
 					</plugin>

@@ -1,21 +1,21 @@
-# codingagent
+# Claudia
 
-This repository contains codingagent, a Java/JDK 25 coding-agent CLI. It is a
+This repository contains Claudia, a Java/JDK 25 coding-agent CLI. It is a
 single Maven project and can be compiled ahead of time with GraalVM
 native-image. It started out as a java port of pi.
 
-`CodingAgentCli` is the entry point and owns command-line modes, terminal input,
-and presentation. It delegates to `CodingAgentOperations`, which owns agent
+`ClaudiaCli` is the entry point and owns command-line modes, terminal input,
+and presentation. It delegates to `ClaudiaOperations`, which owns agent
 execution, providers, tools, repository instructions, and persistence. The CLI
 reads runtime snapshots and subscribes to `AgentEvent` updates; the runtime can
 execute prompts and record sessions without a terminal.
 `ShellSessionManager` owns subprocesses and their I/O independently of the
 agent loop, with explicit cleanup and focused process tests.
-Each `CodingAgentOperations` instance owns its conversation, provider
+Each `ClaudiaOperations` instance owns its conversation, provider
 configuration, shell sessions, and MCP connections. Embedders should use it in
 try-with-resources; `close()` cancels work and releases those resources. The CLI
 creates and closes its own runtime. Separate runtimes can use different
-`CodingAgentPaths` without sharing credentials or conversation state in memory.
+`ClaudiaPaths` without sharing credentials or conversation state in memory.
 Built-in tools are registered in `LocalTools`: each definition keeps its
 metadata, typed parameters, handler, and call description together. Parameter
 declarations generate the model-facing schema and validate arguments before
@@ -42,7 +42,7 @@ Each delegated child has its own state.
 ### Install script
 
 The quickest setup builds everything in this checkout and writes a
-`codingagent` launcher that runs that build:
+`claudia` launcher that runs that build:
 
 ```bash
 ./install.sh                 # macOS, Linux, other *nix
@@ -53,15 +53,15 @@ install.cmd                  :: Windows (runs install.ps1)
 ```
 
 It needs a JDK 25 or newer (`JAVA_HOME` or `java` on `PATH`) and Maven. It
-builds `target/codingagent.jar` with `mvn -DskipTests package` and the
+builds `target/claudia.jar` with `mvn -DskipTests package` and the
 [code-lens](code-lens/README.md) MCP server in `code-lens/build/`, then writes
-the launcher to `~/.local/bin/codingagent` (`%USERPROFILE%\.local\bin\codingagent.cmd`
+the launcher to `~/.local/bin/claudia` (`%USERPROFILE%\.local\bin\claudia.cmd`
 on Windows) and prints a hint if that directory is not on `PATH`. code-lens
 is optional. If it cannot be built because a toolchain is missing (on *nix:
 `git`, `curl`, `unzip`, `make`, a C23 compiler, and zlib headers; on Windows:
 clang with a Windows SDK, Git for Windows, `curl.exe`, and `tar.exe`) or its
 vendored sources cannot be downloaded, the script prints a `WARNING` and still
-installs codingagent without the code-lens integration. Re-run the script to
+installs Claudia without the code-lens integration. Re-run the script to
 update after pulling changes, or after moving the checkout. Options:
 `--bin-dir DIR`/`-BinDir DIR` moves the launcher, `--native`/`-Native` builds
 and launches the GraalVM native executable, and `--run-tests`/`-RunTests`
@@ -74,10 +74,10 @@ Set `JAVA_HOME` to a GraalVM JDK 25 installation, then run:
 ```bash
 mvn -B test
 mvn -B package
-java -jar target/codingagent.jar --list-models
+java -jar target/claudia.jar --list-models
 `````
 
-`codingagent.jar` is the runnable uber JAR; `codingagent-thin.jar` contains only the project's own
+`claudia.jar` is the runnable uber JAR; `claudia-thin.jar` contains only the project's own
 classes. Packaging publishes the uber JAR by renaming a completed temporary
 archive, so rebuilding while a prior copy is running does not corrupt that
 JVM's classpath.
@@ -86,13 +86,13 @@ Build a native executable with:
 
 ```bash
 mvn -B -Pnative package
-./target/codingagent --list-models
+./target/claudia --list-models
 ```
 
 Run a coding prompt with a core provider:
 
 ```bash
-java -jar target/codingagent.jar \
+java -jar target/claudia.jar \
   --model anthropic/claude-haiku-4-5 \
   -p "Summarize the README" \
   --no-session
@@ -100,39 +100,39 @@ java -jar target/codingagent.jar \
 
 For a Clojure tools.deps monorepo, use `--aliases :dev:reporting` to force that
 alias basis on every code-lens MCP query, context lookup, and SQL read during
-this codingagent run. The option is per-run and is not saved to settings:
+this Claudia run. The option is per-run and is not saved to settings:
 
 ```bash
-java -jar target/codingagent.jar --aliases :dev:reporting
+java -jar target/claudia.jar --aliases :dev:reporting
 ```
 
 ### Anthropic APIM proxy
 
-`codingagent` honors the standard `ANTHROPIC_BASE_URL` and
+Claudia honors the standard `ANTHROPIC_BASE_URL` and
 `ANTHROPIC_API_KEY` environment variables. After configuring
-`cai-claude-apim-proxy`, run codingagent in that configured environment:
+`cai-claude-apim-proxy`, run Claudia in that configured environment:
 
 ```bash
 ANTHROPIC_BASE_URL=http://127.0.0.1:8787 \
 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-java -jar target/codingagent.jar --model anthropic/claude-opus-4-6
+java -jar target/claudia.jar --model anthropic/claude-opus-4-6
 ```
 
-The proxy handles its own AAD/APIM authentication; codingagent only sends the
+The proxy handles its own AAD/APIM authentication; Claudia only sends the
 Anthropic Messages request to the proxy. When `ANTHROPIC_BASE_URL` is set,
 `/models` does not refresh GitHub Copilot entitlements, avoiding a JDK HTTP
 client interaction that can break subsequent proxy streaming responses.
 
-Start the interactive codingagent TUI shell with:
+Start the interactive Claudia TUI shell with:
 
 ```bash
-java -jar target/codingagent.jar
+java -jar target/claudia.jar
 ```
 
 The interactive shell supports [Ghostty](https://ghostty.org) on macOS and
 Linux (x86_64 and aarch64), and Windows consoles with virtual terminal input
 and output (for example Windows Terminal). Its terminal layer
-(`com.quaxt.codingagent.terminal`) controls POSIX ttys through termios and
+(`com.quaxt.claudia.terminal`) controls POSIX ttys through termios and
 Windows consoles through the Win32 console API. Other xterm-compatible
 terminals may work but are not tested. Windows has no process-group suspend
 shortcut. When standard input or output is redirected, interactive mode exits
@@ -149,7 +149,7 @@ code; the latter uses OpenAI's Codex authorization and your ChatGPT plan's
 included Codex usage. The OpenAI API-key option is separate and uses Platform
 API billing. GitHub Copilot selects GPT-5.4 when it is enabled for the account,
 otherwise it selects the first enabled coding model. Credentials are stored in
-`~/.codingagent/auth.json`; `/logout` removes the credential for the active model.
+`~/.claudia/auth.json`; `/logout` removes the credential for the active model.
 Use `/models` to open the searchable model selector for the current provider
 (or the provider just chosen through `/login`); type to fuzzy-filter models and
 use Up/Down and Enter to select. Log in to another provider or start with
@@ -160,7 +160,7 @@ GPT-6.1 Sol is available as `openai/gpt-6.1-sol` with an OpenAI API key or
 `chatgpt/gpt-6.1-sol` with ChatGPT login. It supports thinking levels `low`,
 `medium`, `high`, `xhigh`, and `max`.
 Model and thinking-level selections are saved in
-`~/.codingagent/settings.json` and restored when the next interactive session
+`~/.claudia/settings.json` and restored when the next interactive session
 starts. An explicit `--model` overrides the saved model for one run; choosing a
 model through the interactive selector, including one opened by `--provider`,
 updates the saved default. Changing models with `/models` continues the current
@@ -169,7 +169,7 @@ file; resumed sessions use the latest selected model. Use `/clear` to start a
 fresh conversation. You can select another provider explicitly:
 
 ```bash
-java -jar target/codingagent.jar \
+java -jar target/claudia.jar \
   --model anthropic/claude-haiku-4-5
 ```
 
@@ -252,7 +252,7 @@ A status bar on the bottom terminal row starts with the shell's live activity,
 followed by the working directory (with the home directory abbreviated to `~`),
 the checked-out Git branch, the current named session when present, and the
 model, thinking level, and context-window use. For example:
-`● Ready │ ~/xa/coding-agent [main]  GPT-5.6 Sol Max (0%)`.
+`● Ready │ ~/xa/claudia [main]  GPT-5.6 Sol Max (0%)`.
 `Ready` is the only green activity, making it clear when the current turn has settled and the shell can accept another prompt. Slash commands
 are identified while they run. During an agent turn, the status distinguishes
 preparing tools, waiting for the model, reasoning, responding, preparing or
@@ -264,16 +264,16 @@ Transient provider and connection failures (including HTTP 503 responses) are
 automatically retried up to three times with exponential backoff; Escape also
 cancels a pending retry.
 After `fg`, the conversation screen, terminal mode, prompt, and partially
-entered input are restored; shell output produced while codingagent was
-suspended is replaced by the redrawn codingagent screen.
+entered input are restored; shell output produced while Claudia was
+suspended is replaced by the redrawn Claudia screen.
 
-The conversation scrolls inside codingagent rather than in the terminal's
-scrollback: while the prompt is active, codingagent receives mouse reports, so
+The conversation scrolls inside Claudia rather than in the terminal's
+scrollback: while the prompt is active, Claudia receives mouse reports, so
 the mouse wheel scrolls the conversation by three rows and PgUp/PgDn scroll by
 a page. New output does not move a view that has been scrolled up, and the status
 bar shows `↓ more below` until you scroll back to the end or submit a prompt.
 To select text natively, hold Shift while dragging (Ghostty's default
-`mouse-shift-capture`); selection covers the rows on screen. When codingagent
+`mouse-shift-capture`); selection covers the rows on screen. When Claudia
 exits, the whole conversation, as currently expanded, is written to the terminal
 so it remains in the scrollback.
 
@@ -334,8 +334,8 @@ to Build, independently of earlier sessions. Override that with
 `--agent-mode plan` in interactive, print, JSON, or RPC usage:
 
 ```bash
-java -jar target/codingagent.jar --agent-mode plan
-java -jar target/codingagent.jar --agent-mode plan \
+java -jar target/claudia.jar --agent-mode plan
+java -jar target/claudia.jar --agent-mode plan \
   --model anthropic/claude-haiku-4-5 --print "Plan the cache refactor"
 ```
 
@@ -347,7 +347,7 @@ the unresolved question in its response, without waiting for stdin.
 
 ## Java debugger tools
 
-In the JVM CLI (`java -jar target/codingagent.jar`), ask the agent to use
+In the JVM CLI (`java -jar target/claudia.jar`), ask the agent to use
 `debug_launch` with exactly one of `main_class` (a Java class, for example
 `com.example.Main`) or `test_selector` (for example
 `com.example.CalculatorTest#adds`). For a main class, compiled classes in
@@ -407,9 +407,9 @@ For example, a normal continue returns only dynamic state:
 
 These changes require a newly started JVM; replacing a JAR cannot update tools
 already loaded in a running session. To stage a build without replacing a
-Windows-locked `target/codingagent.jar`, run
+Windows-locked `target/claudia.jar`, run
 `mvn -Dmaven.antrun.skip=true -DskipTests package`, then start
-`java -jar target/codingagent.next.jar` with your usual CLI arguments. Resume a
+`java -jar target/claudia.next.jar` with your usual CLI arguments. Resume a
 saved session if needed; do not terminate an active session just to publish a JAR.
 
 Inspect a stopped target with
@@ -468,7 +468,7 @@ you would not want in the agent transcript.
 
 ## Interactive scripts
 
-You can ask codingagent to run a script and supply information when it asks:
+You can ask Claudia to run a script and supply information when it asks:
 for example, "Run the import script; when it asks for a link, ask me for it."
 The agent reads the script's prompt, asks you in chat, and sends your next reply
 to the same running process. Scripts can ask multiple questions this way.
@@ -499,7 +499,7 @@ toolsets found through `vswhere`. It accepts the same child environment
 settings as `run_process` and does not install packages.
 
 Shell processes survive ordinary chat turns. Cancelling an active turn,
-resetting the conversation, or exiting codingagent stops them. Running processes
+resetting the conversation, or exiting Claudia stops them. Running processes
 are not saved with conversations and cannot be restored after a restart.
 One-shot `--print` mode closes processes when the response ends; use the
 interactive CLI or a persistent RPC connection for exchanges across turns.
@@ -514,9 +514,9 @@ keyboard access are not supported.
 
 ### Built-in code-lens
 
-codingagent includes [code-lens](code-lens/README.md), a semantic code index for
+Claudia includes [code-lens](code-lens/README.md), a semantic code index for
 Clojure, Java, and C, as a built-in MCP server named `code-lens`. It needs no
-configuration. When codingagent runs from a jar or native executable in a
+configuration. When Claudia runs from a jar or native executable in a
 checkout's `target/` directory, it starts that checkout's
 `code-lens/build/code-lens` (`code-lens.exe` on Windows) as `code-lens mcp` in
 the agent workspace. Its tools are exposed as `code-lens_query`,
@@ -526,7 +526,7 @@ not offered at all.
 
 `/mcp` lists it as `code-lens (built-in)`. Enabling or disabling it or any of
 its tools works as for configured servers. These choices are saved under
-`builtInMcp` in `~/.codingagent/settings.json` rather than in its `mcp` object:
+`builtInMcp` in `~/.claudia/settings.json` rather than in its `mcp` object:
 
 ```json
 {
@@ -538,8 +538,8 @@ its tools works as for configured servers. These choices are saved under
 
 ### Configured servers
 
-codingagent reads MCP server definitions from the `mcp` object in
-`~/.codingagent/settings.json`. Local and remote definitions use the same
+Claudia reads MCP server definitions from the `mcp` object in
+`~/.claudia/settings.json`. Local and remote definitions use the same
 shape as OpenCode, and `{env:NAME}` and `{file:path}` substitutions are
 supported:
 
@@ -569,8 +569,8 @@ interactive shell, `/mcp` opens the configured-server list; Enter connects,
 disconnects, authenticates, or retries the selected server. Press Tab on a
 connected server to open its tool list, then press
 Enter to individually enable or disable a selected tool. Server and tool
-toggles are saved to `~/.codingagent/settings.json` and restored by future
-codingagent processes; a disabled tool also stays disabled if its server
+toggles are saved to `~/.claudia/settings.json` and restored by future
+Claudia processes; a disabled tool also stays disabled if its server
 reconnects during the current process. Tool overrides are stored as an
 optional `disabledTools` array of raw MCP tool names on the server definition.
 Streamable HTTP and legacy HTTP+SSE servers are supported.
@@ -595,12 +595,12 @@ plain-text results pass through unchanged. For example:
 
 Remote OAuth is discovered automatically from the MCP server's
 `WWW-Authenticate` challenge and well-known metadata. When `/mcp` reports
-`Authentication required`, select the server and press Enter. codingagent opens
+`Authentication required`, select the server and press Enter. Claudia opens
 the authorization page, receives the loopback callback, uses PKCE S256, and
 dynamically registers a client when the authorization server supports it.
 Tokens and registered-client details are stored with user-only permissions in
-`~/.codingagent/mcp-auth.json`; access tokens are refreshed automatically.
-codingagent can also import a matching OpenCode credential (same configured
+`~/.claudia/mcp-auth.json`; access tokens are refreshed automatically.
+Claudia can also import a matching OpenCode credential (same configured
 server name and exact URL).
 
 OAuth can be customized for servers that require a pre-registered client:
@@ -623,26 +623,26 @@ OAuth can be customized for servers that require a pre-registered client:
 ```
 
 `redirectUri` may be used instead of `callbackPort`, but must be an HTTP
-loopback URL that codingagent can listen on. Explicit `Authorization` headers
+loopback URL that Claudia can listen on. Explicit `Authorization` headers
 take precedence over OAuth discovery. Set `"oauth": false` to disable OAuth
 for a remote server.
 
 `--api-key` overrides environment-based credentials. Without `--no-session`,
-codingagent records an append-only transcript in `~/.codingagent/sessions`.
+Claudia records an append-only transcript in `~/.claudia/sessions`.
 Successful manual and automatic compactions are recorded as resume boundaries:
 the original transcript remains inspectable, while a resumed session sends only
 the saved checkpoint and messages added after that compaction.
 
 ## Agent instructions
 
-For personal defaults, create `~/.codingagent/AGENTS.md`. codingagent reads
+For personal defaults, create `~/.claudia/AGENTS.md`. Claudia reads
 this optional user-owned instruction file into every new agent session. Its
 contents follow the working-directory context and precede any per-run
 `--system-prompt` text and repository instructions. This follows the
-cross-agent `AGENTS.md` convention while keeping the file with codingagent's
+cross-agent `AGENTS.md` convention while keeping the file with Claudia's
 other settings.
 
-When started inside a Git worktree, codingagent also reads applicable
+When started inside a Git worktree, Claudia also reads applicable
 `AGENTS.md` files from the repository root through the current working
 directory. Their contents are appended to the model's instruction context in
 that order, so more deeply nested files are more specific than the personal
@@ -650,7 +650,7 @@ default. `AGENTS.override.md` takes precedence over `AGENTS.md` when both are
 in the same repository directory. As local tools move into a deeper descendant
 directory, any newly applicable instructions are loaded before the next model
 request. Each instruction file is reported once when it first applies, for
-example `Found /Users/Michael.Reilly/xa/coding-agent/code-lens/AGENTS.md`.
+example `Found /Users/Michael.Reilly/xa/claudia/code-lens/AGENTS.md`.
 Missing or unreadable instruction files are ignored. These files are prompt
 text only; they do not impose separate filesystem restrictions.
 
@@ -690,7 +690,7 @@ waiting for an answer.
 
 ```bash
 printf '%s\n' '{"id":"state-1","type":"get_state"}' |
-  java -jar target/codingagent.jar \
+  java -jar target/claudia.jar \
   --mode rpc --model anthropic/claude-haiku-4-5 --no-session
 ```
 
