@@ -21,6 +21,11 @@ public sealed interface McpServerConfig permits McpServerConfig.Local, McpServer
 		public Long timeoutMillis;
 		public List<McpResultFilter> resultFilters;
 		public List<String> disabledTools;
+		/**
+		 * True for a server codingagent supplies itself (see {@link BuiltInMcpServers})
+		 * rather than one defined in the settings file's {@code mcp} object.
+		 */
+		public boolean builtIn;
 
 		public Local(
 				List<String> command,
@@ -30,6 +35,18 @@ public sealed interface McpServerConfig permits McpServerConfig.Local, McpServer
 				Long timeoutMillis,
 				List<McpResultFilter> resultFilters,
 				List<String> disabledTools) {
+			this(command, cwd, environment, enabled, timeoutMillis, resultFilters, disabledTools, false);
+		}
+
+		public Local(
+				List<String> command,
+				String cwd,
+				Map<String, String> environment,
+				boolean enabled,
+				Long timeoutMillis,
+				List<McpResultFilter> resultFilters,
+				List<String> disabledTools,
+				boolean builtIn) {
 			this.command = command;
 			this.cwd = cwd;
 			this.environment = environment;
@@ -37,6 +54,7 @@ public sealed interface McpServerConfig permits McpServerConfig.Local, McpServer
 			this.timeoutMillis = timeoutMillis;
 			this.resultFilters = resultFilters;
 			this.disabledTools = disabledTools;
+			this.builtIn = builtIn;
 		}
 	}
 

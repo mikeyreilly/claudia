@@ -52,7 +52,9 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -124,6 +126,7 @@ import com.quaxt.codingagent.cli.tools.LocalTools;
 import com.quaxt.codingagent.cli.tools.TaskState;
 import com.quaxt.codingagent.agent.ToolDefinition;
 import com.quaxt.codingagent.shell.ShellSessionManager;
+import com.quaxt.codingagent.mcp.BuiltInMcpServers;
 import com.quaxt.codingagent.mcp.McpAgentTool;
 import com.quaxt.codingagent.mcp.McpClient;
 import com.quaxt.codingagent.mcp.McpResultFilter;
@@ -150,6 +153,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     private volatile AgentMode agentMode = AgentMode.BUILD;
     /* Per-process tools.deps aliases forced into code-lens MCP calls. */
     private String codeLensAliases;
+    /* Finds the built-in code-lens binary; replaceable so tests never depend on a real build. */
+    private Supplier<Optional<Path>> codeLensLocator = BuiltInMcpServers::locateCodeLens;
     private final QuestionBroker questionBroker = new QuestionBroker();
     private final TaskState taskState = new TaskState(snapshot -> {
         if (this.recordingSession) appendSessionEntry(this.sessionId, "task_state", snapshot);
@@ -163,6 +168,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         if (parentRuntime != null) throw new IllegalStateException("Change code-lens aliases through Main");
         codeLensAliases = aliases;
     }
+    void codeLensLocator(Supplier<Optional<Path>> locator) { codeLensLocator = Objects.requireNonNull(locator, "locator"); }
     public ObjectNode taskStateSnapshot() { return taskState.snapshot(); }
     public void restoreTaskState(JsonNode snapshot) throws IOException { taskState.restore(snapshot); }
 
@@ -338,7 +344,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                     configs.put(name, switch (server.config) {
                         case McpServerConfig.Local local -> new McpServerConfig.Local(List.copyOf(local.command), local.cwd,
                                 Map.copyOf(local.environment), server.enabled, local.timeoutMillis,
-                                List.copyOf(local.resultFilters), List.copyOf(server.disabledTools));
+                                List.copyOf(local.resultFilters), List.copyOf(server.disabledTools), local.builtIn);
                         case McpServerConfig.Remote remote -> new McpServerConfig.Remote(remote.url, Map.copyOf(remote.headers),
                                 remote.oauth == null ? null : remote.oauth.deepCopy(), server.enabled, remote.timeoutMillis,
                                 List.copyOf(remote.resultFilters), List.copyOf(server.disabledTools));
@@ -772,6 +778,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
         public final int enabledToolCount;
         public final String target;
         public final String authorizationUrl;
+        /** True for a server codingagent supplies itself rather than one from settings. */
+        public final boolean builtIn;
 
         private McpServerStatus(
                 String name,
@@ -780,7 +788,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 int toolCount,
                 int enabledToolCount,
                 String target,
-                String authorizationUrl) {
+                String authorizationUrl,
+                boolean builtIn) {
             this.name = name;
             this.state = state;
             this.message = message;
@@ -788,6 +797,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             this.enabledToolCount = enabledToolCount;
             this.target = target;
             this.authorizationUrl = authorizationUrl;
+            this.builtIn = builtIn;
         }
     }
 
@@ -5253,9 +5263,10 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
             throw new IOException("Invalid settings file " + settingsPath + ": expected a JSON object");
         }
 
+        Map<String, BuiltInMcpServers.Preference> builtInPreferences = mcpBuiltInPreferences(root, settingsPath);
         JsonNode mcp = root.get("mcp");
         if (mcp == null || mcp.isNull()) {
-            return new McpConfiguration(new LinkedHashMap<>(), List.of(settingsPath));
+            return new McpConfiguration(new LinkedHashMap<>(), List.of(settingsPath), builtInPreferences);
         }
         if (!mcp.isObject()) {
             throw new IOException("Invalid mcp in " + settingsPath + ": expected an object");
@@ -5312,20 +5323,7 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 }
             }
             List<McpResultFilter> resultFilters = List.copyOf(filters);
-            List<String> tools = new ArrayList<>();
-            JsonNode node2 = server.get("disabledTools");
-            if (node2 != null && !node2.isNull()) {
-                if (!node2.isArray()) {
-                    throw mcpInvalidServer(name, "disabledTools must be an array of non-empty strings");
-                }
-                for (JsonNode tool : node2) {
-                    if (!tool.isTextual() || tool.asText().isBlank()) {
-                        throw mcpInvalidServer(name, "disabledTools must contain non-empty strings");
-                    }
-                    tools.add(tool.asText());
-                }
-            }
-            List<String> disabledTools = List.copyOf(tools);
+            List<String> disabledTools = mcpDisabledTools(server, message -> mcpInvalidServer(name, message));
             servers.put(entry.getKey(), switch (typeNode.asText()) {
                 case "local" -> {
                     JsonNode commandNode = server.get("command");
@@ -5423,7 +5421,49 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 default -> throw mcpInvalidServer(name, "type must be local or remote");
             });
         }
-        return new McpConfiguration(new LinkedHashMap<>(servers), List.of(settingsPath));
+        return new McpConfiguration(new LinkedHashMap<>(servers), List.of(settingsPath), builtInPreferences);
+    }
+
+    /**
+     * Reads the stored enable/disable choices for built-in servers. Names that no
+     * built-in server uses are accepted and ignored, so settings survive a server's removal.
+     */
+    private static Map<String, BuiltInMcpServers.Preference> mcpBuiltInPreferences(JsonNode root, Path settingsPath)
+            throws IOException {
+        JsonNode node = root.get(BuiltInMcpServers.SETTINGS_KEY);
+        if (node == null || node.isNull()) return Map.of();
+        if (!node.isObject()) {
+            throw new IOException("Invalid " + BuiltInMcpServers.SETTINGS_KEY + " in " + settingsPath + ": expected an object");
+        }
+        LinkedHashMap<String, BuiltInMcpServers.Preference> preferences = new LinkedHashMap<>();
+        for (var entry : node.properties()) {
+            String name = entry.getKey();
+            Function<String, IOException> invalid =
+                    message -> new IOException("Invalid built-in MCP server \"" + name + "\": " + message);
+            if (!(entry.getValue() instanceof ObjectNode server)) throw invalid.apply("expected an object");
+            JsonNode enabled = server.get("enabled");
+            if (enabled != null && !enabled.isNull() && !enabled.isBoolean()) {
+                throw invalid.apply("enabled must be a boolean");
+            }
+            preferences.put(name, new BuiltInMcpServers.Preference(
+                    enabled == null || enabled.isNull() || enabled.asBoolean(), mcpDisabledTools(server, invalid)));
+        }
+        return Collections.unmodifiableMap(preferences);
+    }
+
+    private static List<String> mcpDisabledTools(ObjectNode server, Function<String, IOException> invalid)
+            throws IOException {
+        JsonNode node = server.get("disabledTools");
+        if (node == null || node.isNull()) return List.of();
+        if (!node.isArray()) throw invalid.apply("disabledTools must be an array of non-empty strings");
+        List<String> tools = new ArrayList<>();
+        for (JsonNode tool : node) {
+            if (!tool.isTextual() || tool.asText().isBlank()) {
+                throw invalid.apply("disabledTools must contain non-empty strings");
+            }
+            tools.add(tool.asText());
+        }
+        return List.copyOf(tools);
     }
 
     private static Map<String, String> mcpStringMap(String server, ObjectNode value, String field) throws IOException {
@@ -6436,13 +6476,17 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
     }
 
     /**
-     * Builds a manager for the MCP servers in codingagent's settings file.
+     * Builds a manager for the MCP servers in codingagent's settings file plus the
+     * built-in servers whose binaries are present.
      */
     void mcpLoadDefaultManager(Path workspace) throws IOException {
-        mcpCreateManager(
-                mcpLoadConfiguration(new McpConfigLoader(
-                        applicationPaths.settingsFile(), Map.copyOf(System.getenv()))),
-                workspace);
+        McpConfiguration configuration = mcpLoadConfiguration(new McpConfigLoader(
+                applicationPaths.settingsFile(), Map.copyOf(System.getenv())));
+        codeLensLocator.get().ifPresent(binary -> configuration.servers.putIfAbsent(
+                BuiltInMcpServers.CODE_LENS,
+                BuiltInMcpServers.codeLens(binary, configuration.builtInPreferences.getOrDefault(
+                        BuiltInMcpServers.CODE_LENS, BuiltInMcpServers.Preference.DEFAULT))));
+        mcpCreateManager(configuration, workspace);
     }
 
     /**
@@ -7028,7 +7072,8 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                         case McpServerConfig.Local local -> String.join(" ", local.command);
                         case McpServerConfig.Remote remote -> remote.url.toString();
                     },
-                    runtime.authorizationUrl);
+                    runtime.authorizationUrl,
+                    runtime.config instanceof McpServerConfig.Local local && local.builtIn);
         }
     }
 
@@ -8486,48 +8531,62 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                 provider, model2, thinkingLevel, value != null && value.asBoolean(false));
     }
 
+    /**
+     * Persists a server or tool toggle. Configured servers are updated in place under
+     * {@code mcp}; built-in servers store their choices under {@code builtInMcp}.
+     */
     public void saveMcpPreference(String serverName, String toolName, boolean enabled) throws IOException {
-        if (toolName != null) {
-            requireSettingsValue(serverName, "serverName");
-            requireSettingsValue(toolName, "toolName");
-            modifySettings(root1 -> {
-                ObjectNode server = settingsMcpServer(root1, serverName);
-                ArrayNode disabledTools = null;
-                JsonNode value1 = server.get("disabledTools");
-                if (value1 != null && !value1.isNull()) {
-                    if (!(value1 instanceof ArrayNode tools)) {
-                        throw new UncheckedIOException(new IOException(
-                                "Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
-                    }
-                    for (JsonNode tool1 : tools) {
-                        settingsDisabledToolName(serverName, tool1);
-                    }
-                    disabledTools = tools;
+        requireSettingsValue(serverName, "serverName");
+        if (toolName != null) requireSettingsValue(toolName, "toolName");
+        boolean builtIn = mcpIsBuiltIn(serverName);
+        modifySettings(root1 -> {
+            ObjectNode server = builtIn
+                    ? settingsBuiltInMcpServer(root1, serverName)
+                    : settingsMcpServer(root1, serverName);
+            if (toolName == null) {
+                server.put("enabled", enabled);
+                return;
+            }
+            ArrayNode disabledTools = null;
+            JsonNode value1 = server.get("disabledTools");
+            if (value1 != null && !value1.isNull()) {
+                if (!(value1 instanceof ArrayNode tools)) {
+                    throw new UncheckedIOException(new IOException(
+                            "Invalid MCP server \"" + serverName + "\": disabledTools must be an array"));
                 }
-                if (enabled) {
-                    if (disabledTools == null) return;
-                    ArrayNode retained = Json.MAPPER.createArrayNode();
-                    for (JsonNode tool : disabledTools) {
-                        String name = settingsDisabledToolName(serverName, tool);
-                        if (!name.equals(toolName))
-                            retained.add(name);
-                    }
-                    if (retained.isEmpty())
-                        server.remove("disabledTools");
-                    else server.set("disabledTools", retained);
-                    return;
+                for (JsonNode tool1 : tools) {
+                    settingsDisabledToolName(serverName, tool1);
                 }
-                if (disabledTools == null)
-                    disabledTools = server.putArray("disabledTools");
+                disabledTools = tools;
+            }
+            if (enabled) {
+                if (disabledTools == null) return;
+                ArrayNode retained = Json.MAPPER.createArrayNode();
                 for (JsonNode tool : disabledTools) {
-                    if (settingsDisabledToolName(serverName, tool).equals(toolName))
-                        return;
+                    String name = settingsDisabledToolName(serverName, tool);
+                    if (!name.equals(toolName))
+                        retained.add(name);
                 }
-                disabledTools.add(toolName);
-            });
-        } else {
-            requireSettingsValue(serverName, "serverName");
-            modifySettings(root1 -> settingsMcpServer(root1, serverName).put("enabled", enabled));
+                if (retained.isEmpty())
+                    server.remove("disabledTools");
+                else server.set("disabledTools", retained);
+                return;
+            }
+            if (disabledTools == null)
+                disabledTools = server.putArray("disabledTools");
+            for (JsonNode tool : disabledTools) {
+                if (settingsDisabledToolName(serverName, tool).equals(toolName))
+                    return;
+            }
+            disabledTools.add(toolName);
+        });
+    }
+
+    private boolean mcpIsBuiltIn(String serverName) {
+        McpRuntime runtime = servers.get(serverName);
+        if (runtime == null) return false;
+        synchronized (runtime.lock) {
+            return runtime.config instanceof McpServerConfig.Local local && local.builtIn;
         }
     }
 
@@ -8619,6 +8678,21 @@ public final class CodingAgentOperations implements CredentialStore, AutoCloseab
                     new IOException("Cannot update MCP server \"" + serverName + "\": server is not configured"));
         }
         return object;
+    }
+
+    /** Returns the built-in server's preference object, creating it and its container as needed. */
+    private static ObjectNode settingsBuiltInMcpServer(ObjectNode root, String serverName) {
+        JsonNode container = root.get(BuiltInMcpServers.SETTINGS_KEY);
+        ObjectNode servers;
+        if (container == null || container.isNull()) servers = root.putObject(BuiltInMcpServers.SETTINGS_KEY);
+        else if (container instanceof ObjectNode object) servers = object;
+        else throw new UncheckedIOException(new IOException("Cannot update built-in MCP server \"" + serverName
+                    + "\": " + BuiltInMcpServers.SETTINGS_KEY + " must be an object"));
+        JsonNode server = servers.get(serverName);
+        if (server == null || server.isNull()) return servers.putObject(serverName);
+        if (server instanceof ObjectNode object) return object;
+        throw new UncheckedIOException(new IOException(
+                "Cannot update built-in MCP server \"" + serverName + "\": expected an object"));
     }
 
     private static String settingsDisabledToolName(String serverName, JsonNode tool) {

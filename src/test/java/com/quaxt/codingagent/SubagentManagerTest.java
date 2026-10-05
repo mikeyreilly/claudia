@@ -242,7 +242,10 @@ class SubagentManagerTest {
         Files.writeString(workspace.resolve("AGENTS.md"), "Workspace instruction: include the verification result.");
         var config = new com.quaxt.codingagent.mcp.McpServerConfig.Local(List.of("unused-command"), null,
                 Map.of("SETTING", "value"), false, 1000L, List.of(), List.of("disabled_tool"));
-        root.mcpCreateManager(new com.quaxt.codingagent.mcp.McpConfiguration(Map.of("fixture", config), List.of()), workspace);
+        var builtIn = new com.quaxt.codingagent.mcp.McpServerConfig.Local(List.of("unused-code-lens", "mcp"), null,
+                Map.of(), false, null, List.of(), List.of(), true);
+        root.mcpCreateManager(new com.quaxt.codingagent.mcp.McpConfiguration(
+                Map.of("fixture", config, "code-lens", builtIn), List.of()), workspace);
         String id = root.subagents().create("write a file", "Writer");
         step(request -> {
             assertTrue(request.context.systemPrompt.contains("Workspace instruction"));
@@ -255,7 +258,9 @@ class SubagentManagerTest {
         assertNotSame(root, child);
         assertEquals(root.applicationPaths(), child.applicationPaths());
         assertEquals("written", Files.readString(workspace.resolve("child.txt")));
-        assertEquals(CodingAgentOperations.McpState.DISABLED, child.mcpStatuses().getFirst().state);
+        assertEquals(CodingAgentOperations.McpState.DISABLED, child.mcpStatus("fixture").state);
+        assertFalse(child.mcpStatus("fixture").builtIn);
+        assertTrue(child.mcpStatus("code-lens").builtIn);
         for (String fieldName : List.of("shellSessions", "servers", "providerStates")) {
             var field = CodingAgentOperations.class.getDeclaredField(fieldName); field.setAccessible(true);
             assertNotSame(field.get(root), field.get(child));
