@@ -22,6 +22,7 @@ char *code_lens_test_json_get_id_raw(const char *object);
 char *code_lens_test_json_get_arguments(const char *params);
 int code_lens_test_repo_write_lock_acquire(const char *repo_name);
 void code_lens_test_repo_write_lock_release(int fd);
+unsigned int code_lens_test_set_pending_byte(unsigned int offset);
 
 /* Bulk write + read-back regression test.
  *
@@ -2756,6 +2757,224 @@ done:
     return failed == 0 ? 0 : 1;
 }
 
+/* SQLite never stores data on the lock-byte page (the page holding file
+ * offset PENDING_BYTE, 1 GiB by default): the pager refuses to read it. The
+ * raw writer used to number grafted pages straight through it, so every
+ * index larger than 1 GiB had a tree on that page and reads failed with
+ * "database disk image is malformed". Moving the lock byte (for SQLite and
+ * the writer alike) into a small fixture's page range exercises the skip at
+ * several positions, for both emitters, without a 1 GiB fixture. */
+#define PENDING_FIXTURE_FILES 120U
+#define PENDING_FIXTURE_DEFNS 25U
+#define PENDING_DEFAULT_OFFSET 0x40000000U
+#define PENDING_PAGE_SIZE 8192U
+
+static int pending_assert(int condition, const char *message, const char *detail)
+{
+    if (!condition) {
+        (void)fprintf(stderr,
+                      "pending-byte test failed: %s%s%s\n",
+                      message,
+                      detail == nullptr ? "" : ": ",
+                      detail == nullptr ? "" : detail);
+        return 1;
+    }
+    return 0;
+}
+
+static long long pending_page_count(const char *db_path)
+{
+    CodeLensDb db;
+    char *rows;
+    long long count;
+
+    if ((db_path == nullptr) || (code_lens_db_open_read(&db, db_path) != 0)) {
+        return -1LL;
+    }
+    rows = code_lens_db_query_to_string(&db, "PRAGMA page_count");
+    count = parse_single_count(rows);
+    code_lens_db_close(&db);
+    return count;
+}
+
+static int test_pending_byte_page(void)
+{
+    static const unsigned int percents[] = {15U, 40U, 65U, 90U, 97U};
+    static const char *const emitters[] = {nullptr, "classic"};
+    char root_template[1024];
+    const char *tmp_dir = getenv("TMPDIR");
+    const char *old_home = getenv("CODE_LENS_HOME");
+    const char *old_emitter = getenv("CODE_LENS_EMITTER");
+    char saved_home[1024] = {0};
+    char saved_emitter[64] = {0};
+    bool had_home = false;
+    bool had_emitter = false;
+    char *root;
+    char *repo_dir = nullptr;
+    char *src_dir = nullptr;
+    long long baseline_pages;
+    int failed = 0;
+
+    if ((old_home != nullptr) && (strlen(old_home) < sizeof(saved_home))) {
+        (void)strcpy(saved_home, old_home);
+        had_home = true;
+    }
+    if ((old_emitter != nullptr) && (strlen(old_emitter) < sizeof(saved_emitter))) {
+        (void)strcpy(saved_emitter, old_emitter);
+        had_emitter = true;
+    }
+    if ((tmp_dir == nullptr) || (tmp_dir[0] == '\0')) {
+        tmp_dir = "/tmp";
+    }
+    (void)snprintf(root_template, sizeof(root_template), "%s/code-lens-pending-XXXXXX", tmp_dir);
+    root = canonical_temp_root(root_template);
+    if (root == nullptr) {
+        (void)fprintf(stderr, "pending-byte test failed: mkdtemp failed\n");
+        return 1;
+    }
+    repo_dir = code_lens_join_path(root, "repo");
+    src_dir = repo_dir == nullptr ? nullptr : code_lens_join_path(repo_dir, "src");
+    if ((src_dir == nullptr) || (code_lens_mkdir_p(src_dir) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    for (size_t f = 0U; f < PENDING_FIXTURE_FILES; f++) {
+        char name[64];
+        char *path;
+        FILE *out;
+
+        (void)snprintf(name, sizeof(name), "f%zu.clj", f);
+        path = code_lens_join_path(src_dir, name);
+        out = path == nullptr ? nullptr : fopen(path, "w");
+        if (out == nullptr) {
+            failed = 1;
+            goto done;
+        }
+        (void)fprintf(out,
+                      "(ns pending.f%zu\n  (:require [pending.f%zu :as prev]))\n",
+                      f,
+                      f == 0U ? 0U : f - 1U);
+        for (size_t d = 0U; d < PENDING_FIXTURE_DEFNS; d++) {
+            (void)fprintf(out,
+                          "(defn pending-%zu-%zu\n  \"Docstring for pending def %zu in file %zu.\"\n"
+                          "  [x]\n  (str x :pending/kw-%zu (prev/pending-%zu-%zu x) "
+                          "(pending-%zu-%zu x)))\n",
+                          f, d, d, f, d, f == 0U ? 0U : f - 1U, d, f,
+                          d == 0U ? 0U : d - 1U);
+        }
+        if (fclose(out) != 0) {
+            failed = 1;
+            goto done;
+        }
+    }
+
+    /* Baseline with the default lock byte: learn the fixture's page span. */
+    {
+        char *home_dir = code_lens_join_path(root, "home-baseline");
+        CodeLensIndexStats stats = {0};
+
+        if ((home_dir == nullptr) || (code_lens_mkdir_p(home_dir) != 0) ||
+            (setenv("CODE_LENS_HOME", home_dir, 1) != 0) ||
+            (code_lens_index_repository(repo_dir, &stats) != 0)) {
+            (void)fprintf(stderr, "pending-byte test failed: baseline index failed\n");
+            failed = 1;
+            goto done;
+        }
+        baseline_pages = pending_page_count(mcp_single_index_db_path(home_dir));
+        if (baseline_pages < 200LL) {
+            (void)fprintf(stderr,
+                          "pending-byte test failed: fixture too small (%lld pages)\n",
+                          baseline_pages);
+            failed = 1;
+            goto done;
+        }
+    }
+
+    for (size_t e = 0U; e < sizeof(emitters) / sizeof(emitters[0]); e++) {
+        if (emitters[e] == nullptr) {
+            (void)unsetenv("CODE_LENS_EMITTER");
+        } else {
+            (void)setenv("CODE_LENS_EMITTER", emitters[e], 1);
+        }
+        for (size_t p = 0U; p < sizeof(percents) / sizeof(percents[0]); p++) {
+            long long pending_pgno = (baseline_pages * (long long)percents[p]) / 100LL;
+            unsigned int offset = (unsigned int)(pending_pgno - 1LL) * PENDING_PAGE_SIZE;
+            char label[128];
+            char home_name[64];
+            char *home_dir;
+            char *db_path;
+            CodeLensIndexStats stats = {0};
+            CodeLensDb db;
+            char *rows;
+            char *context;
+
+            (void)snprintf(label,
+                           sizeof(label),
+                           "emitter=%s lock-byte page %lld of ~%lld",
+                           emitters[e] == nullptr ? "raw" : emitters[e],
+                           pending_pgno,
+                           baseline_pages);
+            (void)snprintf(home_name, sizeof(home_name), "home-%zu-%zu", e, p);
+            home_dir = code_lens_join_path(root, home_name);
+            if ((home_dir == nullptr) || (code_lens_mkdir_p(home_dir) != 0) ||
+                (setenv("CODE_LENS_HOME", home_dir, 1) != 0)) {
+                failed |= pending_assert(0, "fixture home setup", label);
+                continue;
+            }
+            (void)code_lens_test_set_pending_byte(offset);
+            failed |= pending_assert(code_lens_index_repository(repo_dir, &stats) == 0,
+                                     "index succeeds",
+                                     label);
+            db_path = mcp_single_index_db_path(home_dir);
+            failed |= pending_assert(pending_page_count(db_path) > pending_pgno,
+                                     "index spans the lock-byte page",
+                                     label);
+            if ((db_path != nullptr) && (code_lens_db_open_read(&db, db_path) == 0)) {
+                rows = code_lens_db_query_to_string(&db, "PRAGMA integrity_check");
+                failed |= pending_assert((rows != nullptr) && (strstr(rows, "\nok") != nullptr) &&
+                                             (strstr(rows, "reference to page") == nullptr) &&
+                                             (strstr(rows, "wrong # of entries") == nullptr),
+                                         "integrity_check passes",
+                                         rows == nullptr ? label : rows);
+                rows = code_lens_db_query_to_string(
+                    &db, "SELECT COUNT(*) FROM Symbol WHERE length(content) > 0");
+                failed |= pending_assert(parse_single_count(rows) >=
+                                             (long long)(PENDING_FIXTURE_FILES *
+                                                         PENDING_FIXTURE_DEFNS),
+                                         "Symbol content scan reads every page",
+                                         label);
+                code_lens_db_close(&db);
+            } else {
+                failed |= pending_assert(0, "open published index", label);
+            }
+            context = code_lens_context_symbol(repo_dir, "pending-7-3");
+            failed |= pending_assert((context != nullptr) &&
+                                         (strstr(context, "Definitions") != nullptr) &&
+                                         (strstr(context, "pending.f7") != nullptr),
+                                     "context reads definitions and references",
+                                     label);
+            (void)code_lens_test_set_pending_byte(PENDING_DEFAULT_OFFSET);
+        }
+    }
+
+done:
+    (void)code_lens_test_set_pending_byte(PENDING_DEFAULT_OFFSET);
+    if (had_home) {
+        (void)setenv("CODE_LENS_HOME", saved_home, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_HOME");
+    }
+    if (had_emitter) {
+        (void)setenv("CODE_LENS_EMITTER", saved_emitter, 1);
+    } else {
+        (void)unsetenv("CODE_LENS_EMITTER");
+    }
+    if (code_lens_remove_tree(root) != 0) {
+        (void)fprintf(stderr, "pending-byte test warning: failed to remove %s\n", root);
+    }
+    return failed == 0 ? 0 : 1;
+}
+
 int main(void)
 {
     if (strcmp(CODE_LENS_C_STANDARD, "ISO C23") != 0) {
@@ -2833,6 +3052,10 @@ int main(void)
     }
 
     if (test_cljc_symbol_collision() != 0) {
+        return 1;
+    }
+
+    if (test_pending_byte_page() != 0) {
         return 1;
     }
 
