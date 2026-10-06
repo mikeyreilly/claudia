@@ -9289,6 +9289,36 @@ static int term_interner_preload(CodeLensDb *db, TermInterner *interner)
 #define CP_RAW_MAX_LOCAL 2030U
 #define CP_RAW_MAX_CELLS 2048U
 #define CP_RAW_HDR_PAGE_COUNT_OFFSET 28U
+/* SQLite's default lock-byte offset (PENDING_BYTE). */
+#define CP_RAW_DEFAULT_PENDING_BYTE 0x40000000U
+
+/* The page that holds the lock-byte offset (1 GiB by default) is never
+ * used for data: the pager refuses to read it (SQLITE_CORRUPT) and
+ * integrity_check flags any tree that references it. Every raw page run
+ * therefore steps over it once a database grows past that offset. Tests
+ * move the offset (together with SQLite's own) to exercise the skip on
+ * small fixtures. */
+static uint32_t raw_pending_pgno = (CP_RAW_DEFAULT_PENDING_BYTE / CP_RAW_PAGE_SIZE) + 1U;
+
+/* Page number of the k-th page (0-based) of a run whose first page is
+ * base, stepping over the lock-byte page. base itself must not lie past a
+ * skip it should have taken, which holds because every run starts at a
+ * number this helper (or SQLite) produced. */
+static uint64_t raw_run_pgno(uint64_t base, uint64_t k)
+{
+    uint64_t pgno = base + k;
+
+    if ((base <= (uint64_t)raw_pending_pgno) && (pgno >= (uint64_t)raw_pending_pgno)) {
+        pgno++;
+    }
+    return pgno;
+}
+
+/* First page number after a run of count pages starting at base. */
+static uint64_t raw_run_end(uint64_t base, uint64_t count)
+{
+    return count == 0U ? base : raw_run_pgno(base, count - 1U) + 1U;
+}
 
 static bool raw_indexes_enabled(void)
 {
@@ -9530,7 +9560,9 @@ static size_t raw_payload_len(const RawPayloads *payloads, uint32_t index)
 }
 
 /* Contiguous run of fresh pages appended after the last committed page;
- * page i lives at data + i * page_size and is numbered base_pgno + i. */
+ * page i lives at data + i * page_size and is numbered
+ * raw_run_pgno(base_pgno, i), i.e. base_pgno + i except that numbering
+ * steps over the lock-byte page. */
 typedef struct {
     uint8_t *data;
     size_t count;
@@ -9547,7 +9579,11 @@ static void raw_pages_destroy(RawPages *pages)
 static uint8_t *raw_pages_alloc(RawPages *pages, uint32_t *out_pgno)
 {
     uint8_t *page;
+    uint64_t pgno = raw_run_pgno(pages->base_pgno, pages->count);
 
+    if (pgno > (uint64_t)UINT32_MAX) {
+        return nullptr;
+    }
     if (pages->count == pages->cap) {
         size_t new_cap = pages->cap == 0U ? 256U : (pages->cap * 2U);
         uint8_t *grown = realloc(pages->data, new_cap * CP_RAW_PAGE_SIZE);
@@ -9560,7 +9596,7 @@ static uint8_t *raw_pages_alloc(RawPages *pages, uint32_t *out_pgno)
     }
     page = pages->data + (pages->count * CP_RAW_PAGE_SIZE);
     (void)memset(page, 0, CP_RAW_PAGE_SIZE);
-    *out_pgno = pages->base_pgno + (uint32_t)pages->count;
+    *out_pgno = (uint32_t)pgno;
     pages->count++;
     return page;
 }
@@ -10058,6 +10094,36 @@ static int raw_write_all(int fd, const uint8_t *data, size_t len, off_t offset)
     return 0;
 }
 
+/* Writes count contiguous in-memory pages as pages first..first+count-1 of
+ * the run starting at base (see raw_run_pgno), splitting the write where
+ * the run steps over the lock-byte page. The skipped page is never written;
+ * it reads back as a zero-filled hole, which is what SQLite expects. */
+static int raw_write_run(int fd, const uint8_t *data, uint64_t base, uint64_t first, size_t count)
+{
+    while (count > 0U) {
+        uint64_t pgno = raw_run_pgno(base, first);
+        size_t chunk = count;
+
+        if (pgno < (uint64_t)raw_pending_pgno) {
+            uint64_t before = (uint64_t)raw_pending_pgno - pgno;
+
+            if (before < (uint64_t)chunk) {
+                chunk = (size_t)before;
+            }
+        }
+        if (raw_write_all(fd,
+                          data,
+                          chunk * CP_RAW_PAGE_SIZE,
+                          (off_t)(pgno - 1U) * (off_t)CP_RAW_PAGE_SIZE) != 0) {
+            return -1;
+        }
+        data += chunk * CP_RAW_PAGE_SIZE;
+        first += chunk;
+        count -= chunk;
+    }
+    return 0;
+}
+
 /* Builds and grafts all four secondary indexes onto the committed staging
  * database. On any failure the file is restored and the caller falls back
  * to classic CREATE INDEX. */
@@ -10151,14 +10217,14 @@ static int raw_secondary_indexes_graft(const char *db_path, IndexContext *ctx)
         text_keys = nullptr;
     }
 
-    if (((uint64_t)old_page_count + (uint64_t)pages.count) > (uint64_t)UINT32_MAX) {
+    if ((raw_run_end(pages.base_pgno, pages.count) - 1U) > (uint64_t)UINT32_MAX) {
         goto done;
     }
     file_dirty = true;
-    if (raw_write_all(fd, pages.data, pages.count * CP_RAW_PAGE_SIZE, original_size) != 0) {
+    if (raw_write_run(fd, pages.data, pages.base_pgno, 0U, pages.count) != 0) {
         goto done;
     }
-    raw_store_be(count_be, old_page_count + (uint32_t)pages.count, 4U);
+    raw_store_be(count_be, raw_run_end(pages.base_pgno, pages.count) - 1U, 4U);
     if (pwrite(fd, count_be, sizeof(count_be), CP_RAW_HDR_PAGE_COUNT_OFFSET) !=
         (ssize_t)sizeof(count_be)) {
         goto done;
@@ -10880,7 +10946,10 @@ static int raw_graft_table_tree_at(RawGraft *graft,
     uint32_t root = tree->root_local;
     size_t total = tree->page_count;
 
-    if ((root == 0U) || (((uint64_t)base + total) - 1U > (uint64_t)UINT32_MAX)) {
+    /* Non-root local page l occupies run slot l - 1 (before the root) or
+     * l - 2 (after it) of the run starting at base. */
+    if ((root == 0U) || (root > total) ||
+        ((raw_run_end(base, (uint64_t)total - 1U) - 1U) > (uint64_t)UINT32_MAX)) {
         return -1;
     }
     for (size_t i = 0U; i < tree->fixup_count; i++) {
@@ -10891,29 +10960,26 @@ static int raw_graft_table_tree_at(RawGraft *graft,
         if ((local == 0U) || (local == root) || (local > total)) {
             return -1;
         }
-        raw_store_be(at, local < root ? ((uint64_t)base + local) - 1U
-                                      : ((uint64_t)base + local) - 2U, 4U);
+        raw_store_be(at,
+                     raw_run_pgno(base, local < root ? (uint64_t)local - 1U
+                                                     : (uint64_t)local - 2U),
+                     4U);
     }
     (void)memcpy(graft->root_content[tree_index],
                  raw_tree_page(tree, root),
                  CP_RAW_PAGE_SIZE);
     graft->root_set[tree_index] = true;
-    if (root > 1U) {
-        if (raw_write_all(graft->fd,
-                          tree->data,
-                          ((size_t)root - 1U) * CP_RAW_PAGE_SIZE,
-                          (off_t)((uint64_t)base - 1U) * (off_t)CP_RAW_PAGE_SIZE) != 0) {
-            return -1;
-        }
+    if ((root > 1U) &&
+        (raw_write_run(graft->fd, tree->data, base, 0U, (size_t)root - 1U) != 0)) {
+        return -1;
     }
-    if (root < total) {
-        if (raw_write_all(graft->fd,
-                          tree->data + ((size_t)root * CP_RAW_PAGE_SIZE),
-                          (total - (size_t)root) * CP_RAW_PAGE_SIZE,
-                          (off_t)(((uint64_t)base + root) - 2U) * (off_t)CP_RAW_PAGE_SIZE) !=
-            0) {
-            return -1;
-        }
+    if ((root < total) &&
+        (raw_write_run(graft->fd,
+                       tree->data + ((size_t)root * CP_RAW_PAGE_SIZE),
+                       base,
+                       (uint64_t)root - 1U,
+                       total - (size_t)root) != 0)) {
+        return -1;
     }
     return 0;
 }
@@ -10985,7 +11051,7 @@ static int raw_graft_all_table_trees(RawGraft *graft, RawEmitter *emit)
                                      .tree_index = tree_indices[i],
                                      .base = (uint32_t)next,
                                      .rc = -1};
-        next += trees[i]->page_count - 1U;
+        next = raw_run_end(next, (uint64_t)trees[i]->page_count - 1U);
         if (next > (uint64_t)UINT32_MAX) {
             return -1;
         }
@@ -11056,23 +11122,20 @@ static int raw_graft_index_tree(RawGraft *graft, RawPayloads *payloads, size_t t
         goto done;
     }
     if ((pages.count == 0U) ||
-        (root != (pages.base_pgno + (uint32_t)pages.count) - 1U)) {
+        ((uint64_t)root != raw_run_pgno(pages.base_pgno, (uint64_t)pages.count - 1U))) {
         goto done;
     }
     (void)memcpy(graft->root_content[tree_index],
                  pages.data + ((pages.count - 1U) * CP_RAW_PAGE_SIZE),
                  CP_RAW_PAGE_SIZE);
     graft->root_set[tree_index] = true;
-    if (pages.count > 1U) {
-        if (raw_write_all(graft->fd,
-                          pages.data,
-                          (pages.count - 1U) * CP_RAW_PAGE_SIZE,
-                          (off_t)((uint64_t)pages.base_pgno - 1U) *
-                              (off_t)CP_RAW_PAGE_SIZE) != 0) {
-            goto done;
-        }
+    if ((pages.count > 1U) &&
+        (raw_write_run(graft->fd, pages.data, pages.base_pgno, 0U, pages.count - 1U) != 0)) {
+        goto done;
     }
-    graft->next_pgno = (pages.base_pgno + (uint32_t)pages.count) - 1U;
+    /* The root's slot is free (its content moves to the schema root), so
+     * the next tree starts right after the last written page. */
+    graft->next_pgno = (uint32_t)raw_run_end(pages.base_pgno, (uint64_t)pages.count - 1U);
     rc = 0;
 
 done:
@@ -11840,7 +11903,7 @@ static int fts_graft_shadow_trees(FtsSidecar *sidecar,
         if (raw_graft_table_tree_at(graft, trees[i], tree_indices[i], (uint32_t)next) != 0) {
             goto done;
         }
-        next += trees[i]->page_count - 1U;
+        next = raw_run_end(next, (uint64_t)trees[i]->page_count - 1U);
         if (next > (uint64_t)UINT32_MAX) {
             goto done;
         }
@@ -23756,6 +23819,17 @@ static char *call_tool(const char *tool_name, const char *args)
 }
 
 #ifdef CODE_LENS_NO_MAIN
+/* Moves SQLite's lock-byte offset and the raw writer's matching skip so tests
+ * can cross the lock-byte page on small fixtures. Returns the previous
+ * offset. No database connection may be open while it changes. */
+unsigned int code_lens_test_set_pending_byte(unsigned int offset)
+{
+    int previous = sqlite3_test_control(SQLITE_TESTCTRL_PENDING_BYTE, offset);
+
+    raw_pending_pgno = (uint32_t)(offset / CP_RAW_PAGE_SIZE) + 1U;
+    return (unsigned int)previous;
+}
+
 char *code_lens_test_mcp_call_tool(const char *tool_name, const char *args)
 {
     return call_tool(tool_name, args);
