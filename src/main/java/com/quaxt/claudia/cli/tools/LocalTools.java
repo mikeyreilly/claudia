@@ -422,10 +422,10 @@ public final class LocalTools {
         var ignoreCaseArg = flag("ignoreCase", "Case insensitive");
         var literalArg = flag("literal", "Treat pattern literally");
         var includeIgnoredArg = flag("includeIgnored", "Search files ignored by git");
-        var contextArg = integer("context", "Lines before and after matches", 0, Integer.MAX_VALUE, 0);
+        var contextArg = integer("context", "Lines of context before and after each match; context lines are shown as path-N- text", 0, Integer.MAX_VALUE, 0);
         var limitArg = integer("limit", "Maximum matches", 1, Integer.MAX_VALUE, BuiltInTools.DEFAULT_GREP_LIMIT);
         return new ToolDefinition<>("grep",
-                "Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Files ignored by git are skipped; set includeIgnored to search them. Returns paths and line numbers, respecting the result limit. For symbol definitions and call sites in indexed repositories, a code-lens context/query tool (when connected) is usually faster and resolves aliases.",
+                "Search text files beneath a literal file or directory. Use glob, not path, to filter file names. Files ignored by git are skipped; set includeIgnored to search them. Returns path:line: text for each match, respecting the result limit; with context, surrounding lines appear as path-line- text and separate groups are divided by --. For symbol definitions and call sites in indexed repositories, a code-lens context/query tool (when connected) is usually faster and resolves aliases.",
                 new ToolParameters(patternArg, pathArg, globArg, ignoreCaseArg, literalArg, includeIgnoredArg, contextArg, limitArg),
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;
@@ -479,6 +479,7 @@ public final class LocalTools {
                     }
                     List<Path> files = filesUnder(local, root, args.get(includeIgnoredArg), signal);
                     boolean rootIsDirectory = Files.isDirectory(root);
+                    int context = args.get(contextArg);
                     StringBuilder output = new StringBuilder();
                     int filesConsidered = files.size();
                     int filesSearched = 0;
@@ -500,28 +501,50 @@ public final class LocalTools {
                         } catch (IOException ignored) {
                             continue;
                         }
+                        String display = relative.toString().replace('\\', '/');
+                        // Index of the last line already printed from this file, so overlapping
+                        // context windows never repeat a line; -1 until this file has output.
+                        int printedThrough = -1;
+                        // Last line index that is trailing context for the most recent match (long: context may be huge).
+                        long afterUntil = -1;
                         for (int line = 0; line < lines.size(); line++) {
                             if (!pattern.matcher(lines.get(line)).find()) {
+                                if (line <= afterUntil) {
+                                    appendGrepLine(output, display, line, '-', lines.get(line));
+                                    printedThrough = line;
+                                    if (output.length() > BuiltInTools.MAX_BYTES) break search;
+                                }
                                 continue;
                             }
                             matches++;
-                            String line1 = lines.get(line);
-                            output.append(Files.isDirectory(root)
-                                            ? root.relativize(file).toString().replace('\\', '/')
-                                            : file.getFileName().toString())
-                                    .append(':')
-                                    .append(line + 1)
-                                    .append(": ")
-                                    .append(line1.length() <= 500 ? line1 : line1.substring(0, 500) + "... [truncated]")
-                                    .append('\n');
+                            int from = (int) Math.max(printedThrough + 1L, (long) line - context);
+                            // Like grep/ripgrep, separate non-contiguous groups (and files) when context is shown.
+                            if (context > 0 && !output.isEmpty() && (printedThrough < 0 || from > printedThrough + 1)) {
+                                output.append("--\n");
+                            }
+                            for (int before = from; before < line; before++) {
+                                appendGrepLine(output, display, before, '-', lines.get(before));
+                            }
+                            appendGrepLine(output, display, line, ':', lines.get(line));
+                            printedThrough = line;
+                            afterUntil = (long) line + context;
+                            if (output.length() > BuiltInTools.MAX_BYTES) break search;
                             if (matches >= limit) {
+                                // Finish the final match's trailing context, then stop.
+                                int end = (int) Math.min(lines.size() - 1L, afterUntil);
+                                for (int after = line + 1; after <= end; after++) {
+                                    appendGrepLine(output, display, after, '-', lines.get(after));
+                                    if (output.length() > BuiltInTools.MAX_BYTES) break;
+                                }
                                 break search;
                             }
                         }
                     }
                     if (matches > 0) {
-                        return toolResultText(boundToolOutput(
-                                output.toString(), matches >= limit ? "[" + limit + " matches limit reached]" : null));
+                        // boundToolOutput only uses its notice when truncating; the limit notice must always appear.
+                        String bounded = boundToolOutput(output.toString().stripTrailing(), null);
+                        return toolResultText(matches >= limit
+                                ? bounded + "\n\n[" + limit + " matches limit reached]" : bounded);
                     } else if (glob != null && filesSearched == 0 && filesConsidered > 0) {
                         return toolResultText("No files matched glob '" + glob + "' (" + filesConsidered + " files under "
                                 + root + " were considered). The glob is matched against paths relative to path; check the directory prefix.");
@@ -531,6 +554,17 @@ public final class LocalTools {
                         return toolResultText("No matches found in " + filesSearched + " files");
                     }
                 }, raw -> "Searching for " + textArgument(raw, "pattern", "") + " in " + textArgument(raw, "path", "."));
+    }
+
+    /** Appends one grep output line: {@code path:N: text} for matches, {@code path-N- text} for context. */
+    private static void appendGrepLine(StringBuilder output, String path, int lineIndex, char separator, String text) {
+        output.append(path)
+                .append(separator)
+                .append(lineIndex + 1)
+                .append(separator)
+                .append(' ')
+                .append(text.length() <= 500 ? text : text.substring(0, 500) + "... [truncated]")
+                .append('\n');
     }
 
     private static ToolDefinition<Environment> find() {
