@@ -99,6 +99,7 @@ Claudia reads this file before each agent turn. Project `AGENTS.md` files
 are loaded after your personal defaults, from the repository root through
 the current directory, so you can put more specific project instructions there.
 
-See [developer.md](developer.md) for details about Claudia's architecture.
+See [docs/developer.md](docs/developer.md) for how Claudia's main loop works and
+for a reference to its built-in tools.
 
 Licensed under the [MIT licence](LICENSE).
