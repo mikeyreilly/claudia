@@ -75,6 +75,7 @@ intptr_t cp_pread(int fd, void *buffer, size_t count, int64_t offset);
 intptr_t cp_pwrite(int fd, const void *buffer, size_t count, int64_t offset);
 int cp_ftruncate(int fd, int64_t length);
 long cp_processor_count(void);
+double cp_monotonic_seconds(void);
 int cp_lock_fd(int fd);
 int cp_unlock_fd(int fd);
 void cp_set_binary_stdio(void);

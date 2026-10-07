@@ -8727,6 +8727,9 @@ typedef struct {
 
 static double profile_now_seconds(void)
 {
+#ifdef _WIN32
+    return cp_monotonic_seconds();
+#else
     struct timespec ts;
 
 #ifdef CLOCK_MONOTONIC
@@ -8739,6 +8742,7 @@ static double profile_now_seconds(void)
         return (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
     }
     return 0.0;
+#endif
 }
 
 static void profile_init(IndexProfile *profile)

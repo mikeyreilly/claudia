@@ -5,6 +5,17 @@
 #include <stdbool.h>
 #include <string.h>
 
+double cp_monotonic_seconds(void)
+{
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+
+    if (QueryPerformanceFrequency(&frequency) && QueryPerformanceCounter(&counter)) {
+        return (double)counter.QuadPart / (double)frequency.QuadPart;
+    }
+    return (double)GetTickCount64() / 1000.0;
+}
+
 static void cp_set_errno_from_win32(DWORD error)
 {
     switch (error) {
