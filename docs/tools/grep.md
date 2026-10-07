@@ -14,7 +14,7 @@ Defined in [`LocalTools.grep()`](../../src/main/java/com/quaxt/claudia/cli/tools
 | `ignoreCase` | boolean | `false` | Case-insensitive (Unicode-aware) matching. |
 | `literal` | boolean | `false` | Treat `pattern` as plain text. |
 | `includeIgnored` | boolean | `false` | Also search files that git ignores. |
-| `context` | integer ≥ 0 | `0` | Lines of context around each match. **Currently ignored:** it is advertised in the schema but the handler never reads it. |
+| `context` | integer ≥ 0 | `0` | Number of lines to show before and after each match. |
 | `limit` | integer ≥ 1 | `100` | Maximum number of matches. |
 
 ## Behaviour
@@ -25,8 +25,9 @@ Defined in [`LocalTools.grep()`](../../src/main/java/com/quaxt/claudia/cli/tools
   also matches bare file names. `**/` may match zero directories, so
   `src/**/*.java` also matches `src/A.java`.
 - Each match is printed as `relative/path:line: text`. Lines longer than 500
-  characters are cut short. Searching stops after `limit` matches and adds
-  `[N matches limit reached]`.
+  characters are cut short.
+- Searching stops after `limit` matches, and the output ends with
+  `[N matches limit reached]`. Output is limited to 2,000 lines or 50 KB.
 - Files that can't be read as UTF-8 are skipped without an error.
 - If `path` contains wildcard characters and doesn't exist, the error explains
   that the file pattern belongs in `glob`.
@@ -35,6 +36,32 @@ Defined in [`LocalTools.grep()`](../../src/main/java/com/quaxt/claudia/cli/tools
 
 The description advises the model to prefer the code-lens MCP tools for finding
 symbol definitions and call sites.
+
+## Context lines
+
+With `context: N`, up to N lines before and after each match are shown. The
+format follows grep and ripgrep:
+
+- Match lines use colons: `path:N: text`.
+- Context lines use hyphens: `path-N- text`.
+- Groups that don't touch are separated by a `--` line. So are groups from
+  different files.
+- When windows overlap or touch, they merge into one group, and no line is
+  printed twice. A match that falls inside another match's context is still
+  shown and counted as a match.
+- Only matches count towards `limit`. The last match's trailing context is
+  still shown, even if it contains lines that would otherwise match. Those
+  lines are shown as context.
+
+```
+src/A.java-41-     int total = 0;
+src/A.java:42:     for (Item item : items) {
+src/A.java-43-         total += item.price();
+--
+src/B.java-9- import java.util.List;
+src/B.java:10: class B {
+src/B.java-11-     List<Item> items;
+```
 
 ## UI summary
 

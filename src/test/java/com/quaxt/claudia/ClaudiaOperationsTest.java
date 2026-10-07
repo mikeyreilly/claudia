@@ -2549,6 +2549,50 @@ class ClaudiaOperationsTest {
 	}
 
 	@Test
+	void grepShowsContextAroundMatches() throws Exception {
+		Files.writeString(tempDir.resolve("a.txt"), "one\ntwo\nneedle 3\nfour\nfive\nsix\nseven\nneedle 8\nneedle 9\nten\n");
+		Files.writeString(tempDir.resolve("b.txt"), "x\nneedle b2\ny\n");
+		List<AgentTool> tools = builtInTools("git", tempDir);
+
+		assertEquals("a.txt:3: needle 3", run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle").put("path", "a.txt").put("limit", 1)).lines().findFirst().orElseThrow());
+
+		String withContext = run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle").put("path", "a.txt").put("context", 1));
+		assertEquals(String.join("\n",
+				"a.txt-2- two",
+				"a.txt:3: needle 3",
+				"a.txt-4- four",
+				"--",
+				"a.txt-7- seven",
+				"a.txt:8: needle 8",
+				"a.txt:9: needle 9",
+				"a.txt-10- ten"), withContext.strip());
+
+		// Groups from different files are separated too (file walk order is unspecified).
+		String acrossFiles = run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle").put("glob", "*.txt").put("context", 1));
+		assertEquals(12, acrossFiles.strip().lines().count());
+		assertTrue(acrossFiles.contains("a.txt-10- ten\n--\nb.txt-1- x\n")
+				|| acrossFiles.contains("b.txt-3- y\n--\na.txt-2- two\n"), acrossFiles);
+
+		String overlapping = run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle").put("path", "a.txt").put("context", 3));
+		assertFalse(overlapping.contains("--"));
+		assertEquals(10, overlapping.strip().lines().count());
+
+		String limited = run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle").put("path", "a.txt").put("context", 1).put("limit", 2));
+		assertTrue(limited.contains("a.txt:8: needle 8\na.txt-9- needle 9\n"));
+		assertFalse(limited.contains("ten"));
+		assertTrue(limited.contains("[2 matches limit reached]"));
+
+		String huge = run(tools, "grep", ClaudiaOperations.jsonObject()
+				.put("pattern", "needle b2").put("path", "b.txt").put("context", Integer.MAX_VALUE));
+		assertEquals("b.txt-1- x\nb.txt:2: needle b2\nb.txt-3- y", huge.strip());
+	}
+
+	@Test
 	void grepRejectsWildcardsInLiteralPathWithActionableError() {
 		ObjectNode arguments = ClaudiaOperations.jsonObject().put("pattern", "needle").put("path", "src/**/*.java");
 
