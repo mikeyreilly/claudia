@@ -238,3 +238,19 @@ Tools from MCP servers are added to the same list as `<server>_<tool>`. The
 built-in [code-lens](../code-lens/README.md) server provides
 `code-lens_query`, `code-lens_context` and `code-lens_sql`. Its own README
 documents them.
+
+See also [mcp.md]
+
+## See also
+
+- [Build and run](build.md)
+- [Providers and credentials](providers.md)
+- [Terminal usage](terminal.md)
+- [Sessions and conversation history](sessions.md)
+- [MCP servers](mcp.md)
+- [Working with subagents](subagents.md)
+- [Planning, Build mode and clarification](planning.md)
+- [JSONL RPC mode](rpc.md)
+
+
+
