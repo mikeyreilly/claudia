@@ -9,13 +9,13 @@ Builds Claudia (target\claudia.jar) and code-lens
 claudia.cmd launcher that runs this checkout's build. Re-run it to update
 after pulling changes, or after moving the checkout.
 
-code-lens is optional: when it cannot be built (no clang/Windows SDK, or its
+code-lens is optional: when it cannot be built (no usable clang toolchain, or its
 vendored sources cannot be downloaded) a WARNING is printed and Claudia is
 still installed, just without the code-lens integration.
 
 Requirements: a JDK 25 or newer (JAVA_HOME or java on PATH) and Maven.
-code-lens additionally needs LLVM clang with a Windows SDK, Git for Windows,
-curl.exe, and tar.exe.
+code-lens additionally needs LLVM clang with a Windows SDK/MSVC runtime or
+MinGW clang, plus Git for Windows, curl.exe, and tar.exe.
 
 Run it through install.cmd, or with:
     powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
@@ -178,7 +178,7 @@ function Build-CodeLens {
 
     Say 'Building code-lens with clang'
     if ((Invoke-Native (Join-Path $CodeLensDir 'build.bat') @('release')) -ne 0) {
-        Skip-CodeLens ('the build failed (see the output above). Clang needs a Windows SDK and MSVC runtime, ' +
+        Skip-CodeLens ('the build failed (see the output above). Use MinGW clang or LLVM clang with a Windows SDK and MSVC runtime, ' +
             'for example from Visual Studio Build Tools; a running Claudia session also keeps ' +
             'code-lens\build\code-lens.exe locked, so close it and re-run')
         return
