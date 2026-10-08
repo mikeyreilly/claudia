@@ -1,8 +1,7 @@
 # MCP servers
 
 Claudia exposes tools from local and remote Model Context Protocol (MCP)
-servers alongside its local tools. This guide restores the MCP details from
-`086a292^:developer.md`, checked against the current implementation.
+servers alongside its local tools.
 
 See also [build and install](build.md), [RPC automation](rpc.md),
 [subagents](subagents.md), and the [developer guide](developer.md).

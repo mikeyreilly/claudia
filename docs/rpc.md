@@ -1,8 +1,7 @@
 # JSONL RPC mode
 
 `--mode rpc` accepts one JSON command per stdin line and emits JSONL responses
-and agent events on stdout. It needs no terminal. This guide restores the RPC
-details from `086a292^:developer.md`, checked against the current implementation.
+and agent events on stdout.
 
 See also [build/run](build.md), [providers and credentials](providers.md),
 [MCP servers](mcp.md), [sessions](sessions.md), [planning and questions](planning.md)

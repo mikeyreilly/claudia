@@ -239,7 +239,20 @@ built-in [code-lens](../code-lens/README.md) server provides
 `code-lens_query`, `code-lens_context` and `code-lens_sql`. Its own README
 documents them.
 
-See also [mcp.md]
+See also [MCP configuration](mcp.md).
+
+## Feature coverage and scope
+
+Claudia supports interactive, print, JSON-event and JSONL RPC modes; streaming
+providers; local and MCP tools; Java JVM debugging; delegated agents; Plan/Build
+workflows; and persisted sessions with manual and automatic compaction. It can
+run as a JAR or GraalVM native executable, with platform-specific terminal and
+debugger limitations described in the linked guides.
+
+Node extensions, Node-compatible data formats and the Node extension package
+manager are intentionally unsupported. Claudia has no permissions system:
+instructions and Plan mode guide the model but do not enforce tool restrictions.
+Run it in a sandbox when filesystem or process access must be constrained.
 
 ## See also
 
@@ -251,6 +264,8 @@ See also [mcp.md]
 - [Working with subagents](subagents.md)
 - [Planning, Build mode and clarification](planning.md)
 - [JSONL RPC mode](rpc.md)
+- [Agent instructions](instructions.md)
+- [Embedding the runtime](embedding.md)
 
 
 
