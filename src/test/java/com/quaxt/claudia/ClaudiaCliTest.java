@@ -933,6 +933,27 @@ class ClaudiaCliTest {
 		}
 	}
 
+    @Test
+    void windowsTerminalShiftEnterInsertsNewlineWithoutUserConfiguration() throws Exception {
+        // WSL commonly reports xterm-256color, not a Windows-specific TERM.
+        TerminalFixture fixture = terminal("xterm-256color");
+        ClaudiaCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        try {
+            fixture.input().write(("first"
+                    + "\u001b[16;42;0;1;16;1_" // Shift down
+                    + "\u001b[13;28;13;1;16;1_" // Shift-Enter down
+                    + "\u001b[13;28;13;0;16;1_" // Enter up: ignored
+                    + "\u001b[16;42;0;0;0;1_" // Shift up: ignored
+                    + "second\u001b[13;28;13;1;0;1_").getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("first\nsecond", assertTimeoutPreemptively(Duration.ofSeconds(5), () -> cli.readLine("> ")));
+            String written = fixture.output().toString(StandardCharsets.UTF_8);
+            assertEquals(1, count(written, "\u001b[?9001h"));
+            assertEquals(1, count(written, "\u001b[?9001l"));
+            assertTrue(written.indexOf("\u001b[?9001h") < written.indexOf("> "));
+        } finally { cli.closeTerminal(); }
+    }
+
     private static final String KEYBOARD_PUSH = "\u001b[>1u";
     private static final String KEYBOARD_POP = "\u001b[<1u";
 
@@ -960,6 +981,8 @@ class ClaudiaCliTest {
                 String written = fixture.output().toString(StandardCharsets.UTF_8);
                 assertEquals(1, count(written, KEYBOARD_PUSH));
                 assertEquals(1, count(written, KEYBOARD_POP));
+                assertEquals(1, count(written, "\u001b[?9001h"));
+                assertEquals(1, count(written, "\u001b[?9001l"));
                 assertTrue(written.indexOf(KEYBOARD_PUSH) < written.indexOf("> "));
                 assertTrue(written.indexOf(KEYBOARD_PUSH) < written.indexOf(KEYBOARD_POP));
             }
@@ -978,6 +1001,8 @@ class ClaudiaCliTest {
                 String written = fixture.output().toString(StandardCharsets.UTF_8);
                 assertFalse(written.contains(KEYBOARD_PUSH));
                 assertFalse(written.contains(KEYBOARD_POP));
+                assertFalse(written.contains("\u001b[?9001h"));
+                assertFalse(written.contains("\u001b[?9001l"));
             } finally { cli.closeTerminal(); }
         }
     }
@@ -1027,6 +1052,8 @@ class ClaudiaCliTest {
                         String written = fixture.output().toString(StandardCharsets.UTF_8);
                         assertEquals(1, count(written, KEYBOARD_PUSH));
                         assertEquals(1, count(written, KEYBOARD_POP));
+                        assertEquals(1, count(written, "\u001b[?9001h"));
+                        assertEquals(1, count(written, "\u001b[?9001l"));
                         throw new IllegalStateException("render failed");
                     }, input -> {}, () -> false, () -> null));
                 } catch (java.io.IOException error) { throw new AssertionError(error); }
@@ -1038,6 +1065,8 @@ class ClaudiaCliTest {
             String written = fixture.output().toString(StandardCharsets.UTF_8);
             assertEquals(2, count(written, KEYBOARD_PUSH));
             assertEquals(2, count(written, KEYBOARD_POP));
+            assertEquals(2, count(written, "\u001b[?9001h"));
+            assertEquals(2, count(written, "\u001b[?9001l"));
             assertTrue(written.indexOf(KEYBOARD_POP) < written.indexOf("\u001b[?1049h"));
             assertTrue(written.lastIndexOf(KEYBOARD_PUSH) > written.lastIndexOf("\u001b[?1049l"));
             assertTrue(written.lastIndexOf(KEYBOARD_POP) > written.lastIndexOf(KEYBOARD_PUSH));

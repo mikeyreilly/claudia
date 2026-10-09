@@ -170,7 +170,19 @@ class TerminalTest {
     }
 
     @Test
+    void win32InputIsIdempotentAndRestoredOnClose() throws Exception {
+        terminal.win32Input(true);
+        terminal.win32Input(true);
+        assertEquals(Ansi.WIN32_INPUT_ON, output.toString(UTF_8));
+        output.reset();
+        terminal.close();
+        assertEquals(Ansi.WIN32_INPUT_OFF + Ansi.RESET, output.toString(UTF_8));
+    }
+
+    @Test
     void closeAfterFeaturesWereTurnedOffWritesNothing() throws Exception {
+        terminal.win32Input(true);
+        terminal.win32Input(false);
         terminal.pushKeyboardFlags(1);
         terminal.popKeyboardFlags();
         terminal.alternateScreen(true);

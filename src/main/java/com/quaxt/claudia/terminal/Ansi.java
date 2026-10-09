@@ -23,6 +23,9 @@ public final class Ansi {
     public static final String BRACKETED_PASTE_OFF = "\u001b[?2004l";
     public static final String BEGIN_SYNCHRONIZED_UPDATE = "\u001b[?2026h";
     public static final String END_SYNCHRONIZED_UPDATE = "\u001b[?2026l";
+    /** Windows Terminal/ConPTY key records retain modifiers, including Shift-Enter over WSL. */
+    public static final String WIN32_INPUT_ON = "\u001b[?9001h";
+    public static final String WIN32_INPUT_OFF = "\u001b[?9001l";
     /** Pops one entry from the kitty keyboard-protocol flag stack. */
     public static final String POP_KEYBOARD_FLAGS = "\u001b[<1u";
     public static final String PASTE_START = "\u001b[200~";
