@@ -994,10 +994,9 @@ class ClaudiaOperationsTest {
 	}
 
 	private static void respond(HttpExchange exchange, int status, String body) throws IOException {
-		exchange.getRequestBody().readAllBytes();
 		byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
 		exchange.getResponseHeaders().add("Content-Type", "application/json");
-		exchange.sendResponseHeaders(status, bytes.length);
+		exchange.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
 		exchange.getResponseBody().write(bytes);
 		exchange.close();
 	}
@@ -1048,21 +1047,21 @@ class ClaudiaOperationsTest {
 		AtomicInteger tokenRequests = new AtomicInteger();
 		AtomicInteger policyRequests = new AtomicInteger();
 		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-		server.createContext("/login/device/code", exchange -> writeJson(exchange, """
+		server.createContext("/login/device/code", exchange -> respond(exchange, 200, """
 				{"device_code":"device","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900,"interval":0}
 				"""));
 		server.createContext("/login/oauth/access_token", exchange -> {
 			assertTrue(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8).contains("device_code=device"));
-			writeJson(exchange, "{\"access_token\":\"github-token\"}");
+			respond(exchange, 200, "{\"access_token\":\"github-token\"}");
 		});
 		server.createContext("/copilot_internal/v2/token", exchange -> {
 			assertEquals("token github-token", exchange.getRequestHeaders().getFirst("Authorization"));
 			tokenRequests.incrementAndGet();
-			writeJson(exchange, "{\"token\":\"copilot-token\",\"expires_at\":4102444800}");
+			respond(exchange, 200, "{\"token\":\"copilot-token\",\"expires_at\":4102444800}");
 		});
 		server.createContext("/models", exchange -> {
 			assertEquals("Bearer copilot-token", exchange.getRequestHeaders().getFirst("Authorization"));
-			writeJson(exchange, """
+			respond(exchange, 200, """
 					{"data":[
 					  {"id":"gpt-5.4","model_picker_enabled":true,"policy":{"state":"enabled"},"capabilities":{"supports":{"tool_calls":true}}},
 					  {"id":"disabled","model_picker_enabled":false,"policy":{"state":"disabled"},"capabilities":{"supports":{"tool_calls":true}}},
@@ -1075,7 +1074,7 @@ class ClaudiaOperationsTest {
 			assertEquals("chat-policy", exchange.getRequestHeaders().getFirst("openai-intent"));
 			assertEquals("{\"state\":\"enabled\"}", new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
 			policyRequests.incrementAndGet();
-			writeJson(exchange, "{}");
+			respond(exchange, 200, "{}");
 		});
 		server.start();
 		try {
@@ -1136,14 +1135,6 @@ class ClaudiaOperationsTest {
 		} finally {
 			server.stop(0);
 		}
-	}
-
-	private static void writeJson(com.sun.net.httpserver.HttpExchange exchange, String value) throws java.io.IOException {
-		byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-		exchange.getResponseHeaders().set("content-type", "application/json");
-		exchange.sendResponseHeaders(200, bytes.length);
-		exchange.getResponseBody().write(bytes);
-		exchange.close();
 	}
 
 	// SseReader
@@ -3034,8 +3025,76 @@ class ClaudiaOperationsTest {
 
 	// McpRemote
 
+	/** A fake MCP server with one tool, "echo", which returns its "value" argument. */
+	private static final class FakeMcpServer {
+		final String name;
+		final AtomicReference<JsonNode> calledWith = new AtomicReference<>();
+		final AtomicBoolean sawSession = new AtomicBoolean();
+		final AtomicBoolean sawProtocol = new AtomicBoolean();
+
+		FakeMcpServer(String name) {
+			this.name = name;
+		}
+
+		/** The JSON-RPC response to one request, or null for a notification. */
+		ObjectNode reply(JsonNode request) {
+			if (!request.has("id")) return null;
+			ObjectNode response = jsonObject().put("jsonrpc", "2.0");
+			response.set("id", request.get("id"));
+			switch (request.path("method").asText()) {
+				case "initialize" -> {
+					ObjectNode result = response.putObject("result").put("protocolVersion", "2025-11-25");
+					result.putObject("capabilities").putObject("tools");
+					result.putObject("serverInfo").put("name", name).put("version", "test");
+				}
+				case "tools/list" -> {
+					ObjectNode properties = response.putObject("result").putArray("tools").addObject()
+							.put("name", "echo")
+							.putObject("inputSchema").put("type", "object").putObject("properties");
+					properties.putObject("value").put("type", "string");
+					properties.putObject("aliases").put("type", "string");
+				}
+				case "tools/call" -> {
+					JsonNode arguments = request.path("params").path("arguments");
+					calledWith.set(arguments);
+					response.putObject("result").putArray("content").addObject()
+							.put("type", "text").put("text", arguments.path("value").asText());
+				}
+				default -> response.putObject("error").put("code", -32601).put("message", "not found");
+			}
+			return response;
+		}
+
+		/** Serves the Streamable HTTP transport. */
+		void handle(HttpExchange exchange) throws IOException {
+			if (exchange.getRequestMethod().equals("DELETE")) {
+				respond(exchange, 204, "");
+				return;
+			}
+			JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+			if (!request.path("method").asText().equals("initialize")) {
+				sawSession.set("session-1".equals(exchange.getRequestHeaders().getFirst("Mcp-Session-Id")));
+				sawProtocol.set("2025-11-25".equals(exchange.getRequestHeaders().getFirst("MCP-Protocol-Version")));
+			}
+			ObjectNode response = reply(request);
+			if (response == null) {
+				respond(exchange, 202, "");
+				return;
+			}
+			if (response.path("result").has("serverInfo")) {
+				exchange.getResponseHeaders().set("Mcp-Session-Id", "session-1");
+			}
+			respond(exchange, 200, response.toString());
+		}
+	}
+
+	private AgentTool.ToolResult callEcho(ObjectNode arguments) throws Exception {
+		return runtime.executeTool(runtime.mcpTools().getFirst(), "id", arguments, new AbortSignal(), ignored -> {});
+	}
+
 	@Test
 	void fallsBackToALegacySseServerAndCallsToolsOverItsEventStream() throws Exception {
+		FakeMcpServer fake = new FakeMcpServer("legacy");
 		java.util.concurrent.BlockingQueue<String> events = new java.util.concurrent.LinkedBlockingQueue<>();
 		AtomicBoolean stopped = new AtomicBoolean();
 		HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -3064,48 +3123,21 @@ class ClaudiaOperationsTest {
 			}
 		});
 		http.createContext("/messages", exchange -> {
-			try (exchange) {
-				JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
-				if (request.has("id")) {
-					ObjectNode response = ClaudiaOperations.jsonObject().put("jsonrpc", "2.0");
-					response.set("id", request.get("id"));
-					switch (request.path("method").asText()) {
-						case "initialize" -> {
-							ObjectNode result = response.putObject("result");
-							result.put("protocolVersion", "2024-11-05");
-							result.putObject("capabilities").putObject("tools");
-							result.putObject("serverInfo").put("name", "legacy").put("version", "test");
-						}
-						case "tools/list" -> {
-							ObjectNode tool = response.putObject("result").putArray("tools").addObject();
-							tool.put("name", "echo");
-							tool.putObject("inputSchema").put("type", "object")
-									.putObject("properties").putObject("value").put("type", "string");
-						}
-						case "tools/call" -> response.putObject("result").putArray("content").addObject()
-								.put("type", "text")
-								.put("text", request.path("params").path("arguments").path("value").asText());
-						default -> response.putObject("error").put("code", -32601).put("message", "not found");
-					}
-					events.add(Json.MAPPER.writeValueAsString(response));
-				}
-				exchange.sendResponseHeaders(202, -1);
-			}
+			ObjectNode response = fake.reply(Json.MAPPER.readTree(exchange.getRequestBody()));
+			if (response != null) events.add(response.toString());
+			respond(exchange, 202, "");
 		});
 		http.start();
 		try {
 			var remote = new McpServerConfig.Remote(
-					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
+					URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
 					Map.of(), null, true, 5_000L, List.of(), List.of());
 			runtime.mcpCreateManager(new McpConfiguration(Map.of("legacy", remote), List.of()), tempDir);
 			try {
 				runtime.mcpAwaitReady();
 				assertEquals(ClaudiaOperations.McpState.CONNECTED, runtime.mcpStatus("legacy").state);
-				AgentTool tool = runtime.mcpTools().getFirst();
-				AgentTool.ToolResult result = runtime.executeTool(
-						tool, "id", ClaudiaOperations.jsonObject().put("value", "over sse"),
-						new AbortSignal(), ignored -> {});
-				assertEquals("over sse", ((TextContent) result.content.getFirst()).text);
+				assertEquals("over sse", ((TextContent) callEcho(jsonObject().put("value", "over sse"))
+						.content.getFirst()).text);
 			} finally {
 				runtime.mcpCloseManager();
 			}
@@ -3116,31 +3148,77 @@ class ClaudiaOperationsTest {
 	}
 
 	@Test
-	void connectsToAStreamableHttpServer() throws Exception {
-		AtomicBoolean sawSession = new AtomicBoolean();
-		AtomicBoolean sawProtocol = new AtomicBoolean();
+	void authorizesAndConnectsToAStreamableHttpServer() throws Exception {
+		runtime.applicationPaths(new ClaudiaPaths(tempDir.resolve("home")));
+		FakeMcpServer fake = new FakeMcpServer("remote");
+		AtomicReference<String> registeredName = new AtomicReference<>();
 		HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-		http.createContext("/mcp", exchange -> handle(exchange, sawSession, sawProtocol));
+		String base = "http://127.0.0.1:" + http.getAddress().getPort();
+		http.createContext("/mcp", exchange -> {
+			if ("Bearer claudia-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+				fake.handle(exchange);
+				return;
+			}
+			exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer realm=\"mcp\"");
+			respond(exchange, 401, "");
+		});
+		http.createContext("/.well-known/oauth-authorization-server", exchange -> respond(exchange, 200, """
+				{"issuer":"%1$s","authorization_endpoint":"%1$s/authorize","token_endpoint":"%1$s/token",
+				 "registration_endpoint":"%1$s/register","response_types_supported":["code"],
+				 "code_challenge_methods_supported":["S256"]}""".formatted(base)));
+		http.createContext("/register", exchange -> {
+			registeredName.set(Json.MAPPER.readTree(exchange.getRequestBody()).path("client_name").asText());
+			respond(exchange, 201, "{\"client_id\":\"claudia-client\"}");
+		});
+		http.createContext("/token", exchange -> respond(exchange, 200,
+				"{\"access_token\":\"claudia-token\",\"token_type\":\"Bearer\",\"expires_in\":3600}"));
 		http.start();
+		int callbackPort;
+		try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+			callbackPort = socket.getLocalPort();
+		}
 		try {
 			var remote = new McpServerConfig.Remote(
-					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
-					Map.of("X-Test", "yes"),
-					null,
-					true,
-					5_000L,
-					List.of(),
-					List.of());
-			runtime.mcpCreateManager(
-					new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
+					URI.create(base + "/mcp"), Map.of("X-Test", "yes"), jsonObject().put("callbackPort", callbackPort),
+					true, 5_000L, List.of(), List.of());
+			runtime.mcpCreateManager(new McpConfiguration(Map.of("remote", remote), List.of()), tempDir);
 			ClaudiaOperations manager = runtime;
 			try {
 				manager.mcpAwaitReady();
+				assertEquals(ClaudiaOperations.McpState.AUTH_REQUIRED, manager.mcpStatus("remote").state);
+
+				// Stand in for the user's browser: approve and follow the redirect back to Claudia.
+				java.net.http.HttpClient browserClient = ClaudiaOperations.newHttpClient();
+				AtomicReference<String> authorizedClient = new AtomicReference<>();
+				java.util.function.Predicate<URI> browser = authorization -> {
+					Map<String, String> query = formParameters(authorization.getRawQuery());
+					authorizedClient.set(query.get("client_id"));
+					URI callback = URI.create(query.get("redirect_uri") + "?code=auth-code&state="
+							+ java.net.URLEncoder.encode(query.get("state"), StandardCharsets.UTF_8));
+					try {
+						browserClient.send(java.net.http.HttpRequest.newBuilder(callback).build(),
+								java.net.http.HttpResponse.BodyHandlers.discarding());
+						return true;
+					} catch (IOException | InterruptedException e) {
+						return false;
+					}
+				};
+				Method oauthClient = ClaudiaOperations.class.getDeclaredMethod("mcpOAuthClient",
+						java.net.http.HttpClient.class, java.util.function.Predicate.class, java.time.Duration.class);
+				oauthClient.setAccessible(true);
+				oauthClient.invoke(manager, browserClient, browser, java.time.Duration.ofSeconds(10));
+				assertTrue(manager.toggleMcpServer("remote"));
+				manager.mcpAwaitReady();
 				assertEquals(ClaudiaOperations.McpState.CONNECTED, manager.mcpStatus("remote").state);
-				AgentTool tool = manager.mcpTools().getFirst();
-				AgentTool.ToolResult result = runtime.executeTool(
-						tool, "id", ClaudiaOperations.jsonObject().put("value", "over http"), new AbortSignal(), ignored -> {});
-				assertEquals("over http", ((TextContent) result.content.getFirst()).text);
+				assertEquals("Claudia", registeredName.get());
+				assertEquals("claudia-client", authorizedClient.get());
+				JsonNode saved = Json.MAPPER.readTree(tempDir.resolve("home/.claudia/mcp-auth.json").toFile())
+						.path("remote");
+				assertEquals("claudia-client", saved.path("clientInfo").path("clientId").asText());
+				assertEquals("claudia-token", saved.path("tokens").path("accessToken").asText());
+
+				assertEquals("over http", ((TextContent) callEcho(jsonObject().put("value", "over http"))
+						.content.getFirst()).text);
 				assertEquals("remote", manager.mcpStatuses().getFirst().name);
 				assertTrue(manager.mcpToolStatuses("remote").getFirst().enabled);
 				assertFalse(manager.toggleMcpTool("remote", "echo").enabled);
@@ -3157,33 +3235,39 @@ class ClaudiaOperationsTest {
 			} finally {
 				manager.mcpCloseManager();
 			}
-			assertTrue(sawSession.get());
-			assertTrue(sawProtocol.get());
+			assertTrue(fake.sawSession.get());
+			assertTrue(fake.sawProtocol.get());
 		} finally {
 			http.stop(0);
 		}
 	}
 
+	private static Map<String, String> formParameters(String encoded) {
+		return java.util.Arrays.stream(encoded.split("&"))
+				.map(part -> part.split("=", 2))
+				.collect(Collectors.toMap(
+						pair -> java.net.URLDecoder.decode(pair[0], StandardCharsets.UTF_8),
+						pair -> java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8)));
+	}
+
 	@Test
 	void forwardsConfiguredAliasesToAdvertisedCodeLensTools() throws Exception {
-		AtomicReference<String> receivedAliases = new AtomicReference<>();
+		FakeMcpServer fake = new FakeMcpServer("code-lens");
 		HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-		http.createContext("/mcp", exchange -> handleCodeLensAliases(exchange, receivedAliases));
+		http.createContext("/mcp", fake::handle);
 		http.start();
 		try {
 			runtime.setCodeLensAliases(":dev:reporting");
 			var remote = new McpServerConfig.Remote(
-					java.net.URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
+					URI.create("http://127.0.0.1:" + http.getAddress().getPort() + "/mcp"),
 					Map.of(), null, true, 5_000L, List.of(), List.of());
 			runtime.mcpCreateManager(new McpConfiguration(Map.of("renamed-server", remote), List.of()), tempDir);
 			try {
 				runtime.mcpAwaitReady();
-				AgentTool tool = runtime.mcpTools().getFirst();
-				ObjectNode arguments = ClaudiaOperations.jsonObject()
-						.put("query", "driver").put("aliases", ":model-value");
-				runtime.executeTool(tool, "id", arguments, new AbortSignal(), ignored -> {});
+				ObjectNode arguments = jsonObject().put("value", "driver").put("aliases", ":model-value");
+				callEcho(arguments);
 
-				assertEquals(":dev:reporting", receivedAliases.get());
+				assertEquals(":dev:reporting", fake.calledWith.get().path("aliases").asText());
 				assertEquals(":model-value", arguments.path("aliases").asText(),
 						"injection must not mutate the model transcript arguments");
 			} finally {
@@ -3191,95 +3275,6 @@ class ClaudiaOperationsTest {
 			}
 		} finally {
 			http.stop(0);
-		}
-	}
-
-	private static void handleCodeLensAliases(HttpExchange exchange, AtomicReference<String> receivedAliases)
-			throws IOException {
-		try (exchange) {
-			if (exchange.getRequestMethod().equals("DELETE")) {
-				exchange.sendResponseHeaders(204, -1);
-				return;
-			}
-			JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
-			if (!request.has("id")) {
-				exchange.sendResponseHeaders(202, -1);
-				return;
-			}
-			ObjectNode response = ClaudiaOperations.jsonObject().put("jsonrpc", "2.0");
-			response.set("id", request.get("id"));
-			switch (request.path("method").asText()) {
-				case "initialize" -> {
-					ObjectNode result = response.putObject("result");
-					result.put("protocolVersion", "2025-11-25");
-					result.putObject("capabilities").putObject("tools");
-					result.putObject("serverInfo").put("name", "code-lens").put("version", "test");
-					exchange.getResponseHeaders().set("Mcp-Session-Id", "code-lens-session");
-				}
-				case "tools/list" -> {
-					ObjectNode tool = response.putObject("result").putArray("tools").addObject();
-					tool.put("name", "query");
-					ObjectNode properties = tool.putObject("inputSchema").put("type", "object")
-							.putObject("properties");
-					properties.putObject("query").put("type", "string");
-					properties.putObject("aliases").put("type", "string");
-				}
-				case "tools/call" -> {
-					receivedAliases.set(request.path("params").path("arguments").path("aliases").asText());
-					response.putObject("result").putArray("content").addObject()
-							.put("type", "text").put("text", "ok");
-				}
-				default -> response.putObject("error").put("code", -32601).put("message", "not found");
-			}
-			byte[] body = Json.MAPPER.writeValueAsBytes(response);
-			exchange.getResponseHeaders().set("Content-Type", "application/json");
-			exchange.sendResponseHeaders(200, body.length);
-			exchange.getResponseBody().write(body);
-		}
-	}
-
-	private static void handle(HttpExchange exchange, AtomicBoolean sawSession, AtomicBoolean sawProtocol)
-			throws IOException {
-		try (exchange) {
-			if (exchange.getRequestMethod().equals("DELETE")) {
-				exchange.sendResponseHeaders(204, -1);
-				return;
-			}
-			JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
-			String method = request.path("method").asText();
-			if (!method.equals("initialize")) {
-				sawSession.set("session-1".equals(exchange.getRequestHeaders().getFirst("Mcp-Session-Id")));
-				sawProtocol.set("2025-11-25".equals(exchange.getRequestHeaders().getFirst("MCP-Protocol-Version")));
-			}
-			if (!request.has("id")) {
-				exchange.sendResponseHeaders(202, -1);
-				return;
-			}
-			ObjectNode response = ClaudiaOperations.jsonObject().put("jsonrpc", "2.0");
-			response.set("id", request.get("id"));
-			switch (method) {
-				case "initialize" -> {
-					ObjectNode result = response.putObject("result");
-					result.put("protocolVersion", "2025-11-25");
-					result.putObject("capabilities").putObject("tools");
-					exchange.getResponseHeaders().set("Mcp-Session-Id", "session-1");
-				}
-				case "tools/list" -> {
-					ObjectNode tool = response.putObject("result").putArray("tools").addObject();
-					tool.put("name", "echo");
-					tool.putObject("inputSchema").put("type", "object").putObject("properties");
-				}
-				case "tools/call" -> response.putObject("result")
-						.putArray("content")
-						.addObject()
-						.put("type", "text")
-						.put("text", request.path("params").path("arguments").path("value").asText());
-				default -> response.putObject("error").put("code", -32601).put("message", "not found");
-			}
-			byte[] body = Json.MAPPER.writeValueAsBytes(response);
-			exchange.getResponseHeaders().set("Content-Type", "application/json");
-			exchange.sendResponseHeaders(200, body.length);
-			exchange.getResponseBody().write(body);
 		}
 	}
 }

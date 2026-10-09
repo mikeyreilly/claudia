@@ -1028,7 +1028,6 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
 
     // McpOAuthStore fields
     private Path path;
-    private List<Path> importPaths;
 
     // ---------------------------------------------------------------- json
 
@@ -6489,14 +6488,9 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
         mcpCreateManager(configuration, workspace);
     }
 
-    /**
-     * Builds a manager and starts connecting every enabled server.
-     */
-    private void mcpOAuthStore(
-            Path path, Path lockPath, List<Path> importPaths) {
+    private void mcpOAuthStore(Path path, Path lockPath) {
         this.path = path;
         this.mcpAuthLockPath = lockPath;
-        this.importPaths = importPaths;
     }
 
     public static HttpClient newHttpClient() {
@@ -6514,25 +6508,17 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
         this.callbackTimeout = callbackTimeout;
     }
 
+    /**
+     * Builds a manager and starts connecting every enabled server.
+     */
     public void mcpCreateManager(McpConfiguration configuration, Path workspace) {
         requireOpen();
         mcpCloseManager();
         servers = new LinkedHashMap<>();
         closed = false;
         HttpClient http = newHttpClient();
-        Path home = applicationPaths.homeDirectory();
-        String xdg = System.getenv("XDG_DATA_HOME");
-        Path openCodeData = xdg == null || xdg.isBlank()
-                ? home.resolve(".local/share/opencode/mcp-auth.json")
-                : Path.of(xdg).resolve("opencode/mcp-auth.json");
         Path resolved = applicationPaths.mcpAuthFile();
-        mcpOAuthStore(
-                resolved,
-                resolved.resolveSibling(resolved.getFileName() + ".lock"),
-                List.of(openCodeData, home.resolve("Library/Application Support/opencode/mcp-auth.json"))
-                        .stream()
-                        .map(value -> value.toAbsolutePath().normalize())
-                        .toList());
+        mcpOAuthStore(resolved, resolved.resolveSibling(resolved.getFileName() + ".lock"));
         this.mcpOAuthClient(Objects.requireNonNull(http, "http"), Objects.requireNonNull(uri -> {
                     String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
                     List<String> command;
@@ -7202,21 +7188,7 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
     }
 
     private McpOAuthEntry mcpOAuthReload(McpOAuthSession session) throws IOException {
-        McpOAuthEntry result = null;
-        String serverUrl = session.config.url.toString();
-        McpOAuthEntry own = mcpOAuthReadEntry(path, session.name, serverUrl, false);
-        if (own != null) {
-            result = own;
-        } else {
-            for (Path candidate : importPaths) {
-                McpOAuthEntry imported = mcpOAuthReadEntry(candidate, session.name, serverUrl, true);
-                if (imported != null) {
-                    result = imported;
-                    break;
-                }
-            }
-        }
-        session.entry = result;
+        session.entry = mcpOAuthReadEntry(path, session.name, session.config.url.toString());
         session.loaded = true;
         return session.entry;
     }
@@ -7662,7 +7634,7 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
             try (FileChannel channel =
                          FileChannel.open(mcpAuthLockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                  FileLock ignored = channel.lock()) {
-                ObjectNode root = mcpOAuthReadRoot(path, false);
+                ObjectNode root = mcpOAuthReadRoot(path);
                 ObjectNode node = jsonObject().put("serverUrl", serverUrl);
                 if (entry.tokens != null) {
                     McpOAuthTokens value = entry.tokens;
@@ -7701,15 +7673,9 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
     }
 
     private static McpOAuthEntry mcpOAuthReadEntry(
-            Path source, String name, String serverUrl, boolean lenient) throws IOException {
+            Path source, String name, String serverUrl) throws IOException {
         if (!Files.isRegularFile(source)) return null;
-        ObjectNode root;
-        try {
-            root = mcpOAuthReadRoot(source, lenient);
-        } catch (IOException error) {
-            if (lenient) return null;
-            throw error;
-        }
+        ObjectNode root = mcpOAuthReadRoot(source);
         JsonNode node = root.get(name);
         if (node == null || !node.isObject()) return null;
         if (!node.path("serverUrl").isTextual() || !node.path("serverUrl").asText().equals(serverUrl)) return null;
@@ -7736,20 +7702,17 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
             }
             return new McpOAuthEntry(tokens, client);
         } catch (RuntimeException error) {
-            if (lenient) return null;
             throw new IOException("Invalid MCP OAuth credential for \"" + name + "\" in " + source, error);
         }
     }
 
-    private static ObjectNode mcpOAuthReadRoot(Path source, boolean lenient) throws IOException {
+    private static ObjectNode mcpOAuthReadRoot(Path source) throws IOException {
         if (!Files.exists(source)) return jsonObject();
         try {
             JsonNode parsed = Json.MAPPER.readTree(Files.readString(source, StandardCharsets.UTF_8));
             if (parsed instanceof ObjectNode object) return object.deepCopy();
-            if (lenient) return jsonObject();
             throw new IOException("Invalid MCP OAuth credential file " + source + ": expected a JSON object");
         } catch (IOException error) {
-            if (lenient) return jsonObject();
             throw new IOException(
                     "Failed to read MCP OAuth credential file " + source + ": " + error.getMessage(), error);
         }

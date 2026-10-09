@@ -53,8 +53,8 @@ for configured servers, but are saved under `builtInMcp`, not `mcp`:
 
 Definitions come from the `mcp` object in `~/.claudia/settings.json`
 (`%USERPROFILE%\.claudia\settings.json` on Windows). The definition shape is
-OpenCode-compatible; Claudia does **not** discover OpenCode settings or
-project-local MCP configuration files.
+OpenCode-compatible, so a server definition can be copied from an OpenCode
+`mcp` object into Claudia's settings unchanged.
 
 Merge definitions into your existing settings rather than replacing unrelated
 settings:
@@ -162,10 +162,7 @@ HTTP loopback callback, uses PKCE S256 and dynamically registers a client when
 the authorization server supports registration.
 
 Tokens and registered-client details are stored with user-only permissions in
-`~/.claudia/mcp-auth.json`. Access tokens refresh automatically. Claudia can
-also import a matching OpenCode credential: both the configured server name
-and exact URL must match. This credential import does not import OpenCode
-server configuration.
+`~/.claudia/mcp-auth.json`. Access tokens refresh automatically.
 
 For servers requiring a pre-registered client:
 
