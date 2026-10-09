@@ -76,6 +76,7 @@ public class Terminal implements Closeable {
     private int alternateKeyboardFlags;
     private int synchronizedDepth;
     private boolean alternateScreen;
+    private boolean win32Input;
     private boolean mouseTracking;
     private boolean bracketedPaste;
     private boolean cursorHidden;
@@ -212,6 +213,19 @@ public class Terminal implements Closeable {
 
     // ------------------------------------------------------- tracked features
 
+    /**
+     * Requests modifier-preserving Windows Terminal/ConPTY input. Unlike kitty
+     * flags this is not a screen-local stack. Terminals without this protocol
+     * ignore the private mode, so it is safe to request alongside kitty input.
+     */
+    public void win32Input(boolean enabled) {
+        synchronized (outputLock) {
+            if (enabled == win32Input) return;
+            write(enabled ? Ansi.WIN32_INPUT_ON : Ansi.WIN32_INPUT_OFF);
+            win32Input = enabled;
+        }
+    }
+
     /** Pushes kitty keyboard-protocol flags onto the current screen's stack. */
     public void pushKeyboardFlags(int flags) {
         synchronized (outputLock) {
@@ -322,6 +336,7 @@ public class Terminal implements Closeable {
         synchronized (outputLock) {
             StringBuilder sequence = new StringBuilder();
             if (synchronizedDepth > 0) sequence.append(Ansi.END_SYNCHRONIZED_UPDATE);
+            if (win32Input) sequence.append(Ansi.WIN32_INPUT_OFF);
             if (mouseTracking) sequence.append(Ansi.MOUSE_OFF);
             if (bracketedPaste) sequence.append(Ansi.BRACKETED_PASTE_OFF);
             if (alternateScreen) {
@@ -333,6 +348,7 @@ public class Terminal implements Closeable {
             if (cursorHidden) sequence.append(Ansi.CURSOR_SHOW);
             if (!sequence.isEmpty()) sequence.append(Ansi.RESET);
             synchronizedDepth = 0;
+            win32Input = false;
             mouseTracking = false;
             bracketedPaste = false;
             mainKeyboardFlags = 0;

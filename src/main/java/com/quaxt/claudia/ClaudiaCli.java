@@ -602,12 +602,16 @@ public final class ClaudiaCli {
         String type = terminal.type();
         if (type == null || Terminal.TYPE_DUMB.equals(type) || Terminal.TYPE_DUMB_COLOR.equals(type)) return;
         terminal.pushKeyboardFlags(KITTY_DISAMBIGUATE);
+        // Older Windows Terminal versions (including WSL) need win32-input-mode
+        // rather than kitty reporting to distinguish Shift-Enter from Enter.
+        terminal.win32Input(true);
         enhancedKeyboardReporting = true;
     }
 
     private void popEnhancedKeyboardReporting() {
         if (!enhancedKeyboardReporting) return;
         enhancedKeyboardReporting = false;
+        terminal.win32Input(false);
         terminal.popKeyboardFlags();
     }
 
