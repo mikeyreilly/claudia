@@ -149,10 +149,10 @@ public final class KeyParser {
             int value = source.read(-1);
             if (value < 0) {
                 content.append(end, 0, matched);
-                return content.toString();
+                return decodePasteNewlines(content.toString());
             }
             if (value == end.charAt(matched)) {
-                if (++matched == end.length()) return content.toString();
+                if (++matched == end.length()) return decodePasteNewlines(content.toString());
                 continue;
             }
             if (matched > 0) {
@@ -165,6 +165,28 @@ public final class KeyParser {
             }
             content.appendCodePoint(value);
         }
+    }
+
+    private static final java.util.regex.Pattern PASTE_WIN32_RECORD =
+            java.util.regex.Pattern.compile("\u001b\\[([0-9;]{0,64})_");
+
+    /**
+     * Windows Terminal/WSL can encode pasted line breaks as Win32 Enter down/up
+     * records even inside bracketed paste. They are text here, never submit keys.
+     * Keep other escape sequences literal: pasted content is not keyboard input.
+     */
+    private static String decodePasteNewlines(String text) {
+        var matcher = PASTE_WIN32_RECORD.matcher(text);
+        StringBuilder decoded = new StringBuilder();
+        while (matcher.find()) {
+            Win32Record record = win32Record(matcher.group(1));
+            int[] values = record.values();
+            if (values == null || values[0] != 13 || (values[2] != 13 && values[2] != 10)) continue;
+            String newline = values[3] == 1 ? "\n".repeat(values[5]) : "";
+            matcher.appendReplacement(decoded, newline);
+        }
+        matcher.appendTail(decoded);
+        return decoded.toString();
     }
 
     /** Decodes CSI parameters/final byte; null means an ignored Win32 record. */

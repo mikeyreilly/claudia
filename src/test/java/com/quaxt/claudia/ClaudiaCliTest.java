@@ -1108,6 +1108,21 @@ class ClaudiaCliTest {
 	}
 
 	@Test
+	void bracketedWslPasteKeepsEncodedNewlinesUntilEnter() throws Exception {
+		TerminalFixture fixture = terminal();
+		ClaudiaCli interactive = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+		try {
+			fixture.input().write(("\u001b[200~first\u001b[13;28;13;1;0;1_"
+					+ "\u001b[13;28;13;0;0;1_second\u001b[201~\r").getBytes(StandardCharsets.UTF_8));
+			fixture.input().flush();
+			String line = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> interactive.readLine("> "));
+			assertEquals("first\nsecond", line);
+		} finally {
+			interactive.closeTerminal();
+		}
+	}
+
+	@Test
 	void unbracketedCrLfPasteDoesNotSubmitAtTheLineBreak() throws Exception {
 		TerminalFixture fixture = terminal();
 

@@ -375,6 +375,27 @@ class KeyParserTest {
     }
 
     @Test
+    void bracketedPasteDecodesWslEnterRecordsAsTextNotSubmitKeys() throws Exception {
+        String enter = win32(13, 28, 13, 1, 0, 1) + win32(13, 28, 13, 0, 0, 1);
+        String text = "npx dbmate create add todo.priority" + enter + "Creating: todo"
+                + enter + "Error: pq: permission denie" + enter + "d to create database (42501)";
+        InputReader reader = bufferedReader("\u001b[200~" + text + "\u001b[201~\r");
+        assertEquals(new Paste("npx dbmate create add todo.priority\nCreating: todo\n"
+                + "Error: pq: permission denie\nd to create database (42501)"), reader.readEvent(1000));
+        assertEquals(Key.of(KeyType.ENTER), reader.readEvent(1000));
+        assertEquals(new Paste("a\n\nb"), parse("\u001b[200~a" + win32(13, 28, 10, 1, 16, 2)
+                + win32(13, 28, 10, 0, 16, 2) + "b\u001b[201~"));
+    }
+
+    @Test
+    void bracketedPastePreservesOtherEscapeSequencesAndInvalidEnterRecords() {
+        String literal = "\u001b[2J" + win32(65, 'a', 0) + "\u001b[13;28;13;2;0;1_"
+                + "\u001b[13;28;13;1;0;0_" + "\u001b[13;28;13;1;0;1";
+        assertEquals(new Paste(literal), parse("\u001b[200~" + literal + "\u001b[201~"));
+        assertEquals(new Paste("a\nb"), parse("\u001b[200~a" + win32(13, 13, 0) + "b"));
+    }
+
+    @Test
     void decodesSgrMouseReportsAndBracketedPaste() {
         assertEquals(new Mouse(MouseAction.PRESS, 0, 12, 7), parse("\u001b[<0;12;7M"));
         assertEquals(new Mouse(MouseAction.RELEASE, 0, 12, 7), parse("\u001b[<0;12;7m"));
