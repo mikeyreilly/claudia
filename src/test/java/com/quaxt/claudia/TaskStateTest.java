@@ -57,6 +57,13 @@ class TaskStateTest {
             assertFalse(anthropicSchema.has("oneOf"));
             assertEquals(schema.path("properties"), anthropicSchema.path("properties"));
             assertEquals(schema.path("required"), anthropicSchema.path("required"));
+            ObjectNode chatSchema = ClaudiaOperations.chatCompletionsParameters(schema);
+            for (String keyword : List.of("oneOf", "anyOf", "allOf", "enum", "const", "not")) {
+                assertFalse(chatSchema.has(keyword), keyword);
+            }
+            assertEquals("object", chatSchema.path("type").asText());
+            assertEquals(schema.path("properties"), chatSchema.path("properties"));
+            assertEquals(schema.path("required"), chatSchema.path("required"));
             assertEquals(8, schema.path("oneOf").size());
             assertTrue(call(runtime, tool, action("add_task").put("description", "Inspect repository"))
                     .contains("#1 [todo] Inspect repository"));

@@ -3284,11 +3284,29 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
      * drop them and rely on the tool's own argument validation.
      */
     public static ObjectNode anthropicInputSchema(ObjectNode schema) {
-        if (schema == null || !(schema.has("oneOf") || schema.has("allOf") || schema.has("anyOf"))) {
+        return withoutTopLevel(schema, List.of("oneOf", "allOf", "anyOf"));
+    }
+
+    /**
+     * OpenAI-style Chat Completions endpoints (GitHub Copilot's among them) reject function parameters with a
+     * top-level oneOf, anyOf, allOf, enum, const or not, and require type "object". Drop those keywords and
+     * rely on the tool's own argument validation.
+     */
+    public static ObjectNode chatCompletionsParameters(ObjectNode schema) {
+        ObjectNode copy = withoutTopLevel(schema, List.of("oneOf", "allOf", "anyOf", "enum", "const", "not"));
+        if (copy != null && !"object".equals(copy.path("type").asText(null))) {
+            if (copy == schema) copy = schema.deepCopy();
+            copy.put("type", "object");
+        }
+        return copy;
+    }
+
+    private static ObjectNode withoutTopLevel(ObjectNode schema, List<String> keywords) {
+        if (schema == null || keywords.stream().noneMatch(schema::has)) {
             return schema;
         }
         ObjectNode copy = schema.deepCopy();
-        copy.remove(List.of("oneOf", "allOf", "anyOf"));
+        copy.remove(keywords);
         return copy;
     }
 
@@ -3542,7 +3560,7 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                     ObjectNode function1 = tools1.addObject().put("type", "function").putObject("function");
                     function1.put("name", tool.name);
                     function1.put("description", tool.description);
-                    function1.set("parameters", tool.parameters);
+                    function1.set("parameters", chatCompletionsParameters(tool.parameters));
                 }
             }
             postJsonSse(
