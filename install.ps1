@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-Builds Claudia and its built-in code-lens MCP server in this checkout and
-writes a claudia.cmd launcher that runs them in place.
+Builds Claudia, claudia-spawn and its built-in code-lens MCP server in this
+checkout and writes a claudia.cmd launcher that runs them in place.
 
 .DESCRIPTION
-Builds Claudia (target\claudia.jar) and code-lens
+Builds Claudia (target\claudia.jar), claudia-spawn
+(spawn\build\claudia-spawn.exe) and code-lens
 (code-lens\build\code-lens.exe) in this checkout, then writes a
 claudia.cmd launcher that runs this checkout's build. Re-run it to update
 after pulling changes, or after moving the checkout.
@@ -12,10 +13,12 @@ after pulling changes, or after moving the checkout.
 code-lens is optional: when it cannot be built (no usable clang toolchain, or its
 vendored sources cannot be downloaded) a WARNING is printed and Claudia is
 still installed, just without the code-lens integration.
+claudia-spawn is optional too and is built independently of code-lens. Without
+it, tool commands share Claudia's console and can disrupt its input.
 
 Requirements: a JDK 25 or newer (JAVA_HOME or java on PATH) and Maven.
-code-lens additionally needs LLVM clang with a Windows SDK/MSVC runtime or
-MinGW clang, plus Git for Windows, curl.exe, and tar.exe.
+claudia-spawn needs LLVM clang with a Windows SDK/MSVC runtime or MinGW clang.
+code-lens additionally needs Git for Windows, curl.exe, and tar.exe.
 
 Run it through install.cmd, or with:
     powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
@@ -40,6 +43,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $Root = $PSScriptRoot
+$SpawnDir = Join-Path $Root 'spawn'
+$SpawnExe = Join-Path $SpawnDir 'build\claudia-spawn.exe'
 $CodeLensDir = Join-Path $Root 'code-lens'
 $CodeLensExe = Join-Path $CodeLensDir 'build\code-lens.exe'
 $script:Warnings = New-Object 'System.Collections.Generic.List[string]'
@@ -118,6 +123,73 @@ if ($Native) {
     }
     Warn 'native executables do not support interactive mode on Windows; consider installing without -Native'
 }
+
+# ----------------------------------------------------------------- claudia-spawn
+
+function Skip-Spawn([string]$Reason) {
+    Warn "claudia-spawn was not built: $Reason"
+    if (Test-Path -LiteralPath $SpawnExe -PathType Leaf) {
+        Warn 'a claudia-spawn.exe from an earlier build remains in spawn\build and will still be used'
+    } else {
+        Warn "tool commands will share Claudia's console, so console prompts (ssh, pause, choice) can disrupt Claudia's input"
+    }
+}
+
+function Build-Spawn {
+    $clang = Find-Program @('clang.exe')
+    if (-not $clang) {
+        Skip-Spawn 'clang.exe was not found on PATH; install MinGW clang or LLVM clang with a Windows SDK and MSVC runtime'
+        return
+    }
+
+    # Compile separately from code-lens, without its vendored dependencies.
+    # Windows can lock a running .exe against replacement, but allows renaming
+    # it. Keep that earlier build until the new executable is safely published.
+    $suffix = [Guid]::NewGuid().ToString('N')
+    $temporary = "$SpawnExe.tmp.$suffix.exe"
+    $previous = "$SpawnExe.old.$suffix.exe"
+    $movedPrevious = $false
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SpawnExe) | Out-Null
+        Say 'Building claudia-spawn with clang'
+        $arguments = @('-std=c99', '-O2', '-Wall', '-Wextra', '-o', $temporary,
+            (Join-Path $SpawnDir 'claudia-spawn.c'))
+        if ((Invoke-Native $clang $arguments) -ne 0) {
+            Skip-Spawn 'the build failed (see the output above); use MinGW clang or LLVM clang with a Windows SDK and MSVC runtime'
+            return
+        }
+        if (-not (Test-Path -LiteralPath $temporary -PathType Leaf)) {
+            Skip-Spawn "the build did not produce $temporary"
+            return
+        }
+        if (Test-Path -LiteralPath $SpawnExe -PathType Leaf) {
+            Move-Item -LiteralPath $SpawnExe -Destination $previous
+            $movedPrevious = $true
+        }
+        Move-Item -LiteralPath $temporary -Destination $SpawnExe
+    } catch {
+        $reason = $_.Exception.Message
+        if ($movedPrevious -and -not (Test-Path -LiteralPath $SpawnExe -PathType Leaf)) {
+            try {
+                Move-Item -LiteralPath $previous -Destination $SpawnExe
+            } catch {
+                Warn "could not restore the earlier claudia-spawn.exe; it remains at ${previous}: $($_.Exception.Message)"
+            }
+        }
+        Skip-Spawn "could not build or publish the executable: $reason (close running Claudia sessions and re-run)"
+        return
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+    if ($movedPrevious) {
+        Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $previous -PathType Leaf) {
+            Say "Earlier claudia-spawn is still in use; retained at $previous (remove it after those commands exit)"
+        }
+    }
+}
+
+Build-Spawn
 
 # --------------------------------------------------------------------- code-lens
 
@@ -261,6 +333,11 @@ Write-Host ''
 Say 'Claudia is installed'
 Write-Host "    launcher:  $Launcher"
 Write-Host "    runs:      $Program"
+if (Test-Path -LiteralPath $SpawnExe -PathType Leaf) {
+    Write-Host "    spawn:     $SpawnExe (runs tool commands without Claudia's console; except .bat/.cmd)"
+} else {
+    Write-Host '    spawn:     not available (tool commands share the console)'
+}
 if (Test-Path -LiteralPath $CodeLensExe -PathType Leaf) {
     Write-Host "    code-lens: $CodeLensExe (built-in MCP server)"
 } else {

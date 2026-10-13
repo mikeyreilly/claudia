@@ -19,16 +19,23 @@ import java.util.Optional;
  * keystrokes, splitting key sequences between them, and can leave the terminal's
  * modes changed when it is killed.
  *
- * <p>Java cannot start a process in a new session itself, so the command is run
+ * <p>On macOS/Linux Java cannot start a process in a new session itself, so the command is run
  * through {@code claudia-spawn} (built by {@code install.sh} from
  * {@code spawn/claudia-spawn.c} into {@code spawn/build/} of the checkout that
  * built Claudia). It calls {@code setsid()} and then execs the program in the same
  * process, so opening {@code /dev/tty} fails and such prompts fail promptly.
  *
- * <p>The builder is left unchanged, so the program shares Claudia's terminal, when
- * the launcher was not built, on Windows (no launcher yet), or when the program
- * cannot be resolved as {@link ProcessBuilder} would (the parent's {@code PATH});
- * {@link ProcessBuilder#start()} then reports that failure as usual.
+ * <p>On Windows {@code install.ps1} builds {@code claudia-spawn.exe}. It frees the
+ * inherited console and starts the resolved program with a hidden console, passing
+ * Java's native command line through unchanged. Console-only prompts wait unseen
+ * until timeout: load SSH keys into ssh-agent first. A job kills the child tree when
+ * the launcher is terminated, but allows background children to survive normal exit.
+ * {@link Process#pid()} is the launcher PID; the real program is a descendant.
+ *
+ * <p>The builder is left unchanged when the launcher was not built, for Windows
+ * batch files (and other non-.exe names under strict JDK quoting), or when the program cannot
+ * be resolved using the parent's {@code PATH}; {@link ProcessBuilder#start()} then
+ * reports that failure as usual.
  */
 public final class DetachedProcess {
     private DetachedProcess() {}
@@ -37,8 +44,8 @@ public final class DetachedProcess {
             System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
 
     private static final class Installed {
-        static final Path LAUNCHER = WINDOWS ? null
-                : RunningBuild.artifact().flatMap(artifact -> launcherFor(artifact, false)).orElse(null);
+        static final Path LAUNCHER =
+                RunningBuild.artifact().flatMap(artifact -> launcherFor(artifact, WINDOWS)).orElse(null);
     }
 
     /** The installed launcher, if the running build has one; without it, {@link #detach} changes nothing. */
@@ -60,23 +67,38 @@ public final class DetachedProcess {
     }
 
     static ProcessBuilder detach(ProcessBuilder builder, Path launcher) {
-        // Windows: reserved for a claudia-spawn.exe with its own protocol; see spawn/claudia-spawn.c.
         List<String> command = builder.command();
-        if (launcher == null || WINDOWS || command.isEmpty()) return builder;
+        if (launcher == null || command.isEmpty()) return builder;
+        // In particular MavenTestLaunch's mvn.cmd stays attached. Wrapping batch
+        // files would bypass ProcessImpl's special quoting and permit injection.
+        if (WINDOWS && batch(command.getFirst())) return builder;
         Path program = resolve(command.getFirst(), builder.directory());
         if (program == null) return builder;
+        // Strict ProcessImpl uses batch-style verification for every non-.exe
+        // extension, even native .com programs. Switching that to the launcher's
+        // EXE quoting would change arguments (or bypass its quote validation).
+        if (WINDOWS && !program.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".exe")
+                && "false".equalsIgnoreCase(System.getProperty("jdk.lang.Process.allowAmbiguousCommands", "true")))
+            return builder;
         List<String> detached = new ArrayList<>(command.size() + 2);
         detached.add(launcher.toString());
         detached.add(program.toString());
-        detached.addAll(command); // The original program name stays the program's argv[0].
+        // Both Windows EXE modes in ProcessImpl quote all remaining arguments the
+        // same way, regardless of the executable name. Preserve legacy pre-quoting
+        // from ShellCommandLine/ProcessEnvironment; do not quote these again.
+        // A Windows path cannot contain a quote or end in a backslash (it's a file),
+        // so its ordinary-argument quoting also works as the child's argv[0].
+        detached.addAll(WINDOWS ? command.subList(1, command.size()) : command);
         builder.command(detached);
         return builder;
     }
 
-    /** The executable ProcessBuilder would run: a path relative to the directory, or found on the parent's PATH. */
+    /** The executable ProcessBuilder would run: relative paths use the child cwd on POSIX,
+     * the parent cwd on Windows; bare names use the parent's search path. */
     static Path resolve(String program, File directory) {
         try {
             if (program.isEmpty()) return null;
+            if (WINDOWS) return resolveWindows(program);
             Path base = directory == null ? Path.of("").toAbsolutePath() : directory.toPath().toAbsolutePath();
             if (program.indexOf('/') >= 0) return executable(base.resolve(program));
             String path = System.getenv("PATH");
@@ -88,6 +110,60 @@ public final class DetachedProcess {
         } catch (InvalidPathException error) {
             return null;
         }
+    }
+
+    private static boolean batch(String program) {
+        String lower = program.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".bat") || lower.endsWith(".cmd");
+    }
+
+    private static Path resolveWindows(String program) {
+        // ProcessImpl accepts a quoted executable token; quotes are not path chars.
+        if (program.length() > 1 && program.startsWith("\"") && program.endsWith("\""))
+            program = program.substring(1, program.length() - 1);
+        if (program.isEmpty() || batch(program)) return null;
+        Path requested = Path.of(program);
+        Path parent = Path.of("").toAbsolutePath();
+        // On Windows even explicit relative executable paths resolve against the
+        // parent's cwd, not lpCurrentDirectory (which only sets the child's cwd).
+        if (requested.isAbsolute() || program.indexOf('/') >= 0 || program.indexOf('\\') >= 0)
+            return windowsExecutable(parent.resolve(requested));
+        if (program.indexOf(':') >= 0) // Drive-relative paths, such as C:tool.exe.
+            return windowsExecutable(requested.toAbsolutePath());
+        // CreateProcess searches the parent's application/current/system directories
+        // before PATH. The builder's environment does not affect this search.
+        List<Path> directories = new ArrayList<>();
+        ProcessHandle.current().info().command().ifPresent(command -> {
+            Path application = Path.of(command).toAbsolutePath().getParent();
+            if (application != null) directories.add(application);
+        });
+        directories.add(parent);
+        String root = System.getenv("SystemRoot");
+        if (root != null) {
+            directories.add(Path.of(root, "System32"));
+            directories.add(Path.of(root, "System"));
+            directories.add(Path.of(root));
+        }
+        String path = System.getenv("PATH");
+        if (path != null) for (String entry : path.split(";", -1)) {
+            if (entry.length() > 1 && entry.startsWith("\"") && entry.endsWith("\""))
+                entry = entry.substring(1, entry.length() - 1);
+            try { directories.add(parent.resolve(entry.isEmpty() ? "." : entry)); }
+            catch (InvalidPathException ignored) { /* Ignore unusable PATH entries. */ }
+        }
+        for (Path search : directories) {
+            Path found = windowsExecutable(search.resolve(program));
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static Path windowsExecutable(Path path) {
+        // CreateProcess appends .exe only when the final component has no extension.
+        if (path.getFileName() == null) return null;
+        if (path.getFileName().toString().indexOf('.') < 0)
+            path = path.resolveSibling(path.getFileName() + ".exe");
+        return executable(path);
     }
 
     private static Path executable(Path path) {

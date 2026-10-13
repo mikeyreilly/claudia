@@ -204,8 +204,16 @@ public final class DebugManager implements AutoCloseable {
                 if(!entry.getValue().isTextual()) throw fail("invalid_argument","Environment values must be strings");
                 builder.environment().put(entry.getKey(),entry.getValue().asText());
             });
-            process=DetachedProcess.detach(builder).start(); debuggeePid=process.pid();
-            try { vm=connectSocket(port,Math.max(1000,num(a,"launch_timeout_ms",15000,120000)),process); }
+            DetachedProcess.detach(builder);
+            boolean windowsLauncher = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")
+                    && !builder.command().getFirst().equals(command.getFirst());
+            process=builder.start(); debuggeePid=process.pid();
+            try {
+                vm=connectSocket(port,Math.max(1000,num(a,"launch_timeout_ms",15000,120000)),process);
+                // The suspended JVM is the Windows launcher's sole immediate child.
+                // Keep process for output/exit/termination, but report the JVM's PID.
+                if (windowsLauncher) debuggeePid=process.children().mapToLong(ProcessHandle::pid).findFirst().orElse(-1);
+            }
             catch(Exception e) { process.destroyForcibly(); throw e; }
         }
         String id=UUID.randomUUID().toString();

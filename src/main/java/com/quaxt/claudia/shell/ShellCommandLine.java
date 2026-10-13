@@ -48,7 +48,8 @@ public final class ShellCommandLine {
     }
 
     // PowerShell's console host bypasses redirected stdout for Read-Host prompts.
-    // Adapt that cmdlet to our pipes; other console-only prompts still fail promptly.
+    // Adapt that cmdlet to our pipes; other console-only prompts may wait unseen
+    // in claudia-spawn's hidden console until the tool timeout.
     private static final String POWERSHELL_STDIN_PREAMBLE = """
             $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);
             function global:Read-Host {

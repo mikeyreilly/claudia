@@ -19,9 +19,9 @@ See also [getting started](../README.md#getting-started),
 ```
 
 The installers build `target/claudia.jar` (skipping tests by default), attempt
-to build the optional [code-lens](../code-lens/README.md) MCP server, and write
-a launcher pointing at this checkout. On macOS/Linux, `install.sh` also builds
-[`claudia-spawn`](#claudia-spawn). The default launcher is
+to build the optional [code-lens](../code-lens/README.md) MCP server and
+[`claudia-spawn`](#claudia-spawn), and write a launcher pointing at this
+checkout. The default launcher is
 `~/.local/bin/claudia`, or `%USERPROFILE%\.local\bin\claudia.cmd` on Windows.
 Add that directory to `PATH` if the installer reports it is missing. Re-run
 the installer after pulling changes or moving the checkout.
@@ -48,27 +48,53 @@ code-lens discovery expects the Claudia JAR/executable in the checkout's
 
 ### claudia-spawn
 
-On macOS/Linux, Claudia starts tool commands (`shell`, `run_process`,
-`debug_launch`, and stdio MCP servers) through `spawn/build/claudia-spawn`,
-built from [`spawn/claudia-spawn.c`](../spawn/claudia-spawn.c). It calls
-`setsid()` and then execs the command, so the command has no controlling
-terminal. Otherwise a command that prompts on `/dev/tty` (ssh for a key
-passphrase, sudo, gpg) reads keystrokes meant for Claudia's line editor, and
-if it is killed mid-prompt it can leave the terminal so that Ctrl-C and Ctrl-D
-no longer reach Claudia.
+Claudia starts tool commands (`shell`, `run_process`, `debug_launch`, and
+stdio MCP servers) through `spawn/build/claudia-spawn` (`claudia-spawn.exe`
+on Windows), built from [`spawn/claudia-spawn.c`](../spawn/claudia-spawn.c).
+This keeps commands from reading keystrokes meant for Claudia's line editor
+or changing its terminal modes, even if a command is killed mid-prompt.
+
+- **macOS/Linux:** it calls `setsid()` and then execs the command, so there is
+  no controlling terminal. Prompts on `/dev/tty` (ssh for a key passphrase,
+  sudo, gpg) fail promptly.
+- **Windows:** it detaches from Claudia's console and starts the command with
+  `CREATE_NO_WINDOW`, giving console programs a separate hidden console.
+  Console prompts no longer reach the user: they can wait unseen until the
+  tool's timeout (indefinitely if no timeout is set). Load SSH keys into
+  `ssh-agent` first, or use non-interactive credentials. Pipes still work.
+  `.bat`/`.cmd` programs, including `mvn.cmd` test launches, are not detached,
+  to preserve Java's batch-specific argument quoting. They still share
+  Claudia's console. With strict JDK quoting enabled
+  (`jdk.lang.Process.allowAmbiguousCommands=false`), other non-`.exe`
+  extensions such as native `.com` programs also remain attached, because Java
+  applies batch-style argument verification to them. The launcher uses a job object to kill the program and
+  its descendants if the launcher is forcibly stopped, when job assignment
+  is allowed. Background programs survive a normal command exit.
 
 `install.sh` builds it with `$CC`, or the first of `cc`, `gcc`, and `clang`
-found. It needs only a C99 compiler. When it cannot be built, a warning is
-printed and an earlier build, if present, remains in use. Without one, tool
-commands share Claudia's terminal. Discovery, like code-lens's, expects the
-Claudia JAR/executable in the checkout's `target/` directory. To build it by
-hand:
+found; it needs only a C99 compiler. `install.ps1` builds it with clang
+(MinGW clang, or LLVM clang with a Windows SDK/MSVC runtime), independently
+of code-lens and without its vendored dependencies. It compiles to a temporary
+executable and renames an earlier build out of the way before publishing;
+if the old executable is still running, it is retained under a temporary
+name until you remove it after those commands exit.
+
+When it cannot be built or published, a warning is printed and an earlier
+build, if present, remains in use. Without one, tool commands share Claudia's
+terminal/console. Discovery, like code-lens's, expects the Claudia
+JAR/executable in the checkout's `target/` directory. To build it by hand:
 
 ```sh
-mkdir -p spawn/build && cc -std=c99 -O2 -o spawn/build/claudia-spawn spawn/claudia-spawn.c
+mkdir -p spawn/build && cc -std=c99 -O2 -Wall -Wextra -o spawn/build/claudia-spawn spawn/claudia-spawn.c
 ```
 
-Windows has no launcher yet, so tool commands there share Claudia's console.
+```powershell
+New-Item -ItemType Directory -Force spawn\build | Out-Null
+clang -std=c99 -O2 -Wall -Wextra -o spawn\build\claudia-spawn.exe spawn\claudia-spawn.c
+```
+
+For a Windows rebuild while tool commands are running, use `install.ps1` to
+handle the locked executable, or wait for those commands to exit first.
 
 ## Build manually
 

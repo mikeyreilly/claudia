@@ -36,6 +36,24 @@ processes are managed by
   instead of reading keystrokes from Claudia's terminal. Load SSH keys into an
   agent, or use another non-interactive credential, before the agent needs them.
   `run_process`, `debug_launch` and stdio MCP servers are started the same way.
+- On Windows, when `claudia-spawn.exe` is installed, the command runs with
+  `CREATE_NO_WINDOW` in a separate hidden console. Commands cannot read
+  Claudia's keystrokes or change its console modes or code page. Console-only
+  prompts (ssh key passphrases, `pause`, `choice`) no longer reach the user
+  and can wait unseen until the tool's timeout; without a timeout they can
+  wait indefinitely. Load SSH keys into `ssh-agent` first, or use
+  non-interactive credentials. Prompts using the pipes, including the
+  shell's `Read-Host` replacement, still work through `shell_input`.
+  `run_process`, `debug_launch` and stdio MCP servers use the same launcher,
+  but direct `.bat`/`.cmd` launches (such as `mvn.cmd`) are not detached, to
+  preserve Java's batch-specific quoting. Under strict JDK quoting
+  (`jdk.lang.Process.allowAmbiguousCommands=false`), other non-`.exe`
+  extensions such as native `.com` programs also remain attached for the same
+  reason. Batch files invoked inside the detached PowerShell command inherit
+  its isolated console.
+- Without a built launcher, tool commands share Claudia's terminal/console;
+  console prompts can interfere with its input. See the
+  [build instructions](../build.md#claudia-spawn).
 - `PYTHONUNBUFFERED=1` is set unless the environment already defines it.
 - The tool waits up to `yield_ms` and then returns the output so far:
   - **Finished:** the output ends with `[Command exited with code N.]`, and the
