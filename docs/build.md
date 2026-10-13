@@ -131,7 +131,9 @@ mvn -B -Pnative package
 On Windows the output is `target/claudia.exe`. Native interactive mode is
 supported on Linux and Apple silicon Macs, not Windows or Intel Macs; use
 the JVM build for interactive mode there. Native images do not support the
-[JDI debugger tools](tools/debugger.md). See [terminal requirements](terminal.md#terminal-requirements)
+[JDI debugger tools](tools/debugger.md), or reading images and PDFs with
+[`read`](tools/read.md) (which needs AWT and PDFBox; the native image leaves
+them out). See [terminal requirements](terminal.md#terminal-requirements)
 for terminal and native-access details.
 
 Build settings and installer behavior are defined in [pom.xml](../pom.xml),

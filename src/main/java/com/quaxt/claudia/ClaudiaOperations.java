@@ -3292,6 +3292,68 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
         return copy;
     }
 
+    /**
+     * Chat Completions cannot put images in tool messages, so the images from a run of tool results are sent
+     * in one user message placed after the last of them (tool messages must directly follow their tool calls).
+     */
+    private static void appendChatToolImages(ArrayNode messages, List<ToolResultMessage> results) {
+        ArrayNode parts = messages.addObject().put("role", "user").putArray("content");
+        for (ToolResultMessage result : results) {
+            parts.addObject().put("type", "text")
+                    .put("text", "Image output of the " + result.toolName + " tool call " + result.toolCallId + ":");
+            for (UserContent block : result.content) {
+                if (block instanceof ImageContent image) {
+                    parts.addObject()
+                            .put("type", "image_url")
+                            .putObject("image_url")
+                            .put("url", "data:" + image.mimeType + ";base64," + image.data);
+                }
+            }
+        }
+        results.clear();
+    }
+
+    static boolean hasImage(List<? extends UserContent> content) {
+        return content.stream().anyMatch(ImageContent.class::isInstance);
+    }
+
+    private static boolean contextHasImage(Context context) {
+        for (Message message : context.messages) {
+            if (message instanceof UserMessage user && hasImage(user.content)) return true;
+            if (message instanceof ToolResultMessage result && hasImage(result.content)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns the context unchanged when the model accepts images (or none are present); otherwise a copy
+     * whose images are replaced by a short text note, since such models reject image input.
+     */
+    static Context withSupportedContent(Model model, Context context) {
+        if (context == null || model == null || model.input == null || model.input.contains("image")
+                || !contextHasImage(context)) {
+            return context;
+        }
+        TextContent omitted = new TextContent("[image omitted: " + model.id + " does not accept image input]", null);
+        Context copy = new Context(context.systemPrompt);
+        copy.tools = context.tools;
+        for (Message message : context.messages) {
+            copy.messages.add(switch (message) {
+                case UserMessage user when hasImage(user.content) ->
+                        new UserMessage(withoutImages(user.content, omitted), user.timestamp);
+                case ToolResultMessage result when hasImage(result.content) -> new ToolResultMessage(
+                        result.toolCallId, result.toolName, withoutImages(result.content, omitted),
+                        result.details, result.isError, result.timestamp);
+                default -> message;
+            });
+        }
+        return copy;
+    }
+
+    private static List<UserContent> withoutImages(List<UserContent> content, TextContent replacement) {
+        return content.stream().map(block -> block instanceof ImageContent ? (UserContent) replacement : block).toList();
+    }
+
     private void anthropicAppendContent(ArrayNode target, List<? extends UserContent> content) {
         for (UserContent block : content) {
             if (block instanceof TextContent text) {
@@ -3404,7 +3466,11 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
             if (context.systemPrompt != null && !context.systemPrompt.isBlank()) {
                 messages.addObject().put("role", "system").put("content", context.systemPrompt);
             }
+            List<ToolResultMessage> toolImages = new ArrayList<>();
             for (Message message : context.messages) {
+                if (!(message instanceof ToolResultMessage) && !toolImages.isEmpty()) {
+                    appendChatToolImages(messages, toolImages);
+                }
                 switch (message) {
                     case UserMessage user -> {
                         ObjectNode target = messages.addObject().put("role", "user");
@@ -3451,11 +3517,24 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                             }
                         }
                     }
-                    case ToolResultMessage toolResult -> messages.addObject()
-                            .put("role", "tool")
-                            .put("tool_call_id", toolResult.toolCallId)
-                            .put("content", text(toolResult));
+                    case ToolResultMessage toolResult -> {
+                        // Chat Completions tool messages hold only text; images follow in a user message.
+                        long images = toolResult.content.stream().filter(ImageContent.class::isInstance).count();
+                        String content = text(toolResult);
+                        if (images > 0) {
+                            content += (content.isEmpty() ? "" : "\n") + "[" + images
+                                    + (images == 1 ? " image" : " images") + " attached in the next user message]";
+                            toolImages.add(toolResult);
+                        }
+                        messages.addObject()
+                                .put("role", "tool")
+                                .put("tool_call_id", toolResult.toolCallId)
+                                .put("content", content);
+                    }
                 }
+            }
+            if (!toolImages.isEmpty()) {
+                appendChatToolImages(messages, toolImages);
             }
             if (!context.tools.isEmpty()) {
                 ArrayNode tools1 = request1.putArray("tools");
@@ -3742,10 +3821,25 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                             }
                         }
                     }
-                    case ToolResultMessage result -> input.addObject()
-                            .put("type", "function_call_output")
-                            .put("call_id", result.toolCallId)
-                            .put("output", text(result));
+                    case ToolResultMessage result -> {
+                        ObjectNode item = input.addObject()
+                                .put("type", "function_call_output")
+                                .put("call_id", result.toolCallId);
+                        if (!hasImage(result.content)) {
+                            item.put("output", text(result));
+                        } else {
+                            ArrayNode parts = item.putArray("output");
+                            for (UserContent block : result.content) {
+                                if (block instanceof TextContent text1) {
+                                    parts.addObject().put("type", "input_text").put("text", text1.text);
+                                } else if (block instanceof ImageContent image) {
+                                    parts.addObject()
+                                            .put("type", "input_image")
+                                            .put("image_url", "data:" + image.mimeType + ";base64," + image.data);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (!context.tools.isEmpty()) {
@@ -4181,7 +4275,8 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
      * thrown, except for argument validation.
      */
     public AssistantMessageEventStream stream(
-            Provider provider, Model model, Context context, StreamOptions options) {
+            Provider provider, Model model, Context requestContext, StreamOptions options) {
+        Context context = withSupportedContent(model, requestContext);
         return switch (provider) {
             case AnthropicProvider anthropic -> anthropicStream(anthropic, model, context, options);
             case ProviderState chatGpt when chatGpt.role == ProviderState.Role.CHATGPT -> {
@@ -4332,6 +4427,10 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                         yield providerErrorStream(model, error);
                     }
                 }
+                if (contextHasImage(context)) {
+                    // Copilot rejects image input unless the request is flagged as a vision request.
+                    requestOptions.headers.put("Copilot-Vision-Request", "true");
+                }
                 yield switch (model.api) {
                     case "anthropic-messages" -> anthropicStream(copilot.anthropic, model, context, requestOptions);
                     case "openai-completions" ->
@@ -4393,14 +4492,21 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                                 }
                             }
                             case ToolResultMessage result -> {
-                                ObjectNode function1 = contents.addObject()
+                                ArrayNode parts = contents.addObject()
                                         .put("role", "user")
-                                        .putArray("parts")
-                                        .addObject()
-                                        .putObject("functionResponse");
+                                        .putArray("parts");
+                                ObjectNode function1 = parts.addObject().putObject("functionResponse");
                                 function1.put("name", result.toolName);
                                 function1.put("id", result.toolCallId);
                                 function1.putObject("response").put(result.isError ? "error" : "output", text(result));
+                                // Images ride along as inline parts of the same turn.
+                                for (UserContent block1 : result.content) {
+                                    if (block1 instanceof ImageContent image) {
+                                        parts.addObject().putObject("inlineData")
+                                                .put("mimeType", image.mimeType)
+                                                .put("data", image.data);
+                                    }
+                                }
                             }
                         }
                     }
@@ -4956,17 +5062,26 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                         finished.success, finished.attempt, finished.finalError)));
     }
 
-    private static long estimateMessageTokens(List<Message> messages) {
+    /** Rough token cost of one image; images are capped at about 1.15 megapixels, roughly 1,600 tokens. */
+    static final long IMAGE_TOKEN_ESTIMATE = 1_600;
+
+    static long estimateMessageTokens(List<Message> messages) {
         long characters = 0;
+        long imageTokens = 0;
         for (Message message : messages) {
-            if (message instanceof UserMessage user) characters += text(user).length();
-            else if (message instanceof AssistantMessage assistant) {
+            if (message instanceof UserMessage user) {
+                characters += text(user).length();
+                imageTokens += IMAGE_TOKEN_ESTIMATE * user.content.stream().filter(ImageContent.class::isInstance).count();
+            } else if (message instanceof AssistantMessage assistant) {
                 characters += text(assistant).length() + thinking(assistant).length();
                 for (ToolCall call : toolCalls(assistant))
                     characters += call.name.length() + call.arguments.toString().length();
-            } else if (message instanceof ToolResultMessage toolResult) characters += text(toolResult).length();
+            } else if (message instanceof ToolResultMessage toolResult) {
+                characters += text(toolResult).length();
+                imageTokens += IMAGE_TOKEN_ESTIMATE * toolResult.content.stream().filter(ImageContent.class::isInstance).count();
+            }
         }
-        return (characters + 3) / 4;
+        return (characters + 3) / 4 + imageTokens;
     }
 
     private void emit(AgentEvent event) {

@@ -2165,6 +2165,232 @@ class ClaudiaOperationsTest {
 		}
 	}
 
+	// Images in tool results
+
+	private static Context toolImageContext(Model model) {
+		Context context = new Context();
+		context.messages.add(ClaudiaOperations.userMessage("look"));
+		AssistantMessage assistant = new AssistantMessage(model.api, model.provider, model.id);
+		assistant.content.add(new ToolCall("call_1", "read", jsonObject().put("path", "a.png"), null));
+		assistant.content.add(new ToolCall("call_2", "read", jsonObject().put("path", "b.txt"), null));
+		context.messages.add(assistant);
+		context.messages.add(new ToolResultMessage("call_1", "read",
+				List.of(new TextContent("Image: a.png", null), new ImageContent("aW1hZ2U=", "image/png")),
+				null, false, 1));
+		context.messages.add(new ToolResultMessage("call_2", "read", List.of(new TextContent("plain", null)), null, false, 2));
+		return context;
+	}
+
+	private static Model withImageInput(Model model) {
+		model.input = new ArrayList<>(List.of("text", "image"));
+		return model;
+	}
+
+	@Test
+	void sendsToolResultImagesAsResponsesOutputItems() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = responsesServer(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeResponsesSse(exchange, """
+					data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+
+					""");
+		});
+		try {
+			Model model = withImageInput(responsesModel(responsesUrl(server)));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), null,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
+
+			ClaudiaOperations.result(runtime.stream(provider, model, toolImageContext(model), responsesOptions("test-key")));
+
+			List<JsonNode> outputs = new ArrayList<>();
+			for (JsonNode item : Json.MAPPER.readTree(request.get()).path("input")) {
+				if (item.path("type").asText().equals("function_call_output")) outputs.add(item);
+			}
+			assertEquals(2, outputs.size());
+			JsonNode withImage = outputs.get(0).path("output");
+			assertTrue(withImage.isArray(), withImage.toString());
+			assertEquals("input_text", withImage.get(0).path("type").asText());
+			assertEquals("Image: a.png", withImage.get(0).path("text").asText());
+			assertEquals("input_image", withImage.get(1).path("type").asText());
+			assertEquals("data:image/png;base64,aW1hZ2U=", withImage.get(1).path("image_url").asText());
+			assertEquals("plain", outputs.get(1).path("output").asText());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void sendsChatCompletionToolImagesInAUserMessageAfterTheToolMessages() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = compatibleServer(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeCompatibleSse(exchange, """
+					data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+					data: [DONE]
+
+					""");
+		});
+		try {
+			Model model = withImageInput(compatibleModel(compatibleUrl(server)));
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
+
+			ClaudiaOperations.result(runtime.stream(provider, model, toolImageContext(model), compatibleOptions("test-key")));
+
+			JsonNode messages = Json.MAPPER.readTree(request.get()).path("messages");
+			assertEquals(5, messages.size(), messages.toString());
+			assertEquals("tool", messages.get(2).path("role").asText());
+			assertEquals("Image: a.png\n[1 image attached in the next user message]", messages.get(2).path("content").asText());
+			assertEquals("tool", messages.get(3).path("role").asText());
+			assertEquals("plain", messages.get(3).path("content").asText());
+			JsonNode images = messages.get(4);
+			assertEquals("user", images.path("role").asText());
+			assertEquals("Image output of the read tool call call_1:", images.path("content").get(0).path("text").asText());
+			assertEquals("data:image/png;base64,aW1hZ2U=",
+					images.path("content").get(1).path("image_url").path("url").asText());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void replacesImagesWithANoteForModelsWithoutImageInput() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = compatibleServer(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeCompatibleSse(exchange, """
+					data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+					data: [DONE]
+
+					""");
+		});
+		try {
+			Model model = compatibleModel(compatibleUrl(server));
+			assertEquals(List.of("text"), model.input);
+			ProviderState provider = openAiCompatibleProvider("custom", "Custom", compatibleUrl(server), List.of(model));
+			Context context = toolImageContext(model);
+			context.messages.add(new UserMessage(
+					List.of(new TextContent("and this", null), new ImageContent("aW1hZ2U=", "image/png")), 3));
+
+			ClaudiaOperations.result(runtime.stream(provider, model, context, compatibleOptions("test-key")));
+
+			assertFalse(request.get().contains("image_url"), request.get());
+			JsonNode messages = Json.MAPPER.readTree(request.get()).path("messages");
+			assertEquals(5, messages.size(), messages.toString());
+			assertEquals("Image: a.png[image omitted: test-model does not accept image input]",
+					messages.get(2).path("content").asText());
+			assertTrue(messages.get(4).path("content").asText().contains("[image omitted"), messages.get(4).toString());
+			// The caller's context is left untouched.
+			assertInstanceOf(ImageContent.class, ((ToolResultMessage) context.messages.get(2)).content.get(1));
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void sendsToolResultImagesAsGeminiInlineDataParts() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		HttpServer server = googleServer(exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			writeGoogleSse(exchange, """
+					data: {"responseId":"resp_1","candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}
+
+					""");
+		});
+		try {
+			Model model = withImageInput(googleModel(googleUrl(server)));
+			ProviderState provider = runtime.googleProvider(
+					runtime.providerState(ProviderState.Role.GOOGLE), List.of(model));
+
+			ClaudiaOperations.result(runtime.stream(provider, model, toolImageContext(model), googleOptions("test-key")));
+
+			JsonNode withImage = null;
+			for (JsonNode content : Json.MAPPER.readTree(request.get()).path("contents")) {
+				if (content.path("parts").path(0).path("functionResponse").path("id").asText().equals("call_1")) {
+					withImage = content.path("parts");
+				}
+			}
+			assertNotNull(withImage, request.get());
+			assertEquals(2, withImage.size());
+			assertEquals("Image: a.png", withImage.get(0).path("functionResponse").path("response").path("output").asText());
+			assertEquals("image/png", withImage.get(1).path("inlineData").path("mimeType").asText());
+			assertEquals("aW1hZ2U=", withImage.get(1).path("inlineData").path("data").asText());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void flagsCopilotRequestsWithImagesAsVisionRequests() throws Exception {
+		AtomicReference<String> request = new AtomicReference<>();
+		AtomicReference<String> vision = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			vision.set(exchange.getRequestHeaders().getFirst("Copilot-Vision-Request"));
+			writeCopilotSse(exchange, """
+					event: message_start
+					data: {"message":{"id":"a","usage":{"input_tokens":1}}}
+
+					event: message_delta
+					data: {"delta":{"stop_reason":"end_turn"}}
+
+					event: message_stop
+					data: {}
+
+					""");
+		});
+		server.start();
+		try {
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			Model model = withImageInput(copilotModel("anthropic", "anthropic-messages", base));
+			ClaudiaOperations store = runtime;
+			store.fileCredentialStore(Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
+			runtime.modifyCredential(
+					store,
+					ClaudiaOperations.GITHUB_COPILOT_PROVIDER_ID,
+					ignored -> new Credential.OAuthCredential(
+							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
+			ProviderState provider = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			runtime.gitHubCopilotAuth(provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			runtime.newGitHubCopilotProvider(provider, List.of(model));
+
+			ClaudiaOperations.result(runtime.stream(provider, model, toolImageContext(model), copilotOptions(null)));
+			assertEquals("true", vision.get());
+			JsonNode toolResult = null;
+			for (JsonNode message : Json.MAPPER.readTree(request.get()).path("messages")) {
+				for (JsonNode block : message.path("content")) {
+					if (block.path("tool_use_id").asText().equals("call_1")) toolResult = block;
+				}
+			}
+			assertNotNull(toolResult, request.get());
+			assertEquals("image", toolResult.path("content").get(1).path("type").asText());
+			assertEquals("aW1hZ2U=", toolResult.path("content").get(1).path("source").path("data").asText());
+
+			Context textOnly = new Context();
+			textOnly.messages.add(ClaudiaOperations.userMessage("hi"));
+			ClaudiaOperations.result(runtime.stream(provider, model, textOnly, copilotOptions(null)));
+			assertNull(vision.get());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void countsImagesWhenEstimatingContextSize() {
+		List<Message> text = List.of(ClaudiaOperations.userMessage("abcd"));
+		List<Message> withImage = List.of(new UserMessage(
+				List.of(new TextContent("abcd", null), new ImageContent("x".repeat(400_000), "image/png")), 1));
+		List<Message> toolImage = List.of(new ToolResultMessage(
+				"c", "read", List.of(new ImageContent("aW1hZ2U=", "image/png")), null, false, 1));
+		assertEquals(1, ClaudiaOperations.estimateMessageTokens(text));
+		assertEquals(1 + ClaudiaOperations.IMAGE_TOKEN_ESTIMATE, ClaudiaOperations.estimateMessageTokens(withImage));
+		assertEquals(ClaudiaOperations.IMAGE_TOKEN_ESTIMATE, ClaudiaOperations.estimateMessageTokens(toolImage));
+	}
+
 	private static Model responsesModel(String baseUrl) {
 		Model model = new Model();
 		model.id = "gpt-test";

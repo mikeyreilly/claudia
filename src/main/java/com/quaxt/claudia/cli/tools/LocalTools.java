@@ -12,6 +12,7 @@ import com.quaxt.claudia.debug.DebugManager;
 import com.quaxt.claudia.debug.DebugTools;
 import com.quaxt.claudia.ai.types.TextContent;
 import com.quaxt.claudia.ai.util.AbortSignal;
+import com.quaxt.claudia.cli.tools.media.MediaFiles;
 import com.quaxt.claudia.shell.ShellCommandLine;
 import com.quaxt.claudia.shell.ShellSessionManager;
 import com.quaxt.claudia.shell.PosixPreflight;
@@ -187,16 +188,19 @@ public final class LocalTools {
         var pathArg = text("path", "Path to the file to read. A leading ~/ expands to the user home directory.");
         var offsetArg = integer("offset", "1-indexed starting line", 1, Integer.MAX_VALUE, 1);
         var limitArg = integer("limit", "Maximum lines to read", 1, Integer.MAX_VALUE, Integer.MAX_VALUE);
+        var pagesArg = optionalText("pages",
+                "PDF only: pages to return as rendered images as well as text, e.g. \"1\", \"2-4\" or \"1,3\" (at most "
+                        + MediaFiles.MAX_RENDERED_PAGES + " per call). Omit to get the text of every page.", null);
         return new ToolDefinition<>("read",
-                "Read a text file. Use offset and limit for large files; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
-                new ToolParameters(pathArg, offsetArg, limitArg),
+                "Read a text file, an image (PNG, JPEG, GIF, WebP or BMP; returned as an image you can see), or a PDF (text of each page; with pages, those pages are also returned as images). Use offset and limit for large text files and PDF text; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
+                new ToolParameters(pathArg, offsetArg, limitArg, pagesArg),
                 (local, args, invocation) -> {
                     AbortSignal signal = invocation.signal;
                     AgentTool.ToolResult result;
                     String pathText = args.get(pathArg);
                     BuiltInTools.ArchiveLocation location = localToolArchiveLocation(local, pathText);
                     if (location == null) {
-                        result = readToolFile(localToolPath(local, pathText), args.get(offsetArg), args.get(limitArg), signal);
+                        result = readToolFile(localToolPath(local, pathText), args.get(offsetArg), args.get(limitArg), args.get(pagesArg), signal);
                     } else {
                         if (location.entry.startsWith("/")) {
                             throw new IllegalArgumentException("Archive entry paths must not start with '/'");
@@ -259,12 +263,14 @@ public final class LocalTools {
                                     throw new IOException("Archive entry not found: " + entry1 + " in " + location.archive
                                             + ". Nearby entries:\n" + suggestions);
                                 }
-                                result = readToolFile(entry, args.get(offsetArg), args.get(limitArg), signal);
+                                result = readToolFile(entry, args.get(offsetArg), args.get(limitArg), args.get(pagesArg), signal);
                             }
                         }
                     }
                     return result;
                 }, raw -> {
+                    String pages = textArgument(raw, "pages", null);
+                    if (pages != null) return "Reading " + textArgument(raw, "path", ".") + " (pages " + pages + ")";
                     int offset = raw.path("offset").asInt(1);
                     int limit = raw.path("limit").asInt();
                     return "Reading " + textArgument(raw, "path", ".")
@@ -637,7 +643,7 @@ public final class LocalTools {
                     return result;
                 }, raw -> "Listing " + textArgument(raw, "path", "."));
     }
-    private static AgentTool.ToolResult readToolFile(Path file, int offset, int limit, AbortSignal signal)
+    private static AgentTool.ToolResult readToolFile(Path file, int offset, int limit, String pages, AbortSignal signal)
             throws IOException {
         requireNotAborted(signal);
         if (!Files.isRegularFile(file)) {
@@ -653,9 +659,25 @@ public final class LocalTools {
         }
         List<String> lines;
         try {
-            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            MediaFiles.Kind kind = MediaFiles.sniff(file);
+            if (pages != null && kind != MediaFiles.Kind.PDF) {
+                throw new IllegalArgumentException("pages applies only to PDF files");
+            }
+            Runnable checkpoint = () -> requireNotAborted(signal);
+            if (kind == MediaFiles.Kind.PDF && pages != null) {
+                return new AgentTool.ToolResult(MediaFiles.pdfPages(file, pages, checkpoint), null, false);
+            } else if (kind == MediaFiles.Kind.PDF) {
+                lines = MediaFiles.pdfTextLines(file, checkpoint);
+            } else if (kind != null) {
+                return new AgentTool.ToolResult(MediaFiles.readImage(file, kind), null, false);
+            } else {
+                lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            }
         } catch (java.nio.file.AccessDeniedException denied) {
             throw new IOException("Access denied: " + file + " (the file may be outside the sandbox)");
+        } catch (java.nio.charset.CharacterCodingException binary) {
+            throw new IOException("Cannot read " + file
+                    + ": it is a binary file (not UTF-8 text, and not a supported image or PDF)");
         }
         int start = offset - 1;
         if (start >= lines.size()) {

@@ -46,6 +46,7 @@ import com.quaxt.claudia.ai.providers.ProviderState;
 import com.quaxt.claudia.ai.types.AssistantContent;
 import com.quaxt.claudia.ai.types.AssistantMessage;
 import com.quaxt.claudia.ai.types.AssistantMessageEvent;
+import com.quaxt.claudia.ai.types.ImageContent;
 import com.quaxt.claudia.ai.types.Message;
 import com.quaxt.claudia.ai.types.Model;
 import com.quaxt.claudia.ai.types.StopReason;
@@ -57,6 +58,7 @@ import com.quaxt.claudia.ai.types.ToolResultMessage;
 import com.quaxt.claudia.ai.types.Usage;
 import com.quaxt.claudia.ai.types.UserContent;
 import com.quaxt.claudia.ai.types.UserMessage;
+import com.quaxt.claudia.cli.tools.media.MediaFiles;
 import com.quaxt.claudia.cli.ActivityStatus;
 import com.quaxt.claudia.cli.McpSelector;
 import com.quaxt.claudia.cli.TurnDetailsComponent;
@@ -3324,7 +3326,7 @@ public final class ClaudiaCli {
                             ToolResultMessage result = toolResults.get(call.id);
                             if (result != null) {
                                 renderedToolResults.add(result.toolCallId);
-                                screen.finishTool(call.id, terminalSafeText(text(result)), result.isError);
+                                screen.finishTool(call.id, terminalSafeText(toolResultOutput(result.content)), result.isError);
                             }
                         }
                     }
@@ -3337,7 +3339,7 @@ public final class ClaudiaCli {
                         // A result whose call is no longer visible, for example after compaction.
                         screen.addTool(result.toolCallId, result.toolName, "", "",
                                 containerExpanded(result.toolCallId, false));
-                        screen.finishTool(result.toolCallId, terminalSafeText(text(result)), result.isError);
+                        screen.finishTool(result.toolCallId, terminalSafeText(toolResultOutput(result.content)), result.isError);
                     }
                 }
             }
@@ -4021,16 +4023,23 @@ public final class ClaudiaCli {
                 .orElseGet(() -> terminalSafeText(arguments.toString()));
     }
 
-    /** The text blocks of a tool result, as the model receives them. */
+    /** A tool result as shown in the transcript: its text blocks, with a placeholder line for each image. */
     public static String toolResultOutput(AgentTool.ToolResult result) {
+        return toolResultOutput(result.content);
+    }
+
+    static String toolResultOutput(List<UserContent> content) {
         StringBuilder text = new StringBuilder();
-        for (UserContent block : result.content) {
-            if (block instanceof TextContent value) {
-                if (!text.isEmpty()) {
-                    text.append('\n');
-                }
-                text.append(value.text);
+        for (UserContent block : content) {
+            String line = switch (block) {
+                case TextContent value -> value.text;
+                case ImageContent image -> "[" + image.mimeType + " image, "
+                        + MediaFiles.size((long) image.data.length() * 3 / 4) + "]";
+            };
+            if (!text.isEmpty()) {
+                text.append('\n');
             }
+            text.append(line);
         }
         return text.toString();
     }

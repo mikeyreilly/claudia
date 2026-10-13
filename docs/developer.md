@@ -178,7 +178,7 @@ lines or 50 KB. Debugger results are paged with `limit`/`cursor`.
 
 | Tool | Purpose |
 | --- | --- |
-| [`read`](tools/read.md) | Read a text file, or an entry inside a jar/zip archive |
+| [`read`](tools/read.md) | Read a text file, an image, a PDF (text, or rendered pages), or an entry inside a jar/zip archive |
 | [`write`](tools/write.md) | Create or overwrite a text file |
 | [`edit`](tools/edit.md) | Replace exact, unique blocks of text in a file |
 | [`ls`](tools/ls.md) | List a directory |

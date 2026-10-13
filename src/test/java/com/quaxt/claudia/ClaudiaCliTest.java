@@ -439,6 +439,11 @@ class ClaudiaCliTest {
 				"package works.earendil;\npublic final class Main {}",
 				ClaudiaCli.toolResultOutput(
 						ClaudiaOperations.toolResultText("package works.earendil;\npublic final class Main {}")));
+		assertEquals(
+				"Image: a.png\n[image/png image, 3 KB]",
+				ClaudiaCli.toolResultOutput(new com.quaxt.claudia.agent.AgentTool.ToolResult(List.of(
+						new TextContent("Image: a.png", null),
+						new com.quaxt.claudia.ai.types.ImageContent("A".repeat(4096), "image/png")), null, false)));
 	}
 
 	@Test
