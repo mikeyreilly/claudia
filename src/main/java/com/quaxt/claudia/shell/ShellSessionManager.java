@@ -78,7 +78,8 @@ public final class ShellSessionManager implements AutoCloseable {
                 if (closed) throw new IllegalStateException("Shell session manager is closed");
                 if (shellSessions.size() >= 32) throw new IllegalStateException("Too many shell sessions; poll or terminate existing sessions with shell_input first");
                 ensureShutdownHook();
-                session = new ShellSession(java.util.UUID.randomUUID().toString(), builder.start(), child.toString(), stdoutLog, stderrLog);
+                session = new ShellSession(java.util.UUID.randomUUID().toString(),
+                        DetachedProcess.detach(builder).start(), child.toString(), stdoutLog, stderrLog);
                 shellSessions.put(session.id, session);
             }
         } catch (IOException | RuntimeException error) {
@@ -227,7 +228,7 @@ public final class ShellSessionManager implements AutoCloseable {
                     .directory(cwd.toFile()).redirectErrorStream(true);
             // Python otherwise buffers stdout when attached to a pipe, hiding input prompts.
             builder.environment().putIfAbsent("PYTHONUNBUFFERED", "1");
-            session = new ShellSession(java.util.UUID.randomUUID().toString(), builder.start());
+            session = new ShellSession(java.util.UUID.randomUUID().toString(), DetachedProcess.detach(builder).start());
             shellSessions.put(session.id, session);
         }
         Thread.ofVirtual().name("claudia-shell-output").start(() -> {

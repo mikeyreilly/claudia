@@ -29,6 +29,13 @@ processes are managed by
 - stdout and stderr are merged into one stream. Communication uses pipes, not a
   PTY, so programs must flush their prompts. Full-screen or console-only
   programs are not supported.
+- On macOS/Linux, when [`claudia-spawn`](../build.md#claudia-spawn) is
+  installed, the command runs in a new session without a controlling
+  terminal, so it cannot open `/dev/tty`. Programs that would prompt there
+  (ssh for a key passphrase, git credential prompts, sudo, gpg) fail promptly
+  instead of reading keystrokes from Claudia's terminal. Load SSH keys into an
+  agent, or use another non-interactive credential, before the agent needs them.
+  `run_process`, `debug_launch` and stdio MCP servers are started the same way.
 - `PYTHONUNBUFFERED=1` is set unless the environment already defines it.
 - The tool waits up to `yield_ms` and then returns the output so far:
   - **Finished:** the output ends with `[Command exited with code N.]`, and the

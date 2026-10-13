@@ -125,6 +125,7 @@ import com.quaxt.claudia.cli.session.SessionSnapshot;
 import com.quaxt.claudia.cli.tools.LocalTools;
 import com.quaxt.claudia.cli.tools.TaskState;
 import com.quaxt.claudia.agent.ToolDefinition;
+import com.quaxt.claudia.shell.DetachedProcess;
 import com.quaxt.claudia.shell.ShellSessionManager;
 import com.quaxt.claudia.mcp.BuiltInMcpServers;
 import com.quaxt.claudia.mcp.McpAgentTool;
@@ -6697,7 +6698,7 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                                 ProcessBuilder builder = new ProcessBuilder(local.command);
                                 builder.directory(processDirectory.toFile());
                                 builder.environment().putAll(local.environment);
-                                transport.process = builder.start();
+                                transport.process = DetachedProcess.detach(builder).start();
                                 transport.writer = new BufferedWriter(
                                         new OutputStreamWriter(transport.process.getOutputStream(), StandardCharsets.UTF_8));
                                 Thread.ofVirtual().name("mcp-stdio-reader").start(() -> {

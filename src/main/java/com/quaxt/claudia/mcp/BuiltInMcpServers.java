@@ -1,10 +1,7 @@
 package com.quaxt.claudia.mcp;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.nio.file.Files;
+import com.quaxt.claudia.RunningBuild;
 import java.nio.file.Path;
-import java.security.CodeSource;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -38,8 +35,7 @@ public final class BuiltInMcpServers {
 
 	/** Finds the code-lens binary that belongs to the running Claudia build, if one was built. */
 	public static Optional<Path> locateCodeLens() {
-		Path artifact = runningArtifact();
-		return artifact == null ? Optional.empty() : codeLensFor(artifact, isWindows());
+		return RunningBuild.artifact().flatMap(artifact -> codeLensFor(artifact, isWindows()));
 	}
 
 	/**
@@ -47,11 +43,7 @@ public final class BuiltInMcpServers {
 	 * native executable at {@code <repo>/target/<artifact>}, when it is an executable file.
 	 */
 	public static Optional<Path> codeLensFor(Path artifact, boolean windows) {
-		Path directory = artifact.toAbsolutePath().normalize().getParent();
-		Path checkout = directory == null ? null : directory.getParent();
-		if (checkout == null) return Optional.empty();
-		Path binary = checkout.resolve("code-lens").resolve("build").resolve(windows ? "code-lens.exe" : "code-lens");
-		return Files.isRegularFile(binary) && Files.isExecutable(binary) ? Optional.of(binary) : Optional.empty();
+		return RunningBuild.executable(artifact, "code-lens", "build", windows ? "code-lens.exe" : "code-lens");
 	}
 
 	/** The local server configuration that runs {@code binary} as code-lens's MCP stdio server. */
@@ -65,34 +57,6 @@ public final class BuiltInMcpServers {
 				List.of(),
 				preference.disabledTools(),
 				true);
-	}
-
-	/**
-	 * The jar or native executable Claudia is running from. Classes directories
-	 * (tests and IDE runs) are not a build, so they report none and stay hermetic.
-	 */
-	private static Path runningArtifact() {
-		try {
-			Path location;
-			if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
-				Optional<String> command = ProcessHandle.current().info().command();
-				if (command.isEmpty()) return null;
-				location = Path.of(command.get());
-			} else {
-				CodeSource source = BuiltInMcpServers.class.getProtectionDomain().getCodeSource();
-				if (source == null || source.getLocation() == null) return null;
-				location = Path.of(source.getLocation().toURI());
-			}
-			if (!Files.isRegularFile(location)) return null;
-			try {
-				// A launcher may reach the build through a symbolic link.
-				return location.toRealPath();
-			} catch (IOException error) {
-				return location;
-			}
-		} catch (URISyntaxException | RuntimeException error) {
-			return null;
-		}
 	}
 
 	private static boolean isWindows() {

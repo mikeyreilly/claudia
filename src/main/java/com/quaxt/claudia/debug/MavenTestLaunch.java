@@ -1,5 +1,6 @@
 package com.quaxt.claudia.debug;
 
+import com.quaxt.claudia.shell.DetachedProcess;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -65,10 +66,10 @@ public final class MavenTestLaunch {
         String debug = "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:" + port;
         String maven = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")
                 ? "mvn.cmd" : "mvn";
-        return new ProcessBuilder(maven, "-N", "-Dtest=" + selector,
+        return DetachedProcess.detach(new ProcessBuilder(maven, "-N", "-Dtest=" + selector,
                 "-DfailIfNoTests=true", "-Dsurefire.failIfNoSpecifiedTests=true",
                 "-DskipTests=false", "-Dmaven.surefire.debug=" + debug, "surefire:test")
-                .directory(cwd.toFile()).start();
+                .directory(cwd.toFile())).start();
     }
 
     private static void inspect(Path file, String className, String method) throws IOException {

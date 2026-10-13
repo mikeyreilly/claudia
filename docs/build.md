@@ -20,7 +20,8 @@ See also [getting started](../README.md#getting-started),
 
 The installers build `target/claudia.jar` (skipping tests by default), attempt
 to build the optional [code-lens](../code-lens/README.md) MCP server, and write
-a launcher pointing at this checkout. The default launcher is
+a launcher pointing at this checkout. On macOS/Linux, `install.sh` also builds
+[`claudia-spawn`](#claudia-spawn). The default launcher is
 `~/.local/bin/claudia`, or `%USERPROFILE%\.local\bin\claudia.cmd` on Windows.
 Add that directory to `PATH` if the installer reports it is missing. Re-run
 the installer after pulling changes or moving the checkout.
@@ -45,6 +46,30 @@ present, remains in use. Otherwise its tools are not offered. Built-in
 code-lens discovery expects the Claudia JAR/executable in the checkout's
 `target/` directory and the server in `code-lens/build/`.
 
+### claudia-spawn
+
+On macOS/Linux, Claudia starts tool commands (`shell`, `run_process`,
+`debug_launch`, and stdio MCP servers) through `spawn/build/claudia-spawn`,
+built from [`spawn/claudia-spawn.c`](../spawn/claudia-spawn.c). It calls
+`setsid()` and then execs the command, so the command has no controlling
+terminal. Otherwise a command that prompts on `/dev/tty` (ssh for a key
+passphrase, sudo, gpg) reads keystrokes meant for Claudia's line editor, and
+if it is killed mid-prompt it can leave the terminal so that Ctrl-C and Ctrl-D
+no longer reach Claudia.
+
+`install.sh` builds it with `$CC`, or the first of `cc`, `gcc`, and `clang`
+found. It needs only a C99 compiler. When it cannot be built, a warning is
+printed and an earlier build, if present, remains in use. Without one, tool
+commands share Claudia's terminal. Discovery, like code-lens's, expects the
+Claudia JAR/executable in the checkout's `target/` directory. To build it by
+hand:
+
+```sh
+mkdir -p spawn/build && cc -std=c99 -O2 -o spawn/build/claudia-spawn spawn/claudia-spawn.c
+```
+
+Windows has no launcher yet, so tool commands there share Claudia's console.
+
 ## Build manually
 
 From the repository root:
@@ -58,8 +83,9 @@ java -jar target/claudia.jar
 
 `target/claudia.jar` is the runnable uber JAR; `target/claudia-thin.jar`
 contains only this project's classes. `package` runs tests unless you pass
-`-DskipTests`. Maven does not build code-lens; use the installer or its
-[build instructions](../code-lens/README.md).
+`-DskipTests`. Maven does not build code-lens or claudia-spawn; use the
+installer or their build instructions ([code-lens](../code-lens/README.md),
+[claudia-spawn](#claudia-spawn)).
 
 To run without a terminal, choose a current model from `--list-models` and
 replace `PROVIDER/MODEL_ID` below (it is a placeholder):

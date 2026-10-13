@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quaxt.claudia.ai.json.Json;
+import com.quaxt.claudia.shell.DetachedProcess;
 import com.sun.jdi.*;
 import com.sun.jdi.connect.*;
 import com.sun.jdi.event.*;
@@ -203,7 +204,7 @@ public final class DebugManager implements AutoCloseable {
                 if(!entry.getValue().isTextual()) throw fail("invalid_argument","Environment values must be strings");
                 builder.environment().put(entry.getKey(),entry.getValue().asText());
             });
-            process=builder.start(); debuggeePid=process.pid();
+            process=DetachedProcess.detach(builder).start(); debuggeePid=process.pid();
             try { vm=connectSocket(port,Math.max(1000,num(a,"launch_timeout_ms",15000,120000)),process); }
             catch(Exception e) { process.destroyForcibly(); throw e; }
         }

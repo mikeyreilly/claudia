@@ -5,16 +5,18 @@
 # code-lens is optional: when it cannot be built (no suitable C toolchain, or
 # its vendored sources cannot be downloaded) a WARNING is printed and
 # Claudia is still installed, just without the code-lens integration.
+# claudia-spawn, which runs tool commands without Claudia's terminal, is
+# optional in the same way.
 set -eu
 
 usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
-Builds Claudia (target/claudia.jar) and code-lens
-(code-lens/build/code-lens) in this checkout, then writes a `claudia`
-launcher that runs this checkout's build. Re-run it to update after pulling
-changes, or after moving the checkout.
+Builds Claudia (target/claudia.jar), claudia-spawn (spawn/build/claudia-spawn)
+and code-lens (code-lens/build/code-lens) in this checkout, then writes a
+`claudia` launcher that runs this checkout's build. Re-run it to update after
+pulling changes, or after moving the checkout.
 
 Options:
   --bin-dir DIR   Directory for the launcher (default: ~/.local/bin)
@@ -24,6 +26,8 @@ Options:
   -h, --help      Show this help
 
 Requirements: a JDK 25 or newer (JAVA_HOME or java on PATH) and Maven.
+claudia-spawn needs a C compiler; without it, tool commands share Claudia's
+terminal and can read keystrokes meant for it.
 code-lens additionally needs git, curl, unzip, make, a C compiler with ISO C23
 support, and zlib headers; without them Claudia is installed without it.
 EOF
@@ -45,6 +49,8 @@ quote() {
 }
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+spawn_dir="${root}/spawn"
+spawn_bin="${spawn_dir}/build/claudia-spawn"
 code_lens_dir="${root}/code-lens"
 code_lens_bin="${code_lens_dir}/build/code-lens"
 bin_dir="${HOME}/.local/bin"
@@ -94,6 +100,43 @@ if [ "$native" -eq 1 ]; then
         warn 'native executables do not support interactive mode on Intel Macs; consider installing without --native'
     fi
 fi
+
+# -------------------------------------------------------------- claudia-spawn
+
+# Claudia runs tool commands through claudia-spawn, which starts them in a new
+# session without Claudia's terminal (see spawn/claudia-spawn.c). The new binary
+# is renamed into place, so running sessions keep executing the old one.
+build_spawn() {
+    if [ -n "${CC:-}" ]; then candidates=$CC; else candidates='cc gcc clang'; fi
+    spawn_cc=''
+    for candidate in $candidates; do
+        if command -v "$candidate" >/dev/null 2>&1; then spawn_cc=$candidate; break; fi
+    done
+    if [ -z "$spawn_cc" ]; then
+        spawn_skipped "no C compiler was found (tried: ${candidates}); install clang or gcc, or set CC"
+        return 1
+    fi
+    say "Building claudia-spawn with ${spawn_cc}"
+    mkdir -p "${spawn_dir}/build" || { spawn_skipped "could not create ${spawn_dir}/build"; return 1; }
+    tmp="${spawn_bin}.tmp.$$"
+    if "$spawn_cc" -std=c99 -O2 -Wall -Wextra -o "$tmp" "${spawn_dir}/claudia-spawn.c" && mv -f "$tmp" "$spawn_bin"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    spawn_skipped 'the build failed (see the output above)'
+    return 1
+}
+
+spawn_skipped() {
+    warn "claudia-spawn was not built: $1"
+    if [ -x "$spawn_bin" ]; then
+        warn 'a claudia-spawn binary from an earlier build remains in spawn/build and will still be used'
+    else
+        warn "tool commands will share Claudia's terminal, so a command that prompts there (ssh, sudo) can disrupt Claudia's input"
+    fi
+}
+
+build_spawn || true
 
 # ------------------------------------------------------------------ code-lens
 
@@ -238,6 +281,11 @@ printf '\n'
 say 'Claudia is installed'
 printf '    launcher:  %s\n' "$launcher"
 printf '    runs:      %s\n' "$program"
+if [ -x "$spawn_bin" ]; then
+    printf '    spawn:     %s (runs tool commands without the terminal)\n' "$spawn_bin"
+else
+    printf '    spawn:     not available (tool commands share the terminal)\n'
+fi
 if [ -x "$code_lens_bin" ]; then
     printf '    code-lens: %s (built-in MCP server)\n' "$code_lens_bin"
 else
