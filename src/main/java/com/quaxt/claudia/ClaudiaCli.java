@@ -74,6 +74,7 @@ import com.quaxt.claudia.tui.TuiInput;
 import com.quaxt.claudia.tui.TuiRuntime;
 import com.quaxt.claudia.terminal.Ansi;
 import com.quaxt.claudia.terminal.Cells;
+import com.quaxt.claudia.terminal.Clipboard;
 import com.quaxt.claudia.terminal.KeyParser;
 import com.quaxt.claudia.terminal.LineEditor;
 import com.quaxt.claudia.terminal.StatusLine;
@@ -184,6 +185,8 @@ public final class ClaudiaCli {
                 Ctrl-O      inspects reasoning/tool steps.
                 Ctrl-T      shows or hides streamed thinking.
                 Shift-Tab   toggles Plan/Build.
+                Drag        selects conversation text and copies it.
+                Shift-Drag  uses the terminal's own selection.
                 """;
 
     }
@@ -191,6 +194,12 @@ public final class ClaudiaCli {
     private static final int VISIBLE_COMMANDS = 4;
     /** Conversation rows one mouse-wheel step scrolls. */
     private static final int WHEEL_ROWS = 3;
+    /** Conversation rows a selection dragged to the viewport's edge scrolls each step. */
+    private static final int SELECTION_SCROLL_ROWS = 2;
+    /** Shortest interval between selection scroll steps. */
+    private static final long SELECTION_SCROLL_NANOS = 50_000_000L;
+    /** How long a copy notice stays in the status bar. */
+    private static final long COPY_NOTICE_NANOS = 3_000_000_000L;
     private static final String THINKING_KEY_PREFIX = "thinking:";
     /** SI (invoke G0 into GL), then designate ASCII into G0, undoing stray character-set shifts. */
     static final String RESET_CHARACTER_SET = "\u000f\u001b(B";
@@ -341,6 +350,17 @@ public final class ClaudiaCli {
     private boolean viewportStale = true;
     /** Whether the line editor wants mouse reports for the conversation. */
     private boolean conversationMouse;
+    /** Whether the left button, pressed in the conversation, is selecting text. */
+    private boolean selecting;
+    /** Zero-based screen row and column of the pointer while selecting. */
+    private int pointerRow;
+    private int pointerColumn;
+    private long lastSelectionScroll;
+    /** Receives selected conversation text; set with the terminal. */
+    private Clipboard clipboard;
+    /** A short message after the status, such as the result of a copy, until it expires. */
+    private String statusNotice;
+    private long statusNoticeExpires;
     /** Whether the status bar reflects a viewport that shows the conversation's end. */
     private boolean followingShown = true;
     private StatusLine statusLine;
@@ -1098,7 +1118,10 @@ public final class ClaudiaCli {
         managedSuspend = false;
         commandSuggestionsActive = false;
         enhancedKeyboardReporting = false;
+        selecting = false;
+        statusNotice = null;
         this.terminal = terminal;
+        this.clipboard = Clipboard.system(terminal);
         this.editor = new LineEditor(terminal);
         this.editorLock = editor.lock();
         this.statusLine = new StatusLine(terminal);
@@ -1201,9 +1224,12 @@ public final class ClaudiaCli {
         if (suggestionsEnabled) {
             options.below = this::commandSuggestionLines;
             options.beforeAccept = this::insertSelectedCommand;
-            // Questions open only from the main prompt, between key sequences.
-            options.idle = this::showPendingQuestions;
         }
+        options.idle = () -> {
+            conversationIdle();
+            // Questions open only from the main prompt, between key sequences.
+            if (suggestionsEnabled) showPendingQuestions();
+        };
         LineEditor.Result result;
         Terminal.Mode previousMode = terminal.mode();
         try {
@@ -1623,22 +1649,42 @@ public final class ClaudiaCli {
         } finally { if (editorLock != null) editorLock.unlock(); }
     }
 
-    /** Wheel scrolling and toggle clicks in the conversation, reported while the prompt reads. */
+    /** Wheel scrolling, toggle clicks, and text selection in the conversation, reported while the prompt reads. */
     private void handleConversationMouse(TerminalEvent.Mouse mouse) {
         synchronized (this) {
+            // Viewport rows start at the top screen row.
+            int row = mouse.y() - 1;
+            int column = mouse.x() - 1;
             switch (mouse.action()) {
                 case SCROLL_UP -> scrollConversation(-WHEEL_ROWS);
                 case SCROLL_DOWN -> scrollConversation(WHEEL_ROWS);
                 case PRESS -> {
                     if (mouse.button() != 0 || viewportStale) return;
-                    // Viewport rows start at the top screen row.
-                    String key = transcript.toggleAt(mouse.y() - 1, mouse.x() - 1);
-                    if (key == null) return;
-                    containerOverrides.put(containerScope(key), transcript.toggle(key));
+                    String key = transcript.toggleAt(row, column);
+                    if (key != null) {
+                        selecting = false;
+                        containerOverrides.put(containerScope(key), transcript.toggle(key));
+                        repaintScreen();
+                        return;
+                    }
+                    boolean shown = transcript.hasSelection();
+                    selecting = transcript.startSelection(row, column);
+                    pointerRow = row;
+                    pointerColumn = column;
+                    if (shown) repaintScreen();
+                }
+                case DRAG -> {
+                    if (!selecting || mouse.button() != 0) return;
+                    pointerRow = row;
+                    pointerColumn = column;
+                    transcript.extendSelection(row, column);
+                    scrollSelection();
                     repaintScreen();
                 }
-                default -> {
-                    // Releases and drags leave the conversation unchanged.
+                case RELEASE -> {
+                    if (!selecting) return;
+                    selecting = false;
+                    copySelection();
                 }
             }
         }
@@ -1647,7 +1693,48 @@ public final class ClaudiaCli {
     private void scrollConversation(int rows) {
         synchronized (this) {
             transcript.scroll(rows);
+            // Scrolling while dragging moves the selection's end with the text under the pointer.
+            if (selecting) transcript.extendSelection(pointerRow, pointerColumn);
             repaintScreen();
+        }
+    }
+
+    /**
+     * Scrolls the conversation while a selection is dragged to the viewport's top
+     * row or below its bottom, at most one step per interval. Returns whether it scrolled.
+     */
+    private boolean scrollSelection() {
+        if (!selecting) return false;
+        int direction = pointerRow >= transcript.viewportHeight() ? 1
+                // The top row also holds text; it scrolls only a selection made upwards.
+                : pointerRow <= 0 && transcript.selectionExtendsUp() ? -1 : 0;
+        if (direction == 0) return false;
+        long now = System.nanoTime();
+        if (now - lastSelectionScroll < SELECTION_SCROLL_NANOS) return false;
+        lastSelectionScroll = now;
+        transcript.scroll(direction * SELECTION_SCROLL_ROWS);
+        transcript.extendSelection(pointerRow, pointerColumn);
+        return true;
+    }
+
+    /** Copies the selection, if any, and reports the result in the status bar. */
+    private void copySelection() {
+        String text = transcript.selectedText();
+        if (text.isEmpty()) return;
+        clipboard.copy(text);
+        int characters = text.codePointCount(0, text.length());
+        statusNotice = "Copied " + characters + " character" + (characters == 1 ? "" : "s");
+        statusNoticeExpires = System.nanoTime() + COPY_NOTICE_NANOS;
+        if (activity != null) renderShellStatus();
+    }
+
+    /** Runs when the prompt has had no input for a moment: keeps a held selection scrolling and expires notices. */
+    private void conversationIdle() {
+        synchronized (this) {
+            if (componentOpen || managedSuspend) return;
+            if (scrollSelection()) repaintScreen();
+            // Rendering the status drops an expired notice.
+            if (statusNotice != null && activity != null && System.nanoTime() - statusNoticeExpires >= 0) renderShellStatus();
         }
     }
 
@@ -3264,7 +3351,7 @@ public final class ClaudiaCli {
         header.append('\n');
         header.append(model == null
                 ? "Run /login to choose a provider. Shift-Tab toggles Plan/Build. Commands: /help, /plan, /build, /resume, /login, /mcp, /exit"
-                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Shift-Tab toggles Plan/Build. Click ▶/▼ to expand or collapse; wheel or PgUp/PgDn scrolls; Shift-drag selects. Ctrl-O inspects steps; Ctrl-T expands or collapses thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
+                : "Enter submits; Shift-Enter adds a newline; Esc interrupts. Shift-Tab toggles Plan/Build. Click ▶/▼ to expand or collapse; wheel or PgUp/PgDn scrolls; drag selects and copies (Shift-drag for the terminal's own selection). Ctrl-O inspects steps; Ctrl-T expands or collapses thinking. Commands: /help, /plan, /build, /subagents, /clear, /fork, /resume, /models, /mcp, /settings, /compact, /logout, /exit");
         header.append('\n');
         return header.toString();
     }
@@ -3634,7 +3721,9 @@ public final class ClaudiaCli {
         String label = waiting ? "Waiting for answer" : activityLabel(current, System.nanoTime());
         // The conversation viewport is scrolled away from new output.
         String scrolled = transcript.following() ? "" : "  \u2193 more below";
-        setStatus(label + " [" + runtime.agentMode().label + "]" + scrolled, waiting ? StatusAccent.ACTIVE : activityAccent(current), statusLocation, statusModel);
+        if (statusNotice != null && System.nanoTime() - statusNoticeExpires >= 0) statusNotice = null;
+        String notice = statusNotice == null ? "" : "  " + statusNotice;
+        setStatus(label + " [" + runtime.agentMode().label + "]" + scrolled + notice, waiting ? StatusAccent.ACTIVE : activityAccent(current), statusLocation, statusModel);
     }
 
     private void changeAgentMode(AgentMode mode, boolean editorActive) {

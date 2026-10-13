@@ -255,6 +255,121 @@ class TranscriptTest {
         assertTrue(transcript.plainText().equals("\n"));
     }
 
+    @Test
+    void selectionCopiesWrappedLinesWholeWithoutContainerDecoration() {
+        Transcript transcript = textOf("abcdefghijklmnopqrstuvwxyz\nsecond line\n");
+        transcript.addTool("t", "read", "Reading", "{}", true);
+        transcript.finishTool("t", "0123456789012345678901", false);
+        transcript.append("after");
+        List<Transcript.Row> frame = transcript.frame(20, 30);
+        assertEquals(List.of("abcdefghijklmnopqrst", "uvwxyz", "second line", "", "▼ [read] Reading",
+                "    Arguments", "    {}", "    Result", "    0123456789012345", "    678901", "after"), plainFrame(frame));
+
+        // From "c" to the end of the first two lines: the wrap is not a line break.
+        assertTrue(transcript.startSelection(0, 2));
+        transcript.extendSelection(2, 30);
+        assertEquals("cdefghijklmnopqrstuvwxyz\nsecond line", transcript.selectedText());
+
+        // Dragging backwards selects the same way; the toggle and indents are left out.
+        transcript.startSelection(9, 9);
+        transcript.extendSelection(4, 0);
+        assertTrue(transcript.selectionExtendsUp());
+        assertEquals("[read] Reading\nArguments\n{}\nResult\n0123456789012345678901", transcript.selectedText());
+
+        // Selecting past the end of the document stops at its last row.
+        transcript.startSelection(10, 1);
+        transcript.extendSelection(40, 0);
+        assertEquals("fter", transcript.selectedText());
+
+        // A press that never moves selects nothing; outside the frame it starts nothing.
+        transcript.startSelection(0, 0);
+        assertFalse(transcript.hasSelection());
+        assertEquals("", transcript.selectedText());
+        assertFalse(transcript.startSelection(11, 0));
+        transcript.extendSelection(0, 3);
+        assertFalse(transcript.hasSelection());
+    }
+
+    @Test
+    void selectedCellsAreDrawnInReverseVideoThatSurvivesStyleResets() {
+        Transcript transcript = textOf("plain " + TerminalStyle.MUTED + "muted" + TerminalStyle.RESET + " end\nnext\n");
+        transcript.frame(20, 5);
+        transcript.startSelection(0, 3);
+        transcript.extendSelection(1, 1);
+        List<Transcript.Row> frame = transcript.frame(20, 5);
+        assertEquals("   ^^^^^^^^^^^^^", reversedCells(frame.get(0).text()),
+                "The selected line break shows as one selected cell after the text");
+        assertEquals("^^", reversedCells(frame.get(1).text()));
+        assertEquals("", reversedCells(frame.get(2).text()));
+        assertTrue(frame.get(1).text().endsWith("xt"));
+        assertEquals(List.of("plain muted end", "next", ""), plainFrame(frame));
+        assertEquals("in muted end\nne", transcript.selectedText());
+        ScreenEmulator screen = ScreenEmulator.render(
+                frame.stream().map(Transcript.Row::text).collect(Collectors.joining("\r\n")), 20, 3);
+        assertEquals(List.of("plain muted end", "next", ""), screen.lines().stream().map(String::stripTrailing).toList());
+    }
+
+    @Test
+    void theSelectionFollowsScrollingAndEndsWhenRowsAboveItMove() {
+        Transcript transcript = textOf(lines(20) + "\n");
+        transcript.frame(20, 5);
+        // The viewport shows lines 17 to 20 and the empty row after them.
+        transcript.startSelection(3, 0);
+        transcript.scroll(-3);
+        // The same screen row now shows an earlier line.
+        transcript.extendSelection(3, 3);
+        assertTrue(transcript.selectionExtendsUp());
+        assertEquals("e 17\nline 18\nline 19\nl", transcript.selectedText());
+        // A row above the viewport reaches its top row's start.
+        transcript.extendSelection(-1, 9);
+        assertEquals("line 14\nline 15\nline 16\nline 17\nline 18\nline 19\nl", transcript.selectedText());
+
+        // Output appended below keeps it.
+        transcript.frame(20, 5);
+        transcript.append("more\n");
+        transcript.frame(20, 5);
+        assertTrue(transcript.hasSelection());
+        // A width change wraps the rows again.
+        transcript.frame(10, 5);
+        assertFalse(transcript.hasSelection());
+
+        transcript.scrollToEnd();
+        transcript.addTool("t", "read", "Reading", "{}", false);
+        transcript.frame(20, 5);
+        transcript.startSelection(0, 0);
+        transcript.extendSelection(1, 3);
+        transcript.finishTool("t", "done", false);
+        assertTrue(transcript.hasSelection(), "A container below the selection changes nothing above it");
+        transcript.frame(20, 5);
+        transcript.startSelection(4, 0);
+        transcript.extendSelection(4, 3);
+        transcript.finishTool("t", "two\nlines", false);
+        assertFalse(transcript.hasSelection(), "A container that changes under the selection ends it");
+    }
+
+    /** Marks each printed cell {@code ^} when drawn in reverse video and a space otherwise. */
+    private static String reversedCells(String styled) {
+        StringBuilder marks = new StringBuilder();
+        boolean reverse = false;
+        for (int index = 0; index < styled.length(); index++) {
+            char character = styled.charAt(index);
+            if (character == '\u001b' && index + 1 < styled.length() && styled.charAt(index + 1) == '[') {
+                int end = index + 2;
+                while (styled.charAt(end) < 0x40 || styled.charAt(end) > 0x7e) end++;
+                if (styled.charAt(end) == 'm') {
+                    for (String parameter : styled.substring(index + 2, end).split(";", -1)) {
+                        if (parameter.isEmpty() || parameter.equals("0") || parameter.equals("27")) reverse = false;
+                        else if (parameter.equals("7")) reverse = true;
+                    }
+                }
+                index = end;
+                continue;
+            }
+            marks.append(reverse ? '^' : ' ');
+        }
+        return marks.toString().stripTrailing();
+    }
+
     private static Transcript textOf(String text) {
         Transcript transcript = new Transcript();
         transcript.append(text);

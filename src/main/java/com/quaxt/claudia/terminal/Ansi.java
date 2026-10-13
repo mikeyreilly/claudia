@@ -33,10 +33,11 @@ public final class Ansi {
 
     private Ansi() {}
 
-    private static final java.util.regex.Pattern SEQUENCE = java.util.regex.Pattern.compile(
+    /** CSI, OSC, character-set, and simple escape sequences. */
+    public static final java.util.regex.Pattern SEQUENCE = java.util.regex.Pattern.compile(
             "\u001b(?:\\[[0-?]*[ -/]*[@-~]|\\][^\u0007\u001b]*(?:\u0007|\u001b\\\\)|[()][0-9A-Za-z]|[78DEHMc=>])");
 
-    /** Removes CSI, OSC, character-set, and simple escape sequences. */
+    /** Removes {@link #SEQUENCE escape sequences}. */
     public static String strip(String text) {
         return text.indexOf('\u001b') < 0 ? text : SEQUENCE.matcher(text).replaceAll("");
     }

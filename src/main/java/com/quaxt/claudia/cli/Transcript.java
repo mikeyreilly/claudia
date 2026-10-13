@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 
 /**
  * The interactive conversation as laid-out terminal rows for an app-managed
@@ -35,15 +36,20 @@ public final class Transcript {
     private static final int TAB_STOP = 8;
     private static final String ELLIPSIS = "\u2026";
     private static final String ERASE_TO_END_OF_LINE = "\u001b[K";
-    private static final Row BLANK = new Row("", null);
+    private static final Row BLANK = new Row("", null, 0, false);
 
     public enum Kind {
         THINKING,
         TOOL
     }
 
-    /** One terminal row. {@code toggle} names the container whose toggle starts this row, if any. */
-    public record Row(String text, String toggle) {
+    /**
+     * One terminal row. {@code toggle} names the container whose toggle starts
+     * this row, if any. The first {@code margin} cells are decoration (a toggle
+     * or an indent) that copying leaves out, and {@code continued} marks a row
+     * that wraps the previous row's line, so copying joins the two.
+     */
+    public record Row(String text, String toggle, int margin, boolean continued) {
         public String plain() {
             return Ansi.strip(text);
         }
@@ -127,16 +133,17 @@ public final class Transcript {
                     || lines.stream().anyMatch(line -> Cells.width(expandTabs(line)) > available);
             List<Row> rows = new ArrayList<>();
             String title = TerminalStyle.MUTED + "Thinking" + TerminalStyle.RESET;
-            rows.add(expandable ? new Row(glyph() + " " + title, key) : new Row("  " + title, null));
+            rows.add(new Row((expandable ? glyph() + " " : "  ") + title, expandable ? key : null, TOGGLE_COLUMNS, false));
             if (expanded || !expandable) {
                 for (String line : lines) {
-                    for (String part : Cells.wrap(expandTabs(line), available)) rows.add(muted(INDENT + part));
+                    List<String> parts = Cells.wrap(expandTabs(line), available);
+                    for (int index = 0; index < parts.size(); index++) rows.add(muted(INDENT + parts.get(index), index > 0));
                 }
             } else {
                 for (int index = 0; index < Math.min(PREVIEW_LINES, lines.size()); index++) {
-                    rows.add(muted(INDENT + clip(lines.get(index), available)));
+                    rows.add(muted(INDENT + clip(lines.get(index), available), false));
                 }
-                if (lines.size() > PREVIEW_LINES) rows.add(muted(INDENT + moreLines(lines.size() - PREVIEW_LINES)));
+                if (lines.size() > PREVIEW_LINES) rows.add(muted(INDENT + moreLines(lines.size() - PREVIEW_LINES), false));
             }
             return rows;
         }
@@ -146,38 +153,38 @@ public final class Transcript {
             int titleWidth = width - 2;
             if (expanded) {
                 List<String> parts = Cells.wrap(expandTabs(title), titleWidth);
-                rows.add(new Row(glyph() + " " + parts.getFirst(), key));
-                for (String part : parts.subList(1, parts.size())) rows.add(new Row("  " + part, null));
+                rows.add(new Row(glyph() + " " + parts.getFirst(), key, TOGGLE_COLUMNS, false));
+                for (String part : parts.subList(1, parts.size())) rows.add(new Row("  " + part, null, TOGGLE_COLUMNS, true));
                 int available = width - INDENT.length();
-                rows.add(muted(INDENT + "Arguments"));
+                rows.add(muted(INDENT + "Arguments", false));
                 for (String line : bodyLines(arguments)) wrapInto(rows, line, available);
-                rows.add(muted(INDENT + (error ? "Error" : "Result")));
+                rows.add(muted(INDENT + (error ? "Error" : "Result"), false));
                 if (result == null) {
-                    rows.add(new Row(INDENT + "Running" + ELLIPSIS, null));
+                    rows.add(indented(INDENT + "Running" + ELLIPSIS));
                 } else {
                     List<String> lines = bodyLines(result);
-                    if (lines.isEmpty()) rows.add(muted(INDENT + "(no output)"));
+                    if (lines.isEmpty()) rows.add(muted(INDENT + "(no output)", false));
                     for (String line : lines) wrapInto(rows, line, available);
                 }
                 return rows;
             }
-            rows.add(new Row(glyph() + " " + clip(title, titleWidth), key));
+            rows.add(new Row(glyph() + " " + clip(title, titleWidth), key, TOGGLE_COLUMNS, false));
             if (result == null) {
-                rows.add(new Row(INDENT + "Running" + ELLIPSIS, null));
+                rows.add(indented(INDENT + "Running" + ELLIPSIS));
                 return rows;
             }
             List<String> lines = bodyLines(result);
             String label = error ? "Error: " : "Done: ";
             if (lines.isEmpty()) {
-                rows.add(new Row(INDENT + label + (error ? "Tool failed without an error message." : "Completed."), null));
+                rows.add(indented(INDENT + label + (error ? "Tool failed without an error message." : "Completed.")));
                 return rows;
             }
             int available = width - INDENT.length() - label.length();
             for (int index = 0; index < Math.min(PREVIEW_LINES, lines.size()); index++) {
                 String lead = index == 0 ? label : " ".repeat(label.length());
-                rows.add(new Row(INDENT + lead + clip(lines.get(index), available), null));
+                rows.add(indented(INDENT + lead + clip(lines.get(index), available)));
             }
-            if (lines.size() > PREVIEW_LINES) rows.add(muted(INDENT + moreLines(lines.size() - PREVIEW_LINES)));
+            if (lines.size() > PREVIEW_LINES) rows.add(muted(INDENT + moreLines(lines.size() - PREVIEW_LINES), false));
             return rows;
         }
 
@@ -186,7 +193,10 @@ public final class Transcript {
         }
 
         private static void wrapInto(List<Row> rows, String line, int available) {
-            for (String part : Cells.wrap(expandTabs(line), available)) rows.add(new Row(INDENT + part, null));
+            List<String> parts = Cells.wrap(expandTabs(line), available);
+            for (int index = 0; index < parts.size(); index++) {
+                rows.add(new Row(INDENT + parts.get(index), null, INDENT.length(), index > 0));
+            }
         }
     }
 
@@ -202,6 +212,12 @@ public final class Transcript {
     private int lastHeight = 1;
     private int lastTop;
     private List<Row> lastFrame = List.of();
+    /** Document row and cell where the selection started, or -1 without one. */
+    private int anchorRow = -1;
+    private int anchorColumn;
+    /** Document row and cell the selection extends to; both ends are included. */
+    private int focusRow;
+    private int focusColumn;
 
     // ------------------------------------------------------------- document
 
@@ -222,6 +238,7 @@ public final class Transcript {
     public void clear() {
         blocks.clear();
         containers.clear();
+        clearSelection();
         dirty = true;
         following = true;
         top = 0;
@@ -300,6 +317,8 @@ public final class Transcript {
     public void remove(String key) {
         Container container = containers.remove(key);
         if (container == null) return;
+        // Later rows move up and merged text wraps again.
+        clearSelection();
         int index = blocks.indexOf(container);
         blocks.remove(index);
         // Adjacent text continues the same line, exactly as if it had been printed together.
@@ -319,6 +338,7 @@ public final class Transcript {
     public boolean toggle(String key) {
         Container container = containers.get(key);
         if (container == null) return false;
+        clearSelection();
         int before = lastWidth > 0 ? headerRow(container, lastWidth) : -1;
         int screenRow = before - lastTop;
         container.expanded = !container.expanded;
@@ -401,6 +421,8 @@ public final class Transcript {
             anchorOffset = Math.max(0, top - blockStarts[anchorBlock]);
         }
         List<Row> rows = layout(safeWidth);
+        // Rows wrap differently at another width.
+        if (lastWidth > 0 && lastWidth != safeWidth) clearSelection();
         if (anchorBlock >= 0) {
             int blockRows = blocks.get(anchorBlock).rows(safeWidth).size();
             top = blockStarts[anchorBlock] + Math.min(anchorOffset, Math.max(0, blockRows - 1));
@@ -415,7 +437,8 @@ public final class Transcript {
         lastWidth = safeWidth;
         lastHeight = safeHeight;
         lastTop = top;
-        lastFrame = List.copyOf(rows.subList(top, Math.min(rows.size(), top + safeHeight)));
+        List<Row> visible = rows.subList(top, Math.min(rows.size(), top + safeHeight));
+        lastFrame = hasSelection() ? highlighted(rows, top, visible.size()) : List.copyOf(visible);
         return lastFrame;
     }
 
@@ -429,8 +452,7 @@ public final class Transcript {
     public void scroll(int delta) {
         if (lastWidth <= 0) return;
         int max = Math.max(0, layout(lastWidth).size() - lastHeight);
-        int current = following ? max : Math.clamp(top, 0, max);
-        top = Math.clamp((long) current + delta, 0, max);
+        top = Math.clamp((long) viewportTop() + delta, 0, max);
         following = top >= max;
     }
 
@@ -457,6 +479,191 @@ public final class Transcript {
         return following;
     }
 
+    /** Rows in the last frame's viewport, including any below the end of the document. */
+    public int viewportHeight() {
+        return lastHeight;
+    }
+
+    // ------------------------------------------------------------ selection
+
+    /**
+     * Starts a selection at a zero-based row and column of the viewport, replacing
+     * any other. Returns false, leaving nothing selected, outside the rows of the
+     * last frame.
+     */
+    public boolean startSelection(int row, int column) {
+        clearSelection();
+        if (lastWidth <= 0 || row < 0 || row >= lastFrame.size()) return false;
+        anchorRow = focusRow = viewportTop() + row;
+        anchorColumn = focusColumn = Math.max(0, column);
+        return true;
+    }
+
+    /**
+     * Extends the selection to a zero-based row and column of the viewport as it is
+     * now scrolled. A row above the viewport selects from the start of its top row;
+     * one below it selects to the end of its bottom row.
+     */
+    public void extendSelection(int row, int column) {
+        if (anchorRow < 0) return;
+        int last = layout(lastWidth).size() - 1;
+        focusRow = viewportTop() + Math.clamp(row, 0, lastHeight - 1);
+        focusColumn = row < 0 ? 0 : row >= lastHeight ? Integer.MAX_VALUE : Math.max(0, column);
+        if (focusRow > last) {
+            focusRow = Math.max(0, last);
+            focusColumn = Integer.MAX_VALUE;
+        }
+    }
+
+    /** Whether more than the cell that was pressed is selected. */
+    public boolean hasSelection() {
+        return anchorRow >= 0 && (anchorRow != focusRow || anchorColumn != focusColumn);
+    }
+
+    /** Whether the selection was extended towards the start of the document. */
+    public boolean selectionExtendsUp() {
+        return anchorRow >= 0 && (focusRow < anchorRow || focusRow == anchorRow && focusColumn < anchorColumn);
+    }
+
+    public void clearSelection() {
+        anchorRow = -1;
+    }
+
+    /**
+     * The selected text as it was written: wrapped rows join into their line,
+     * decoration such as toggles and container indents is left out, and lines
+     * lose trailing blanks.
+     */
+    public String selectedText() {
+        if (!hasSelection() || lastWidth <= 0) return "";
+        List<Row> rows = layout(lastWidth);
+        int[] range = selectionRange(rows.size());
+        if (range == null) return "";
+        StringBuilder text = new StringBuilder();
+        for (int index = range[0]; index <= range[2]; index++) {
+            Row row = rows.get(index);
+            String plain = row.plain();
+            int from = Math.max(row.margin(), index == range[0] ? range[1] : 0);
+            int to = index == range[2] ? range[3] : Integer.MAX_VALUE;
+            String part = slice(plain, from, to);
+            boolean joins = index < range[2] && rows.get(index + 1).continued();
+            // A line's trailing blanks are layout, unless the selection ends inside them.
+            if (!joins && to > Cells.width(plain)) part = part.stripTrailing();
+            text.append(part);
+            if (index < range[2] && !joins) text.append('\n');
+        }
+        return text.toString();
+    }
+
+    /** First row, its first cell, last row, and the cell after its last, or null when empty. */
+    private int[] selectionRange(int rowCount) {
+        if (!hasSelection()) return null;
+        boolean reversed = selectionExtendsUp();
+        int startRow = reversed ? focusRow : anchorRow;
+        int startColumn = reversed ? focusColumn : anchorColumn;
+        int endRow = reversed ? anchorRow : focusRow;
+        int endColumn = reversed ? anchorColumn : focusColumn;
+        if (startRow >= rowCount) return null;
+        if (endRow >= rowCount) {
+            endRow = rowCount - 1;
+            endColumn = Integer.MAX_VALUE;
+        }
+        return new int[] {startRow, startColumn, endRow, endColumn == Integer.MAX_VALUE ? endColumn : endColumn + 1};
+    }
+
+    /** The viewport's rows with the selected cells shown in reverse video. */
+    private List<Row> highlighted(List<Row> rows, int first, int count) {
+        int[] range = selectionRange(rows.size());
+        List<Row> frame = new ArrayList<>(count);
+        for (int index = first; index < first + count; index++) {
+            Row row = rows.get(index);
+            if (range == null || index < range[0] || index > range[2]) {
+                frame.add(row);
+                continue;
+            }
+            int from = Math.max(row.margin(), index == range[0] ? range[1] : 0);
+            int to = index == range[2] ? range[3] : Integer.MAX_VALUE;
+            // Show a selected line break as one selected cell after the text.
+            boolean lineBreak = index < range[2] && !rows.get(index + 1).continued();
+            frame.add(new Row(reverse(row.text(), from, to, lineBreak, lastWidth), row.toggle(), row.margin(), row.continued()));
+        }
+        return frame;
+    }
+
+    private static final String REVERSE = "\u001b[7m";
+    private static final String NO_REVERSE = "\u001b[27m";
+
+    /**
+     * Styled text with cells {@code [from, to)} in reverse video, followed by one
+     * selected blank cell for a selected line break when the row has room for it.
+     */
+    static String reverse(String styled, int from, int to, boolean lineBreak, int width) {
+        StringBuilder out = new StringBuilder(styled.length() + 16);
+        boolean inside = false;
+        int column = 0;
+        Matcher escape = Ansi.SEQUENCE.matcher(styled);
+        for (int index = 0; index < styled.length(); ) {
+            if (styled.charAt(index) == '\u001b' && escape.region(index, styled.length()).lookingAt()) {
+                String sequence = escape.group();
+                index = escape.end();
+                if (!inside) {
+                    out.append(sequence);
+                } else if (sequence.endsWith("m")) {
+                    // A reset or new style must not end the selection's reverse video.
+                    out.append(sequence).append(REVERSE);
+                } else {
+                    // Erasing in reverse video would fill with the foreground colour.
+                    out.append(NO_REVERSE).append(sequence).append(REVERSE);
+                }
+                continue;
+            }
+            int codePoint = styled.codePointAt(index);
+            index += Character.charCount(codePoint);
+            int cells = Cells.width(codePoint);
+            if (cells > 0) {
+                boolean selected = column >= from && column < to;
+                if (selected != inside) {
+                    out.append(selected ? REVERSE : NO_REVERSE);
+                    inside = selected;
+                }
+                column += cells;
+            }
+            out.appendCodePoint(codePoint);
+        }
+        if (lineBreak && column < width) {
+            if (!inside) out.append(REVERSE);
+            out.append(' ');
+            inside = true;
+        }
+        if (inside) out.append(NO_REVERSE);
+        return out.toString();
+    }
+
+    /** The characters of plain text that start in cells {@code [from, to)}, with any zero-width marks after them. */
+    static String slice(String plain, int from, int to) {
+        StringBuilder out = new StringBuilder();
+        int column = 0;
+        boolean taking = false;
+        for (int index = 0; index < plain.length(); ) {
+            int codePoint = plain.codePointAt(index);
+            index += Character.charCount(codePoint);
+            int cells = Cells.width(codePoint);
+            if (cells < 0) continue;
+            if (cells > 0) {
+                taking = column >= from && column < to;
+                column += cells;
+            }
+            if (taking) out.appendCodePoint(codePoint);
+        }
+        return out.toString();
+    }
+
+    /** The first document row the viewport shows now, as the next frame would draw it. */
+    private int viewportTop() {
+        int max = Math.max(0, layout(lastWidth).size() - lastHeight);
+        return following ? max : Math.clamp(top, 0, max);
+    }
+
     // -------------------------------------------------------------- helpers
 
     private <T extends Block> T add(T block) {
@@ -475,12 +682,24 @@ public final class Transcript {
     }
 
     private void changed(Container container) {
+        // A container that changes height moves the rows below it.
+        int index = blocks.indexOf(container);
+        if (anchorRow >= 0 && index >= 0 && index < blockStarts.length
+                && blockStarts[index] <= Math.max(anchorRow, focusRow)) {
+            clearSelection();
+        }
         container.changed();
         dirty = true;
     }
 
-    private static Row muted(String text) {
-        return new Row(TerminalStyle.MUTED + text + TerminalStyle.RESET, null);
+    /** A muted container body row, indented by {@link #INDENT}. */
+    private static Row muted(String text, boolean continued) {
+        return new Row(TerminalStyle.MUTED + text + TerminalStyle.RESET, null, INDENT.length(), continued);
+    }
+
+    /** A container body row, indented by {@link #INDENT}. */
+    private static Row indented(String text) {
+        return new Row(text, null, INDENT.length(), false);
     }
 
     private static String moreLines(int count) {
@@ -540,6 +759,7 @@ public final class Transcript {
         private StringBuilder row;
         private boolean fill;
         private boolean styledRow;
+        private boolean continued;
         private int column;
 
         Wrapper(int width, String initialStyle) {
@@ -553,7 +773,7 @@ public final class Transcript {
          */
         void wrap(CharSequence text, int from, int to, List<Row> out, boolean emitTail) {
             fill = false;
-            startRow();
+            startRow(false);
             for (int index = from; index < to; ) {
                 char character = text.charAt(index);
                 if (character == '\u001b') {
@@ -563,7 +783,7 @@ public final class Transcript {
                 if (character == '\n') {
                     finishRow(out);
                     fill = false;
-                    startRow();
+                    startRow(false);
                     index++;
                     continue;
                 }
@@ -579,7 +799,7 @@ public final class Transcript {
                 if (cells < 0) continue;
                 if (cells > 0 && column > 0 && column + cells > width) {
                     finishRow(out);
-                    startRow();
+                    startRow(true);
                 }
                 row.appendCodePoint(codePoint);
                 column += cells;
@@ -623,9 +843,10 @@ public final class Transcript {
             return index;
         }
 
-        private void startRow() {
+        private void startRow(boolean wrapped) {
             row = new StringBuilder();
             column = 0;
+            continued = wrapped;
             styledRow = !style.isEmpty() || fill;
             row.append(style);
             if (fill) row.append(ERASE_TO_END_OF_LINE);
@@ -633,7 +854,7 @@ public final class Transcript {
 
         private void finishRow(List<Row> out) {
             if (styledRow) row.append(TerminalStyle.RESET);
-            out.add(new Row(row.toString(), null));
+            out.add(new Row(row.toString(), null, 0, continued));
         }
     }
 }

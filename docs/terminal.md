@@ -55,8 +55,21 @@ editing, Ctrl-G restores the draft, and Enter submits the match.
 Scrolling happens inside Claudia, not in terminal scrollback. The mouse wheel
 moves three rows; PgUp/PgDn moves a page. New output preserves a scrolled-up
 view; `↓ more below` indicates unseen output. Scroll to the end or submit a
-prompt to follow new output again. Hold Shift while dragging for native text
-selection (Ghostty's default); it selects the rows currently on screen.
+prompt to follow new output again.
+
+Drag to select conversation text; releasing the button copies it and the
+status row reports `Copied N characters`. Dragging to the top row (when
+selecting upwards) or below the conversation keeps scrolling, and the wheel
+scrolls while dragging, so a selection can span any number of screens. The
+copy joins wrapped rows back into their original lines and leaves out toggles
+and container indents. A click elsewhere clears the selection. Locally the
+copy uses `pbcopy`, `clip.exe` (Windows and WSL), `wl-copy`, `xclip` or
+`xsel`; over SSH, or when none of those is available, it uses OSC 52, which
+the terminal must allow (iTerm2: *Applications in terminal may access
+clipboard*; tmux: `set -g set-clipboard on`).
+
+Hold Shift while dragging for native text selection (Ghostty's default); it
+selects the rows currently on screen.
 On exit, the conversation in its current expanded/collapsed form is written
 to terminal scrollback.
 

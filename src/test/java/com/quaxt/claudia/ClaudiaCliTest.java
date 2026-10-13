@@ -1787,6 +1787,60 @@ class ClaudiaCliTest {
     }
 
     @Test
+    void draggingSelectsConversationTextScrollsAtTheEdgeAndCopiesOnRelease() throws Exception {
+        TerminalFixture fixture = terminal();
+        ClaudiaCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
+        List<String> copied = new java.util.concurrent.CopyOnWriteArrayList<>();
+        setCliField(cli, "clipboard", (com.quaxt.claudia.terminal.Clipboard) copied::add);
+        setCliField(cli, "activity", readyActivity(System.nanoTime()));
+        cli.setStatus("\u25cf Ready", ClaudiaCli.StatusAccent.READY, "~/project", "Model (0%)");
+        for (int index = 1; index <= 58; index++) cli.println("line " + index);
+        cli.println("x".repeat(100));
+        var reader = java.util.concurrent.CompletableFuture.supplyAsync(() -> cli.readLine("\n> "));
+        try {
+            waitUntil(() -> fixture.terminal().mouseTracking() && screen(fixture).lines().contains("> ".strip()));
+            ScreenEmulator before = screen(fixture);
+            int wrapped = before.lines().indexOf("x".repeat(80));
+            assertTrue(wrapped > 2, before.lines().toString());
+            int first = lineNumber(before.line(0));
+
+            // Drag from "line 57" into the wrapped row: the wrap is not copied as a line break.
+            String start = String.valueOf(wrapped - 1);
+            String end = String.valueOf(wrapped + 2);
+            fixture.input().write(("\u001b[<0;1;" + start + "M\u001b[<32;5;" + end + "M\u001b[<0;5;" + end + "m")
+                    .getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> copied.size() == 1);
+            assertEquals("line 57\nline 58\n" + "x".repeat(85), copied.getFirst());
+            waitUntil(() -> screen(fixture).line(23).contains("Copied 101 characters"));
+            assertEquals(first, lineNumber(screen(fixture).line(0)), "Selecting leaves the viewport where it was");
+
+            // Holding a selection made upwards at the top row keeps scrolling the conversation.
+            fixture.input().write(("\u001b[<0;1;" + start + "M\u001b[<32;1;1M").getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> lineNumber(screen(fixture).line(0)) < first - 6);
+            fixture.input().write("\u001b[<0;1;1m".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            waitUntil(() -> copied.size() == 2);
+            int top = lineNumber(screen(fixture).line(0));
+            assertTrue(copied.get(1).startsWith("line " + top + "\n"), copied.get(1));
+            assertTrue(copied.get(1).endsWith("\nline 56\nl"), copied.get(1));
+
+            // A click in the conversation ends the selection without copying.
+            fixture.input().write("\u001b[<0;3;3M\u001b[<0;3;3m".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            fixture.input().write("\r".getBytes(StandardCharsets.UTF_8));
+            fixture.input().flush();
+            assertEquals("", reader.get(3, TimeUnit.SECONDS));
+            assertEquals(2, copied.size());
+            assertFalse(((Transcript) getCliField(cli, "transcript")).hasSelection());
+        } finally {
+            fixture.input().close();
+            cli.closeTerminal();
+        }
+    }
+
+    @Test
     void wheelAndPageKeysScrollTheConversationAndTheStatusShowsMoreBelow() throws Exception {
         TerminalFixture fixture = terminal();
         ClaudiaCli cli = newInteractiveTerminal(fixture.terminal(), () -> null, false);
