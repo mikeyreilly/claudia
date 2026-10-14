@@ -36,8 +36,8 @@ them; it is the full-depth companion to all three.
 ## 1. What code-lens is
 
 code-lens is a native ISO C23 command-line tool and MCP (Model Context
-Protocol) server that indexes Clojure, Java, C, and Python codebases into per-repo SQLite
-databases and answers symbol search (FTS5 full-text search ranked with
+Protocol) server that indexes Clojure, Java, C, Python, and TypeScript codebases
+into per-repo SQLite databases and answers symbol search (FTS5 full-text search ranked with
 BM25), definition/reference context, and raw SQL queries over that index.
 
 - One binary: `build/code-lens`. The same binary serves the CLI and the MCP
@@ -66,7 +66,7 @@ make release
 # 3. Run the tests.
 make test
 
-# 4. Index a Clojure, Java, C, or mixed repository into an isolated home and query it.
+# 4. Index a Clojure, Java, C, Python, TypeScript, or mixed repository in an isolated home.
 CODE_LENS_HOME=/tmp/code-lens-home \
   ./build/code-lens index --repo /path/to/clojure-repo
 
@@ -92,11 +92,12 @@ default `~/.code-lens/repos/`.
 | `tests/test_java_support.c` | Java parser and end-to-end indexing/context assertions. |
 | `tests/test_c_support.c` | C parser, linkage/member resolution, and end-to-end indexing assertions. |
 | `tests/test_python_support.c` | Python module naming, parser/receiver resolution, and end-to-end indexing assertions. |
+| `tests/test_typescript_support.c` | TypeScript syntax indexing, module/import resolution, and end-to-end indexing assertions. |
 | `scripts/vendor-deps.sh` | Fetches and pins vendored dependencies (git clones and the SQLite amalgamation archive). |
 | `scripts/detect-c23-flag.sh` | Probes the compiler for `-std=c23` vs `-std=c2x`. |
 | `scripts/benchmark-index.sh` | Repeatable indexing benchmark harness. |
 | `vendor/deps.lock` | Pinned dependency refs (name, url, ref-or-sha256, license). |
-| `vendor/sqlite/`, `vendor/tree-sitter/`, `vendor/tree-sitter-clojure/`, `vendor/tree-sitter-java/`, `vendor/tree-sitter-c/`, `vendor/tree-sitter-python/` | Dependency trees. Local artifacts, git-ignored. |
+| `vendor/sqlite/`, `vendor/tree-sitter/`, `vendor/tree-sitter-clojure/`, `vendor/tree-sitter-java/`, `vendor/tree-sitter-c/`, `vendor/tree-sitter-python/`, `vendor/tree-sitter-typescript/` | Dependency trees. Local artifacts, git-ignored. |
 | `Makefile` | The whole build. No CMake anywhere. |
 | `README.md` | Project front door: overview, quick start, doc links. |
 | `USAGE.txt` | End-user CLI usage and MCP registration notes. |
@@ -194,7 +195,17 @@ pedantic/warnings-as-errors policy (with only SQLite's public-header
 | Canonical binary | `build/code-lens` (copy of the most recently built mode) |
 | Test binary | `build/<mode>/tests/test-main`, copied to `build/tests/test-main` |
 | SQLite object | `build/<mode>/obj/vendor/sqlite/sqlite3.o` |
-| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o` plus `.../tree-sitter-<grammar>/parser.o` for each `GRAMMARS` entry and `.../tree-sitter-<grammar>/scanner.o` when the grammar ships an external scanner (Python does, for indentation and strings) |
+| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o` plus `.../tree-sitter-<grammar>/parser.o` for each `GRAMMARS` entry and `.../tree-sitter-<grammar>/scanner.o` when the grammar ships an external scanner (Python and TypeScript do) |
+
+Grammar source directories are selected by `grammar_src` in the Makefile and
+`:compile_grammar` in `build.bat`. Existing grammars use
+`vendor/tree-sitter-<grammar>/src`; TypeScript uses
+`vendor/tree-sitter-typescript/typescript/src/parser.c` and `scanner.c`.
+The scanner includes `../../common/scanner.h`, which is an explicit Make
+prerequisite so header changes rebuild it. TSX is not compiled or linked.
+`TEST_SRC` includes `tests/test_typescript_support.c` alongside the other
+language suites; the test pattern rule retains `include/code_lens.h` as a
+prerequisite.
 
 ### Build gotchas
 
@@ -250,6 +261,7 @@ pin a commit, archive dependencies pin the SHA-256 of the archive):
 | `tree-sitter-java` | `94703d5a6bed02b98e438d7cad1136c01a60ba2c` (v0.23.5) | MIT |
 | `tree-sitter-c` | `7fa1be1b694b6e763686793d97da01f36a0e5c12` (v0.24.1) | MIT |
 | `tree-sitter-python` | `26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64` | MIT |
+| `tree-sitter-typescript` | `75b3874edb2dc714fb1fd77a32013d0f8699989f` | MIT |
 | `libdeflate` | `c8c56a20f8f621e6a966b716b31f1dedab6a41e3` (v1.25) | MIT |
 | `zlib` | `51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf` (v1.3.1) | zlib |
 
@@ -260,7 +272,9 @@ pinned URL, verified against the pinned SHA-256, and extracted flattened into
 that directory; a `.sha256` stamp file makes re-runs no-ops until the pin
 changes. Run the script whenever `vendor/sqlite`, `vendor/tree-sitter`, or
 any `vendor/tree-sitter-<grammar>` directory listed in the Makefile's
-`GRAMMARS` is missing.
+`GRAMMARS` is missing. On native Windows use `scripts\vendor-deps.bat`;
+its lock-driven bootstrap also fetches the nested TypeScript grammar without
+any vendor patches.
 
 To upgrade SQLite: pick the new amalgamation from sqlite.org/download.html
 (the URL embeds the release year), verify the download against the published
@@ -279,13 +293,14 @@ by `/* Section name */` comments. Keep new code in the appropriate section.
 | Language registry | `languages[]` (`LanguageSpec` per language), `language_for_path`, parser adapters, `CodeLensSourceParser`, `code_lens_language_info`; see [Language parsers](#9-language-parsers). |
 | Platform helpers | Home resolution, path utilities, mkdir/rmtree, file reads (heap for small files, mmap for large), supported-source file walking. |
 | String builder | Arena-backed `StringBuilder` with `sb_append`/`sb_appendf`. |
-| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python metadata, used by `version --deps` and tests. |
+| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python/TypeScript metadata, used by `version --deps` and tests. |
 | Database wrapper | SQLite open modes, prepared statements, parameter binding, the pipe-format result renderer, error reporting. |
 | Clojure parser | Custom-reader/tree-sitter extraction of namespaces, aliases, definitions, references, and keywords. |
-| Tree-sitter helpers | `TshIds` kind/field id tables (`tsh_ids_init`), null-safe node accessors, and the `ParseMap`/`ScopeIndex` lookup structures shared by the Java, C, and Python extractors. |
+| Tree-sitter helpers | `TshIds` kind/field id tables (`tsh_ids_init`), null-safe node accessors, and the `ParseMap`/`ScopeIndex` lookup structures shared by the Java, C, Python, and TypeScript extractors. |
 | Java parser | tree-sitter-java extraction of packages, imports, types/members, Javadocs, and resolved references. |
 | C parser | tree-sitter-c extraction of declarations, aggregate types, macros, linkage, calls, and members. |
 | Python parser | tree-sitter-python module naming plus extraction of imports, classes/functions/fields, docstrings, and scope-aware resolved references. |
+| TypeScript parser | Native tree-sitter-typescript syntax indexing, path-based module namespaces, and relative-import resolution. |
 | Indexer | Schema DDL, prepared per-table INSERT writers, staging/publish paths, parallel parse workers. |
 | Search | `list`, `query`, `context`, `sql` implementations over the per-repo indexes. |
 | MCP server | stdio JSON-RPC loop, hand-rolled JSON scanning, tool dispatch. |
@@ -403,7 +418,8 @@ Rules:
 - The recursive walker (`walk_path`) accepts an extension predicate. The
   indexing and staleness paths use `has_supported_extension`, which routes
   through the language registry (`language_for_path`, see section 9) and so
-  accepts `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, and `.py`; the
+  accepts `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, `.py`,
+  `.ts`, `.mts`, and `.cts` (including `.d.ts`, `.d.mts`, and `.d.cts`); the
   public Clojure compatibility walker remains Clojure-only.
   - Skipped directories (`should_skip_dir`): `.git`, `node_modules`, `vendor`,
     `target`, `build`, `.shadow-cljs`, `.cpcache`, `.idea`, `.vscode`,
@@ -442,8 +458,9 @@ registered extension routes through the walker.
 
 ### Tree-sitter helpers
 
-The Java, C, and Python extractors share a small helper layer ("Tree-sitter
-helpers" section, `tsh_*`). Each grammar declares the node kinds and fields it
+The Java, C, Python, and TypeScript extractors share a small helper layer
+("Tree-sitter helpers" section, `tsh_*`). Each grammar declares the node kinds
+and fields it
 inspects as an enum plus a name table (`JK_*`/`JF_*`, `CK_*`/`CF_*`,
 `PYK_*`/`PYF_*`); `tsh_ids_init` resolves them once per process (under
 `pthread_once`, from the parser's `_new`) to numeric symbol and field ids, so
@@ -490,7 +507,9 @@ Adding a language:
 1. Pin `tree-sitter-<name>` in `vendor/deps.lock` (`scripts/vendor-deps.sh`
    reads it) and append `<name>` to `GRAMMARS` in the `Makefile` and
    `build.bat`; both compile `src/parser.c` plus `src/scanner.c` when the
-   grammar ships an external scanner. `.gitignore` already covers
+   grammar ships an external scanner. For nested grammar layouts, update
+   `grammar_src` and `:compile_grammar` (TypeScript uses `typescript/src`)
+   and declare any scanner header prerequisites. `.gitignore` already covers
    `vendor/*/`.
 2. Declare `tree_sitter_<name>()` beside the others at the top of
    `src/code_lens.c`, write a parser section (public
@@ -805,6 +824,32 @@ naming, definitions, docstrings, imports, receiver resolution, scoping,
 error tolerance, deep nesting, walking/skip directories, context, and the
 `__init__.py` incremental fallback.
 
+### TypeScript
+
+TypeScript uses the pinned native tree-sitter-typescript grammar, with its
+external scanner; there is no compiler or Node.js runtime requirement for
+indexing. Supported sources are `.ts`, `.mts`, and `.cts`, including declaration
+files such as `.d.ts`, `.d.mts`, and `.d.cts`. TSX and JavaScript are deliberately
+out of scope; the sibling `tsx` grammar is not linked.
+
+Syntax indexing covers classes, interfaces, type aliases, enums, namespaces,
+functions, variables, and members. A file's module namespace is its
+repository-relative **POSIX path including the extension**, for example
+`src/models.ts`, not a dotted or extensionless stem. Members use
+`module.Class` (for example `src/models.ts.Service`). Retaining the extension
+keeps `.ts`, `.mts`, `.cts`, and declaration modules collision-free.
+
+Relative imports resolve syntactically to workspace modules. This is not
+compiler attribution: `tsconfig` path aliases and barrel/re-export chains are
+not resolved. Do not promise whole-program type inference or compiler-level
+module semantics. Adding or removing any supported TypeScript source
+conservatively forces a full rebuild, since import resolution in an unchanged
+file can change when a candidate module appears or disappears. Ordinary
+source edits remain eligible for incremental refresh under the usual budget.
+
+`tests/test_typescript_support.c` is linked by `TEST_SRC`; parser and test
+implementation live with the other language sections and suites.
+
 ## 10. Database layer and schema
 
 ### Connection handling
@@ -922,7 +967,7 @@ known, and ordinary `:foo/bar` stores `foo` verbatim.
 `File.size`, `File.mtimeSec`, and `File.mtimeNsec` are a best-effort source
 snapshot recorded at index time. `list`, `query`, and `context` use it to
 warn when indexed files are missing/changed and when new supported Clojure,
-Java, C, or Python source files exist outside the index.
+Java, C, Python, or TypeScript source files exist outside the index.
 
 Plain indexes: `idx_symbol_name` on `Symbol(name)`, `idx_term_text` (unique)
 on `Term(text)`, `idx_ref_symbol_base` on `RefData(symbolBaseTerm)` (the
@@ -1002,7 +1047,7 @@ transaction. Before either path starts, it takes the repo's blocking writer
 lock; the lock remains held through publication and stale-artifact cleanup.
 
 ```
-walk repo for .clj/.cljc/.cljs/.bb files
+walk repo for registered Clojure/Java/C/Python/TypeScript sources
         |
         v
 parse workers (tree-sitter, per-thread parser + arena)
@@ -1110,8 +1155,8 @@ single-threaded and ordered.
     rule); entry chunks never move once published, so a claimed entry can be
     used without the lock.
   - Each worker owns a `CodeLensSourceParser` containing reusable Clojure,
-    Java, C, and Python parsers and, implicitly, its own thread-local arena; allocation
-    requires no locking.
+    Java, C, Python, and TypeScript parsers and, implicitly, its own thread-local
+    arena; allocation requires no locking.
   - Workers claim the next unclaimed entry under the mutex (cond-waiting
     until the walker publishes more paths or finishes), parse (read or map
     the file, parse, release), publish the result into the entry, and flag
@@ -1137,8 +1182,8 @@ with the project's own pipe renderer (see
 
 Explicit CLI and public-API `list`, `query`, and `context` calls run
 `check_repo_staleness` before returning indexed data. The checker reads `File`
-rows, stats each indexed path, walks the current repo for supported Clojure, Java, C, and Python files, and
-reports the elapsed time in a leading `note:` or `warning:` line. These direct
+rows, stats each indexed path, walks the current repo for supported Clojure,
+Java, C, Python, and TypeScript files, and reports the elapsed time in a leading `note:` or `warning:` line. These direct
 reads return stale results with the warning; `sql` skips the check and remains
 raw read-only DB access.
 
@@ -1299,8 +1344,9 @@ Usage:
 - `version` prints `0.1.0-dev` (`CODE_LENS_VERSION`). `version --deps` adds
   `sqlite <version>`, `tree-sitter-clojure abi=<n> symbols=<n>`,
   `tree-sitter-java abi=<n> symbols=<n>`,
-  `tree-sitter-c abi=<n> symbols=<n>`, and
-  `tree-sitter-python abi=<n> symbols=<n>` lines.
+  `tree-sitter-c abi=<n> symbols=<n>`,
+  `tree-sitter-python abi=<n> symbols=<n>`, and
+  `tree-sitter-typescript abi=<n> symbols=<n>` lines.
 - `index` requires `--repo <path>` (`--path` is accepted as a legacy
   synonym); success prints exactly
   `indexed <path>: <N> files, <N> symbols, <N> references, <N> keywords, <N> aliases in <T>s (git <B>/<N>)`

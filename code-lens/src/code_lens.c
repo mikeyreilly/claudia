@@ -38,6 +38,7 @@ const TSLanguage *tree_sitter_clojure(void);
 const TSLanguage *tree_sitter_java(void);
 const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_python(void);
+const TSLanguage *tree_sitter_typescript(void);
 
 static char *copy_bytes(const char *value, size_t len)
 {
@@ -325,6 +326,7 @@ typedef enum {
     LANG_JAVA,
     LANG_C,
     LANG_PYTHON,
+    LANG_TYPESCRIPT,
     LANG_COUNT,
 } LanguageId;
 
@@ -460,10 +462,43 @@ static bool python_forces_full_rebuild(const char *path)
             (path[len - marker_len - 1U] == '\\'));
 }
 
+static void *typescript_parser_new_adapter(const char *repo_root)
+{
+    CodeLensTypeScriptParser *parser = code_lens_typescript_parser_new();
+
+    if ((parser != nullptr) && (code_lens_typescript_parser_set_repo_root(parser, repo_root) != 0)) {
+        code_lens_typescript_parser_delete(parser);
+        return nullptr;
+    }
+    return parser;
+}
+
+static void typescript_parser_delete_adapter(void *parser)
+{
+    code_lens_typescript_parser_delete(parser);
+}
+
+static int typescript_parse_adapter(void *parser,
+                                    const char *file_path,
+                                    const char *source,
+                                    size_t source_len,
+                                    CodeLensSourceFile *out_file)
+{
+    return code_lens_parse_typescript_source_with_parser(parser, file_path, source, source_len, out_file);
+}
+
+/* Any added/removed source can change extensionless or index import probes. */
+static bool typescript_forces_full_rebuild(const char *path)
+{
+    (void)path;
+    return true;
+}
+
 static const char *const clojure_extensions[] = {".clj", ".cljc", ".cljs", ".bb", nullptr};
 static const char *const java_extensions[] = {".java", nullptr};
 static const char *const c_extensions[] = {".c", ".h", nullptr};
 static const char *const python_extensions[] = {".py", nullptr};
+static const char *const typescript_extensions[] = {".ts", ".mts", ".cts", nullptr};
 
 static const LanguageSpec languages[LANG_COUNT] = {
     [LANG_CLOJURE] = {.name = "clojure",
@@ -497,6 +532,14 @@ static const LanguageSpec languages[LANG_COUNT] = {
                      .parser_delete = python_parser_delete_adapter,
                      .parse = python_parse_adapter,
                      .forces_full_rebuild = python_forces_full_rebuild},
+    [LANG_TYPESCRIPT] = {.name = "typescript",
+                         .grammar = "tree-sitter-typescript",
+                         .extensions = typescript_extensions,
+                         .ts_language = tree_sitter_typescript,
+                         .parser_new = typescript_parser_new_adapter,
+                         .parser_delete = typescript_parser_delete_adapter,
+                         .parse = typescript_parse_adapter,
+                         .forces_full_rebuild = typescript_forces_full_rebuild},
 };
 
 /* The language owning path's extension, or LANG_COUNT. The extension is the
@@ -2716,6 +2759,16 @@ uint32_t code_lens_python_language_symbol_count(void)
  * 16: same schema as 15, but Maven resolution now also materializes main JARs
  * that embed sources (Clojure libraries) when no -sources.jar exists; bumped
  * so Maven dependency indexes reused from an unchanged pom.xml re-resolve. */
+uint32_t code_lens_typescript_language_abi_version(void)
+{
+    return ts_language_abi_version(tree_sitter_typescript());
+}
+
+uint32_t code_lens_typescript_language_symbol_count(void)
+{
+    return ts_language_symbol_count(tree_sitter_typescript());
+}
+
 #define CODE_LENS_INDEX_FORMAT_VERSION 16
 
 static double profile_now_seconds(void);

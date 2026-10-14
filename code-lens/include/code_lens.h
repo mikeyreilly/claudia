@@ -81,7 +81,7 @@ typedef struct {
     char *kind;
     char *name;
     /* Clojure namespace, Java enclosing type, C linkage/type scope, or
-     * Python module / module.Class. */
+     * Python module / module.Class, or TypeScript module path / path.Type. */
     char *namespace_name;
     char *doc;
     char *source;
@@ -89,11 +89,13 @@ typedef struct {
     uint32_t end_line;
 } CodeLensSymbol;
 
-/* Parsed source-file data shared by the Clojure, Java, C, and Python
+/* Parsed source-file data shared by the Clojure, Java, C, Python, and TypeScript
  * extractors. namespace_name is a Clojure namespace, Java package, empty for
  * C, or the dotted Python module. For Java, Alias rows model normal imports
  * and Referred rows model static imports; for Python, Alias rows model
- * `import a.b [as x]` and Referred rows model `from m import n`. */
+ * `import a.b [as x]` and Referred rows model `from m import n`. TypeScript
+ * namespaces retain the file extension; Alias models namespace imports,
+ * Referred models named/default imports with their original exported name. */
 typedef struct {
     char *file_path;
     char *namespace_name;
@@ -120,11 +122,13 @@ typedef CodeLensSourceFile CodeLensClojureFile;
 typedef CodeLensSourceFile CodeLensJavaFile;
 typedef CodeLensSourceFile CodeLensCFile;
 typedef CodeLensSourceFile CodeLensPythonFile;
+typedef CodeLensSourceFile CodeLensTypeScriptFile;
 
 typedef struct CodeLensClojureParser CodeLensClojureParser;
 typedef struct CodeLensJavaParser CodeLensJavaParser;
 typedef struct CodeLensCParser CodeLensCParser;
 typedef struct CodeLensPythonParser CodeLensPythonParser;
+typedef struct CodeLensTypeScriptParser CodeLensTypeScriptParser;
 
 CodeLensClojureParser *code_lens_clojure_parser_new(void);
 void code_lens_clojure_parser_delete(CodeLensClojureParser *parser);
@@ -185,6 +189,27 @@ int code_lens_parse_python_source(const char *repo_root,
 /* Arena-allocated dotted module name for file_path (see rules above). */
 char *code_lens_python_module_name(const char *repo_root, const char *file_path);
 
+/* TypeScript module names are repository-relative POSIX paths INCLUDING
+ * the source extension (.ts/.mts/.cts, including declaration files). A NULL
+ * or non-enclosing root uses the full basename, not the stem. Relative
+ * imports probe source files within the root; bare packages, tsconfig paths,
+ * and barrel/re-export chains are not resolved. No JavaScript/TSX grammar. */
+CodeLensTypeScriptParser *code_lens_typescript_parser_new(void);
+void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser);
+int code_lens_typescript_parser_set_repo_root(CodeLensTypeScriptParser *parser,
+                                               const char *repo_root);
+int code_lens_parse_typescript_source_with_parser(CodeLensTypeScriptParser *parser,
+                                                   const char *file_path,
+                                                   const char *source,
+                                                   size_t source_len,
+                                                   CodeLensTypeScriptFile *out_file);
+int code_lens_parse_typescript_source(const char *repo_root,
+                                       const char *file_path,
+                                       const char *source,
+                                       size_t source_len,
+                                       CodeLensTypeScriptFile *out_file);
+char *code_lens_typescript_module_name(const char *repo_root, const char *file_path);
+
 /* Process-wide counts of files served from the git object store versus
  * read from the working tree while a git blob source was active. */
 uint64_t code_lens_git_blob_read_count(void);
@@ -199,6 +224,8 @@ uint32_t code_lens_c_language_abi_version(void);
 uint32_t code_lens_c_language_symbol_count(void);
 uint32_t code_lens_python_language_abi_version(void);
 uint32_t code_lens_python_language_symbol_count(void);
+uint32_t code_lens_typescript_language_abi_version(void);
+uint32_t code_lens_typescript_language_symbol_count(void);
 
 /* Supported source languages in registry order (the order `version --deps`
  * prints). Strings are static; extensions is nullptr-terminated and each

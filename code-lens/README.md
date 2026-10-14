@@ -1,8 +1,8 @@
 # code-lens
 
 A native ISO C23 command-line tool and MCP server that indexes Clojure, Java,
-C, and Python codebases into per-repo [SQLite](https://sqlite.org) databases and answers
-symbol search (FTS5 full-text search ranked with BM25), definition/reference
+C, Python, and TypeScript codebases into per-repo [SQLite](https://sqlite.org)
+databases and answers symbol search (FTS5 full-text search ranked with BM25), definition/reference
 context, and raw SQL queries over the index.
 
 One binary serves both the CLI and the MCP stdio server. The entire
@@ -48,7 +48,7 @@ make release
 # 3. Run the tests.
 make test
 
-# 4. Index a Clojure, Java, C, Python, or mixed repository and query it.
+# 4. Index a Clojure, Java, C, Python, TypeScript, or mixed repository and query it.
 CODE_LENS_HOME=/tmp/code-lens-home \
   ./build/code-lens index --repo /path/to/repo
 
@@ -89,14 +89,20 @@ repository, so `--repo` accepts the repo root or any file or directory within
 it.
 
 Supported source extensions are `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`,
-`.c`, `.h`, and `.py`. The Java extractor uses tree-sitter-java and indexes packages,
-imports, types, members, Javadocs, and resolved references. The C extractor
+`.c`, `.h`, `.py`, `.ts`, `.mts`, and `.cts` (including `.d.ts`, `.d.mts`,
+and `.d.cts` declaration files). TSX and JavaScript are not supported. The Java
+extractor uses tree-sitter-java and indexes packages, imports, types, members,
+Javadocs, and resolved references. The C extractor
 uses tree-sitter-c and indexes functions/prototypes, variables, typedefs,
 structs, unions, enums, fields, macros, documentation comments, calls, and
 member accesses. The Python extractor uses tree-sitter-python and indexes
 modules, imports, classes, functions, methods, module variables, class and
-`self.` attributes, docstrings, and resolved references. Repositories can mix
-all four languages. Python bytecode caches and virtualenv/tool directories
+`self.` attributes, docstrings, and resolved references. The TypeScript extractor
+uses the native tree-sitter-typescript grammar to index classes, interfaces,
+type aliases, enums, namespaces, functions, variables, and members, with
+syntax-level references and relative imports (no TypeScript compiler required).
+Repositories can mix all five languages. Python bytecode caches and
+virtualenv/tool directories
 (`__pycache__`, `.venv`, `venv`, `.tox`, `.nox`, `.mypy_cache`,
 `.pytest_cache`, `.ruff_cache`, `.eggs`, `site-packages`) are skipped.
 
@@ -198,8 +204,9 @@ maintenance are deliberately absent from the model-facing interface; use the
 `index`, `list`, and `remove` CLI commands for administration. See `USAGE.txt`
 for client registration examples.
 
-`query` searches Clojure, Java, C, and Python symbol definitions plus Clojure keyword
-usage locations. Symbol results match whole words and word prefixes (names are split
+`query` searches Clojure, Java, C, Python, and TypeScript symbol definitions plus
+Clojure keyword usage locations. Symbol results match whole words and word
+prefixes (names are split
 on `- . / _`), ranked by BM25; keyword results match keyword-name prefixes such
 as `:report!-fn`. Keyword locations are distributed across matching files before
 repeated occurrences from one file, so a noisy file cannot consume a small result
@@ -257,6 +264,14 @@ constructor-assigned locals (`x = Klass()`), and annotations (including
 target, and names re-exported through a package `__init__.py` resolve to the
 re-exporting package rather than the defining module. Adding or removing an
 `__init__.py` renames modules, so re-indexing then performs a full rebuild.
+For TypeScript, the module namespace is the repository-relative POSIX file path
+**including its extension**, for example `src/models.ts`; members use
+`src/models.ts.Class`. Keeping the extension avoids collisions between `.ts`,
+`.mts`, `.cts`, and declaration modules. Relative imports resolve syntactically
+to workspace modules; there is no compiler attribution, `tsconfig` path-alias
+resolution, or traversal of barrel/re-export chains. Adding or removing any
+TypeScript source conservatively forces a full rebuild, since it can change
+relative-import resolution in unchanged files.
 `context` accepts Java `Type.member`, `Type#member`, fully qualified
 type spellings, C `ptr->field` spellings, and Python `module.func` or
 `Class.method` spellings as well as a bare name.
@@ -265,8 +280,8 @@ chosen repo's database (reads only -- ATTACH, PRAGMA, and writes are denied),
 with output capped at 100 rows.
 
 `list`, `query`, and `context` check whether indexed files still match their
-recorded size/mtime snapshot and whether new Clojure, Java, C, or Python files have
-appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
+recorded size/mtime snapshot and whether new Clojure, Java, C, Python, or
+TypeScript files have appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
 they return any stale results with a warning. MCP instead guarantees that
 `query`, `context`, and `sql` operate on current worktree data or return an
 ordinary search-availability error. A current workspace-only partial index

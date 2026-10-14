@@ -82,12 +82,14 @@ SQLITE_DEFINES := -DSQLITE_ENABLE_FTS5 -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_LOAD_
 	-DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
 	-DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_USE_ALLOCA
 TREE_SITTER_OBJ := $(OBJ_DIR)/vendor/tree-sitter/lib.o
-# Grammars linked into the binary; each is vendor/tree-sitter-<name> (pinned in
-# vendor/deps.lock). A grammar's src/scanner.c (external scanner) is compiled
-# when present. Adding a language: append it here and to GRAMMARS in build.bat.
-GRAMMARS := clojure java c python
+# Grammars linked into the binary (pinned in vendor/deps.lock). TypeScript
+# lives in a nested typescript/src directory; TSX is deliberately not linked.
+# External scanner.c files are compiled when present. Keep GRAMMARS in sync
+# with build.bat.
+GRAMMARS := clojure java c python typescript
+grammar_src = vendor/tree-sitter-$(1)/$(if $(filter typescript,$(1)),typescript/)src
 TREE_SITTER_GRAMMAR_OBJS := $(foreach g,$(GRAMMARS),$(OBJ_DIR)/vendor/tree-sitter-$(g)/parser.o) \
-	$(foreach g,$(GRAMMARS),$(if $(wildcard vendor/tree-sitter-$(g)/src/scanner.c),$(OBJ_DIR)/vendor/tree-sitter-$(g)/scanner.o))
+	$(foreach g,$(GRAMMARS),$(if $(wildcard $(call grammar_src,$(g))/scanner.c),$(OBJ_DIR)/vendor/tree-sitter-$(g)/scanner.o))
 # Decompression-only slice of libdeflate; the cpu_features files are
 # internally guarded per architecture, so compiling both is safe anywhere.
 LIBDEFLATE_SRCS := vendor/libdeflate/lib/deflate_decompress.c \
@@ -101,7 +103,7 @@ VENDOR_OBJS := $(SQLITE_OBJ) $(TREE_SITTER_OBJ) $(TREE_SITTER_GRAMMAR_OBJS) $(LI
 
 SRC := src/code_lens.c
 OBJ := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRC))
-TEST_SRC := tests/test_main.c tests/test_clojure_parser.c tests/test_java_support.c tests/test_c_support.c tests/test_python_support.c tests/test_git_blobs.c
+TEST_SRC := tests/test_main.c tests/test_clojure_parser.c tests/test_java_support.c tests/test_c_support.c tests/test_python_support.c tests/test_typescript_support.c tests/test_git_blobs.c
 TEST_OBJ := $(patsubst tests/%.c,$(OBJ_DIR)/tests/%.o,$(TEST_SRC))
 TEST_APP_OBJ := $(OBJ_DIR)/code_lens_test.o
 
@@ -134,13 +136,19 @@ $(SQLITE_OBJ): vendor/sqlite/sqlite3.c
 	@mkdir -p $(dir $@)
 	$(CC) -Ivendor/sqlite $(VENDOR_CFLAGS) $(PTHREADFLAGS) $(SQLITE_DEFINES) -c $< -o $@
 
-$(OBJ_DIR)/vendor/tree-sitter-%/parser.o: vendor/tree-sitter-%/src/parser.c
-	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-$*/src $(VENDOR_CFLAGS) -c $< -o $@
+define grammar_rules
+$(OBJ_DIR)/vendor/tree-sitter-$(1)/parser.o: $(call grammar_src,$(1))/parser.c
+	@mkdir -p $$(dir $$@)
+	$$(CC) -Ivendor/tree-sitter/lib/include -I$(call grammar_src,$(1)) $$(VENDOR_CFLAGS) -c $$< -o $$@
 
-$(OBJ_DIR)/vendor/tree-sitter-%/scanner.o: vendor/tree-sitter-%/src/scanner.c
-	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-$*/src $(VENDOR_CFLAGS) -c $< -o $@
+$(OBJ_DIR)/vendor/tree-sitter-$(1)/scanner.o: $(call grammar_src,$(1))/scanner.c
+	@mkdir -p $$(dir $$@)
+	$$(CC) -Ivendor/tree-sitter/lib/include -I$(call grammar_src,$(1)) $$(VENDOR_CFLAGS) -c $$< -o $$@
+endef
+$(foreach g,$(GRAMMARS),$(eval $(call grammar_rules,$(g))))
+
+# The TypeScript scanner includes ../../common/scanner.h.
+$(OBJ_DIR)/vendor/tree-sitter-typescript/scanner.o: vendor/tree-sitter-typescript/common/scanner.h
 
 $(OBJ_DIR)/vendor/libdeflate/%.o: vendor/libdeflate/lib/%.c
 	@mkdir -p $(dir $@)

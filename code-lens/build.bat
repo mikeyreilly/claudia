@@ -17,8 +17,9 @@ goto usage_error
 :configure
 where clang.exe >nul 2>nul || (echo code-lens: clang.exe was not found on PATH 1>&2 & goto fail)
 rem Grammars linked into the binary (vendor\tree-sitter-<name>); keep in sync
-rem with GRAMMARS in the Makefile. src\scanner.c is compiled when present.
-set "GRAMMARS=clojure java c python"
+rem with GRAMMARS in the Makefile. scanner.c is compiled when present;
+rem TypeScript uses typescript\src (not the TSX grammar).
+set "GRAMMARS=clojure java c python typescript"
 for %%D in (sqlite tree-sitter libdeflate zlib) do (
   if not exist "vendor\%%D" (
     echo code-lens: vendor\%%D is missing. Run scripts\vendor-deps.bat first. 1>&2
@@ -57,10 +58,7 @@ call :compile_vendor src\windows_compat.c windows_compat.obj || goto fail
 call :compile_sqlite vendor\sqlite\sqlite3.c sqlite3.obj || goto fail
 call :compile_tree vendor\tree-sitter\lib\src\lib.c tree_sitter.obj -Ivendor\tree-sitter\lib\src || goto fail
 for %%G in (%GRAMMARS%) do (
-  call :compile_tree vendor\tree-sitter-%%G\src\parser.c tree_sitter_%%G.obj -Ivendor\tree-sitter-%%G\src || goto fail
-  if exist "vendor\tree-sitter-%%G\src\scanner.c" (
-    call :compile_tree vendor\tree-sitter-%%G\src\scanner.c tree_sitter_%%G_scanner.obj -Ivendor\tree-sitter-%%G\src || goto fail
-  )
+  call :compile_grammar %%G || goto fail
 )
 
 call :compile_vendor vendor\libdeflate\lib\deflate_decompress.c libdeflate_deflate_decompress.obj || goto fail
@@ -98,6 +96,15 @@ exit /b %ERRORLEVEL%
 echo [CC] %~1
 clang %INCLUDES% %VENDOR_FLAGS% -DSQLITE_ENABLE_FTS5 -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_USE_ALLOCA -c "%~1" -o "%OBJ_DIR%\%~2"
 exit /b %ERRORLEVEL%
+
+:compile_grammar
+set "GRAMMAR_SRC=vendor\tree-sitter-%~1\src"
+if "%~1"=="typescript" set "GRAMMAR_SRC=vendor\tree-sitter-typescript\typescript\src"
+call :compile_tree "%GRAMMAR_SRC%\parser.c" tree_sitter_%~1.obj -I%GRAMMAR_SRC% || exit /b 1
+if exist "%GRAMMAR_SRC%\scanner.c" (
+  call :compile_tree "%GRAMMAR_SRC%\scanner.c" tree_sitter_%~1_scanner.obj -I%GRAMMAR_SRC% || exit /b 1
+)
+exit /b 0
 
 :compile_tree
 echo [CC] %~1
