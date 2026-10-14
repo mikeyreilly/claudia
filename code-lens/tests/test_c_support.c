@@ -186,6 +186,104 @@ static int test_c_parser(void)
     return failed == 0 ? 0 : 1;
 }
 
+static int c_count_references(const CodeLensCFile *file, const char *base, const char *target)
+{
+    int count = 0;
+
+    for (size_t i = 0U; i < file->reference_count; i++) {
+        const CodeLensReference *reference = &file->references[i];
+
+        if ((reference->base_len == strlen(base)) &&
+            (memcmp(reference->base, base, reference->base_len) == 0) &&
+            (strcmp(reference->target_namespace, target) == 0)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Same-name bindings across and within scopes (the indexed binding lookup
+ * must pick the innermost visible one), and doc comments that must not
+ * reach past a plain block comment to an earlier doc comment. */
+static int test_c_scopes_and_docs(void)
+{
+    static const char source[] =
+        "typedef struct Outer { int o; } Outer;\n"
+        "typedef struct Inner { int i; } Inner;\n"
+        "/** Global p. */\n"
+        "static Outer p;\n"
+        "/* Plain comment, not documentation. */\n"
+        "int f(Inner *p) { return p->i; }\n"
+        "int g(void) { return p.o + later(); }\n"
+        "int k(void) {\n"
+        "  Outer *r = 0;\n"
+        "  int a = r->o;\n"
+        "  { Inner *r = 0; a += r->i; }\n"
+        "  return a + r->o;\n"
+        "}\n"
+        "static int later(void) { return 0; }\n";
+    CodeLensCFile file;
+    const CodeLensSymbol *global_p;
+    const CodeLensSymbol *f;
+    int failed = 0;
+
+    if (code_lens_parse_c_source("scope.c", source, sizeof(source) - 1U, &file) != 0) {
+        (void)fprintf(stderr, "C support test failed: scope fixture parse error\n");
+        return 1;
+    }
+    failed |= c_assert(c_count_references(&file, "i", "Inner") == 2,
+                       "parameter and inner-block bindings shadow outer same-name bindings");
+    failed |= c_assert(c_count_references(&file, "o", "Outer") == 3,
+                       "global and enclosing bindings resolve outside shadowing scopes");
+    failed |= c_assert((c_count_references(&file, "i", "Outer") == 0) &&
+                           (c_count_references(&file, "o", "Inner") == 0),
+                       "no member access resolves through an out-of-scope binding");
+    failed |= c_assert(c_count_references(&file, "p", "scope.c") == 1,
+                       "only the unshadowed use of a static global is a reference");
+    failed |= c_assert(c_count_references(&file, "later", "scope.c") == 1,
+                       "static function called before its definition resolves to the file");
+
+    global_p = c_find_symbol(&file, "p", "variable", "scope.c");
+    f = c_find_symbol(&file, "f", "function", "");
+    failed |= c_assert((global_p != nullptr) && (global_p->doc != nullptr) &&
+                           (strcmp(global_p->doc, "Global p.") == 0),
+                       "doc comment directly before a declaration is extracted");
+    failed |= c_assert((f != nullptr) && ((f->doc == nullptr) || (f->doc[0] == '\0')),
+                       "plain block comment does not absorb an earlier doc comment");
+    return failed;
+}
+
+/* Error recovery inserts zero-width MISSING nodes; they must be skipped,
+ * never fail the file (which would abort the whole index). */
+static int test_c_parser_robustness(void)
+{
+    static const char *const sources[] = {
+        "void trailing(void) { M(1, 2,); }\nint after(void) { return 0; }\n",
+        "void arrow(void) { p->; }\nint after(void) { return 0; }\n",
+        "void cast(void) { int y = (int); }\nint after(void) { return 0; }\n",
+    };
+    int failed = 0;
+
+    for (size_t i = 0U; i < sizeof(sources) / sizeof(sources[0]); i++) {
+        CodeLensCFile file;
+        bool spans_ok = true;
+
+        if (code_lens_parse_c_source("/virtual/broken.c", sources[i], strlen(sources[i]), &file) !=
+            0) {
+            failed |= c_assert(false, "zero-width MISSING nodes do not fail the parse");
+            continue;
+        }
+        for (size_t r = 0U; r < file.reference_count; r++) {
+            spans_ok = spans_ok && (file.references[r].base_len > 0U) &&
+                       (file.references[r].end_byte > file.references[r].start_byte);
+        }
+        failed |= c_assert(spans_ok, "no zero-width references are emitted");
+        failed |= c_assert(c_find_symbol(&file, "after", "function", "") != nullptr,
+                           "definitions after a recovered error are extracted");
+    }
+    return failed;
+}
+
 static int c_write_file(const char *directory, const char *name, const char *content)
 {
     char *path = code_lens_join_path(directory, name);
@@ -284,7 +382,9 @@ static int test_c_index(void)
         (c_write_file(src_dir,
                       "app.c",
                       "#include \"../include/widget.h\"\n"
-                      "int run_app(Widget *widget) { return widget_get(widget); }\n") != 0) ||
+                      "int run_app(Widget *widget) { return widget_get(widget); }\n"
+                      /* A recovered syntax error must not abort the index. */
+                      "void recovered(void) { APPLY(1, 2,); }\n") != 0) ||
         (c_write_file(vendor_dir,
                       "ignored.c",
                       "int vendored_symbol(void) { return 0; }\n") != 0) ||
@@ -381,6 +481,8 @@ int test_c_support(void)
     int failed = 0;
 
     failed |= test_c_parser();
+    failed |= test_c_parser_robustness();
+    failed |= test_c_scopes_and_docs();
     failed |= test_c_index();
     if (failed == 0) {
         (void)fprintf(stderr, "C parser and indexing tests passed\n");

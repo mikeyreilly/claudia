@@ -194,7 +194,7 @@ pedantic/warnings-as-errors policy (with only SQLite's public-header
 | Canonical binary | `build/code-lens` (copy of the most recently built mode) |
 | Test binary | `build/<mode>/tests/test-main`, copied to `build/tests/test-main` |
 | SQLite object | `build/<mode>/obj/vendor/sqlite/sqlite3.o` |
-| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o`, `.../tree-sitter-clojure/parser.o`, `.../tree-sitter-java/parser.o`, `.../tree-sitter-c/parser.o`, and `.../tree-sitter-python/{parser,scanner}.o` (the Python grammar ships an external scanner for indentation and strings) |
+| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o` plus `.../tree-sitter-<grammar>/parser.o` for each `GRAMMARS` entry and `.../tree-sitter-<grammar>/scanner.o` when the grammar ships an external scanner (Python does, for indentation and strings) |
 
 ### Build gotchas
 
@@ -258,9 +258,9 @@ the pinned ref (detached). The SQLite amalgamation is downloaded from the
 pinned URL, verified against the pinned SHA-256, and extracted flattened into
 `vendor/sqlite/` so `vendor/sqlite/sqlite3.c` and `sqlite3.h` sit directly in
 that directory; a `.sha256` stamp file makes re-runs no-ops until the pin
-changes. Run the script whenever `vendor/sqlite`, `vendor/tree-sitter`,
-`vendor/tree-sitter-clojure`, `vendor/tree-sitter-java`,
-`vendor/tree-sitter-c`, or `vendor/tree-sitter-python` is missing.
+changes. Run the script whenever `vendor/sqlite`, `vendor/tree-sitter`, or
+any `vendor/tree-sitter-<grammar>` directory listed in the Makefile's
+`GRAMMARS` is missing.
 
 To upgrade SQLite: pick the new amalgamation from sqlite.org/download.html
 (the URL embeds the release year), verify the download against the published
@@ -276,11 +276,13 @@ by `/* Section name */` comments. Keep new code in the appropriate section.
 | --- | --- |
 | Preamble and shared helpers | `copy_bytes` (arena string duplication), `grow_array` (doubling arena arrays with overflow checks). |
 | Arena allocator | Thread-local bump allocator; marks and resets. |
+| Language registry | `languages[]` (`LanguageSpec` per language), `language_for_path`, parser adapters, `CodeLensSourceParser`, `code_lens_language_info`; see [Language parsers](#9-language-parsers). |
 | Platform helpers | Home resolution, path utilities, mkdir/rmtree, file reads (heap for small files, mmap for large), supported-source file walking. |
 | String builder | Arena-backed `StringBuilder` with `sb_append`/`sb_appendf`. |
 | Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python metadata, used by `version --deps` and tests. |
 | Database wrapper | SQLite open modes, prepared statements, parameter binding, the pipe-format result renderer, error reporting. |
 | Clojure parser | Custom-reader/tree-sitter extraction of namespaces, aliases, definitions, references, and keywords. |
+| Tree-sitter helpers | `TshIds` kind/field id tables (`tsh_ids_init`), null-safe node accessors, and the `ParseMap`/`ScopeIndex` lookup structures shared by the Java, C, and Python extractors. |
 | Java parser | tree-sitter-java extraction of packages, imports, types/members, Javadocs, and resolved references. |
 | C parser | tree-sitter-c extraction of declarations, aggregate types, macros, linkage, calls, and members. |
 | Python parser | tree-sitter-python module naming plus extraction of imports, classes/functions/fields, docstrings, and scope-aware resolved references. |
@@ -399,9 +401,10 @@ Rules:
   `code_lens_git_file_read_count`). Requires the system zlib
   (`PROJECT_LDLIBS = -lz`, plus `-lm` on Linux for SQLite FTS5).
 - The recursive walker (`walk_path`) accepts an extension predicate. The
-  indexing and staleness paths use `has_supported_extension` for `.clj`,
-  `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, and `.py`; the public Clojure compatibility
-  walker remains Clojure-only.
+  indexing and staleness paths use `has_supported_extension`, which routes
+  through the language registry (`language_for_path`, see section 9) and so
+  accepts `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, and `.py`; the
+  public Clojure compatibility walker remains Clojure-only.
   - Skipped directories (`should_skip_dir`): `.git`, `node_modules`, `vendor`,
     `target`, `build`, `.shadow-cljs`, `.cpcache`, `.idea`, `.vscode`,
     `.lsp`, `.code-lens`, plus Python caches and environments: `__pycache__`,
@@ -420,6 +423,83 @@ path must copy it, as the internal collector does (`path_list_append` copies
 via `copy_bytes`).
 
 ## 9. Language parsers
+
+### Language registry
+
+`languages[]` in the "Language registry" section of `src/code_lens.c` holds
+one `LanguageSpec` per language: name, grammar name, extensions, whether the
+language is extracted from dependency source JARs, the tree-sitter language
+function, parser new/delete/parse adapters, and an optional
+`forces_full_rebuild(path)` hook. Everything language-generic derives from
+it: `language_for_path` (extension routing for the walkers, git index
+filter, and staleness walk), `CodeLensSourceParser` (one parser per language
+per worker) and its dispatch (unregistered extensions parse as Clojure),
+`dependency_source_extension` (dependency JAR entries),
+`repo_diff_forces_full_rebuild` (incremental refresh), `version --deps`, and
+the public `code_lens_language_count`/`code_lens_language_info`, which
+`tests/test_main.c` iterates to check every grammar loads and every
+registered extension routes through the walker.
+
+### Tree-sitter helpers
+
+The Java, C, and Python extractors share a small helper layer ("Tree-sitter
+helpers" section, `tsh_*`). Each grammar declares the node kinds and fields it
+inspects as an enum plus a name table (`JK_*`/`JF_*`, `CK_*`/`CF_*`,
+`PYK_*`/`PYF_*`); `tsh_ids_init` resolves them once per process (under
+`pthread_once`, from the parser's `_new`) to numeric symbol and field ids, so
+extraction compares integers (`java_is`, `c_kind`, `py_field`, ...) instead of
+`strcmp(ts_node_type(...))` and `ts_node_child_by_field_name`. A kind maps
+every grammar symbol carrying its name, so matching is exactly the old string
+comparison (Python restricts to named nodes because soft keywords such as
+`type` share names with named nodes). Init fails - and with it the parser's
+`_new`, and so every test - when a listed kind or field does not exist in the
+grammar, which catches typos and grammar-bump renames (it found two dead
+names, C `void_type` and Python `except_group_clause`, when introduced). All
+accessors (`tsh_kind`, `tsh_field`, `tsh_named_count`, `tsh_named_child`,
+`tsh_count`, `tsh_child`, `tsh_parent`) accept null nodes, so loops over an
+absent field iterate zero times instead of dereferencing NULL. Child loops
+cache the count (`for (i = 0, i_count = tsh_named_count(n); ...)`); indexed
+child access is not quadratic in tree-sitter (hidden repeat subtrees are
+skipped by count), and tree cursors measured slower, so neither is replaced.
+Helpers shared across languages must take nodes resolved with the caller's
+grammar ids (see `java_definition_source`, which C also uses).
+
+The section also holds the extractors' lookup structures. `ParseMap` is an
+open-addressing `(scope, name) -> uint32` map over keys that outlive it
+(source slices, arena or heap strings). `ScopeIndex` resolves lexically
+scoped names for C and Java: each extractor adds every binding (name, scope
+byte range, declaration byte, always-visible flag for C globals and Java
+fields) once declarations are complete, and lookups binary-search the name's
+run, sorted by `(scope_start, add order)`, to the innermost visible binding
+(innermost scope, then latest declaration, then earliest added). Never add a
+per-use linear scan over bindings, symbols, fields, aliases, or types, and
+never call `ts_node_parent` per node in a whole-tree walk (it re-walks from
+the root through every sibling at each level; the C reference pass keeps an
+ancestor stack instead): each made a large translation unit quadratic, and
+`sqlite3.c` took ~60s to index before these indexes (~1s now). The
+equivalence check for such changes is the dump hash, which must not move.
+
+Doc comments (`java_doc_before`, which `c_doc_before` tries first) are only
+the block comment ending directly before a declaration, and only when its own
+opener is `/**`. A plain `/* ... */` there yields no doc; it used to search
+back to any earlier `/**` and absorb the code in between (hundreds of MB of
+"doc" text in `sqlite3.c`, 1290 bogus docs in `java.base`).
+
+Adding a language:
+
+1. Pin `tree-sitter-<name>` in `vendor/deps.lock` (`scripts/vendor-deps.sh`
+   reads it) and append `<name>` to `GRAMMARS` in the `Makefile` and
+   `build.bat`; both compile `src/parser.c` plus `src/scanner.c` when the
+   grammar ships an external scanner. `.gitignore` already covers
+   `vendor/*/`.
+2. Declare `tree_sitter_<name>()` beside the others at the top of
+   `src/code_lens.c`, write a parser section (public
+   `code_lens_<name>_parser_new/_delete` and
+   `code_lens_parse_<name>_source_with_parser` in `include/code_lens.h`),
+   and add a `LANG_<NAME>` id plus a `languages[]` entry with its adapters.
+3. Add `tests/test_<name>_support.c` to `TEST_SRC`, call it from
+   `tests/test_main.c`, and update the user-facing language lists (README,
+   USAGE, MCP tool descriptions).
 
 ### Clojure
 
@@ -664,8 +744,9 @@ outside any regular package (scripts, PEP 420 namespace packages) uses its
 repository-relative path with a leading `src/` component stripped, and a file
 outside the root falls back to its stem. `__init__.py` names its package.
 Because adding or removing an `__init__.py` renames every module below it,
-`repo_diff_changes_python_packages` sends such a diff to a full rebuild even
-under `CODE_LENS_INCREMENTAL=force`.
+the Python registry entry's `forces_full_rebuild` hook makes
+`repo_diff_forces_full_rebuild` send such a diff to a full rebuild even under
+`CODE_LENS_INCREMENTAL=force`.
 
 **Representation.** `File.namespace` is the dotted module. Module-level
 definitions (`function`, `class`, `variable`, `typedef` for `type X = ...`)
@@ -703,8 +784,8 @@ re-exported through a package `__init__.py` resolve to the re-exporting
 package, not the defining module.
 
 **Performance and safety.** Node kinds and field names resolve once to the
-grammar's numeric symbol/field ids (`init_python_ids`), so hot paths compare
-integers. Pooled tree cursors measured slower than indexed child access and
+grammar's numeric symbol/field ids through the shared tree-sitter helpers
+(`init_python_ids`, named nodes only), so hot paths compare integers. Pooled tree cursors measured slower than indexed child access and
 are not used. The expression walkers stop descending past `PY_MAX_DEPTH`
 (512) levels so pathological files cannot exhaust a parse worker's 512 KB
 stack; ASan builds need `CODE_LENS_INDEX_THREADS=1` on deeply nested inputs
@@ -760,7 +841,7 @@ so headers stay stable regardless of SQLite's default column naming.
 ### Schema
 
 The schema is created by one DDL block (`index_schema_sql`), stamped with
-`PRAGMA user_version = 13` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
+`PRAGMA user_version = 15` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
 tables plus one FTS5 index table and two compatibility views:
 
 | Table | Primary key | Columns |
@@ -1305,8 +1386,10 @@ Harness mechanics:
   the test `main` while linking the entire application and vendor objects.
 - `tests/test_main.c` checks: `CODE_LENS_C_STANDARD == "ISO C23"`, a
   non-empty `CODE_LENS_VERSION`, a non-empty SQLite version string, and
-  non-zero tree-sitter Clojure, Java, C, and Python ABI versions and symbol counts;
-  then calls `test_clojure_parser()`, `test_java_support()`, `test_c_support()`,
+  (`test_language_registry`) that every registry language has a grammar
+  with non-zero ABI version and symbol count, and that the source walkers
+  route exactly the registered extensions (rejecting `.#` lock files,
+  unregistered suffixes, and dotted directory names); then calls `test_clojure_parser()`, `test_java_support()`, `test_c_support()`,
   `test_python_support()`,
   `test_index_readback()`, and
   `test_context_alias_resolution()`.
@@ -1327,11 +1410,16 @@ Harness mechanics:
   kind filter, SQL visibility, static-import context, Java-file staleness,
   incremental addition, and `context` linking `service.execute` back to
   `demo.lib.Service.execute` when called with the dotted name `Service.execute`.
+  `test_java_parser_robustness` checks that error-recovery MISSING nodes
+  (`super.;`) are skipped rather than failing the parse.
 - `tests/test_c_support.c` checks C macros, typedefs, aggregates, function
   pointers, globals, static/external linkage, documentation, calls, and typed
   member references. Its end-to-end fixture verifies `.c`/`.h` walking,
   `struct` filtering, global/static/member context, C-file staleness, and an
-  incremental source addition.
+  incremental source addition. `test_c_parser_robustness` (and a recovered
+  syntax error in the indexed fixture) checks that zero-width MISSING nodes
+  (`M(1, 2,);`, `p->;`, `(int);`) are skipped rather than failing the parse,
+  which would abort the whole index.
 - `tests/test_python_support.c` checks module naming against real
   `__init__.py` trees (package chains, `src/` stripping, out-of-root stems),
   parses an inline fixture for kinds, namespaces, docstrings, Alias/Referred
@@ -1489,7 +1577,10 @@ The condensed list of rules that must survive any change:
   outlive the step; stack buffers bind with `SQLITE_TRANSIENT`.
 - **Format stamp.** The schema carries `PRAGMA user_version =
   CODE_LENS_INDEX_FORMAT_VERSION`; read opens reject mismatches with a
-  "re-index required" message. Bump the version on any schema change.
+  "re-index required" message. Bump the version on any schema change, and
+  on any extraction change whose old output an incremental refresh would
+  keep in unchanged files (version 15 did this for the doc-comment fix;
+  a stamp mismatch forces the next index to rebuild in full).
 - **Build pragmas.** `journal_mode=OFF`/`synchronous=OFF` apply only to
   staging files published by atomic rename, never to databases opened in
   place.

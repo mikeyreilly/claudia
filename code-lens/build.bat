@@ -16,9 +16,18 @@ goto usage_error
 
 :configure
 where clang.exe >nul 2>nul || (echo code-lens: clang.exe was not found on PATH 1>&2 & goto fail)
-for %%D in (sqlite tree-sitter tree-sitter-clojure tree-sitter-java tree-sitter-c tree-sitter-python libdeflate zlib) do (
+rem Grammars linked into the binary (vendor\tree-sitter-<name>); keep in sync
+rem with GRAMMARS in the Makefile. src\scanner.c is compiled when present.
+set "GRAMMARS=clojure java c python"
+for %%D in (sqlite tree-sitter libdeflate zlib) do (
   if not exist "vendor\%%D" (
     echo code-lens: vendor\%%D is missing. Run scripts\vendor-deps.bat first. 1>&2
+    goto fail
+  )
+)
+for %%G in (%GRAMMARS%) do (
+  if not exist "vendor\tree-sitter-%%G" (
+    echo code-lens: vendor\tree-sitter-%%G is missing. Run scripts\vendor-deps.bat first. 1>&2
     goto fail
   )
 )
@@ -47,11 +56,12 @@ call :compile_project src\code_lens.c code_lens.obj || goto fail
 call :compile_vendor src\windows_compat.c windows_compat.obj || goto fail
 call :compile_sqlite vendor\sqlite\sqlite3.c sqlite3.obj || goto fail
 call :compile_tree vendor\tree-sitter\lib\src\lib.c tree_sitter.obj -Ivendor\tree-sitter\lib\src || goto fail
-call :compile_tree vendor\tree-sitter-clojure\src\parser.c tree_sitter_clojure.obj -Ivendor\tree-sitter-clojure\src || goto fail
-call :compile_tree vendor\tree-sitter-java\src\parser.c tree_sitter_java.obj -Ivendor\tree-sitter-java\src || goto fail
-call :compile_tree vendor\tree-sitter-c\src\parser.c tree_sitter_c.obj -Ivendor\tree-sitter-c\src || goto fail
-call :compile_tree vendor\tree-sitter-python\src\parser.c tree_sitter_python.obj -Ivendor\tree-sitter-python\src || goto fail
-call :compile_tree vendor\tree-sitter-python\src\scanner.c tree_sitter_python_scanner.obj -Ivendor\tree-sitter-python\src || goto fail
+for %%G in (%GRAMMARS%) do (
+  call :compile_tree vendor\tree-sitter-%%G\src\parser.c tree_sitter_%%G.obj -Ivendor\tree-sitter-%%G\src || goto fail
+  if exist "vendor\tree-sitter-%%G\src\scanner.c" (
+    call :compile_tree vendor\tree-sitter-%%G\src\scanner.c tree_sitter_%%G_scanner.obj -Ivendor\tree-sitter-%%G\src || goto fail
+  )
+)
 
 call :compile_vendor vendor\libdeflate\lib\deflate_decompress.c libdeflate_deflate_decompress.obj || goto fail
 call :compile_vendor vendor\libdeflate\lib\zlib_decompress.c libdeflate_zlib_decompress.obj || goto fail

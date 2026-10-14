@@ -200,6 +200,21 @@ uint32_t code_lens_c_language_symbol_count(void);
 uint32_t code_lens_python_language_abi_version(void);
 uint32_t code_lens_python_language_symbol_count(void);
 
+/* Supported source languages in registry order (the order `version --deps`
+ * prints). Strings are static; extensions is nullptr-terminated and each
+ * entry carries its leading dot. */
+typedef struct {
+    const char *name;
+    const char *grammar;
+    const char *const *extensions;
+    uint32_t abi_version;
+    uint32_t symbol_count;
+} CodeLensLanguageInfo;
+
+size_t code_lens_language_count(void);
+/* Returns 0 and fills out_info, or -1 when index is out of range. */
+int code_lens_language_info(size_t index, CodeLensLanguageInfo *out_info);
+
 typedef struct {
     char *path;
     sqlite3 *handle;

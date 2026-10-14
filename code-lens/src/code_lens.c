@@ -311,6 +311,261 @@ void code_lens_arena_reset(CodeLensArenaMark mark)
     thread_current_block->used = mark.used;
 }
 
+/* Language registry
+ *
+ * One entry per supported source language. Extension routing (walkers, git
+ * filter, staleness walk), parser construction and dispatch, dependency-JAR
+ * extraction, incremental full-rebuild triggers, and `version --deps` all
+ * derive from this table, so adding a language means adding its grammar to
+ * vendor/deps.lock and the Makefile/build.bat GRAMMARS lists, writing its
+ * parser section, and adding one entry here. */
+
+typedef enum {
+    LANG_CLOJURE,
+    LANG_JAVA,
+    LANG_C,
+    LANG_PYTHON,
+    LANG_COUNT,
+} LanguageId;
+
+typedef struct {
+    const char *name;
+    const char *grammar;
+    /* nullptr-terminated, each with its leading dot. */
+    const char *const *extensions;
+    /* Extracted from dependency source JARs. */
+    bool dependency_sources;
+    const TSLanguage *(*ts_language)(void);
+    /* repo_root anchors path-derived names (Python modules); nullptr for
+     * dependency sources. */
+    void *(*parser_new)(const char *repo_root);
+    void (*parser_delete)(void *parser);
+    int (*parse)(void *parser,
+                 const char *file_path,
+                 const char *source,
+                 size_t source_len,
+                 CodeLensSourceFile *out_file);
+    /* Optional: an added or removed file at path changes how other files of
+     * the language are named, so incremental refresh must rebuild fully. */
+    bool (*forces_full_rebuild)(const char *path);
+} LanguageSpec;
+
+static void *clojure_parser_new_adapter(const char *repo_root)
+{
+    (void)repo_root;
+    return code_lens_clojure_parser_new();
+}
+
+static void clojure_parser_delete_adapter(void *parser)
+{
+    code_lens_clojure_parser_delete(parser);
+}
+
+static int clojure_parse_adapter(void *parser,
+                                 const char *file_path,
+                                 const char *source,
+                                 size_t source_len,
+                                 CodeLensSourceFile *out_file)
+{
+    return code_lens_parse_clojure_source_with_parser(parser,
+                                                       file_path,
+                                                       source,
+                                                       source_len,
+                                                       out_file);
+}
+
+static void *java_parser_new_adapter(const char *repo_root)
+{
+    (void)repo_root;
+    return code_lens_java_parser_new();
+}
+
+static void java_parser_delete_adapter(void *parser)
+{
+    code_lens_java_parser_delete(parser);
+}
+
+static int java_parse_adapter(void *parser,
+                              const char *file_path,
+                              const char *source,
+                              size_t source_len,
+                              CodeLensSourceFile *out_file)
+{
+    return code_lens_parse_java_source_with_parser(parser,
+                                                    file_path,
+                                                    source,
+                                                    source_len,
+                                                    out_file);
+}
+
+static void *c_parser_new_adapter(const char *repo_root)
+{
+    (void)repo_root;
+    return code_lens_c_parser_new();
+}
+
+static void c_parser_delete_adapter(void *parser)
+{
+    code_lens_c_parser_delete(parser);
+}
+
+static int c_parse_adapter(void *parser,
+                           const char *file_path,
+                           const char *source,
+                           size_t source_len,
+                           CodeLensSourceFile *out_file)
+{
+    return code_lens_parse_c_source_with_parser(parser, file_path, source, source_len, out_file);
+}
+
+static void *python_parser_new_adapter(const char *repo_root)
+{
+    CodeLensPythonParser *parser = code_lens_python_parser_new();
+
+    if ((parser != nullptr) && (code_lens_python_parser_set_repo_root(parser, repo_root) != 0)) {
+        code_lens_python_parser_delete(parser);
+        return nullptr;
+    }
+    return parser;
+}
+
+static void python_parser_delete_adapter(void *parser)
+{
+    code_lens_python_parser_delete(parser);
+}
+
+static int python_parse_adapter(void *parser,
+                                const char *file_path,
+                                const char *source,
+                                size_t source_len,
+                                CodeLensSourceFile *out_file)
+{
+    return code_lens_parse_python_source_with_parser(parser,
+                                                      file_path,
+                                                      source,
+                                                      source_len,
+                                                      out_file);
+}
+
+/* An added or removed __init__.py changes the package chain, and so the
+ * module name, of every Python file below it. */
+static bool python_forces_full_rebuild(const char *path)
+{
+    static const char marker[] = "__init__.py";
+    size_t marker_len = sizeof(marker) - 1U;
+    size_t len = strlen(path);
+
+    return (len >= marker_len) && (strcmp(path + len - marker_len, marker) == 0) &&
+           ((len == marker_len) || (path[len - marker_len - 1U] == '/') ||
+            (path[len - marker_len - 1U] == '\\'));
+}
+
+static const char *const clojure_extensions[] = {".clj", ".cljc", ".cljs", ".bb", nullptr};
+static const char *const java_extensions[] = {".java", nullptr};
+static const char *const c_extensions[] = {".c", ".h", nullptr};
+static const char *const python_extensions[] = {".py", nullptr};
+
+static const LanguageSpec languages[LANG_COUNT] = {
+    [LANG_CLOJURE] = {.name = "clojure",
+                      .grammar = "tree-sitter-clojure",
+                      .extensions = clojure_extensions,
+                      .dependency_sources = true,
+                      .ts_language = tree_sitter_clojure,
+                      .parser_new = clojure_parser_new_adapter,
+                      .parser_delete = clojure_parser_delete_adapter,
+                      .parse = clojure_parse_adapter},
+    [LANG_JAVA] = {.name = "java",
+                   .grammar = "tree-sitter-java",
+                   .extensions = java_extensions,
+                   .dependency_sources = true,
+                   .ts_language = tree_sitter_java,
+                   .parser_new = java_parser_new_adapter,
+                   .parser_delete = java_parser_delete_adapter,
+                   .parse = java_parse_adapter},
+    [LANG_C] = {.name = "c",
+                .grammar = "tree-sitter-c",
+                .extensions = c_extensions,
+                .ts_language = tree_sitter_c,
+                .parser_new = c_parser_new_adapter,
+                .parser_delete = c_parser_delete_adapter,
+                .parse = c_parse_adapter},
+    [LANG_PYTHON] = {.name = "python",
+                     .grammar = "tree-sitter-python",
+                     .extensions = python_extensions,
+                     .ts_language = tree_sitter_python,
+                     .parser_new = python_parser_new_adapter,
+                     .parser_delete = python_parser_delete_adapter,
+                     .parse = python_parse_adapter,
+                     .forces_full_rebuild = python_forces_full_rebuild},
+};
+
+/* The language owning path's extension, or LANG_COUNT. The extension is the
+ * text from the path's last '.', and Emacs lock files (`.#name`) never
+ * match. */
+static LanguageId language_for_path(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    const char *name = slash == nullptr ? path : slash + 1;
+    const char *dot = strrchr(path, '.');
+
+    if ((dot == nullptr) || (strncmp(name, ".#", 2U) == 0)) {
+        return LANG_COUNT;
+    }
+    for (size_t lang = 0U; lang < LANG_COUNT; lang++) {
+        for (const char *const *ext = languages[lang].extensions; *ext != nullptr; ext++) {
+            if (strcmp(dot, *ext) == 0) {
+                return (LanguageId)lang;
+            }
+        }
+    }
+    return LANG_COUNT;
+}
+
+/* Dependency JAR entries: plain suffix match over the languages extracted
+ * from dependency sources. */
+static bool dependency_source_extension(const char *name, size_t len)
+{
+    for (size_t lang = 0U; lang < LANG_COUNT; lang++) {
+        if (!languages[lang].dependency_sources) {
+            continue;
+        }
+        for (const char *const *ext = languages[lang].extensions; *ext != nullptr; ext++) {
+            size_t ext_len = strlen(*ext);
+
+            if ((len >= ext_len) && (memcmp(name + len - ext_len, *ext, ext_len) == 0)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* One parser per language, used by a single thread at a time. */
+typedef struct {
+    void *parsers[LANG_COUNT];
+} CodeLensSourceParser;
+
+size_t code_lens_language_count(void)
+{
+    return LANG_COUNT;
+}
+
+int code_lens_language_info(size_t index, CodeLensLanguageInfo *out_info)
+{
+    const TSLanguage *language;
+
+    if ((index >= LANG_COUNT) || (out_info == nullptr)) {
+        return -1;
+    }
+    language = languages[index].ts_language();
+    out_info->name = languages[index].name;
+    out_info->grammar = languages[index].grammar;
+    out_info->extensions = languages[index].extensions;
+    out_info->abi_version = ts_language_abi_version(language);
+    out_info->symbol_count = ts_language_symbol_count(language);
+    return 0;
+}
+
 /* Platform helpers */
 
 char *code_lens_default_home(void)
@@ -618,53 +873,12 @@ typedef bool (*SourceExtensionPredicate)(const char *path);
 
 static bool has_clojure_extension(const char *path)
 {
-    const char *name = strrchr(path, '/');
-    const char *dot = strrchr(path, '.');
-
-    name = name == nullptr ? path : name + 1;
-    if (strncmp(name, ".#", 2U) == 0) {
-        return false;
-    }
-    if (dot == nullptr) {
-        return false;
-    }
-    return (strcmp(dot, ".clj") == 0) || (strcmp(dot, ".cljc") == 0) ||
-           (strcmp(dot, ".cljs") == 0) || (strcmp(dot, ".bb") == 0);
-}
-
-static bool has_java_extension(const char *path)
-{
-    const char *name = strrchr(path, '/');
-    const char *dot = strrchr(path, '.');
-
-    name = name == nullptr ? path : name + 1;
-    return (strncmp(name, ".#", 2U) != 0) && (dot != nullptr) &&
-           (strcmp(dot, ".java") == 0);
-}
-
-static bool has_c_extension(const char *path)
-{
-    const char *name = strrchr(path, '/');
-    const char *dot = strrchr(path, '.');
-
-    name = name == nullptr ? path : name + 1;
-    return (strncmp(name, ".#", 2U) != 0) && (dot != nullptr) &&
-           ((strcmp(dot, ".c") == 0) || (strcmp(dot, ".h") == 0));
-}
-
-static bool has_python_extension(const char *path)
-{
-    const char *name = strrchr(path, '/');
-    const char *dot = strrchr(path, '.');
-
-    name = name == nullptr ? path : name + 1;
-    return (strncmp(name, ".#", 2U) != 0) && (dot != nullptr) && (strcmp(dot, ".py") == 0);
+    return language_for_path(path) == LANG_CLOJURE;
 }
 
 static bool has_supported_extension(const char *path)
 {
-    return has_clojure_extension(path) || has_java_extension(path) || has_c_extension(path) ||
-           has_python_extension(path);
+    return language_for_path(path) != LANG_COUNT;
 }
 
 static bool dirent_can_skip_without_stat(const struct dirent *entry,
@@ -2496,7 +2710,10 @@ uint32_t code_lens_python_language_symbol_count(void)
 #define QUERY_TIMEOUT_MS 30000
 #define QUERY_TIMEOUT_SECONDS 30.0
 #define QUERY_PROGRESS_OPS 10000
-#define CODE_LENS_INDEX_FORMAT_VERSION 14
+/* 15: same schema as 14, but C/Java doc comments are now bounded to the
+ * comment directly before a declaration; bumped so indexes carrying the old
+ * runaway docs rebuild in full instead of being refreshed incrementally. */
+#define CODE_LENS_INDEX_FORMAT_VERSION 15
 
 static double profile_now_seconds(void);
 
@@ -5604,7 +5821,523 @@ int code_lens_parse_clojure_source(const char *file_path,
     return rc;
 }
 
+/* Tree-sitter helpers
+ *
+ * Shared by the Java, C, and Python extractors. Each grammar lists the node
+ * kinds and fields it inspects as an enum (kind 0 = "other") plus a
+ * matching name table; tsh_ids_init resolves them once to the grammar's
+ * numeric symbol and field ids, so hot paths compare integers rather than
+ * node-type strings. A kind maps every symbol id carrying its name, so
+ * matching is exactly `strcmp(ts_node_type(node), name) == 0` (restricted
+ * to named nodes when named_only, for grammars whose keywords share names
+ * with named nodes). Init fails - and so does the owning parser's _new -
+ * when a listed kind or field does not exist in the grammar, catching typos
+ * and grammar-bump renames in the test suite. Every accessor is null-safe:
+ * a null node has kind 0, no children, and no fields. */
+
+#define TSH_MAX_SYMBOLS 2048U
+#define TSH_MAX_FIELDS 64U
+
+typedef struct {
+    uint16_t kind_of_symbol[TSH_MAX_SYMBOLS];
+    TSFieldId field_ids[TSH_MAX_FIELDS];
+    bool ok;
+} TshIds;
+
+static bool tsh_ids_init(TshIds *ids,
+                         const TSLanguage *language,
+                         const char *const *kind_names,
+                         uint32_t kind_count,
+                         const char *const *field_names,
+                         uint32_t field_count,
+                         bool named_only)
+{
+    uint32_t symbol_count = ts_language_symbol_count(language);
+    bool found[TSH_MAX_SYMBOLS] = {false};
+
+    if ((symbol_count > TSH_MAX_SYMBOLS) || (kind_count > TSH_MAX_SYMBOLS) ||
+        (kind_count > UINT16_MAX) || (field_count > TSH_MAX_FIELDS)) {
+        return false;
+    }
+    for (uint32_t symbol = 0U; symbol < symbol_count; symbol++) {
+        const char *name = ts_language_symbol_name(language, (TSSymbol)symbol);
+        TSSymbolType type = ts_language_symbol_type(language, (TSSymbol)symbol);
+
+        /* Auxiliary symbols never surface as nodes; visible supertypes
+         * (e.g. Python's expression_statement) do, and are named. */
+        if ((name == nullptr) || (type == TSSymbolTypeAuxiliary) ||
+            (named_only && (type == TSSymbolTypeAnonymous))) {
+            continue;
+        }
+        for (uint32_t kind = 1U; kind < kind_count; kind++) {
+            if (strcmp(name, kind_names[kind]) == 0) {
+                ids->kind_of_symbol[symbol] = (uint16_t)kind;
+                found[kind] = true;
+                break;
+            }
+        }
+    }
+    for (uint32_t kind = 1U; kind < kind_count; kind++) {
+        if (!found[kind]) {
+            (void)fprintf(stderr, "code-lens: grammar has no node kind '%s'\n", kind_names[kind]);
+            return false;
+        }
+    }
+    for (uint32_t field = 0U; field < field_count; field++) {
+        ids->field_ids[field] = ts_language_field_id_for_name(language,
+                                                              field_names[field],
+                                                              (uint32_t)strlen(field_names[field]));
+        if (ids->field_ids[field] == 0U) {
+            (void)fprintf(stderr, "code-lens: grammar has no field '%s'\n", field_names[field]);
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline uint32_t tsh_kind(const TshIds *ids, TSNode node)
+{
+    TSSymbol symbol;
+
+    if (ts_node_is_null(node)) {
+        return 0U;
+    }
+    symbol = ts_node_symbol(node);
+    return symbol < TSH_MAX_SYMBOLS ? ids->kind_of_symbol[symbol] : 0U;
+}
+
+static inline TSNode tsh_field(const TshIds *ids, TSNode node, uint32_t field)
+{
+    return ts_node_is_null(node) ? (TSNode){0}
+                                 : ts_node_child_by_field_id(node, ids->field_ids[field]);
+}
+
+static inline uint32_t tsh_named_count(TSNode node)
+{
+    return ts_node_is_null(node) ? 0U : ts_node_named_child_count(node);
+}
+
+static inline TSNode tsh_named_child(TSNode node, uint32_t index)
+{
+    return ts_node_is_null(node) ? (TSNode){0} : ts_node_named_child(node, index);
+}
+
+static inline uint32_t tsh_count(TSNode node)
+{
+    return ts_node_is_null(node) ? 0U : ts_node_child_count(node);
+}
+
+static inline TSNode tsh_child(TSNode node, uint32_t index)
+{
+    return ts_node_is_null(node) ? (TSNode){0} : ts_node_child(node, index);
+}
+
+static inline TSNode tsh_parent(TSNode node)
+{
+    return ts_node_is_null(node) ? (TSNode){0} : ts_node_parent(node);
+}
+
+/* (scope, name) -> uint32 value map over keys that outlive the map (source
+ * slices, arena or heap strings). Open addressing, power-of-two capacity,
+ * at most half full. Shared by the C and Python extractors; free `slots`
+ * when done. */
+typedef struct {
+    const char *key;
+    size_t key_len;
+    uint64_t hash;
+    uint32_t scope;
+    uint32_t value;
+} ParseMapSlot;
+
+typedef struct {
+    ParseMapSlot *slots;
+    size_t capacity;
+    size_t count;
+} ParseMap;
+
+static uint64_t parse_map_hash(uint32_t scope, const char *key, size_t len)
+{
+    return term_hash(key, len) ^ ((uint64_t)(scope + 1U) * 0x9E3779B97F4A7C15ULL);
+}
+
+static bool parse_map_grow(ParseMap *map)
+{
+    size_t capacity = map->capacity == 0U ? 64U : map->capacity * 2U;
+    ParseMapSlot *slots;
+
+    if (capacity > (SIZE_MAX / sizeof(*slots))) {
+        return false;
+    }
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == nullptr) {
+        return false;
+    }
+    for (size_t i = 0U; i < map->capacity; i++) {
+        size_t index;
+
+        if (map->slots[i].key == nullptr) {
+            continue;
+        }
+        index = (size_t)map->slots[i].hash & (capacity - 1U);
+        while (slots[index].key != nullptr) {
+            index = (index + 1U) & (capacity - 1U);
+        }
+        slots[index] = map->slots[i];
+    }
+    free(map->slots);
+    map->slots = slots;
+    map->capacity = capacity;
+    return true;
+}
+
+static bool parse_map_find(const ParseMap *map,
+                        uint32_t scope,
+                        const char *key,
+                        size_t len,
+                        uint32_t *out_value)
+{
+    uint64_t hash;
+    size_t index;
+
+    if (map->capacity == 0U) {
+        return false;
+    }
+    hash = parse_map_hash(scope, key, len);
+    index = (size_t)hash & (map->capacity - 1U);
+    while (map->slots[index].key != nullptr) {
+        const ParseMapSlot *slot = &map->slots[index];
+
+        if ((slot->hash == hash) && (slot->scope == scope) && (slot->key_len == len) &&
+            (memcmp(slot->key, key, len) == 0)) {
+            *out_value = slot->value;
+            return true;
+        }
+        index = (index + 1U) & (map->capacity - 1U);
+    }
+    return false;
+}
+
+/* Value slot for an existing key, or nullptr; lets callers update in place. */
+static uint32_t *parse_map_slot(ParseMap *map, uint32_t scope, const char *key, size_t len)
+{
+    uint64_t hash;
+    size_t index;
+
+    if (map->capacity == 0U) {
+        return nullptr;
+    }
+    hash = parse_map_hash(scope, key, len);
+    index = (size_t)hash & (map->capacity - 1U);
+    while (map->slots[index].key != nullptr) {
+        ParseMapSlot *slot = &map->slots[index];
+
+        if ((slot->hash == hash) && (slot->scope == scope) && (slot->key_len == len) &&
+            (memcmp(slot->key, key, len) == 0)) {
+            return &slot->value;
+        }
+        index = (index + 1U) & (map->capacity - 1U);
+    }
+    return nullptr;
+}
+
+/* Inserts a key known to be absent. */
+static bool parse_map_insert(ParseMap *map,
+                             uint32_t scope,
+                             const char *key,
+                             size_t len,
+                             uint32_t value)
+{
+    uint64_t hash;
+    size_t index;
+
+    if (((map->count + 1U) * 2U > map->capacity) && !parse_map_grow(map)) {
+        return false;
+    }
+    hash = parse_map_hash(scope, key, len);
+    index = (size_t)hash & (map->capacity - 1U);
+    while (map->slots[index].key != nullptr) {
+        index = (index + 1U) & (map->capacity - 1U);
+    }
+    map->slots[index] = (ParseMapSlot){
+        .key = key, .key_len = len, .hash = hash, .scope = scope, .value = value};
+    map->count++;
+    return true;
+}
+
+static bool parser_heap_grow(void **items,
+                           size_t *capacity,
+                           size_t elem_size,
+                           size_t initial_capacity)
+{
+    size_t new_capacity = *capacity == 0U ? initial_capacity : *capacity * 2U;
+    void *grown;
+
+    if ((new_capacity < *capacity) || (new_capacity > (SIZE_MAX / elem_size))) {
+        return false;
+    }
+    grown = realloc(*items, new_capacity * elem_size);
+    if (grown == nullptr) {
+        return false;
+    }
+    *items = grown;
+    *capacity = new_capacity;
+    return true;
+}
+
+/* Lexically scoped name lookup for the C and Java extractors. Callers add
+ * every binding (name, scope byte range, declaration byte) in storage
+ * order, finish once, then resolve uses: the answer is the binding whose
+ * scope holds the use and that is declared at or before it (unless
+ * always_visible), preferring the innermost scope_start, then the latest
+ * declaration, then the earliest added. Each name's entries are one run
+ * sorted by (scope_start, index), so a lookup binary-searches to the
+ * innermost candidate instead of scanning every same-name binding; common
+ * local names (`p`, `rc`, `i`) have hundreds of those in a large file. */
+typedef struct {
+    uint32_t run;
+    uint32_t index;
+    uint32_t declaration_byte;
+    uint32_t scope_start;
+    uint32_t scope_end;
+    bool always_visible;
+} ScopeEntry;
+
+typedef struct {
+    ParseMap names;        /* name -> run */
+    ScopeEntry *entries;   /* after finish: grouped by run, sorted in run */
+    size_t entry_count;
+    size_t entry_capacity;
+    uint32_t *run_starts;  /* after finish: run r is [run_starts[r], run_starts[r + 1]) */
+    uint32_t run_count;
+} ScopeIndex;
+
+#define SCOPE_INDEX_NONE UINT32_MAX
+
+static void scope_index_free(ScopeIndex *index)
+{
+    free(index->names.slots);
+    free(index->entries);
+    free(index->run_starts);
+}
+
+/* `name` must outlive the index. */
+static bool scope_index_add(ScopeIndex *index,
+                            const char *name,
+                            uint32_t declaration_byte,
+                            uint32_t scope_start,
+                            uint32_t scope_end,
+                            bool always_visible)
+{
+    size_t len = strlen(name);
+    uint32_t run;
+
+    if ((index->entry_count >= SCOPE_INDEX_NONE) ||
+        ((index->entry_count == index->entry_capacity) &&
+         !parser_heap_grow((void **)&index->entries,
+                           &index->entry_capacity,
+                           sizeof(*index->entries),
+                           64U))) {
+        return false;
+    }
+    if (!parse_map_find(&index->names, 0U, name, len, &run)) {
+        run = index->run_count++;
+        if (!parse_map_insert(&index->names, 0U, name, len, run)) {
+            return false;
+        }
+    }
+    index->entries[index->entry_count] = (ScopeEntry){
+        .run = run,
+        .index = (uint32_t)index->entry_count,
+        .declaration_byte = declaration_byte,
+        .scope_start = scope_start,
+        .scope_end = scope_end,
+        .always_visible = always_visible,
+    };
+    index->entry_count++;
+    return true;
+}
+
+static int scope_entry_compare(const void *left, const void *right)
+{
+    const ScopeEntry *a = left;
+    const ScopeEntry *b = right;
+
+    if (a->run != b->run) {
+        return a->run < b->run ? -1 : 1;
+    }
+    if (a->scope_start != b->scope_start) {
+        return a->scope_start < b->scope_start ? -1 : 1;
+    }
+    return (a->index > b->index) - (a->index < b->index);
+}
+
+static bool scope_index_finish(ScopeIndex *index)
+{
+    uint32_t run = 0U;
+
+    index->run_starts = malloc(((size_t)index->run_count + 1U) * sizeof(*index->run_starts));
+    if (index->run_starts == nullptr) {
+        return false;
+    }
+    if (index->entry_count > 0U) {
+        qsort(index->entries, index->entry_count, sizeof(*index->entries), scope_entry_compare);
+    }
+    for (size_t i = 0U; i < index->entry_count; i++) {
+        while (run <= index->entries[i].run) {
+            index->run_starts[run++] = (uint32_t)i;
+        }
+    }
+    while (run <= index->run_count) {
+        index->run_starts[run++] = (uint32_t)index->entry_count;
+    }
+    return true;
+}
+
+/* Index (in add order) of the binding `name` resolves to at at_byte, or
+ * SCOPE_INDEX_NONE. Only valid after scope_index_finish. */
+static uint32_t scope_index_find(const ScopeIndex *index, const char *name, uint32_t at_byte)
+{
+    const ScopeEntry *best = nullptr;
+    const ScopeEntry *run;
+    uint32_t run_id;
+    size_t low = 0U;
+    size_t high;
+
+    if ((index->run_starts == nullptr) ||
+        !parse_map_find(&index->names, 0U, name, strlen(name), &run_id)) {
+        return SCOPE_INDEX_NONE;
+    }
+    run = index->entries + index->run_starts[run_id];
+    high = index->run_starts[run_id + 1U] - index->run_starts[run_id];
+    while (low < high) {
+        size_t mid = low + ((high - low) / 2U);
+
+        if (run[mid].scope_start <= at_byte) {
+            low = mid + 1U;
+        } else {
+            high = mid;
+        }
+    }
+    /* Descending scope_start: the first match fixes the innermost scope;
+     * within it `>=` lets the earlier-added entry win a full tie. */
+    for (size_t i = low; i > 0U; i--) {
+        const ScopeEntry *entry = &run[i - 1U];
+
+        if ((best != nullptr) && (entry->scope_start < best->scope_start)) {
+            break;
+        }
+        if ((at_byte > entry->scope_end) ||
+            (!entry->always_visible && (entry->declaration_byte > at_byte))) {
+            continue;
+        }
+        if ((best == nullptr) || (entry->declaration_byte >= best->declaration_byte)) {
+            best = entry;
+        }
+    }
+    return best == nullptr ? SCOPE_INDEX_NONE : best->index;
+}
+
 /* Java parser */
+
+/* Node kinds and fields the Java extractor inspects (see Tree-sitter
+ * helpers). Kinds match named and anonymous nodes alike. */
+typedef enum {
+    JK_OTHER,
+    JK_ANNOTATION,
+    JK_ANNOTATION_TYPE_DECLARATION,
+    JK_ANNOTATION_TYPE_ELEMENT_DECLARATION,
+    JK_BLOCK,
+    JK_CAST_EXPRESSION,
+    JK_CLASS_DECLARATION,
+    JK_COMPACT_CONSTRUCTOR_DECLARATION,
+    JK_CONSTANT_DECLARATION,
+    JK_CONSTRUCTOR_DECLARATION,
+    JK_ENHANCED_FOR_STATEMENT,
+    JK_ENUM_CONSTANT,
+    JK_ENUM_DECLARATION,
+    JK_FIELD_ACCESS,
+    JK_FIELD_DECLARATION,
+    JK_FORMAL_PARAMETER,
+    JK_GENERIC_TYPE,
+    JK_IDENTIFIER,
+    JK_IMPORT_DECLARATION,
+    JK_INTERFACE_DECLARATION,
+    JK_LOCAL_VARIABLE_DECLARATION,
+    JK_MARKER_ANNOTATION,
+    JK_METHOD_DECLARATION,
+    JK_METHOD_INVOCATION,
+    JK_METHOD_REFERENCE,
+    JK_MODIFIERS,
+    JK_MODULE_DECLARATION,
+    JK_OBJECT_CREATION_EXPRESSION,
+    JK_PACKAGE_DECLARATION,
+    JK_RECORD_DECLARATION,
+    JK_RESOURCE,
+    JK_SCOPED_IDENTIFIER,
+    JK_SCOPED_TYPE_IDENTIFIER,
+    JK_TYPE_IDENTIFIER,
+    JK_VARIABLE_DECLARATOR,
+    JK_COUNT,
+} JavaKind;
+
+static const char *const java_kind_names[JK_COUNT] = {
+    [JK_ANNOTATION] = "annotation",
+    [JK_ANNOTATION_TYPE_DECLARATION] = "annotation_type_declaration",
+    [JK_ANNOTATION_TYPE_ELEMENT_DECLARATION] = "annotation_type_element_declaration",
+    [JK_BLOCK] = "block",
+    [JK_CAST_EXPRESSION] = "cast_expression",
+    [JK_CLASS_DECLARATION] = "class_declaration",
+    [JK_COMPACT_CONSTRUCTOR_DECLARATION] = "compact_constructor_declaration",
+    [JK_CONSTANT_DECLARATION] = "constant_declaration",
+    [JK_CONSTRUCTOR_DECLARATION] = "constructor_declaration",
+    [JK_ENHANCED_FOR_STATEMENT] = "enhanced_for_statement",
+    [JK_ENUM_CONSTANT] = "enum_constant",
+    [JK_ENUM_DECLARATION] = "enum_declaration",
+    [JK_FIELD_ACCESS] = "field_access",
+    [JK_FIELD_DECLARATION] = "field_declaration",
+    [JK_FORMAL_PARAMETER] = "formal_parameter",
+    [JK_GENERIC_TYPE] = "generic_type",
+    [JK_IDENTIFIER] = "identifier",
+    [JK_IMPORT_DECLARATION] = "import_declaration",
+    [JK_INTERFACE_DECLARATION] = "interface_declaration",
+    [JK_LOCAL_VARIABLE_DECLARATION] = "local_variable_declaration",
+    [JK_MARKER_ANNOTATION] = "marker_annotation",
+    [JK_METHOD_DECLARATION] = "method_declaration",
+    [JK_METHOD_INVOCATION] = "method_invocation",
+    [JK_METHOD_REFERENCE] = "method_reference",
+    [JK_MODIFIERS] = "modifiers",
+    [JK_MODULE_DECLARATION] = "module_declaration",
+    [JK_OBJECT_CREATION_EXPRESSION] = "object_creation_expression",
+    [JK_PACKAGE_DECLARATION] = "package_declaration",
+    [JK_RECORD_DECLARATION] = "record_declaration",
+    [JK_RESOURCE] = "resource",
+    [JK_SCOPED_IDENTIFIER] = "scoped_identifier",
+    [JK_SCOPED_TYPE_IDENTIFIER] = "scoped_type_identifier",
+    [JK_TYPE_IDENTIFIER] = "type_identifier",
+    [JK_VARIABLE_DECLARATOR] = "variable_declarator",
+};
+
+typedef enum {
+    JF_BODY,
+    JF_FIELD,
+    JF_NAME,
+    JF_OBJECT,
+    JF_PARAMETERS,
+    JF_SUPERCLASS,
+    JF_TYPE,
+    JF_COUNT,
+} JavaField;
+
+static const char *const java_field_names[JF_COUNT] = {
+    [JF_BODY] = "body",
+    [JF_FIELD] = "field",
+    [JF_NAME] = "name",
+    [JF_OBJECT] = "object",
+    [JF_PARAMETERS] = "parameters",
+    [JF_SUPERCLASS] = "superclass",
+    [JF_TYPE] = "type",
+};
+
 
 struct CodeLensJavaParser {
     TSParser *parser;
@@ -5637,57 +6370,60 @@ typedef struct {
     JavaBinding *bindings;
     size_t binding_count;
     size_t binding_capacity;
+    /* Built once declarations are complete; per-use linear scans over
+     * every binding and symbol made large files quadratic. */
+    ScopeIndex binding_scopes;
+    ParseMap member_names;        /* symbol name -> newest symbol index */
+    uint32_t *member_prev;        /* earlier symbol with the same name */
+    size_t member_indexed;
 } JavaParseContext;
 
-typedef struct {
-    CodeLensClojureParser *clojure;
-    CodeLensJavaParser *java;
-    CodeLensCParser *c;
-    CodeLensPythonParser *python;
-} CodeLensSourceParser;
+static pthread_once_t java_ids_once = PTHREAD_ONCE_INIT;
+static TshIds java_ids;
 
-static bool java_node_is(TSNode node, const char *type)
+static void init_java_ids(void)
 {
-    return !ts_node_is_null(node) && (strcmp(ts_node_type(node), type) == 0);
+    java_ids.ok = tsh_ids_init(&java_ids,
+                               tree_sitter_java(),
+                               java_kind_names,
+                               JK_COUNT,
+                               java_field_names,
+                               JF_COUNT,
+                               false);
 }
 
-static bool parser_heap_grow(void **items,
-                           size_t *capacity,
-                           size_t elem_size,
-                           size_t initial_capacity)
+static JavaKind java_kind(TSNode node)
 {
-    size_t new_capacity = *capacity == 0U ? initial_capacity : *capacity * 2U;
-    void *grown;
+    return (JavaKind)tsh_kind(&java_ids, node);
+}
 
-    if ((new_capacity < *capacity) || (new_capacity > (SIZE_MAX / elem_size))) {
-        return false;
-    }
-    grown = realloc(*items, new_capacity * elem_size);
-    if (grown == nullptr) {
-        return false;
-    }
-    *items = grown;
-    *capacity = new_capacity;
-    return true;
+static bool java_is(TSNode node, JavaKind kind)
+{
+    return java_kind(node) == kind;
+}
+
+static TSNode java_field(TSNode node, JavaField field)
+{
+    return tsh_field(&java_ids, node, field);
 }
 
 static const char *java_type_declaration_kind(TSNode node)
 {
-    const char *type = ts_node_type(node);
+    JavaKind kind = java_kind(node);
 
-    if (strcmp(type, "class_declaration") == 0) {
+    if (kind == JK_CLASS_DECLARATION) {
         return "class";
     }
-    if (strcmp(type, "interface_declaration") == 0) {
+    if (kind == JK_INTERFACE_DECLARATION) {
         return "interface";
     }
-    if (strcmp(type, "enum_declaration") == 0) {
+    if (kind == JK_ENUM_DECLARATION) {
         return "enum";
     }
-    if (strcmp(type, "annotation_type_declaration") == 0) {
+    if (kind == JK_ANNOTATION_TYPE_DECLARATION) {
         return "annotation";
     }
-    if (strcmp(type, "record_declaration") == 0) {
+    if (kind == JK_RECORD_DECLARATION) {
         return "record";
     }
     return nullptr;
@@ -5777,7 +6513,7 @@ static bool java_collect_type_entries(JavaParseContext *ctx, TSNode node, const 
     const char *child_enclosing = enclosing;
 
     if (kind != nullptr) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+        TSNode name = java_field(node, JF_NAME);
 
         if (ts_node_is_null(name) || !java_add_type_entry(ctx, node, name, enclosing)) {
             return false;
@@ -5785,8 +6521,8 @@ static bool java_collect_type_entries(JavaParseContext *ctx, TSNode node, const 
         child_enclosing = ctx->types[ctx->type_count - 1U].target;
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        if (!java_collect_type_entries(ctx, ts_node_named_child(node, i), child_enclosing)) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        if (!java_collect_type_entries(ctx, tsh_named_child(node, i), child_enclosing)) {
             return false;
         }
     }
@@ -5795,14 +6531,14 @@ static bool java_collect_type_entries(JavaParseContext *ctx, TSNode node, const 
 
 static bool java_extract_package(JavaParseContext *ctx, TSNode root)
 {
-    for (uint32_t i = 0U; i < ts_node_named_child_count(root); i++) {
-        TSNode child = ts_node_named_child(root, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(root); i < i_count; i++) {
+        TSNode child = tsh_named_child(root, i);
 
-        if (java_node_is(child, "package_declaration")) {
-            for (uint32_t j = 0U; j < ts_node_named_child_count(child); j++) {
-                TSNode name = ts_node_named_child(child, j);
+        if (java_is(child, JK_PACKAGE_DECLARATION)) {
+            for (uint32_t j = 0U, j_count = tsh_named_count(child); j < j_count; j++) {
+                TSNode name = tsh_named_child(child, j);
 
-                if (java_node_is(name, "identifier") || java_node_is(name, "scoped_identifier")) {
+                if (java_is(name, JK_IDENTIFIER) || java_is(name, JK_SCOPED_IDENTIFIER)) {
                     ctx->file->namespace_name = node_text(ctx->source, name);
                     return ctx->file->namespace_name != nullptr;
                 }
@@ -5897,10 +6633,10 @@ static bool java_extract_import(JavaParseContext *ctx, TSNode node)
 
 static bool java_extract_imports(JavaParseContext *ctx, TSNode root)
 {
-    for (uint32_t i = 0U; i < ts_node_named_child_count(root); i++) {
-        TSNode child = ts_node_named_child(root, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(root); i < i_count; i++) {
+        TSNode child = tsh_named_child(root, i);
 
-        if (java_node_is(child, "import_declaration") && !java_extract_import(ctx, child)) {
+        if (java_is(child, JK_IMPORT_DECLARATION) && !java_extract_import(ctx, child)) {
             return false;
         }
     }
@@ -6050,15 +6786,15 @@ static char *java_resolve_type(JavaParseContext *ctx,
 
 static TSNode java_first_type_node(TSNode node)
 {
-    const char *type = ts_node_type(node);
+    JavaKind kind = java_kind(node);
 
-    if ((strcmp(type, "type_identifier") == 0) ||
-        (strcmp(type, "scoped_type_identifier") == 0) ||
-        (strcmp(type, "generic_type") == 0)) {
+    if ((kind == JK_TYPE_IDENTIFIER) ||
+        (kind == JK_SCOPED_TYPE_IDENTIFIER) ||
+        (kind == JK_GENERIC_TYPE)) {
         return node;
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode found = java_first_type_node(ts_node_named_child(node, i));
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode found = java_first_type_node(tsh_named_child(node, i));
 
         if (!ts_node_is_null(found)) {
             return found;
@@ -6084,10 +6820,15 @@ static char *java_doc_before(const char *source, uint32_t declaration_start)
         return nullptr;
     }
     comment_end = end - 2U;
-    for (size_t i = comment_end; i >= 3U; i--) {
-        if ((source[i - 3U] == '/') && (source[i - 2U] == '*') &&
-            (source[i - 1U] == '*')) {
-            open = i;
+    /* Only the comment that ends here counts: find its nearest opener and
+     * require a doc opener (slash, star, star). Searching back for any doc
+     * opener let a plain block comment absorb everything since an earlier,
+     * unrelated doc comment (hundreds of MB of "doc" text in sqlite3.c). */
+    for (size_t i = comment_end; i >= 2U; i--) {
+        if ((source[i - 2U] == '/') && (source[i - 1U] == '*')) {
+            if ((i < comment_end) && (source[i] == '*')) {
+                open = i + 1U;
+            }
             break;
         }
     }
@@ -6134,9 +6875,13 @@ static char *java_doc_before(const char *source, uint32_t declaration_start)
     return out.data;
 }
 
-static char *java_definition_source(const char *source, TSNode declaration, bool header_only)
+/* Shared with the C extractor, so the caller resolves body with its own
+ * grammar's field ids. */
+static char *java_definition_source(const char *source,
+                                    TSNode declaration,
+                                    TSNode body,
+                                    bool header_only)
 {
-    TSNode body;
     uint32_t start;
     uint32_t end;
     static const char suffix[] = " { ... }";
@@ -6146,7 +6891,6 @@ static char *java_definition_source(const char *source, TSNode declaration, bool
     if (!header_only) {
         return node_text(source, declaration);
     }
-    body = ts_node_child_by_field_name(declaration, "body", 4U);
     if (ts_node_is_null(body)) {
         return node_text(source, declaration);
     }
@@ -6183,7 +6927,10 @@ static bool java_add_definition(JavaParseContext *ctx,
     symbol->name = node_text(ctx->source, name_node);
     symbol->namespace_name = copy_cstr(namespace_name);
     symbol->doc = java_doc_before(ctx->source, ts_node_start_byte(declaration));
-    symbol->source = java_definition_source(ctx->source, declaration, header_only);
+    symbol->source = java_definition_source(ctx->source,
+                                            declaration,
+                                            java_field(declaration, JF_BODY),
+                                            header_only);
     symbol->start_line = ts_node_start_point(declaration).row + 1U;
     symbol->end_line = ts_node_end_point(declaration).row + 1U;
     if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
@@ -6213,18 +6960,18 @@ static bool java_test_annotation_name(const char *name)
 
 static bool java_modifiers_have_test_annotation(const char *source, TSNode declaration)
 {
-    for (uint32_t i = 0U; i < ts_node_named_child_count(declaration); i++) {
-        TSNode child = ts_node_named_child(declaration, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(declaration); i < i_count; i++) {
+        TSNode child = tsh_named_child(declaration, i);
 
-        if (!java_node_is(child, "modifiers")) {
+        if (!java_is(child, JK_MODIFIERS)) {
             continue;
         }
-        for (uint32_t j = 0U; j < ts_node_named_child_count(child); j++) {
-            TSNode annotation = ts_node_named_child(child, j);
-            const char *type = ts_node_type(annotation);
+        for (uint32_t j = 0U, j_count = tsh_named_count(child); j < j_count; j++) {
+            TSNode annotation = tsh_named_child(child, j);
+            JavaKind kind = java_kind(annotation);
 
-            if ((strcmp(type, "annotation") == 0) || (strcmp(type, "marker_annotation") == 0)) {
-                TSNode name_node = ts_node_child_by_field_name(annotation, "name", 4U);
+            if ((kind == JK_ANNOTATION) || (kind == JK_MARKER_ANNOTATION)) {
+                TSNode name_node = java_field(annotation, JF_NAME);
                 char *name = ts_node_is_null(name_node) ? nullptr : node_text(source, name_node);
 
                 if ((name != nullptr) && java_test_annotation_name(name)) {
@@ -6296,27 +7043,31 @@ static bool java_add_binding(JavaParseContext *ctx,
                               field);
 }
 
+/* Declarations precede the reference pass, the only lookup caller. */
+static bool java_index_bindings(JavaParseContext *ctx)
+{
+    for (size_t i = 0U; i < ctx->binding_count; i++) {
+        const JavaBinding *binding = &ctx->bindings[i];
+
+        if (!scope_index_add(&ctx->binding_scopes,
+                             binding->name,
+                             binding->declaration_byte,
+                             binding->scope_start,
+                             binding->scope_end,
+                             binding->field)) {
+            return false;
+        }
+    }
+    return scope_index_finish(&ctx->binding_scopes);
+}
+
 static const JavaBinding *java_find_binding(const JavaParseContext *ctx,
                                            const char *name,
                                            uint32_t at_byte)
 {
-    const JavaBinding *best = nullptr;
+    uint32_t index = scope_index_find(&ctx->binding_scopes, name, at_byte);
 
-    for (size_t i = 0U; i < ctx->binding_count; i++) {
-        const JavaBinding *binding = &ctx->bindings[i];
-
-        if ((strcmp(binding->name, name) != 0) || (at_byte < binding->scope_start) ||
-            (at_byte > binding->scope_end) ||
-            (!binding->field && (binding->declaration_byte > at_byte))) {
-            continue;
-        }
-        if ((best == nullptr) || (binding->scope_start > best->scope_start) ||
-            ((binding->scope_start == best->scope_start) &&
-             (binding->declaration_byte > best->declaration_byte))) {
-            best = binding;
-        }
-    }
-    return best;
+    return index == SCOPE_INDEX_NONE ? nullptr : &ctx->bindings[index];
 }
 
 static const char *java_binding_target(const JavaParseContext *ctx,
@@ -6335,13 +7086,13 @@ static bool java_add_variable_declaration_bindings(JavaParseContext *ctx,
                                                    bool field,
                                                    const JavaTypeEntry *current)
 {
-    TSNode type_node = ts_node_child_by_field_name(declaration, "type", 4U);
+    TSNode type_node = java_field(declaration, JF_TYPE);
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(declaration); i++) {
-        TSNode child = ts_node_named_child(declaration, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(declaration); i < i_count; i++) {
+        TSNode child = tsh_named_child(declaration, i);
 
-        if (java_node_is(child, "variable_declarator")) {
-            TSNode name = ts_node_child_by_field_name(child, "name", 4U);
+        if (java_is(child, JK_VARIABLE_DECLARATOR)) {
+            TSNode name = java_field(child, JF_NAME);
 
             if (!java_add_binding(ctx,
                                   name,
@@ -6364,11 +7115,11 @@ static bool java_add_field_definitions(JavaParseContext *ctx,
     if (current == nullptr) {
         return true;
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(declaration); i++) {
-        TSNode child = ts_node_named_child(declaration, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(declaration); i < i_count; i++) {
+        TSNode child = tsh_named_child(declaration, i);
 
-        if (java_node_is(child, "variable_declarator")) {
-            TSNode name = ts_node_child_by_field_name(child, "name", 4U);
+        if (java_is(child, JK_VARIABLE_DECLARATOR)) {
+            TSNode name = java_field(child, JF_NAME);
 
             if (!java_add_definition(ctx,
                                      declaration,
@@ -6394,15 +7145,15 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                                       uint32_t scope_start,
                                       uint32_t scope_end)
 {
-    const char *type = ts_node_type(node);
+    JavaKind node_kind = java_kind(node);
     const char *type_kind = java_type_declaration_kind(node);
     JavaTypeEntry *child_current = current;
     uint32_t child_scope_start = scope_start;
     uint32_t child_scope_end = scope_end;
 
     if (type_kind != nullptr) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
-        TSNode superclass = ts_node_child_by_field_name(node, "superclass", 10U);
+        TSNode name = java_field(node, JF_NAME);
+        TSNode superclass = java_field(node, JF_SUPERCLASS);
 
         child_current = java_type_entry_for_declaration(ctx, node);
         if ((child_current == nullptr) ||
@@ -6424,16 +7175,16 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                 raw == nullptr ? nullptr : java_resolve_type(ctx, raw, child_current);
         }
         if (strcmp(type_kind, "record") == 0) {
-            TSNode parameters = ts_node_child_by_field_name(node, "parameters", 10U);
+            TSNode parameters = java_field(node, JF_PARAMETERS);
 
-            for (uint32_t i = 0U; i < ts_node_named_child_count(parameters); i++) {
-                TSNode parameter = ts_node_named_child(parameters, i);
+            for (uint32_t i = 0U, i_count = tsh_named_count(parameters); i < i_count; i++) {
+                TSNode parameter = tsh_named_child(parameters, i);
 
-                if (java_node_is(parameter, "formal_parameter")) {
-                    TSNode component = ts_node_child_by_field_name(parameter, "name", 4U);
+                if (java_is(parameter, JK_FORMAL_PARAMETER)) {
+                    TSNode component = java_field(parameter, JF_NAME);
 
                     TSNode component_type =
-                        ts_node_child_by_field_name(parameter, "type", 4U);
+                        java_field(parameter, JF_TYPE);
 
                     if (!java_add_definition(ctx,
                                              parameter,
@@ -6453,8 +7204,8 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                 }
             }
         }
-    } else if (strcmp(type, "method_declaration") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if (node_kind == JK_METHOD_DECLARATION) {
+        TSNode name = java_field(node, JF_NAME);
         const char *kind = java_modifiers_have_test_annotation(ctx->source, node) ? "test" : "method";
 
         if ((current != nullptr) &&
@@ -6463,9 +7214,9 @@ static bool java_extract_declarations(JavaParseContext *ctx,
         }
         child_scope_start = ts_node_start_byte(node);
         child_scope_end = ts_node_end_byte(node);
-    } else if ((strcmp(type, "constructor_declaration") == 0) ||
-               (strcmp(type, "compact_constructor_declaration") == 0)) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if ((node_kind == JK_CONSTRUCTOR_DECLARATION) ||
+               (node_kind == JK_COMPACT_CONSTRUCTOR_DECLARATION)) {
+        TSNode name = java_field(node, JF_NAME);
 
         if ((current != nullptr) &&
             !java_add_definition(ctx, node, name, "constructor", current->target, false)) {
@@ -6473,13 +7224,13 @@ static bool java_extract_declarations(JavaParseContext *ctx,
         }
         child_scope_start = ts_node_start_byte(node);
         child_scope_end = ts_node_end_byte(node);
-    } else if ((strcmp(type, "field_declaration") == 0) ||
-               (strcmp(type, "constant_declaration") == 0)) {
+    } else if ((node_kind == JK_FIELD_DECLARATION) ||
+               (node_kind == JK_CONSTANT_DECLARATION)) {
         if (!java_add_field_definitions(ctx, node, current)) {
             return false;
         }
-    } else if (strcmp(type, "enum_constant") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if (node_kind == JK_ENUM_CONSTANT) {
+        TSNode name = java_field(node, JF_NAME);
 
         if ((current != nullptr) &&
             (!java_add_definition(ctx,
@@ -6496,22 +7247,22 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                                  true))) {
             return false;
         }
-    } else if (strcmp(type, "annotation_type_element_declaration") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if (node_kind == JK_ANNOTATION_TYPE_ELEMENT_DECLARATION) {
+        TSNode name = java_field(node, JF_NAME);
 
         if ((current != nullptr) &&
             !java_add_definition(ctx, node, name, "method", current->target, false)) {
             return false;
         }
-    } else if (strcmp(type, "module_declaration") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if (node_kind == JK_MODULE_DECLARATION) {
+        TSNode name = java_field(node, JF_NAME);
         char *module_name = ts_node_is_null(name) ? nullptr : node_text(ctx->source, name);
 
         if ((module_name == nullptr) ||
             !java_add_definition(ctx, node, name, "module", module_name, true)) {
             return false;
         }
-    } else if (strcmp(type, "local_variable_declaration") == 0) {
+    } else if (node_kind == JK_LOCAL_VARIABLE_DECLARATION) {
         if (!java_add_variable_declaration_bindings(ctx,
                                                     node,
                                                     scope_start,
@@ -6520,9 +7271,9 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                                                     current)) {
             return false;
         }
-    } else if (strcmp(type, "formal_parameter") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
-        TSNode value_type = ts_node_child_by_field_name(node, "type", 4U);
+    } else if (node_kind == JK_FORMAL_PARAMETER) {
+        TSNode name = java_field(node, JF_NAME);
+        TSNode value_type = java_field(node, JF_TYPE);
 
         if (!java_add_binding(ctx,
                               name,
@@ -6533,9 +7284,9 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                               current)) {
             return false;
         }
-    } else if (strcmp(type, "enhanced_for_statement") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
-        TSNode value_type = ts_node_child_by_field_name(node, "type", 4U);
+    } else if (node_kind == JK_ENHANCED_FOR_STATEMENT) {
+        TSNode name = java_field(node, JF_NAME);
+        TSNode value_type = java_field(node, JF_TYPE);
 
         if (!java_add_binding(ctx,
                               name,
@@ -6546,9 +7297,9 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                               current)) {
             return false;
         }
-    } else if (strcmp(type, "resource") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
-        TSNode value_type = ts_node_child_by_field_name(node, "type", 4U);
+    } else if (node_kind == JK_RESOURCE) {
+        TSNode name = java_field(node, JF_NAME);
+        TSNode value_type = java_field(node, JF_TYPE);
 
         if (!java_add_binding(ctx,
                               name,
@@ -6559,14 +7310,14 @@ static bool java_extract_declarations(JavaParseContext *ctx,
                               current)) {
             return false;
         }
-    } else if (strcmp(type, "block") == 0) {
+    } else if (node_kind == JK_BLOCK) {
         child_scope_start = ts_node_start_byte(node);
         child_scope_end = ts_node_end_byte(node);
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
         if (!java_extract_declarations(ctx,
-                                       ts_node_named_child(node, i),
+                                       tsh_named_child(node, i),
                                        child_current,
                                        child_scope_start,
                                        child_scope_end)) {
@@ -6586,8 +7337,13 @@ static bool java_add_reference_span(JavaParseContext *ctx,
 {
     CodeLensReference *reference;
 
+    /* Degenerate spans (zero-width MISSING nodes from error recovery) are
+     * skipped, never a parse failure. */
     if ((end <= start) || (base_start < start) || (base_end <= base_start) ||
-        (base_end > end) || ((size_t)end > ctx->source_len) || !reserve_references(ctx->file)) {
+        (base_end > end) || ((size_t)end > ctx->source_len)) {
+        return true;
+    }
+    if (!reserve_references(ctx->file)) {
         return false;
     }
     reference = &ctx->file->references[ctx->file->reference_count];
@@ -6666,9 +7422,9 @@ static char *java_resolve_receiver(JavaParseContext *ctx,
                                    const JavaTypeEntry *current,
                                    uint32_t at_byte)
 {
-    if (java_node_is(object, "object_creation_expression") ||
-        java_node_is(object, "cast_expression")) {
-        TSNode type_node = ts_node_child_by_field_name(object, "type", 4U);
+    if (java_is(object, JK_OBJECT_CREATION_EXPRESSION) ||
+        java_is(object, JK_CAST_EXPRESSION)) {
+        TSNode type_node = java_field(object, JF_TYPE);
         char *raw_type = ts_node_is_null(type_node) ? nullptr : node_text(ctx->source, type_node);
         char *resolved = raw_type == nullptr ? nullptr : java_resolve_type(ctx, raw_type, current);
 
@@ -6741,18 +7497,52 @@ static bool java_receiver_span_is_simple(const char *source, TSNode object)
     return true;
 }
 
-static bool java_type_defines_name(const JavaParseContext *ctx,
+/* Whether `type` declares a member `name`. The name -> symbols index
+ * catches up with symbols added since the last call; false on out of
+ * memory too (it only picks between fallback targets). */
+static bool java_type_defines_name(JavaParseContext *ctx,
                                    const JavaTypeEntry *type,
                                    const char *name)
 {
+    const CodeLensJavaFile *file = ctx->file;
+    uint32_t index;
+
     if (type == nullptr) {
         return false;
     }
-    for (size_t i = 0U; i < ctx->file->symbol_count; i++) {
-        const CodeLensSymbol *symbol = &ctx->file->symbols[i];
+    if (ctx->member_indexed < file->symbol_count) {
+        uint32_t *grown;
 
-        if ((strcmp(symbol->namespace_name, type->target) == 0) &&
-            (strcmp(symbol->name, name) == 0)) {
+        if (file->symbol_count >= UINT32_MAX) {
+            return false;
+        }
+        grown = realloc(ctx->member_prev, file->symbol_count * sizeof(*ctx->member_prev));
+        if (grown == nullptr) {
+            return false;
+        }
+        ctx->member_prev = grown;
+        for (; ctx->member_indexed < file->symbol_count; ctx->member_indexed++) {
+            const char *member = file->symbols[ctx->member_indexed].name;
+            size_t len = strlen(member);
+            uint32_t *newest = parse_map_slot(&ctx->member_names, 0U, member, len);
+            uint32_t position = (uint32_t)ctx->member_indexed;
+
+            if (newest != nullptr) {
+                ctx->member_prev[position] = *newest;
+                *newest = position;
+            } else {
+                ctx->member_prev[position] = UINT32_MAX;
+                if (!parse_map_insert(&ctx->member_names, 0U, member, len, position)) {
+                    return false;
+                }
+            }
+        }
+    }
+    if (!parse_map_find(&ctx->member_names, 0U, name, strlen(name), &index)) {
+        return false;
+    }
+    for (; index != UINT32_MAX; index = ctx->member_prev[index]) {
+        if (strcmp(file->symbols[index].namespace_name, type->target) == 0) {
             return true;
         }
     }
@@ -6763,8 +7553,8 @@ static bool java_add_method_invocation_reference(JavaParseContext *ctx,
                                                  TSNode node,
                                                  const JavaTypeEntry *current)
 {
-    TSNode name = ts_node_child_by_field_name(node, "name", 4U);
-    TSNode object = ts_node_child_by_field_name(node, "object", 6U);
+    TSNode name = java_field(node, JF_NAME);
+    TSNode object = java_field(node, JF_OBJECT);
     char *method_name;
     char *target = nullptr;
     bool wildcard = false;
@@ -6813,8 +7603,8 @@ static bool java_add_field_access_reference(JavaParseContext *ctx,
                                             TSNode node,
                                             const JavaTypeEntry *current)
 {
-    TSNode field = ts_node_child_by_field_name(node, "field", 5U);
-    TSNode object = ts_node_child_by_field_name(node, "object", 6U);
+    TSNode field = java_field(node, JF_FIELD);
+    TSNode object = java_field(node, JF_OBJECT);
     char *target;
 
     if (ts_node_is_null(field) || ts_node_is_null(object)) {
@@ -6839,11 +7629,11 @@ static TSNode java_last_named_identifier(TSNode node)
 {
     TSNode found = (TSNode){0};
 
-    if (java_node_is(node, "identifier") || java_node_is(node, "type_identifier")) {
+    if (java_is(node, JK_IDENTIFIER) || java_is(node, JK_TYPE_IDENTIFIER)) {
         found = node;
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child_found = java_last_named_identifier(ts_node_named_child(node, i));
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child_found = java_last_named_identifier(tsh_named_child(node, i));
 
         if (!ts_node_is_null(child_found)) {
             found = child_found;
@@ -6856,7 +7646,7 @@ static bool java_add_method_reference(JavaParseContext *ctx,
                                       TSNode node,
                                       const JavaTypeEntry *current)
 {
-    uint32_t count = ts_node_named_child_count(node);
+    uint32_t count = tsh_named_count(node);
     TSNode object;
     TSNode name;
     char *target;
@@ -6864,7 +7654,7 @@ static bool java_add_method_reference(JavaParseContext *ctx,
     if (count < 2U) {
         return true;
     }
-    object = ts_node_named_child(node, 0U);
+    object = tsh_named_child(node, 0U);
     name = java_last_named_identifier(node);
     if (ts_node_is_null(name) || (ts_node_start_byte(name) <= ts_node_start_byte(object))) {
         return true;
@@ -6888,7 +7678,7 @@ static bool java_add_annotation_reference(JavaParseContext *ctx,
                                           TSNode node,
                                           const JavaTypeEntry *current)
 {
-    TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    TSNode name = java_field(node, JF_NAME);
     char *raw;
     char *target;
     TSNode base;
@@ -6931,16 +7721,16 @@ static bool java_add_type_reference(JavaParseContext *ctx,
 
 static bool java_identifier_is_handled_elsewhere(TSNode node)
 {
-    TSNode parent = ts_node_parent(node);
-    const char *parent_type = ts_node_type(parent);
-    TSNode name = ts_node_child_by_field_name(parent, "name", 4U);
-    TSNode field = ts_node_child_by_field_name(parent, "field", 5U);
+    TSNode parent = tsh_parent(node);
+    JavaKind parent_kind = java_kind(parent);
+    TSNode name = java_field(parent, JF_NAME);
+    TSNode field = java_field(parent, JF_FIELD);
 
     return (!ts_node_is_null(name) && ts_node_eq(node, name)) ||
            (!ts_node_is_null(field) && ts_node_eq(node, field)) ||
-           (strcmp(parent_type, "scoped_identifier") == 0) ||
-           (strcmp(parent_type, "scoped_type_identifier") == 0) ||
-           (strcmp(parent_type, "method_reference") == 0);
+           (parent_kind == JK_SCOPED_IDENTIFIER) ||
+           (parent_kind == JK_SCOPED_TYPE_IDENTIFIER) ||
+           (parent_kind == JK_METHOD_REFERENCE);
 }
 
 static bool java_add_identifier_reference(JavaParseContext *ctx,
@@ -6981,55 +7771,55 @@ static bool java_extract_references(JavaParseContext *ctx,
                                     TSNode node,
                                     JavaTypeEntry *current)
 {
-    const char *type = ts_node_type(node);
+    JavaKind kind = java_kind(node);
     const char *type_kind = java_type_declaration_kind(node);
     JavaTypeEntry *child_current = current;
 
     if (type_kind != nullptr) {
         child_current = java_type_entry_for_declaration(ctx, node);
     }
-    if ((strcmp(type, "package_declaration") == 0) ||
-        (strcmp(type, "import_declaration") == 0)) {
+    if ((kind == JK_PACKAGE_DECLARATION) ||
+        (kind == JK_IMPORT_DECLARATION)) {
         return true;
     }
-    if (strcmp(type, "method_invocation") == 0) {
+    if (kind == JK_METHOD_INVOCATION) {
         if (!java_add_method_invocation_reference(ctx, node, current)) {
             return false;
         }
-    } else if (strcmp(type, "field_access") == 0) {
+    } else if (kind == JK_FIELD_ACCESS) {
         if (!java_add_field_access_reference(ctx, node, current)) {
             return false;
         }
-    } else if (strcmp(type, "method_reference") == 0) {
+    } else if (kind == JK_METHOD_REFERENCE) {
         if (!java_add_method_reference(ctx, node, current)) {
             return false;
         }
-    } else if ((strcmp(type, "annotation") == 0) ||
-               (strcmp(type, "marker_annotation") == 0)) {
+    } else if ((kind == JK_ANNOTATION) ||
+               (kind == JK_MARKER_ANNOTATION)) {
         if (!java_add_annotation_reference(ctx, node, current)) {
             return false;
         }
-    } else if (strcmp(type, "scoped_type_identifier") == 0) {
-        TSNode parent = ts_node_parent(node);
+    } else if (kind == JK_SCOPED_TYPE_IDENTIFIER) {
+        TSNode parent = tsh_parent(node);
 
-        if (!java_node_is(parent, "scoped_type_identifier") &&
+        if (!java_is(parent, JK_SCOPED_TYPE_IDENTIFIER) &&
             !java_add_type_reference(ctx, node, current)) {
             return false;
         }
-    } else if (strcmp(type, "type_identifier") == 0) {
-        TSNode parent = ts_node_parent(node);
+    } else if (kind == JK_TYPE_IDENTIFIER) {
+        TSNode parent = tsh_parent(node);
 
-        if (!java_node_is(parent, "scoped_type_identifier") &&
+        if (!java_is(parent, JK_SCOPED_TYPE_IDENTIFIER) &&
             !java_add_type_reference(ctx, node, current)) {
             return false;
         }
-    } else if ((strcmp(type, "identifier") == 0) &&
+    } else if ((kind == JK_IDENTIFIER) &&
                !java_add_identifier_reference(ctx, node, current)) {
         return false;
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        if (!java_extract_references(ctx, ts_node_named_child(node, i), child_current)) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        if (!java_extract_references(ctx, tsh_named_child(node, i), child_current)) {
             return false;
         }
     }
@@ -7038,8 +7828,13 @@ static bool java_extract_references(JavaParseContext *ctx,
 
 CodeLensJavaParser *code_lens_java_parser_new(void)
 {
-    CodeLensJavaParser *parser = code_lens_alloc(sizeof(*parser));
+    CodeLensJavaParser *parser;
 
+    (void)pthread_once(&java_ids_once, init_java_ids);
+    if (!java_ids.ok) {
+        return nullptr;
+    }
+    parser = code_lens_alloc(sizeof(*parser));
     if (parser == nullptr) {
         return nullptr;
     }
@@ -7094,10 +7889,14 @@ int code_lens_parse_java_source_with_parser(CodeLensJavaParser *parser,
     ok = java_extract_package(&ctx, root) && java_extract_imports(&ctx, root) &&
          java_collect_type_entries(&ctx, root, nullptr) &&
          java_extract_declarations(&ctx, root, nullptr, 0U, (uint32_t)source_len) &&
+         java_index_bindings(&ctx) &&
          java_extract_references(&ctx, root, nullptr);
 
     free(ctx.types);
     free(ctx.bindings);
+    scope_index_free(&ctx.binding_scopes);
+    free(ctx.member_names.slots);
+    free(ctx.member_prev);
     ts_tree_delete(tree);
     return ok ? 0 : -1;
 }
@@ -7124,6 +7923,102 @@ int code_lens_parse_java_source(const char *file_path,
 
 /* C parser */
 
+/* Node kinds and fields the C extractor inspects (see Tree-sitter
+ * helpers). Kinds match named and anonymous nodes alike. */
+typedef enum {
+    CK_OTHER,
+    CK_ARGUMENT_LIST,
+    CK_CALL_EXPRESSION,
+    CK_CAST_EXPRESSION,
+    CK_COMPOUND_STATEMENT,
+    CK_DECLARATION,
+    CK_ENUM_SPECIFIER,
+    CK_ENUMERATOR,
+    CK_FIELD_DECLARATION,
+    CK_FIELD_EXPRESSION,
+    CK_FIELD_IDENTIFIER,
+    CK_FOR_STATEMENT,
+    CK_FUNCTION_DECLARATOR,
+    CK_FUNCTION_DEFINITION,
+    CK_IDENTIFIER,
+    CK_INITIALIZER_LIST,
+    CK_PARAMETER_DECLARATION,
+    CK_PARAMETER_LIST,
+    CK_PARENTHESIZED_DECLARATOR,
+    CK_POINTER_DECLARATOR,
+    CK_PREPROC_DEF,
+    CK_PREPROC_ELSE,
+    CK_PREPROC_FUNCTION_DEF,
+    CK_PREPROC_IF,
+    CK_PREPROC_IFDEF,
+    CK_PREPROC_INCLUDE,
+    CK_PRIMITIVE_TYPE,
+    CK_STORAGE_CLASS_SPECIFIER,
+    CK_STRUCT_SPECIFIER,
+    CK_TRANSLATION_UNIT,
+    CK_TYPE_DEFINITION,
+    CK_TYPE_IDENTIFIER,
+    CK_UNION_SPECIFIER,
+    CK_COUNT,
+} CKind;
+
+static const char *const c_kind_names[CK_COUNT] = {
+    [CK_ARGUMENT_LIST] = "argument_list",
+    [CK_CALL_EXPRESSION] = "call_expression",
+    [CK_CAST_EXPRESSION] = "cast_expression",
+    [CK_COMPOUND_STATEMENT] = "compound_statement",
+    [CK_DECLARATION] = "declaration",
+    [CK_ENUM_SPECIFIER] = "enum_specifier",
+    [CK_ENUMERATOR] = "enumerator",
+    [CK_FIELD_DECLARATION] = "field_declaration",
+    [CK_FIELD_EXPRESSION] = "field_expression",
+    [CK_FIELD_IDENTIFIER] = "field_identifier",
+    [CK_FOR_STATEMENT] = "for_statement",
+    [CK_FUNCTION_DECLARATOR] = "function_declarator",
+    [CK_FUNCTION_DEFINITION] = "function_definition",
+    [CK_IDENTIFIER] = "identifier",
+    [CK_INITIALIZER_LIST] = "initializer_list",
+    [CK_PARAMETER_DECLARATION] = "parameter_declaration",
+    [CK_PARAMETER_LIST] = "parameter_list",
+    [CK_PARENTHESIZED_DECLARATOR] = "parenthesized_declarator",
+    [CK_POINTER_DECLARATOR] = "pointer_declarator",
+    [CK_PREPROC_DEF] = "preproc_def",
+    [CK_PREPROC_ELSE] = "preproc_else",
+    [CK_PREPROC_FUNCTION_DEF] = "preproc_function_def",
+    [CK_PREPROC_IF] = "preproc_if",
+    [CK_PREPROC_IFDEF] = "preproc_ifdef",
+    [CK_PREPROC_INCLUDE] = "preproc_include",
+    [CK_PRIMITIVE_TYPE] = "primitive_type",
+    [CK_STORAGE_CLASS_SPECIFIER] = "storage_class_specifier",
+    [CK_STRUCT_SPECIFIER] = "struct_specifier",
+    [CK_TRANSLATION_UNIT] = "translation_unit",
+    [CK_TYPE_DEFINITION] = "type_definition",
+    [CK_TYPE_IDENTIFIER] = "type_identifier",
+    [CK_UNION_SPECIFIER] = "union_specifier",
+};
+
+typedef enum {
+    CF_ARGUMENT,
+    CF_BODY,
+    CF_DECLARATOR,
+    CF_FIELD,
+    CF_FUNCTION,
+    CF_NAME,
+    CF_TYPE,
+    CF_COUNT,
+} CField;
+
+static const char *const c_field_names[CF_COUNT] = {
+    [CF_ARGUMENT] = "argument",
+    [CF_BODY] = "body",
+    [CF_DECLARATOR] = "declarator",
+    [CF_FIELD] = "field",
+    [CF_FUNCTION] = "function",
+    [CF_NAME] = "name",
+    [CF_TYPE] = "type",
+};
+
+
 struct CodeLensCParser {
     TSParser *parser;
 };
@@ -7131,6 +8026,7 @@ struct CodeLensCParser {
 typedef struct {
     char *name;
     char *target;
+    uint32_t next_same_target; /* later alias with this target, or C_NO_INDEX */
 } CTypeAlias;
 
 typedef struct {
@@ -7151,66 +8047,116 @@ typedef struct {
     bool global_scope;
 } CBinding;
 
+#define C_NO_INDEX UINT32_MAX
+
+/* value_symbols flags: a same-file value symbol is file-local / global. */
+#define C_SYMBOL_FILE_LOCAL_VALUE 1U
+#define C_SYMBOL_GLOBAL_VALUE 2U
+
 typedef struct {
     char *owner;
     char *name;
     char *type_target;
+    uint32_t prev_same_name; /* earlier field with this name, or C_NO_INDEX */
 } CFieldType;
 
 typedef struct {
     const char *source;
     size_t source_len;
     CodeLensCFile *file;
+    /* The ParseMap indexes below replace linear scans that ran once per
+     * identifier, field access, or type use and made large translation
+     * units quadratic (sqlite3.c took ~60s). Lookup results are unchanged:
+     * newest-wins scans read the newest index, ordered scans walk chains. */
     CTypeAlias *aliases;
     size_t alias_count;
     size_t alias_capacity;
+    ParseMap alias_names;         /* name -> newest alias */
+    ParseMap alias_target_first;  /* target -> oldest alias (next_same_target chain) */
+    ParseMap alias_target_last;   /* target -> newest alias */
     CTypeSpec *types;
     size_t type_count;
     size_t type_capacity;
+    ParseMap type_starts;         /* start byte (as scope, empty key) -> first type */
     CBinding *bindings;
     size_t binding_count;
     size_t binding_capacity;
+    ScopeIndex binding_scopes;    /* built once declarations are complete */
+    /* name -> C_SYMBOL_* flags over file->symbols[0, value_symbols_indexed). */
+    ParseMap value_symbols;
+    size_t value_symbols_indexed;
+    /* Ancestors of the node c_extract_references is visiting (last =
+     * parent). ts_node_parent re-walks from the root through every sibling
+     * at each level, which is quadratic on wide translation units. */
+    TSNode *lineage;
+    size_t lineage_count;
+    size_t lineage_capacity;
     CFieldType *fields;
     size_t field_count;
     size_t field_capacity;
+    ParseMap field_names;         /* name -> newest field (prev_same_name chain) */
 } CParseContext;
 
-static bool c_node_is(TSNode node, const char *type)
+static pthread_once_t c_ids_once = PTHREAD_ONCE_INIT;
+static TshIds c_ids;
+
+static void init_c_ids(void)
 {
-    return !ts_node_is_null(node) && (strcmp(ts_node_type(node), type) == 0);
+    c_ids.ok = tsh_ids_init(&c_ids,
+                            tree_sitter_c(),
+                            c_kind_names,
+                            CK_COUNT,
+                            c_field_names,
+                            CF_COUNT,
+                            false);
 }
 
-static bool c_node_field_equals(TSNode parent, const char *field_name, TSNode node)
+static CKind c_kind(TSNode node)
 {
-    TSNode field = ts_node_child_by_field_name(parent, field_name, (uint32_t)strlen(field_name));
+    return (CKind)tsh_kind(&c_ids, node);
+}
 
-    return !ts_node_is_null(field) && ts_node_eq(field, node);
+static bool c_is(TSNode node, CKind kind)
+{
+    return c_kind(node) == kind;
+}
+
+static TSNode c_field(TSNode node, CField field)
+{
+    return tsh_field(&c_ids, node, field);
+}
+
+static bool c_node_field_equals(TSNode parent, CField field, TSNode node)
+{
+    TSNode child = c_field(parent, field);
+
+    return !ts_node_is_null(child) && ts_node_eq(child, node);
 }
 
 static TSNode c_declarator_name(TSNode node)
 {
-    const char *type;
+    CKind kind;
     TSNode declarator;
 
     if (ts_node_is_null(node)) {
         return (TSNode){0};
     }
-    type = ts_node_type(node);
-    if ((strcmp(type, "identifier") == 0) || (strcmp(type, "type_identifier") == 0) ||
-        (strcmp(type, "field_identifier") == 0)) {
+    kind = c_kind(node);
+    if ((kind == CK_IDENTIFIER) || (kind == CK_TYPE_IDENTIFIER) ||
+        (kind == CK_FIELD_IDENTIFIER)) {
         return node;
     }
-    declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+    declarator = c_field(node, CF_DECLARATOR);
     if (!ts_node_is_null(declarator)) {
         return c_declarator_name(declarator);
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
-        const char *child_type = ts_node_type(child);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
+        CKind child_kind = c_kind(child);
 
-        if ((strcmp(child_type, "parameter_list") == 0) ||
-            (strcmp(child_type, "argument_list") == 0) ||
-            (strcmp(child_type, "initializer_list") == 0)) {
+        if ((child_kind == CK_PARAMETER_LIST) ||
+            (child_kind == CK_ARGUMENT_LIST) ||
+            (child_kind == CK_INITIALIZER_LIST)) {
             continue;
         }
         {
@@ -7229,20 +8175,20 @@ static bool c_declarator_contains_pointer(TSNode node)
     if (ts_node_is_null(node)) {
         return false;
     }
-    if (c_node_is(node, "pointer_declarator")) {
+    if (c_is(node, CK_POINTER_DECLARATOR)) {
         return true;
     }
     {
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+        TSNode declarator = c_field(node, CF_DECLARATOR);
 
         if (!ts_node_is_null(declarator)) {
             return c_declarator_contains_pointer(declarator);
         }
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
 
-        if (!c_node_is(child, "parameter_list") && c_declarator_contains_pointer(child)) {
+        if (!c_is(child, CK_PARAMETER_LIST) && c_declarator_contains_pointer(child)) {
             return true;
         }
     }
@@ -7254,22 +8200,22 @@ static bool c_declarator_is_function(TSNode node)
     if (ts_node_is_null(node)) {
         return false;
     }
-    if (c_node_is(node, "function_declarator")) {
-        TSNode inner = ts_node_child_by_field_name(node, "declarator", 10U);
+    if (c_is(node, CK_FUNCTION_DECLARATOR)) {
+        TSNode inner = c_field(node, CF_DECLARATOR);
 
         return !c_declarator_contains_pointer(inner);
     }
     {
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+        TSNode declarator = c_field(node, CF_DECLARATOR);
 
         if (!ts_node_is_null(declarator)) {
             return c_declarator_is_function(declarator);
         }
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
 
-        if (!c_node_is(child, "parameter_list") && c_declarator_is_function(child)) {
+        if (!c_is(child, CK_PARAMETER_LIST) && c_declarator_is_function(child)) {
             return true;
         }
     }
@@ -7281,11 +8227,11 @@ static TSNode c_function_declarator(TSNode node)
     if (ts_node_is_null(node)) {
         return (TSNode){0};
     }
-    if (c_node_is(node, "function_declarator") && c_declarator_is_function(node)) {
+    if (c_is(node, CK_FUNCTION_DECLARATOR) && c_declarator_is_function(node)) {
         return node;
     }
     {
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+        TSNode declarator = c_field(node, CF_DECLARATOR);
 
         if (!ts_node_is_null(declarator)) {
             TSNode found = c_function_declarator(declarator);
@@ -7298,9 +8244,35 @@ static TSNode c_function_declarator(TSNode node)
     return (TSNode){0};
 }
 
+/* Makes `index` the newest entry under `key`; *out_prev receives the
+ * previous newest, or C_NO_INDEX. The key must outlive the map. */
+static bool c_index_push(ParseMap *map, const char *key, uint32_t index, uint32_t *out_prev)
+{
+    size_t len = strlen(key);
+    uint32_t *newest = parse_map_slot(map, 0U, key, len);
+
+    if (newest != nullptr) {
+        *out_prev = *newest;
+        *newest = index;
+        return true;
+    }
+    *out_prev = C_NO_INDEX;
+    return parse_map_insert(map, 0U, key, len, index);
+}
+
+static uint32_t c_index_newest(const ParseMap *map, const char *key)
+{
+    uint32_t index;
+
+    return parse_map_find(map, 0U, key, strlen(key), &index) ? index : C_NO_INDEX;
+}
+
 static bool c_push_alias(CParseContext *ctx, char *name, char *target)
 {
-    if ((name == nullptr) || (target == nullptr)) {
+    uint32_t index;
+    uint32_t prev;
+
+    if ((name == nullptr) || (target == nullptr) || (ctx->alias_count >= C_NO_INDEX)) {
         return false;
     }
     if ((ctx->alias_count == ctx->alias_capacity) &&
@@ -7310,45 +8282,47 @@ static bool c_push_alias(CParseContext *ctx, char *name, char *target)
                           16U)) {
         return false;
     }
-    ctx->aliases[ctx->alias_count++] = (CTypeAlias){.name = name, .target = target};
-    return true;
+    index = (uint32_t)ctx->alias_count++;
+    ctx->aliases[index] =
+        (CTypeAlias){.name = name, .target = target, .next_same_target = C_NO_INDEX};
+    if (!c_index_push(&ctx->alias_names, name, index, &prev) ||
+        !c_index_push(&ctx->alias_target_last, target, index, &prev)) {
+        return false;
+    }
+    if (prev != C_NO_INDEX) {
+        ctx->aliases[prev].next_same_target = index;
+        return true;
+    }
+    return parse_map_insert(&ctx->alias_target_first, 0U, target, strlen(target), index);
 }
 
 static const char *c_alias_target(const CParseContext *ctx, const char *name)
 {
-    for (size_t i = ctx->alias_count; i > 0U; i--) {
-        const CTypeAlias *alias = &ctx->aliases[i - 1U];
+    uint32_t index = c_index_newest(&ctx->alias_names, name);
 
-        if (strcmp(alias->name, name) == 0) {
-            return alias->target;
-        }
-    }
-    return nullptr;
+    return index == C_NO_INDEX ? nullptr : ctx->aliases[index].target;
 }
 
 static CTypeSpec *c_type_spec_for_node(CParseContext *ctx, TSNode node)
 {
-    uint32_t start = ts_node_start_byte(node);
+    uint32_t index;
 
-    for (size_t i = 0U; i < ctx->type_count; i++) {
-        if (ctx->types[i].start_byte == start) {
-            return &ctx->types[i];
-        }
-    }
-    return nullptr;
+    return parse_map_find(&ctx->type_starts, ts_node_start_byte(node), "", 0U, &index)
+               ? &ctx->types[index]
+               : nullptr;
 }
 
 static const char *c_specifier_kind(TSNode node)
 {
-    const char *type = ts_node_type(node);
+    CKind kind = c_kind(node);
 
-    if (strcmp(type, "struct_specifier") == 0) {
+    if (kind == CK_STRUCT_SPECIFIER) {
         return "struct";
     }
-    if (strcmp(type, "union_specifier") == 0) {
+    if (kind == CK_UNION_SPECIFIER) {
         return "union";
     }
-    if (strcmp(type, "enum_specifier") == 0) {
+    if (kind == CK_ENUM_SPECIFIER) {
         return "enum";
     }
     return nullptr;
@@ -7376,7 +8350,7 @@ static bool c_register_type_spec(CParseContext *ctx, TSNode node, const char *fa
     if (c_type_spec_for_node(ctx, node) != nullptr) {
         return true;
     }
-    name_node = ts_node_child_by_field_name(node, "name", 4U);
+    name_node = c_field(node, CF_NAME);
     name = ts_node_is_null(name_node) ? nullptr : node_text(ctx->source, name_node);
     if (name != nullptr) {
         target = copy_cstr(name);
@@ -7395,6 +8369,13 @@ static bool c_register_type_spec(CParseContext *ctx, TSNode node, const char *fa
                           16U)) {
         return false;
     }
+    if (!parse_map_insert(&ctx->type_starts,
+                          ts_node_start_byte(node),
+                          "",
+                          0U,
+                          (uint32_t)ctx->type_count)) {
+        return false;
+    }
     entry = &ctx->types[ctx->type_count++];
     entry->start_byte = ts_node_start_byte(node);
     entry->target = target;
@@ -7405,40 +8386,41 @@ static bool c_register_type_spec(CParseContext *ctx, TSNode node, const char *fa
 
 static char *c_type_target_from_node(CParseContext *ctx, TSNode node)
 {
-    const char *type;
+    CKind kind;
 
     if (ts_node_is_null(node)) {
         return copy_cstr("");
     }
-    type = ts_node_type(node);
-    if ((strcmp(type, "struct_specifier") == 0) || (strcmp(type, "union_specifier") == 0) ||
-        (strcmp(type, "enum_specifier") == 0)) {
+    kind = c_kind(node);
+    if ((kind == CK_STRUCT_SPECIFIER) || (kind == CK_UNION_SPECIFIER) ||
+        (kind == CK_ENUM_SPECIFIER)) {
         CTypeSpec *spec = c_type_spec_for_node(ctx, node);
-        TSNode name_node = ts_node_child_by_field_name(node, "name", 4U);
+        TSNode name_node = c_field(node, CF_NAME);
 
         if (spec != nullptr) {
             return copy_cstr(spec->target);
         }
         return ts_node_is_null(name_node) ? copy_cstr("") : node_text(ctx->source, name_node);
     }
-    if (strcmp(type, "type_identifier") == 0) {
+    if (kind == CK_TYPE_IDENTIFIER) {
         char *name = node_text(ctx->source, node);
         const char *target = name == nullptr ? nullptr : c_alias_target(ctx, name);
 
         return target == nullptr ? name : copy_cstr(target);
     }
-    if ((strcmp(type, "primitive_type") == 0) || (strcmp(type, "void_type") == 0)) {
+    /* tree-sitter-c has no void_type node; `void` is a primitive_type. */
+    if (kind == CK_PRIMITIVE_TYPE) {
         return copy_cstr("");
     }
     {
-        TSNode inner = ts_node_child_by_field_name(node, "type", 4U);
+        TSNode inner = c_field(node, CF_TYPE);
 
         if (!ts_node_is_null(inner) && !ts_node_eq(inner, node)) {
             return c_type_target_from_node(ctx, inner);
         }
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
         const char *child_type = ts_node_type(child);
 
         if ((strstr(child_type, "type") != nullptr) ||
@@ -7451,16 +8433,16 @@ static char *c_type_target_from_node(CParseContext *ctx, TSNode node)
 
 static bool c_collect_types(CParseContext *ctx, TSNode node)
 {
-    if (c_node_is(node, "type_definition")) {
-        TSNode type_node = ts_node_child_by_field_name(node, "type", 4U);
+    if (c_is(node, CK_TYPE_DEFINITION)) {
+        TSNode type_node = c_field(node, CF_TYPE);
         TSNode first_alias_node = (TSNode){0};
         char *first_alias = nullptr;
 
-        for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+        for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
             const char *field_name = ts_node_field_name_for_named_child(node, i);
 
             if ((field_name != nullptr) && (strcmp(field_name, "declarator") == 0)) {
-                first_alias_node = c_declarator_name(ts_node_named_child(node, i));
+                first_alias_node = c_declarator_name(tsh_named_child(node, i));
                 if (!ts_node_is_null(first_alias_node)) {
                     first_alias = node_text(ctx->source, first_alias_node);
                     break;
@@ -7476,11 +8458,11 @@ static bool c_collect_types(CParseContext *ctx, TSNode node)
             const char *canonical =
                 (underlying != nullptr) && (underlying[0] != '\0') ? underlying : first_alias;
 
-            for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+            for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
                 const char *field_name = ts_node_field_name_for_named_child(node, i);
 
                 if ((field_name != nullptr) && (strcmp(field_name, "declarator") == 0)) {
-                    TSNode alias_node = c_declarator_name(ts_node_named_child(node, i));
+                    TSNode alias_node = c_declarator_name(tsh_named_child(node, i));
                     char *alias = ts_node_is_null(alias_node) ? nullptr
                                                               : node_text(ctx->source, alias_node);
                     const char *target = canonical == nullptr ? alias : canonical;
@@ -7495,8 +8477,8 @@ static bool c_collect_types(CParseContext *ctx, TSNode node)
         return false;
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        if (!c_collect_types(ctx, ts_node_named_child(node, i))) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        if (!c_collect_types(ctx, tsh_named_child(node, i))) {
             return false;
         }
     }
@@ -7505,10 +8487,10 @@ static bool c_collect_types(CParseContext *ctx, TSNode node)
 
 static bool c_has_storage(const CParseContext *ctx, TSNode node, const char *storage)
 {
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
 
-        if (c_node_is(child, "storage_class_specifier") &&
+        if (c_is(child, CK_STORAGE_CLASS_SPECIFIER) &&
             node_text_equals(ctx->source, child, storage, strlen(storage))) {
             return true;
         }
@@ -7641,7 +8623,10 @@ static bool c_add_definition(CParseContext *ctx,
     symbol->name = node_text(ctx->source, name_node);
     symbol->namespace_name = copy_cstr(namespace_name);
     symbol->doc = c_doc_before(ctx->source, ts_node_start_byte(declaration));
-    symbol->source = header_only ? java_definition_source(ctx->source, declaration, true)
+    symbol->source = header_only ? java_definition_source(ctx->source,
+                                                          declaration,
+                                                          c_field(declaration, CF_BODY),
+                                                          true)
                                  : node_text(ctx->source, declaration);
     symbol->start_line = ts_node_start_point(declaration).row + 1U;
     symbol->end_line = ts_node_end_point(declaration).row + 1U;
@@ -7693,27 +8678,31 @@ static bool c_store_binding(CParseContext *ctx,
     return (binding->type_target != nullptr) && (binding->symbol_namespace != nullptr);
 }
 
+/* Declarations precede the reference pass, the only c_find_binding caller. */
+static bool c_index_bindings(CParseContext *ctx)
+{
+    for (size_t i = 0U; i < ctx->binding_count; i++) {
+        const CBinding *binding = &ctx->bindings[i];
+
+        if (!scope_index_add(&ctx->binding_scopes,
+                             binding->name,
+                             binding->declaration_byte,
+                             binding->scope_start,
+                             binding->scope_end,
+                             binding->global_scope)) {
+            return false;
+        }
+    }
+    return scope_index_finish(&ctx->binding_scopes);
+}
+
 static const CBinding *c_find_binding(const CParseContext *ctx,
                                       const char *name,
                                       uint32_t at_byte)
 {
-    const CBinding *best = nullptr;
+    uint32_t index = scope_index_find(&ctx->binding_scopes, name, at_byte);
 
-    for (size_t i = 0U; i < ctx->binding_count; i++) {
-        const CBinding *binding = &ctx->bindings[i];
-
-        if ((strcmp(binding->name, name) != 0) || (at_byte < binding->scope_start) ||
-            (at_byte > binding->scope_end) ||
-            (!binding->global_scope && (binding->declaration_byte > at_byte))) {
-            continue;
-        }
-        if ((best == nullptr) || (binding->scope_start > best->scope_start) ||
-            ((binding->scope_start == best->scope_start) &&
-             (binding->declaration_byte > best->declaration_byte))) {
-            best = binding;
-        }
-    }
-    return best;
+    return index == SCOPE_INDEX_NONE ? nullptr : &ctx->bindings[index];
 }
 
 static bool c_store_field_type(CParseContext *ctx,
@@ -7722,9 +8711,13 @@ static bool c_store_field_type(CParseContext *ctx,
                                const char *type_target)
 {
     CFieldType *field;
+    uint32_t index;
 
     if ((owner == nullptr) || ts_node_is_null(name_node)) {
         return true;
+    }
+    if (ctx->field_count >= C_NO_INDEX) {
+        return false;
     }
     if ((ctx->field_count == ctx->field_capacity) &&
         !parser_heap_grow((void **)&ctx->fields,
@@ -7733,22 +8726,25 @@ static bool c_store_field_type(CParseContext *ctx,
                           32U)) {
         return false;
     }
-    field = &ctx->fields[ctx->field_count++];
+    index = (uint32_t)ctx->field_count++;
+    field = &ctx->fields[index];
     field->owner = copy_cstr(owner);
     field->name = node_text(ctx->source, name_node);
     field->type_target = copy_cstr(type_target == nullptr ? "" : type_target);
     return (field->owner != nullptr) && (field->name != nullptr) &&
-           (field->type_target != nullptr);
+           (field->type_target != nullptr) &&
+           c_index_push(&ctx->field_names, field->name, index, &field->prev_same_name);
 }
 
 static const char *c_field_type(const CParseContext *ctx,
                                 const char *owner,
                                 const char *name)
 {
-    for (size_t i = ctx->field_count; i > 0U; i--) {
-        const CFieldType *field = &ctx->fields[i - 1U];
+    for (uint32_t index = c_index_newest(&ctx->field_names, name); index != C_NO_INDEX;
+         index = ctx->fields[index].prev_same_name) {
+        const CFieldType *field = &ctx->fields[index];
 
-        if ((strcmp(field->owner, owner) == 0) && (strcmp(field->name, name) == 0)) {
+        if (strcmp(field->owner, owner) == 0) {
             return field->type_target;
         }
     }
@@ -7760,9 +8756,9 @@ static bool c_add_parameter_bindings(CParseContext *ctx,
                                      uint32_t scope_start,
                                      uint32_t scope_end)
 {
-    if (c_node_is(node, "parameter_declaration")) {
-        TSNode type_node = ts_node_child_by_field_name(node, "type", 4U);
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+    if (c_is(node, CK_PARAMETER_DECLARATION)) {
+        TSNode type_node = c_field(node, CF_TYPE);
+        TSNode declarator = c_field(node, CF_DECLARATOR);
         TSNode name = c_declarator_name(declarator);
         char *target = c_type_target_from_node(ctx, type_node);
 
@@ -7775,9 +8771,9 @@ static bool c_add_parameter_bindings(CParseContext *ctx,
                                false,
                                false);
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
         if (!c_add_parameter_bindings(ctx,
-                                      ts_node_named_child(node, i),
+                                      tsh_named_child(node, i),
                                       scope_start,
                                       scope_end)) {
             return false;
@@ -7792,7 +8788,7 @@ static bool c_add_declaration_items(CParseContext *ctx,
                                     uint32_t scope_start,
                                     uint32_t scope_end)
 {
-    TSNode type_node = ts_node_child_by_field_name(declaration, "type", 4U);
+    TSNode type_node = c_field(declaration, CF_TYPE);
     char *type_target = c_type_target_from_node(ctx, type_node);
     bool is_static = c_has_storage(ctx, declaration, "static");
     const char *symbol_namespace = is_static ? ctx->file->file_path : "";
@@ -7800,7 +8796,7 @@ static bool c_add_declaration_items(CParseContext *ctx,
     if (type_target == nullptr) {
         return false;
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(declaration); i++) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(declaration); i < i_count; i++) {
         const char *field_name = ts_node_field_name_for_named_child(declaration, i);
         TSNode declarator;
         TSNode name;
@@ -7809,7 +8805,7 @@ static bool c_add_declaration_items(CParseContext *ctx,
         if ((field_name == nullptr) || (strcmp(field_name, "declarator") != 0)) {
             continue;
         }
-        declarator = ts_node_named_child(declaration, i);
+        declarator = tsh_named_child(declaration, i);
         name = c_declarator_name(declarator);
         function = c_declarator_is_function(declarator);
         if (ts_node_is_null(name)) {
@@ -7852,11 +8848,11 @@ static bool c_add_declaration_items(CParseContext *ctx,
 
 static bool c_add_typedef_symbols(CParseContext *ctx, TSNode definition)
 {
-    for (uint32_t i = 0U; i < ts_node_named_child_count(definition); i++) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(definition); i < i_count; i++) {
         const char *field_name = ts_node_field_name_for_named_child(definition, i);
 
         if ((field_name != nullptr) && (strcmp(field_name, "declarator") == 0)) {
-            TSNode name = c_declarator_name(ts_node_named_child(definition, i));
+            TSNode name = c_declarator_name(tsh_named_child(definition, i));
 
             if (!ts_node_is_null(name) &&
                 !c_add_definition(ctx, definition, name, "typedef", "", false)) {
@@ -7874,7 +8870,7 @@ static bool c_extract_declarations(CParseContext *ctx,
                                    uint32_t scope_start,
                                    uint32_t scope_end)
 {
-    const char *type = ts_node_type(node);
+    CKind kind = c_kind(node);
     const char *child_type = current_type;
     bool child_inside_function = inside_function;
     uint32_t child_scope_start = scope_start;
@@ -7883,27 +8879,27 @@ static bool c_extract_declarations(CParseContext *ctx,
 
     if (specifier_kind != nullptr) {
         CTypeSpec *spec = c_type_spec_for_node(ctx, node);
-        TSNode body = ts_node_child_by_field_name(node, "body", 4U);
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+        TSNode body = c_field(node, CF_BODY);
+        TSNode name = c_field(node, CF_NAME);
 
         if (spec == nullptr) {
             return false;
         }
         child_type = spec->target;
         if (!ts_node_is_null(name)) {
-            TSNode parent = ts_node_parent(node);
+            TSNode parent = tsh_parent(node);
             bool forward_declaration = false;
 
             if (ts_node_is_null(body) &&
-                (c_node_is(parent, "translation_unit") ||
-                 c_node_is(parent, "type_definition") ||
-                 c_node_is(parent, "preproc_if") ||
-                 c_node_is(parent, "preproc_ifdef") ||
-                 c_node_is(parent, "preproc_else"))) {
+                (c_is(parent, CK_TRANSLATION_UNIT) ||
+                 c_is(parent, CK_TYPE_DEFINITION) ||
+                 c_is(parent, CK_PREPROC_IF) ||
+                 c_is(parent, CK_PREPROC_IFDEF) ||
+                 c_is(parent, CK_PREPROC_ELSE))) {
                 forward_declaration = true;
-            } else if (ts_node_is_null(body) && c_node_is(parent, "declaration")) {
+            } else if (ts_node_is_null(body) && c_is(parent, CK_DECLARATION)) {
                 forward_declaration = true;
-                for (uint32_t i = 0U; i < ts_node_named_child_count(parent); i++) {
+                for (uint32_t i = 0U, i_count = tsh_named_count(parent); i < i_count; i++) {
                     const char *field_name = ts_node_field_name_for_named_child(parent, i);
 
                     if ((field_name != nullptr) && (strcmp(field_name, "declarator") == 0)) {
@@ -7914,8 +8910,8 @@ static bool c_extract_declarations(CParseContext *ctx,
             if ((!ts_node_is_null(body) || forward_declaration) &&
                 !c_add_definition(ctx,
                                   forward_declaration &&
-                                          (c_node_is(parent, "declaration") ||
-                                           c_node_is(parent, "type_definition"))
+                                          (c_is(parent, CK_DECLARATION) ||
+                                           c_is(parent, CK_TYPE_DEFINITION))
                                       ? parent
                                       : node,
                                   name,
@@ -7925,15 +8921,15 @@ static bool c_extract_declarations(CParseContext *ctx,
                 return false;
             }
         }
-    } else if (strcmp(type, "type_definition") == 0) {
+    } else if (kind == CK_TYPE_DEFINITION) {
         if (!c_add_typedef_symbols(ctx, node)) {
             return false;
         }
-    } else if (strcmp(type, "function_definition") == 0) {
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10U);
+    } else if (kind == CK_FUNCTION_DEFINITION) {
+        TSNode declarator = c_field(node, CF_DECLARATOR);
         TSNode function_decl = c_function_declarator(declarator);
         TSNode name = c_declarator_name(declarator);
-        TSNode body = ts_node_child_by_field_name(node, "body", 4U);
+        TSNode body = c_field(node, CF_BODY);
         bool is_static = c_has_storage(ctx, node, "static");
         const char *namespace_name = is_static ? ctx->file->file_path : "";
 
@@ -7955,7 +8951,7 @@ static bool c_extract_declarations(CParseContext *ctx,
                                       child_scope_end)) {
             return false;
         }
-    } else if (strcmp(type, "declaration") == 0) {
+    } else if (kind == CK_DECLARATION) {
         if (!c_add_declaration_items(ctx,
                                      node,
                                      inside_function,
@@ -7963,18 +8959,18 @@ static bool c_extract_declarations(CParseContext *ctx,
                                      scope_end)) {
             return false;
         }
-    } else if (strcmp(type, "field_declaration") == 0) {
-        TSNode type_node = ts_node_child_by_field_name(node, "type", 4U);
+    } else if (kind == CK_FIELD_DECLARATION) {
+        TSNode type_node = c_field(node, CF_TYPE);
         char *field_target = c_type_target_from_node(ctx, type_node);
 
         if (field_target == nullptr) {
             return false;
         }
-        for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+        for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
             const char *field_name = ts_node_field_name_for_named_child(node, i);
 
             if ((field_name != nullptr) && (strcmp(field_name, "declarator") == 0)) {
-                TSNode name = c_declarator_name(ts_node_named_child(node, i));
+                TSNode name = c_declarator_name(tsh_named_child(node, i));
 
                 if (!ts_node_is_null(name) &&
                     (!c_add_definition(ctx, node, name, "field", current_type, false) ||
@@ -7982,12 +8978,20 @@ static bool c_extract_declarations(CParseContext *ctx,
                     return false;
                 }
                 if (!ts_node_is_null(name)) {
-                    for (size_t alias_index = 0U; alias_index < ctx->alias_count;
-                         alias_index++) {
+                    uint32_t alias_index = C_NO_INDEX;
+
+                    if (current_type != nullptr) {
+                        (void)parse_map_find(&ctx->alias_target_first,
+                                             0U,
+                                             current_type,
+                                             strlen(current_type),
+                                             &alias_index);
+                    }
+                    for (; alias_index != C_NO_INDEX;
+                         alias_index = ctx->aliases[alias_index].next_same_target) {
                         const CTypeAlias *alias = &ctx->aliases[alias_index];
 
-                        if ((strcmp(alias->target, current_type) == 0) &&
-                            (strcmp(alias->name, current_type) != 0) &&
+                        if ((strcmp(alias->name, current_type) != 0) &&
                             (!c_add_definition(ctx,
                                               node,
                                               name,
@@ -8004,30 +9008,30 @@ static bool c_extract_declarations(CParseContext *ctx,
                 }
             }
         }
-    } else if (strcmp(type, "enumerator") == 0) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if (kind == CK_ENUMERATOR) {
+        TSNode name = c_field(node, CF_NAME);
 
         if (!c_add_definition(ctx, node, name, "enum_constant", "", false)) {
             return false;
         }
-    } else if ((strcmp(type, "preproc_def") == 0) ||
-               (strcmp(type, "preproc_function_def") == 0)) {
-        TSNode name = ts_node_child_by_field_name(node, "name", 4U);
+    } else if ((kind == CK_PREPROC_DEF) ||
+               (kind == CK_PREPROC_FUNCTION_DEF)) {
+        TSNode name = c_field(node, CF_NAME);
 
         if (!c_add_definition(ctx, node, name, "macro", "", false)) {
             return false;
         }
-    } else if (strcmp(type, "compound_statement") == 0) {
+    } else if (kind == CK_COMPOUND_STATEMENT) {
         child_scope_start = ts_node_start_byte(node);
         child_scope_end = ts_node_end_byte(node);
-    } else if (strcmp(type, "for_statement") == 0) {
+    } else if (kind == CK_FOR_STATEMENT) {
         child_scope_start = ts_node_start_byte(node);
         child_scope_end = ts_node_end_byte(node);
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
         if (!c_extract_declarations(ctx,
-                                    ts_node_named_child(node, i),
+                                    tsh_named_child(node, i),
                                     child_type,
                                     child_inside_function,
                                     child_scope_start,
@@ -8038,32 +9042,39 @@ static bool c_extract_declarations(CParseContext *ctx,
     return true;
 }
 
-static bool c_declarator_name_node(TSNode node)
+/* Ancestor `up` levels above the node being visited (0 = parent), or a
+ * null node above the root. Valid only inside c_extract_references. */
+static TSNode c_ancestor(const CParseContext *ctx, size_t up)
+{
+    return up < ctx->lineage_count ? ctx->lineage[ctx->lineage_count - 1U - up] : (TSNode){0};
+}
+
+static bool c_declarator_name_node(const CParseContext *ctx, TSNode node)
 {
     TSNode current = node;
 
     for (size_t depth = 0U; depth < 32U; depth++) {
-        TSNode parent = ts_node_parent(current);
+        TSNode parent = c_ancestor(ctx, depth);
         TSNode declarator;
-        const char *parent_type;
+        CKind parent_kind;
 
         if (ts_node_is_null(parent)) {
             return false;
         }
-        parent_type = ts_node_type(parent);
-        declarator = ts_node_child_by_field_name(parent, "declarator", 10U);
+        parent_kind = c_kind(parent);
+        declarator = c_field(parent, CF_DECLARATOR);
         if (!ts_node_is_null(declarator) && ts_node_eq(declarator, current)) {
-            if ((strcmp(parent_type, "declaration") == 0) ||
-                (strcmp(parent_type, "function_definition") == 0) ||
-                (strcmp(parent_type, "parameter_declaration") == 0) ||
-                (strcmp(parent_type, "type_definition") == 0) ||
-                (strcmp(parent_type, "field_declaration") == 0)) {
+            if ((parent_kind == CK_DECLARATION) ||
+                (parent_kind == CK_FUNCTION_DEFINITION) ||
+                (parent_kind == CK_PARAMETER_DECLARATION) ||
+                (parent_kind == CK_TYPE_DEFINITION) ||
+                (parent_kind == CK_FIELD_DECLARATION)) {
                 return true;
             }
             current = parent;
             continue;
         }
-        if (strcmp(parent_type, "parenthesized_declarator") == 0) {
+        if (parent_kind == CK_PARENTHESIZED_DECLARATOR) {
             current = parent;
             continue;
         }
@@ -8072,18 +9083,18 @@ static bool c_declarator_name_node(TSNode node)
     return false;
 }
 
-static bool c_reference_name_field(TSNode node)
+static bool c_reference_name_field(const CParseContext *ctx, TSNode node)
 {
-    TSNode parent = ts_node_parent(node);
-    const char *parent_type = ts_node_type(parent);
+    TSNode parent = c_ancestor(ctx, 0U);
+    CKind parent_kind = c_kind(parent);
 
-    if (c_declarator_name_node(node)) {
+    if (c_declarator_name_node(ctx, node)) {
         return true;
     }
-    if (((strcmp(parent_type, "preproc_def") == 0) ||
-         (strcmp(parent_type, "preproc_function_def") == 0) ||
-         (strcmp(parent_type, "enumerator") == 0)) &&
-        c_node_field_equals(parent, "name", node)) {
+    if (((parent_kind == CK_PREPROC_DEF) ||
+         (parent_kind == CK_PREPROC_FUNCTION_DEF) ||
+         (parent_kind == CK_ENUMERATOR)) &&
+        c_node_field_equals(parent, CF_NAME, node)) {
         return true;
     }
     return false;
@@ -8100,8 +9111,13 @@ static bool c_add_reference_span(CParseContext *ctx,
     uint32_t base_end = ts_node_end_byte(base_node);
     TSPoint point = ts_node_start_point(base_node);
 
+    /* Error recovery yields zero-width MISSING nodes (`M(1, 2,)`, `p->;`);
+     * a degenerate span is skipped, never a parse failure. */
     if ((end <= start) || (base_start < start) || (base_end <= base_start) ||
-        (base_end > end) || ((size_t)end > ctx->source_len) || !reserve_references(ctx->file)) {
+        (base_end > end) || ((size_t)end > ctx->source_len)) {
+        return true;
+    }
+    if (!reserve_references(ctx->file)) {
         return false;
     }
     reference = &ctx->file->references[ctx->file->reference_count];
@@ -8133,40 +9149,59 @@ static bool c_symbol_kind_is_value(const char *kind)
            (strcmp(kind, "macro") == 0) || (strcmp(kind, "enum_constant") == 0);
 }
 
-static const char *c_same_file_symbol_namespace(const CParseContext *ctx,
-                                                const char *name,
-                                                bool values_only)
+/* Target for an unbound `name`: the file path when a same-file value
+ * symbol of that name is file-local, else "" (global or unresolved). The
+ * name -> flags index catches up with symbols added since the last call;
+ * false means out of memory. */
+static bool c_same_file_symbol_namespace(CParseContext *ctx,
+                                         const char *name,
+                                         const char **out)
 {
-    const char *global = nullptr;
+    const CodeLensCFile *file = ctx->file;
+    uint32_t flags;
 
-    for (size_t i = ctx->file->symbol_count; i > 0U; i--) {
-        const CodeLensSymbol *symbol = &ctx->file->symbols[i - 1U];
+    for (; ctx->value_symbols_indexed < file->symbol_count; ctx->value_symbols_indexed++) {
+        const CodeLensSymbol *symbol = &file->symbols[ctx->value_symbols_indexed];
+        uint32_t flag;
+        uint32_t *existing;
+        size_t name_len;
 
-        if ((strcmp(symbol->name, name) != 0) ||
-            (values_only && !c_symbol_kind_is_value(symbol->kind))) {
+        if (!c_symbol_kind_is_value(symbol->kind)) {
             continue;
         }
-        if (strcmp(symbol->namespace_name, ctx->file->file_path) == 0) {
-            return symbol->namespace_name;
+        if (strcmp(symbol->namespace_name, file->file_path) == 0) {
+            flag = C_SYMBOL_FILE_LOCAL_VALUE;
+        } else if (symbol->namespace_name[0] == '\0') {
+            flag = C_SYMBOL_GLOBAL_VALUE;
+        } else {
+            continue;
         }
-        if (symbol->namespace_name[0] == '\0') {
-            global = symbol->namespace_name;
+        name_len = strlen(symbol->name);
+        existing = parse_map_slot(&ctx->value_symbols, 0U, symbol->name, name_len);
+        if (existing != nullptr) {
+            *existing |= flag;
+        } else if (!parse_map_insert(&ctx->value_symbols, 0U, symbol->name, name_len, flag)) {
+            return false;
         }
     }
-    return global;
+    *out = (parse_map_find(&ctx->value_symbols, 0U, name, strlen(name), &flags) &&
+            ((flags & C_SYMBOL_FILE_LOCAL_VALUE) != 0U))
+               ? file->file_path
+               : "";
+    return true;
 }
 
 static TSNode c_last_identifier(TSNode node)
 {
     TSNode found = (TSNode){0};
-    const char *type = ts_node_type(node);
+    CKind kind = c_kind(node);
 
-    if ((strcmp(type, "identifier") == 0) || (strcmp(type, "field_identifier") == 0) ||
-        (strcmp(type, "type_identifier") == 0)) {
+    if ((kind == CK_IDENTIFIER) || (kind == CK_FIELD_IDENTIFIER) ||
+        (kind == CK_TYPE_IDENTIFIER)) {
         found = node;
     }
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+        TSNode child = tsh_named_child(node, i);
         TSNode nested = c_last_identifier(child);
 
         if (!ts_node_is_null(nested)) {
@@ -8178,18 +9213,18 @@ static TSNode c_last_identifier(TSNode node)
 
 static char *c_expression_type(CParseContext *ctx, TSNode expression)
 {
-    const char *type = ts_node_type(expression);
+    CKind kind = c_kind(expression);
 
-    if (strcmp(type, "identifier") == 0) {
+    if (kind == CK_IDENTIFIER) {
         char *name = node_text(ctx->source, expression);
         const CBinding *binding =
             name == nullptr ? nullptr : c_find_binding(ctx, name, ts_node_start_byte(expression));
 
         return binding == nullptr ? copy_cstr("") : copy_cstr(binding->type_target);
     }
-    if (strcmp(type, "field_expression") == 0) {
-        TSNode argument = ts_node_child_by_field_name(expression, "argument", 8U);
-        TSNode field_node = ts_node_child_by_field_name(expression, "field", 5U);
+    if (kind == CK_FIELD_EXPRESSION) {
+        TSNode argument = c_field(expression, CF_ARGUMENT);
+        TSNode field_node = c_field(expression, CF_FIELD);
         char *owner = c_expression_type(ctx, argument);
         char *field_name = ts_node_is_null(field_node) ? nullptr : node_text(ctx->source, field_node);
         const char *target = ((owner == nullptr) || (field_name == nullptr))
@@ -8198,34 +9233,34 @@ static char *c_expression_type(CParseContext *ctx, TSNode expression)
 
         return target == nullptr ? copy_cstr("") : copy_cstr(target);
     }
-    if (strcmp(type, "cast_expression") == 0) {
-        TSNode type_node = ts_node_child_by_field_name(expression, "type", 4U);
+    if (kind == CK_CAST_EXPRESSION) {
+        TSNode type_node = c_field(expression, CF_TYPE);
 
         return c_type_target_from_node(ctx, type_node);
     }
     {
-        TSNode argument = ts_node_child_by_field_name(expression, "argument", 8U);
+        TSNode argument = c_field(expression, CF_ARGUMENT);
 
         if (!ts_node_is_null(argument)) {
             return c_expression_type(ctx, argument);
         }
     }
-    if (ts_node_named_child_count(expression) == 1U) {
-        return c_expression_type(ctx, ts_node_named_child(expression, 0U));
+    if (tsh_named_count(expression) == 1U) {
+        return c_expression_type(ctx, tsh_named_child(expression, 0U));
     }
     return copy_cstr("");
 }
 
 static bool c_add_call_reference(CParseContext *ctx, TSNode node)
 {
-    TSNode function = ts_node_child_by_field_name(node, "function", 8U);
+    TSNode function = c_field(node, CF_FUNCTION);
     TSNode base = c_last_identifier(function);
     char *name;
     const CBinding *binding;
     const char *target;
 
     if (ts_node_is_null(function) || ts_node_is_null(base) ||
-        c_node_is(function, "field_expression")) {
+        c_is(function, CK_FIELD_EXPRESSION)) {
         return true;
     }
     name = node_text(ctx->source, base);
@@ -8238,11 +9273,8 @@ static bool c_add_call_reference(CParseContext *ctx, TSNode node)
             return true;
         }
         target = binding->symbol_namespace;
-    } else {
-        target = c_same_file_symbol_namespace(ctx, name, true);
-        if (target == nullptr) {
-            target = "";
-        }
+    } else if (!c_same_file_symbol_namespace(ctx, name, &target)) {
+        return false;
     }
     return c_add_reference_span(ctx,
                                 ts_node_start_byte(function),
@@ -8253,8 +9285,8 @@ static bool c_add_call_reference(CParseContext *ctx, TSNode node)
 
 static bool c_add_field_reference(CParseContext *ctx, TSNode node)
 {
-    TSNode argument = ts_node_child_by_field_name(node, "argument", 8U);
-    TSNode field = ts_node_child_by_field_name(node, "field", 5U);
+    TSNode argument = c_field(node, CF_ARGUMENT);
+    TSNode field = c_field(node, CF_FIELD);
     char *target;
 
     if (ts_node_is_null(argument) || ts_node_is_null(field)) {
@@ -8273,30 +9305,30 @@ static bool c_add_field_reference(CParseContext *ctx, TSNode node)
 
 static bool c_add_type_reference(CParseContext *ctx, TSNode node)
 {
-    TSNode parent = ts_node_parent(node);
-    const char *parent_type = ts_node_type(parent);
+    TSNode parent = c_ancestor(ctx, 0U);
+    CKind parent_kind = c_kind(parent);
 
-    if (c_declarator_name_node(node)) {
+    if (c_declarator_name_node(ctx, node)) {
         return true;
     }
-    if (((strcmp(parent_type, "struct_specifier") == 0) ||
-         (strcmp(parent_type, "union_specifier") == 0) ||
-         (strcmp(parent_type, "enum_specifier") == 0)) &&
-        c_node_field_equals(parent, "name", node)) {
-        TSNode body = ts_node_child_by_field_name(parent, "body", 4U);
-        TSNode declaration = ts_node_parent(parent);
+    if (((parent_kind == CK_STRUCT_SPECIFIER) ||
+         (parent_kind == CK_UNION_SPECIFIER) ||
+         (parent_kind == CK_ENUM_SPECIFIER)) &&
+        c_node_field_equals(parent, CF_NAME, node)) {
+        TSNode body = c_field(parent, CF_BODY);
+        TSNode declaration = c_ancestor(ctx, 1U);
         bool definition = !ts_node_is_null(body);
 
         if (!definition &&
-            (c_node_is(declaration, "translation_unit") ||
-             c_node_is(declaration, "type_definition") ||
-             c_node_is(declaration, "preproc_if") ||
-             c_node_is(declaration, "preproc_ifdef") ||
-             c_node_is(declaration, "preproc_else"))) {
+            (c_is(declaration, CK_TRANSLATION_UNIT) ||
+             c_is(declaration, CK_TYPE_DEFINITION) ||
+             c_is(declaration, CK_PREPROC_IF) ||
+             c_is(declaration, CK_PREPROC_IFDEF) ||
+             c_is(declaration, CK_PREPROC_ELSE))) {
             definition = true;
-        } else if (!definition && c_node_is(declaration, "declaration")) {
+        } else if (!definition && c_is(declaration, CK_DECLARATION)) {
             definition = true;
-            for (uint32_t i = 0U; i < ts_node_named_child_count(declaration); i++) {
+            for (uint32_t i = 0U, i_count = tsh_named_count(declaration); i < i_count; i++) {
                 const char *field_name =
                     ts_node_field_name_for_named_child(declaration, i);
 
@@ -8318,13 +9350,13 @@ static bool c_add_type_reference(CParseContext *ctx, TSNode node)
 
 static bool c_add_identifier_reference(CParseContext *ctx, TSNode node)
 {
-    TSNode parent = ts_node_parent(node);
+    TSNode parent = c_ancestor(ctx, 0U);
     char *name;
     const CBinding *binding;
     const char *target;
 
-    if (c_reference_name_field(node) ||
-        (c_node_is(parent, "call_expression") && c_node_field_equals(parent, "function", node))) {
+    if (c_reference_name_field(ctx, node) ||
+        (c_is(parent, CK_CALL_EXPRESSION) && c_node_field_equals(parent, CF_FUNCTION, node))) {
         return true;
     }
     name = node_text(ctx->source, node);
@@ -8337,11 +9369,8 @@ static bool c_add_identifier_reference(CParseContext *ctx, TSNode node)
             return true;
         }
         target = binding->symbol_namespace;
-    } else {
-        target = c_same_file_symbol_namespace(ctx, name, true);
-        if (target == nullptr) {
-            target = "";
-        }
+    } else if (!c_same_file_symbol_namespace(ctx, name, &target)) {
+        return false;
     }
     return c_add_reference_span(ctx,
                                 ts_node_start_byte(node),
@@ -8352,44 +9381,63 @@ static bool c_add_identifier_reference(CParseContext *ctx, TSNode node)
 
 static bool c_extract_references(CParseContext *ctx, TSNode node)
 {
-    const char *type = ts_node_type(node);
+    CKind kind = c_kind(node);
+    uint32_t child_count;
 
-    if ((strcmp(type, "preproc_def") == 0) ||
-        (strcmp(type, "preproc_function_def") == 0) ||
-        (strcmp(type, "preproc_include") == 0)) {
+    if ((kind == CK_PREPROC_DEF) ||
+        (kind == CK_PREPROC_FUNCTION_DEF) ||
+        (kind == CK_PREPROC_INCLUDE)) {
         return true;
     }
-    if ((strcmp(type, "call_expression") == 0) && !c_add_call_reference(ctx, node)) {
+    if ((kind == CK_CALL_EXPRESSION) && !c_add_call_reference(ctx, node)) {
         return false;
     }
-    if ((strcmp(type, "field_expression") == 0) && !c_add_field_reference(ctx, node)) {
+    if ((kind == CK_FIELD_EXPRESSION) && !c_add_field_reference(ctx, node)) {
         return false;
     }
-    if ((strcmp(type, "type_identifier") == 0) && !c_add_type_reference(ctx, node)) {
+    if ((kind == CK_TYPE_IDENTIFIER) && !c_add_type_reference(ctx, node)) {
         return false;
     }
-    if ((strcmp(type, "identifier") == 0) && !c_add_identifier_reference(ctx, node)) {
+    if ((kind == CK_IDENTIFIER) && !c_add_identifier_reference(ctx, node)) {
         return false;
     }
 
-    for (uint32_t i = 0U; i < ts_node_named_child_count(node); i++) {
-        TSNode child = ts_node_named_child(node, i);
+    child_count = tsh_named_count(node);
+    if (child_count == 0U) {
+        return true;
+    }
+    if ((ctx->lineage_count == ctx->lineage_capacity) &&
+        !parser_heap_grow((void **)&ctx->lineage,
+                          &ctx->lineage_capacity,
+                          sizeof(*ctx->lineage),
+                          64U)) {
+        return false;
+    }
+    ctx->lineage[ctx->lineage_count++] = node;
+    for (uint32_t i = 0U; i < child_count; i++) {
+        TSNode child = tsh_named_child(node, i);
 
-        if (c_node_is(node, "field_expression") &&
-            c_node_field_equals(node, "field", child)) {
+        if ((kind == CK_FIELD_EXPRESSION) &&
+            c_node_field_equals(node, CF_FIELD, child)) {
             continue;
         }
         if (!c_extract_references(ctx, child)) {
             return false;
         }
     }
+    ctx->lineage_count--;
     return true;
 }
 
 CodeLensCParser *code_lens_c_parser_new(void)
 {
-    CodeLensCParser *parser = code_lens_alloc(sizeof(*parser));
+    CodeLensCParser *parser;
 
+    (void)pthread_once(&c_ids_once, init_c_ids);
+    if (!c_ids.ok) {
+        return nullptr;
+    }
+    parser = code_lens_alloc(sizeof(*parser));
     if (parser == nullptr) {
         return nullptr;
     }
@@ -8444,12 +9492,21 @@ int code_lens_parse_c_source_with_parser(CodeLensCParser *parser,
 
     ok = c_collect_types(&ctx, root) &&
          c_extract_declarations(&ctx, root, "", false, 0U, (uint32_t)source_len) &&
+         c_index_bindings(&ctx) &&
          c_extract_references(&ctx, root);
 
     free(ctx.aliases);
     free(ctx.types);
     free(ctx.bindings);
     free(ctx.fields);
+    free(ctx.alias_names.slots);
+    free(ctx.alias_target_first.slots);
+    free(ctx.alias_target_last.slots);
+    free(ctx.type_starts.slots);
+    scope_index_free(&ctx.binding_scopes);
+    free(ctx.field_names.slots);
+    free(ctx.value_symbols.slots);
+    free(ctx.lineage);
     ts_tree_delete(tree);
     return ok ? 0 : -1;
 }
@@ -8724,103 +9781,6 @@ char *code_lens_python_module_name(const char *repo_root, const char *file_path)
                           file_path);
 }
 
-/* (scope, name) -> index map over source/arena-backed keys. */
-typedef struct {
-    const char *key;
-    size_t key_len;
-    uint64_t hash;
-    uint32_t scope;
-    uint32_t value;
-} PyMapSlot;
-
-typedef struct {
-    PyMapSlot *slots;
-    size_t capacity;
-    size_t count;
-} PyMap;
-
-static uint64_t py_map_hash(uint32_t scope, const char *key, size_t len)
-{
-    return term_hash(key, len) ^ ((uint64_t)(scope + 1U) * 0x9E3779B97F4A7C15ULL);
-}
-
-static bool py_map_grow(PyMap *map)
-{
-    size_t capacity = map->capacity == 0U ? 64U : map->capacity * 2U;
-    PyMapSlot *slots;
-
-    if (capacity > (SIZE_MAX / sizeof(*slots))) {
-        return false;
-    }
-    slots = calloc(capacity, sizeof(*slots));
-    if (slots == nullptr) {
-        return false;
-    }
-    for (size_t i = 0U; i < map->capacity; i++) {
-        size_t index;
-
-        if (map->slots[i].key == nullptr) {
-            continue;
-        }
-        index = (size_t)map->slots[i].hash & (capacity - 1U);
-        while (slots[index].key != nullptr) {
-            index = (index + 1U) & (capacity - 1U);
-        }
-        slots[index] = map->slots[i];
-    }
-    free(map->slots);
-    map->slots = slots;
-    map->capacity = capacity;
-    return true;
-}
-
-static bool py_map_find(const PyMap *map,
-                        uint32_t scope,
-                        const char *key,
-                        size_t len,
-                        uint32_t *out_value)
-{
-    uint64_t hash;
-    size_t index;
-
-    if (map->capacity == 0U) {
-        return false;
-    }
-    hash = py_map_hash(scope, key, len);
-    index = (size_t)hash & (map->capacity - 1U);
-    while (map->slots[index].key != nullptr) {
-        const PyMapSlot *slot = &map->slots[index];
-
-        if ((slot->hash == hash) && (slot->scope == scope) && (slot->key_len == len) &&
-            (memcmp(slot->key, key, len) == 0)) {
-            *out_value = slot->value;
-            return true;
-        }
-        index = (index + 1U) & (map->capacity - 1U);
-    }
-    return false;
-}
-
-/* Inserts a key known to be absent. */
-static bool py_map_insert(PyMap *map, uint32_t scope, const char *key, size_t len, uint32_t value)
-{
-    uint64_t hash;
-    size_t index;
-
-    if (((map->count + 1U) * 2U > map->capacity) && !py_map_grow(map)) {
-        return false;
-    }
-    hash = py_map_hash(scope, key, len);
-    index = (size_t)hash & (map->capacity - 1U);
-    while (map->slots[index].key != nullptr) {
-        index = (index + 1U) & (map->capacity - 1U);
-    }
-    map->slots[index] = (PyMapSlot){
-        .key = key, .key_len = len, .hash = hash, .scope = scope, .value = value};
-    map->count++;
-    return true;
-}
-
 typedef enum {
     PY_BIND_LOCAL,
     PY_BIND_GLOBAL,
@@ -8873,14 +9833,14 @@ typedef struct {
     size_t binding_count;
     size_t binding_capacity;
     /* (scope id, name) -> binding index */
-    PyMap names;
+    ParseMap names;
     PyClass *classes;
     size_t class_count;
     size_t class_capacity;
     /* (0, class target) -> class index */
-    PyMap class_by_target;
+    ParseMap class_by_target;
     /* (owner + 1, member name) -> binding index; owner 0 is the module */
-    PyMap members;
+    ParseMap members;
     PyScope *scopes;
     size_t scope_count;
     size_t scope_capacity;
@@ -8936,7 +9896,6 @@ typedef enum {
     PYK_ELIF_CLAUSE,
     PYK_ELSE_CLAUSE,
     PYK_EXCEPT_CLAUSE,
-    PYK_EXCEPT_GROUP_CLAUSE,
     PYK_EXPRESSION_STATEMENT,
     PYK_FINALLY_CLAUSE,
     PYK_FOR_IN_CLAUSE,
@@ -9006,7 +9965,6 @@ static const char *const py_kind_names[PYK_COUNT] = {
     [PYK_ELIF_CLAUSE] = "elif_clause",
     [PYK_ELSE_CLAUSE] = "else_clause",
     [PYK_EXCEPT_CLAUSE] = "except_clause",
-    [PYK_EXCEPT_GROUP_CLAUSE] = "except_group_clause",
     [PYK_EXPRESSION_STATEMENT] = "expression_statement",
     [PYK_FINALLY_CLAUSE] = "finally_clause",
     [PYK_FOR_IN_CLAUSE] = "for_in_clause",
@@ -9090,47 +10048,25 @@ static const char *const py_field_names[PYF_COUNT] = {
     [PYF_VALUE] = "value",
 };
 
-#define PY_KIND_TABLE_MAX 1024U
-
 static pthread_once_t py_ids_once = PTHREAD_ONCE_INIT;
-static uint8_t py_kind_table[PY_KIND_TABLE_MAX];
-static TSFieldId py_field_ids[PYF_COUNT];
+static TshIds py_ids;
 
+/* named_only: Python's soft keywords (`type`, `match`, ...) are anonymous
+ * tokens sharing names with named nodes. */
 static void init_python_ids(void)
 {
-    const TSLanguage *language = tree_sitter_python();
-    uint32_t count = ts_language_symbol_count(language);
-
-    for (uint32_t symbol = 0U; (symbol < count) && (symbol < PY_KIND_TABLE_MAX); symbol++) {
-        const char *name = ts_language_symbol_name(language, (TSSymbol)symbol);
-
-        if ((name == nullptr) ||
-            (ts_language_symbol_type(language, (TSSymbol)symbol) != TSSymbolTypeRegular)) {
-            continue;
-        }
-        for (uint32_t kind = 1U; kind < PYK_COUNT; kind++) {
-            if (strcmp(name, py_kind_names[kind]) == 0) {
-                py_kind_table[symbol] = (uint8_t)kind;
-                break;
-            }
-        }
-    }
-    for (uint32_t field = 0U; field < PYF_COUNT; field++) {
-        py_field_ids[field] = ts_language_field_id_for_name(language,
-                                                            py_field_names[field],
-                                                            (uint32_t)strlen(py_field_names[field]));
-    }
+    py_ids.ok = tsh_ids_init(&py_ids,
+                             tree_sitter_python(),
+                             py_kind_names,
+                             PYK_COUNT,
+                             py_field_names,
+                             PYF_COUNT,
+                             true);
 }
 
 static PyKind py_kind(TSNode node)
 {
-    TSSymbol symbol;
-
-    if (ts_node_is_null(node)) {
-        return PYK_OTHER;
-    }
-    symbol = ts_node_symbol(node);
-    return symbol < PY_KIND_TABLE_MAX ? (PyKind)py_kind_table[symbol] : PYK_OTHER;
+    return (PyKind)tsh_kind(&py_ids, node);
 }
 
 static bool py_is(TSNode node, PyKind kind)
@@ -9140,19 +10076,17 @@ static bool py_is(TSNode node, PyKind kind)
 
 static uint32_t py_count(TSNode node)
 {
-    return ts_node_is_null(node) ? 0U : ts_node_named_child_count(node);
+    return tsh_named_count(node);
 }
 
 static TSNode py_child(TSNode node, uint32_t index)
 {
-    return ts_node_is_null(node) ? (TSNode){0} : ts_node_named_child(node, index);
+    return tsh_named_child(node, index);
 }
 
 static TSNode py_field(TSNode node, PyField field)
 {
-    return (ts_node_is_null(node) || (py_field_ids[field] == 0U))
-               ? (TSNode){0}
-               : ts_node_child_by_field_id(node, py_field_ids[field]);
+    return tsh_field(&py_ids, node, field);
 }
 
 static PySlice py_text(const PyParseContext *ctx, TSNode node)
@@ -9216,7 +10150,7 @@ static bool py_add_binding(PyParseContext *ctx,
     if (name.len == 0U) {
         return true;
     }
-    if (py_map_find(&ctx->names, scope, name.data, name.len, &existing)) {
+    if (parse_map_find(&ctx->names, scope, name.data, name.len, &existing)) {
         return true;
     }
     if ((ctx->binding_count == ctx->binding_capacity) &&
@@ -9227,7 +10161,7 @@ static bool py_add_binding(PyParseContext *ctx,
         return false;
     }
     ctx->bindings[ctx->binding_count] = binding;
-    if (!py_map_insert(&ctx->names, scope, name.data, name.len, (uint32_t)ctx->binding_count)) {
+    if (!parse_map_insert(&ctx->names, scope, name.data, name.len, (uint32_t)ctx->binding_count)) {
         return false;
     }
     ctx->binding_count++;
@@ -9238,7 +10172,7 @@ static PyBinding *py_find_binding(PyParseContext *ctx, uint32_t scope, PySlice n
 {
     uint32_t index;
 
-    return py_map_find(&ctx->names, scope, name.data, name.len, &index) ? &ctx->bindings[index]
+    return parse_map_find(&ctx->names, scope, name.data, name.len, &index) ? &ctx->bindings[index]
                                                                           : nullptr;
 }
 
@@ -9291,7 +10225,7 @@ static int32_t py_class_index(const PyParseContext *ctx, const char *target)
     uint32_t index;
 
     if ((target == nullptr) ||
-        !py_map_find(&ctx->class_by_target, 0U, target, strlen(target), &index)) {
+        !parse_map_find(&ctx->class_by_target, 0U, target, strlen(target), &index)) {
         return -1;
     }
     return (int32_t)index;
@@ -9301,7 +10235,7 @@ static const PyBinding *py_member(PyParseContext *ctx, int32_t owner, PySlice na
 {
     uint32_t index;
 
-    return py_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &index)
+    return parse_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &index)
                ? &ctx->bindings[index]
                : nullptr;
 }
@@ -9320,7 +10254,7 @@ static bool py_add_member(PyParseContext *ctx,
         *out_added = false;
     }
     if ((name.len == 0U) ||
-        py_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &existing)) {
+        parse_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &existing)) {
         return true;
     }
     if ((ctx->binding_count == ctx->binding_capacity) &&
@@ -9331,7 +10265,7 @@ static bool py_add_member(PyParseContext *ctx,
         return false;
     }
     ctx->bindings[ctx->binding_count] = binding;
-    if (!py_map_insert(&ctx->members,
+    if (!parse_map_insert(&ctx->members,
                        (uint32_t)(owner + 1),
                        name.data,
                        name.len,
@@ -9705,8 +10639,8 @@ static bool py_process_import(PyParseContext *ctx, TSNode node, uint32_t scope)
             return false;
         }
     }
-    for (uint32_t i = 0U; i < ts_node_child_count(node); i++) {
-        TSNode child = ts_node_child(node, i);
+    for (uint32_t i = 0U, i_count = tsh_count(node); i < i_count; i++) {
+        TSNode child = tsh_child(node, i);
         const char *field = ts_node_field_name_for_child(node, i);
 
         if (from && py_is(child, PYK_WILDCARD_IMPORT)) {
@@ -10145,7 +11079,7 @@ static bool py_add_class(PyParseContext *ctx, const char *target, const char *ba
 {
     uint32_t existing;
 
-    if (py_map_find(&ctx->class_by_target, 0U, target, strlen(target), &existing)) {
+    if (parse_map_find(&ctx->class_by_target, 0U, target, strlen(target), &existing)) {
         *out_index = (int32_t)existing;
         return true;
     }
@@ -10154,7 +11088,7 @@ static bool py_add_class(PyParseContext *ctx, const char *target, const char *ba
         return false;
     }
     ctx->classes[ctx->class_count] = (PyClass){.target = target, .base_target = base, .is_test = is_test};
-    if (!py_map_insert(&ctx->class_by_target, 0U, target, strlen(target), (uint32_t)ctx->class_count)) {
+    if (!parse_map_insert(&ctx->class_by_target, 0U, target, strlen(target), (uint32_t)ctx->class_count)) {
         return false;
     }
     *out_index = (int32_t)ctx->class_count++;
@@ -10479,7 +11413,6 @@ static bool py_is_compound_container(PyKind kind)
     case PYK_ELSE_CLAUSE:
     case PYK_TRY_STATEMENT:
     case PYK_EXCEPT_CLAUSE:
-    case PYK_EXCEPT_GROUP_CLAUSE:
     case PYK_FINALLY_CLAUSE:
     case PYK_WITH_STATEMENT:
     case PYK_FOR_STATEMENT:
@@ -10816,7 +11749,7 @@ static bool py_walk_function(PyParseContext *ctx, TSNode node)
     const PyScope *enclosing = py_innermost_scope(ctx);
     const char *receiver_type = nullptr;
     int32_t saved_class = ctx->current_class;
-    TSNode parent = ts_node_parent(node);
+    TSNode parent = tsh_parent(node);
     uint32_t scope;
     bool ok;
 
@@ -10992,9 +11925,13 @@ static bool py_walk_node(PyParseContext *ctx, TSNode node, bool store)
 
 CodeLensPythonParser *code_lens_python_parser_new(void)
 {
-    CodeLensPythonParser *parser = calloc(1U, sizeof(*parser));
+    CodeLensPythonParser *parser;
 
     (void)pthread_once(&py_ids_once, init_python_ids);
+    if (!py_ids.ok) {
+        return nullptr;
+    }
+    parser = calloc(1U, sizeof(*parser));
     if (parser == nullptr) {
         return nullptr;
     }
@@ -11133,6 +12070,8 @@ int code_lens_parse_python_source(const char *repo_root,
 
 /* repo_root anchors Python module naming; nullptr (dependency sources)
  * falls back to __init__.py package walks and file stems. */
+static void code_lens_source_parser_delete(CodeLensSourceParser *parser);
+
 static CodeLensSourceParser *code_lens_source_parser_new(const char *repo_root)
 {
     CodeLensSourceParser *parser = code_lens_alloc_zeroed(1U, sizeof(*parser));
@@ -11140,24 +12079,12 @@ static CodeLensSourceParser *code_lens_source_parser_new(const char *repo_root)
     if (parser == nullptr) {
         return nullptr;
     }
-    parser->clojure = code_lens_clojure_parser_new();
-    parser->java = code_lens_java_parser_new();
-    parser->c = code_lens_c_parser_new();
-    parser->python = code_lens_python_parser_new();
-    if ((parser->clojure == nullptr) || (parser->java == nullptr) || (parser->c == nullptr) ||
-        (parser->python == nullptr) ||
-        (code_lens_python_parser_set_repo_root(parser->python, repo_root) != 0)) {
-        if (parser->clojure != nullptr) {
-            code_lens_clojure_parser_delete(parser->clojure);
+    for (size_t lang = 0U; lang < LANG_COUNT; lang++) {
+        parser->parsers[lang] = languages[lang].parser_new(repo_root);
+        if (parser->parsers[lang] == nullptr) {
+            code_lens_source_parser_delete(parser);
+            return nullptr;
         }
-        if (parser->java != nullptr) {
-            code_lens_java_parser_delete(parser->java);
-        }
-        if (parser->c != nullptr) {
-            code_lens_c_parser_delete(parser->c);
-        }
-        code_lens_python_parser_delete(parser->python);
-        return nullptr;
     }
     return parser;
 }
@@ -11167,44 +12094,27 @@ static void code_lens_source_parser_delete(CodeLensSourceParser *parser)
     if (parser == nullptr) {
         return;
     }
-    code_lens_clojure_parser_delete(parser->clojure);
-    code_lens_java_parser_delete(parser->java);
-    code_lens_c_parser_delete(parser->c);
-    code_lens_python_parser_delete(parser->python);
+    for (size_t lang = 0U; lang < LANG_COUNT; lang++) {
+        if (parser->parsers[lang] != nullptr) {
+            languages[lang].parser_delete(parser->parsers[lang]);
+            parser->parsers[lang] = nullptr;
+        }
+    }
 }
 
+/* Files without a registered extension parse as Clojure. */
 static int code_lens_parse_source_with_parser(CodeLensSourceParser *parser,
                                                const char *file_path,
                                                const char *source,
                                                size_t source_len,
                                                CodeLensSourceFile *out_file)
 {
-    if (has_java_extension(file_path)) {
-        return code_lens_parse_java_source_with_parser(parser->java,
-                                                        file_path,
-                                                        source,
-                                                        source_len,
-                                                        out_file);
+    LanguageId lang = language_for_path(file_path);
+
+    if (lang == LANG_COUNT) {
+        lang = LANG_CLOJURE;
     }
-    if (has_c_extension(file_path)) {
-        return code_lens_parse_c_source_with_parser(parser->c,
-                                                     file_path,
-                                                     source,
-                                                     source_len,
-                                                     out_file);
-    }
-    if (has_python_extension(file_path)) {
-        return code_lens_parse_python_source_with_parser(parser->python,
-                                                          file_path,
-                                                          source,
-                                                          source_len,
-                                                          out_file);
-    }
-    return code_lens_parse_clojure_source_with_parser(parser->clojure,
-                                                       file_path,
-                                                       source,
-                                                       source_len,
-                                                       out_file);
+    return languages[lang].parse(parser->parsers[lang], file_path, source, source_len, out_file);
 }
 
 /* Indexer */
@@ -11298,30 +12208,25 @@ typedef struct {
     CodeLensPathList added;
 } RepoDiff;
 
-static bool path_list_has_python_package_marker(const CodeLensPathList *list)
+static bool path_list_forces_full_rebuild(const CodeLensPathList *list)
 {
-    static const char marker[] = "__init__.py";
-
     for (size_t i = 0U; i < list->count; i++) {
-        const char *path = list->paths[i];
-        size_t len = strlen(path);
+        LanguageId lang = language_for_path(list->paths[i]);
 
-        if ((len >= sizeof(marker) - 1U) &&
-            (strcmp(path + len - (sizeof(marker) - 1U), marker) == 0) &&
-            ((len == sizeof(marker) - 1U) ||
-             (path[len - sizeof(marker)] == '/') || (path[len - sizeof(marker)] == '\\'))) {
+        if ((lang != LANG_COUNT) && (languages[lang].forces_full_rebuild != nullptr) &&
+            languages[lang].forces_full_rebuild(list->paths[i])) {
             return true;
         }
     }
     return false;
 }
 
-/* An added or removed __init__.py changes the package chain, and so the
- * module name, of every Python file below it. */
-static bool repo_diff_changes_python_packages(const RepoDiff *diff)
+/* Some added or removed files rename others (see LanguageSpec), which the
+ * per-file incremental path cannot express. */
+static bool repo_diff_forces_full_rebuild(const RepoDiff *diff)
 {
-    return path_list_has_python_package_marker(&diff->added) ||
-           path_list_has_python_package_marker(&diff->missing);
+    return path_list_forces_full_rebuild(&diff->added) ||
+           path_list_forces_full_rebuild(&diff->missing);
 }
 
 typedef struct FtsSidecar FtsSidecar;
@@ -11592,7 +12497,8 @@ static char *alloc_printf(const char *format, ...)
 /* One statement block creates the whole index schema. user_version is the
  * format stamp checked by read opens; bump CODE_LENS_INDEX_FORMAT_VERSION
  * when the schema changes so old indexes report "re-index required" instead
- * of being misread. */
+ * of being misread, and when extracted content changes in a way an
+ * incremental refresh would leave stale in unchanged files. */
 #define CODE_LENS_STRINGIZE_VALUE(x) #x
 #define CODE_LENS_STRINGIZE(x) CODE_LENS_STRINGIZE_VALUE(x)
 
@@ -16865,27 +17771,12 @@ static uint32_t zip_u32(const uint8_t *value)
            ((uint32_t)value[2] << 16U) | ((uint32_t)value[3] << 24U);
 }
 
-static bool zip_dependency_source_extension(const char *name, size_t len)
-{
-    static const char *const suffixes[] = {".clj", ".cljc", ".cljs", ".bb", ".java"};
-
-    for (size_t i = 0U; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
-        size_t suffix_len = strlen(suffixes[i]);
-
-        if ((len >= suffix_len) &&
-            (memcmp(name + len - suffix_len, suffixes[i], suffix_len) == 0)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool zip_source_path_safe(const char *name, size_t len)
 {
     size_t segment_start = 0U;
 
     if ((len == 0U) || (name[0] == '/') || (name[0] == '\\') ||
-        !zip_dependency_source_extension(name, len)) {
+        !dependency_source_extension(name, len)) {
         return false;
     }
     for (size_t i = 0U; i <= len; i++) {
@@ -19346,8 +20237,8 @@ static int index_repository_incremental(const char *repo_path,
         goto report_totals;
     }
 
-    if (repo_diff_changes_python_packages(&diff)) {
-        /* Python module names of unchanged files depend on which
+    if (repo_diff_forces_full_rebuild(&diff)) {
+        /* e.g. Python module names of unchanged files depend on which
          * directories hold __init__.py; only a full rebuild renames them. */
         goto fallback;
     }
@@ -26968,18 +27859,16 @@ int code_lens_cli_main(int argc, char **argv)
         if ((argc >= 3) && (strcmp(argv[2], "--deps") == 0)) {
             (void)printf("%s\n", CODE_LENS_VERSION);
             (void)printf("sqlite %s\n", code_lens_sqlite_version());
-            (void)printf("tree-sitter-clojure abi=%u symbols=%u\n",
-                         code_lens_clojure_language_abi_version(),
-                         code_lens_clojure_language_symbol_count());
-            (void)printf("tree-sitter-java abi=%u symbols=%u\n",
-                         code_lens_java_language_abi_version(),
-                         code_lens_java_language_symbol_count());
-            (void)printf("tree-sitter-c abi=%u symbols=%u\n",
-                         code_lens_c_language_abi_version(),
-                         code_lens_c_language_symbol_count());
-            (void)printf("tree-sitter-python abi=%u symbols=%u\n",
-                         code_lens_python_language_abi_version(),
-                         code_lens_python_language_symbol_count());
+            for (size_t lang = 0U; lang < code_lens_language_count(); lang++) {
+                CodeLensLanguageInfo info;
+
+                if (code_lens_language_info(lang, &info) == 0) {
+                    (void)printf("%s abi=%u symbols=%u\n",
+                                 info.grammar,
+                                 info.abi_version,
+                                 info.symbol_count);
+                }
+            }
         } else {
             (void)printf("%s\n", CODE_LENS_VERSION);
         }

@@ -264,6 +264,69 @@ static int java_dossier_usage_scaling(const char *repo, const char *app_dir)
     return failed;
 }
 
+/* Error recovery inserts zero-width MISSING nodes (`super.;`); they must be
+ * skipped, never fail the file (which would abort the whole index). */
+static int test_java_parser_robustness(void)
+{
+    static const char source[] =
+        "class A {\n"
+        "  void f() { super.; }\n"
+        "  void after() { }\n"
+        "}\n";
+    CodeLensJavaFile file;
+    bool spans_ok = true;
+    int failed = 0;
+
+    if (code_lens_parse_java_source("/virtual/A.java", source, sizeof(source) - 1U, &file) != 0) {
+        return java_assert(false, "zero-width MISSING nodes do not fail the parse");
+    }
+    for (size_t i = 0U; i < file.reference_count; i++) {
+        spans_ok = spans_ok && (file.references[i].base_len > 0U) &&
+                   (file.references[i].end_byte > file.references[i].start_byte);
+    }
+    failed |= java_assert(spans_ok, "no zero-width references are emitted");
+    failed |= java_assert(java_find_symbol(&file, "after", "method") != nullptr,
+                          "definitions after a recovered error are extracted");
+    return failed;
+}
+
+/* Javadoc is only the comment ending right before a declaration; a plain
+ * block comment there must not reach back to an earlier Javadoc. */
+static int test_java_doc_boundaries(void)
+{
+    static const char source[] =
+        "class A {\n"
+        "  /** Documented. */\n"
+        "  void documented() { }\n"
+        "  /* Plain comment. */\n"
+        "  void plain() { }\n"
+        "  /***/\n"
+        "  void empty() { }\n"
+        "}\n";
+    CodeLensJavaFile file;
+    const CodeLensSymbol *documented;
+    const CodeLensSymbol *plain;
+    const CodeLensSymbol *empty;
+    int failed = 0;
+
+    if (code_lens_parse_java_source("/virtual/A.java", source, sizeof(source) - 1U, &file) != 0) {
+        return java_assert(false, "doc boundary fixture parses");
+    }
+    documented = java_find_symbol(&file, "documented", "method");
+    plain = java_find_symbol(&file, "plain", "method");
+    empty = java_find_symbol(&file, "empty", "method");
+    failed |= java_assert((documented != nullptr) && (documented->doc != nullptr) &&
+                              (strcmp(documented->doc, "Documented.") == 0),
+                          "Javadoc directly before a method is extracted");
+    failed |= java_assert((plain != nullptr) &&
+                              ((plain->doc == nullptr) || (plain->doc[0] == '\0')),
+                          "plain block comment does not absorb an earlier Javadoc");
+    failed |= java_assert((empty != nullptr) &&
+                              ((empty->doc == nullptr) || (empty->doc[0] == '\0')),
+                          "empty Javadoc yields no documentation");
+    return failed;
+}
+
 static int test_java_index(void)
 {
     char template_buffer[PATH_MAX];
@@ -1377,6 +1440,8 @@ int test_java_support(void)
     int failed = 0;
 
     failed |= test_java_parser();
+    failed |= test_java_parser_robustness();
+    failed |= test_java_doc_boundaries();
     failed |= test_java_index();
     failed |= test_maven_dependency_sources();
     failed |= test_clojure_dependency_sources();

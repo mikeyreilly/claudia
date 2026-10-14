@@ -82,11 +82,12 @@ SQLITE_DEFINES := -DSQLITE_ENABLE_FTS5 -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_LOAD_
 	-DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
 	-DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_USE_ALLOCA
 TREE_SITTER_OBJ := $(OBJ_DIR)/vendor/tree-sitter/lib.o
-TREE_SITTER_CLOJURE_OBJ := $(OBJ_DIR)/vendor/tree-sitter-clojure/parser.o
-TREE_SITTER_JAVA_OBJ := $(OBJ_DIR)/vendor/tree-sitter-java/parser.o
-TREE_SITTER_C_OBJ := $(OBJ_DIR)/vendor/tree-sitter-c/parser.o
-TREE_SITTER_PYTHON_OBJ := $(OBJ_DIR)/vendor/tree-sitter-python/parser.o
-TREE_SITTER_PYTHON_SCANNER_OBJ := $(OBJ_DIR)/vendor/tree-sitter-python/scanner.o
+# Grammars linked into the binary; each is vendor/tree-sitter-<name> (pinned in
+# vendor/deps.lock). A grammar's src/scanner.c (external scanner) is compiled
+# when present. Adding a language: append it here and to GRAMMARS in build.bat.
+GRAMMARS := clojure java c python
+TREE_SITTER_GRAMMAR_OBJS := $(foreach g,$(GRAMMARS),$(OBJ_DIR)/vendor/tree-sitter-$(g)/parser.o) \
+	$(foreach g,$(GRAMMARS),$(if $(wildcard vendor/tree-sitter-$(g)/src/scanner.c),$(OBJ_DIR)/vendor/tree-sitter-$(g)/scanner.o))
 # Decompression-only slice of libdeflate; the cpu_features files are
 # internally guarded per architecture, so compiling both is safe anywhere.
 LIBDEFLATE_SRCS := vendor/libdeflate/lib/deflate_decompress.c \
@@ -96,7 +97,7 @@ LIBDEFLATE_SRCS := vendor/libdeflate/lib/deflate_decompress.c \
 	vendor/libdeflate/lib/arm/cpu_features.c \
 	vendor/libdeflate/lib/x86/cpu_features.c
 LIBDEFLATE_OBJS := $(patsubst vendor/libdeflate/lib/%.c,$(OBJ_DIR)/vendor/libdeflate/%.o,$(LIBDEFLATE_SRCS))
-VENDOR_OBJS := $(SQLITE_OBJ) $(TREE_SITTER_OBJ) $(TREE_SITTER_CLOJURE_OBJ) $(TREE_SITTER_JAVA_OBJ) $(TREE_SITTER_C_OBJ) $(TREE_SITTER_PYTHON_OBJ) $(TREE_SITTER_PYTHON_SCANNER_OBJ) $(LIBDEFLATE_OBJS)
+VENDOR_OBJS := $(SQLITE_OBJ) $(TREE_SITTER_OBJ) $(TREE_SITTER_GRAMMAR_OBJS) $(LIBDEFLATE_OBJS)
 
 SRC := src/code_lens.c
 OBJ := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRC))
@@ -133,26 +134,13 @@ $(SQLITE_OBJ): vendor/sqlite/sqlite3.c
 	@mkdir -p $(dir $@)
 	$(CC) -Ivendor/sqlite $(VENDOR_CFLAGS) $(PTHREADFLAGS) $(SQLITE_DEFINES) -c $< -o $@
 
-$(TREE_SITTER_CLOJURE_OBJ): vendor/tree-sitter-clojure/src/parser.c
+$(OBJ_DIR)/vendor/tree-sitter-%/parser.o: vendor/tree-sitter-%/src/parser.c
 	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-clojure/src $(VENDOR_CFLAGS) -c $< -o $@
+	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-$*/src $(VENDOR_CFLAGS) -c $< -o $@
 
-$(TREE_SITTER_JAVA_OBJ): vendor/tree-sitter-java/src/parser.c
+$(OBJ_DIR)/vendor/tree-sitter-%/scanner.o: vendor/tree-sitter-%/src/scanner.c
 	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-java/src $(VENDOR_CFLAGS) -c $< -o $@
-
-$(TREE_SITTER_C_OBJ): vendor/tree-sitter-c/src/parser.c
-	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-c/src $(VENDOR_CFLAGS) -c $< -o $@
-
-$(TREE_SITTER_PYTHON_OBJ): vendor/tree-sitter-python/src/parser.c
-	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-python/src $(VENDOR_CFLAGS) -c $< -o $@
-
-# tree-sitter-python ships an external scanner (INDENT/DEDENT, strings).
-$(TREE_SITTER_PYTHON_SCANNER_OBJ): vendor/tree-sitter-python/src/scanner.c
-	@mkdir -p $(dir $@)
-	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-python/src $(VENDOR_CFLAGS) -c $< -o $@
+	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-$*/src $(VENDOR_CFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/vendor/libdeflate/%.o: vendor/libdeflate/lib/%.c
 	@mkdir -p $(dir $@)

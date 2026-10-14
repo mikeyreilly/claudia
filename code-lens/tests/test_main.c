@@ -649,6 +649,82 @@ static int write_text_file(const char *src_dir, const char *name, const char *co
     return rc;
 }
 
+/* Every registered language has a loaded grammar, and the source walkers
+ * route exactly the registered extensions (Emacs lock files, compiled
+ * artifacts, and dotted directory names excluded). */
+static int test_language_registry(void)
+{
+    static const char *const rejected[] = {".#lock.py", "module.pyc", "notes.txt", "Makefile"};
+    char template_buffer[PATH_MAX];
+    const char *tmp = getenv("TMPDIR");
+    CodeLensPathList sources = {0};
+    CodeLensPathList clojure = {0};
+    CodeLensLanguageInfo info;
+    size_t count = code_lens_language_count();
+    size_t extension_count = 0U;
+    size_t clojure_count = 0U;
+    char *root;
+    char *dotted_dir;
+    int failed = 0;
+
+    if ((count == 0U) || (code_lens_language_info(count, &info) == 0)) {
+        (void)fprintf(stderr, "language registry test failed: count/bounds\n");
+        return 1;
+    }
+    if ((tmp == nullptr) || (tmp[0] == '\0')) {
+        tmp = "/tmp";
+    }
+    (void)snprintf(template_buffer, sizeof(template_buffer), "%s/code-lens-langs-XXXXXX", tmp);
+    root = canonical_temp_root(template_buffer);
+    dotted_dir = root == nullptr ? nullptr : code_lens_join_path(root, "pkg.py");
+    if ((dotted_dir == nullptr) || (code_lens_mkdir_p(dotted_dir) != 0) ||
+        (write_text_file(dotted_dir, "README", "x\n") != 0)) {
+        (void)fprintf(stderr, "language registry test failed: fixture setup\n");
+        return 1;
+    }
+    for (size_t i = 0U; i < count; i++) {
+        if ((code_lens_language_info(i, &info) != 0) || (info.name == nullptr) ||
+            (info.grammar == nullptr) || (info.abi_version == 0U) || (info.symbol_count == 0U) ||
+            (info.extensions == nullptr) || (info.extensions[0] == nullptr)) {
+            (void)fprintf(stderr, "language registry test failed: entry %zu incomplete\n", i);
+            failed = 1;
+            continue;
+        }
+        for (const char *const *ext = info.extensions; *ext != nullptr; ext++) {
+            char name[64];
+
+            (void)snprintf(name, sizeof(name), "sample%s", *ext);
+            if (write_text_file(root, name, "\n") != 0) {
+                failed = 1;
+            }
+            extension_count++;
+            if (strcmp(info.name, "clojure") == 0) {
+                clojure_count++;
+            }
+        }
+    }
+    for (size_t i = 0U; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+        if (write_text_file(root, rejected[i], "\n") != 0) {
+            failed = 1;
+        }
+    }
+    if ((code_lens_collect_source_files(root, &sources) != 0) ||
+        (sources.count != extension_count)) {
+        (void)fprintf(stderr,
+                      "language registry test failed: walker found %zu of %zu sources\n",
+                      sources.count,
+                      extension_count);
+        failed = 1;
+    }
+    if ((code_lens_collect_clojure_files(root, &clojure) != 0) ||
+        (clojure.count != clojure_count) || (clojure_count == 0U)) {
+        (void)fprintf(stderr, "language registry test failed: Clojure walker routing\n");
+        failed = 1;
+    }
+    (void)code_lens_remove_tree(root);
+    return failed;
+}
+
 /* The repo id (canonical fixture path); set once the fixture is indexed. */
 static const char *context_repo_id = "";
 
@@ -2994,43 +3070,7 @@ int main(void)
         return 1;
     }
 
-    if (code_lens_clojure_language_abi_version() == 0U) {
-        (void)fprintf(stderr, "Clojure language ABI version must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_clojure_language_symbol_count() == 0U) {
-        (void)fprintf(stderr, "Clojure language symbol count must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_java_language_abi_version() == 0U) {
-        (void)fprintf(stderr, "Java language ABI version must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_java_language_symbol_count() == 0U) {
-        (void)fprintf(stderr, "Java language symbol count must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_c_language_abi_version() == 0U) {
-        (void)fprintf(stderr, "C language ABI version must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_c_language_symbol_count() == 0U) {
-        (void)fprintf(stderr, "C language symbol count must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_python_language_abi_version() == 0U) {
-        (void)fprintf(stderr, "Python language ABI version must not be zero\n");
-        return 1;
-    }
-
-    if (code_lens_python_language_symbol_count() == 0U) {
-        (void)fprintf(stderr, "Python language symbol count must not be zero\n");
+    if (test_language_registry() != 0) {
         return 1;
     }
 
