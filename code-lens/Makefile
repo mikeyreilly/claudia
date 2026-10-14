@@ -85,6 +85,8 @@ TREE_SITTER_OBJ := $(OBJ_DIR)/vendor/tree-sitter/lib.o
 TREE_SITTER_CLOJURE_OBJ := $(OBJ_DIR)/vendor/tree-sitter-clojure/parser.o
 TREE_SITTER_JAVA_OBJ := $(OBJ_DIR)/vendor/tree-sitter-java/parser.o
 TREE_SITTER_C_OBJ := $(OBJ_DIR)/vendor/tree-sitter-c/parser.o
+TREE_SITTER_PYTHON_OBJ := $(OBJ_DIR)/vendor/tree-sitter-python/parser.o
+TREE_SITTER_PYTHON_SCANNER_OBJ := $(OBJ_DIR)/vendor/tree-sitter-python/scanner.o
 # Decompression-only slice of libdeflate; the cpu_features files are
 # internally guarded per architecture, so compiling both is safe anywhere.
 LIBDEFLATE_SRCS := vendor/libdeflate/lib/deflate_decompress.c \
@@ -94,11 +96,11 @@ LIBDEFLATE_SRCS := vendor/libdeflate/lib/deflate_decompress.c \
 	vendor/libdeflate/lib/arm/cpu_features.c \
 	vendor/libdeflate/lib/x86/cpu_features.c
 LIBDEFLATE_OBJS := $(patsubst vendor/libdeflate/lib/%.c,$(OBJ_DIR)/vendor/libdeflate/%.o,$(LIBDEFLATE_SRCS))
-VENDOR_OBJS := $(SQLITE_OBJ) $(TREE_SITTER_OBJ) $(TREE_SITTER_CLOJURE_OBJ) $(TREE_SITTER_JAVA_OBJ) $(TREE_SITTER_C_OBJ) $(LIBDEFLATE_OBJS)
+VENDOR_OBJS := $(SQLITE_OBJ) $(TREE_SITTER_OBJ) $(TREE_SITTER_CLOJURE_OBJ) $(TREE_SITTER_JAVA_OBJ) $(TREE_SITTER_C_OBJ) $(TREE_SITTER_PYTHON_OBJ) $(TREE_SITTER_PYTHON_SCANNER_OBJ) $(LIBDEFLATE_OBJS)
 
 SRC := src/code_lens.c
 OBJ := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRC))
-TEST_SRC := tests/test_main.c tests/test_clojure_parser.c tests/test_java_support.c tests/test_c_support.c tests/test_git_blobs.c
+TEST_SRC := tests/test_main.c tests/test_clojure_parser.c tests/test_java_support.c tests/test_c_support.c tests/test_python_support.c tests/test_git_blobs.c
 TEST_OBJ := $(patsubst tests/%.c,$(OBJ_DIR)/tests/%.o,$(TEST_SRC))
 TEST_APP_OBJ := $(OBJ_DIR)/code_lens_test.o
 
@@ -142,6 +144,15 @@ $(TREE_SITTER_JAVA_OBJ): vendor/tree-sitter-java/src/parser.c
 $(TREE_SITTER_C_OBJ): vendor/tree-sitter-c/src/parser.c
 	@mkdir -p $(dir $@)
 	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-c/src $(VENDOR_CFLAGS) -c $< -o $@
+
+$(TREE_SITTER_PYTHON_OBJ): vendor/tree-sitter-python/src/parser.c
+	@mkdir -p $(dir $@)
+	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-python/src $(VENDOR_CFLAGS) -c $< -o $@
+
+# tree-sitter-python ships an external scanner (INDENT/DEDENT, strings).
+$(TREE_SITTER_PYTHON_SCANNER_OBJ): vendor/tree-sitter-python/src/scanner.c
+	@mkdir -p $(dir $@)
+	$(CC) -Ivendor/tree-sitter/lib/include -Ivendor/tree-sitter-python/src $(VENDOR_CFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/vendor/libdeflate/%.o: vendor/libdeflate/lib/%.c
 	@mkdir -p $(dir $@)

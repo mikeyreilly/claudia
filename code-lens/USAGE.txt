@@ -1,7 +1,7 @@
 code-lens
 ==========
 
-Native ISO C23 MCP server and CLI for querying indexed Clojure, Java, and C codebases.
+Native ISO C23 MCP server and CLI for querying indexed Clojure, Java, C, and Python codebases.
 
 Initial command surface:
 
@@ -23,7 +23,9 @@ there are no repo names. Their paths are canonicalized (with `~/` expansion);
 they retain support for plain directories, and any path inside an indexed
 repository resolves to that repository, so `--repo` accepts the repo root or
 any file or directory within it. Supported source extensions are .clj, .cljc,
-.cljs, .bb, .java, .c, and .h; mixed-language repositories are supported.
+.cljs, .bb, .java, .c, .h, and .py; mixed-language repositories are supported.
+Python caches and virtualenvs (__pycache__, .venv, venv, .tox, .nox,
+.mypy_cache, .pytest_cache, .ruff_cache, .eggs, site-packages) are skipped.
 
 MCP tool surface:
 
@@ -131,9 +133,16 @@ checked out next to this repository):
   normal/static imports, enclosing types, and declared receiver types are
   resolved without invoking a compiler; receiver types requiring whole-program
   inference can remain unresolved. C global/static linkage, declared receiver
-  types, and aggregate member accesses are resolved syntax-first. Qualifiers in
-  Clojure `alias/name` and Java `Type.member`, `Type#member`, and fully qualified
-  type spellings are ignored for lookup when no exact dotted definition exists. Its `--namespace <namespace>`/MCP `namespace` and
+  types, and aggregate member accesses are resolved syntax-first. Python
+  modules are named by their __init__.py package chain (or, outside a regular
+  package, by the repository-relative path minus a leading src/); module-level
+  definitions use the module as namespace and class members use module.Class.
+  Imports (including relative ones), self/cls, super(), constructor-assigned
+  locals, and annotations resolve receivers; untyped receivers stay
+  unresolved. Qualifiers in Clojure `alias/name`, Java `Type.member`,
+  `Type#member`, and fully qualified type spellings, and Python `module.func` or
+  `Class.method` spellings are ignored for lookup when no exact dotted
+  definition exists. Its `--namespace <namespace>`/MCP `namespace` and
   `--path <substring>`/MCP `path` filters select matching definition
   candidates, and therefore show only references resolving to those candidates
   rather than merely filtering reference-site output. CLI/public-API `list`,
@@ -171,6 +180,14 @@ checked out next to this repository):
   CODE_LENS_HOME="$PWD/.code-lens" \
     ./build/code-lens context --repo /path/to/c-repo --name widget_get
 
+  # Python examples (the namespace filter, when used, is the dotted module or
+  # module.Class):
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens query --repo /path/to/python-repo --kind class User
+
+  CODE_LENS_HOME="$PWD/.code-lens" \
+    ./build/code-lens context --repo /path/to/python-repo --name User.greet
+
 Copilot CLI MCP command:
 
   env CODE_LENS_HOME=/path/to/code-lens/.code-lens \
@@ -191,7 +208,8 @@ Implementation notes:
 
   - Project-owned C sources are compiled as ISO C23 with pedantic diagnostics.
   - Run scripts/vendor-deps.sh to fetch the pinned SQLite amalgamation and
-    clone tree-sitter, tree-sitter-clojure, tree-sitter-java, and tree-sitter-c into vendor/. The source trees
+    clone tree-sitter, tree-sitter-clojure, tree-sitter-java, tree-sitter-c, and
+    tree-sitter-python into vendor/. The source trees
     are local artifacts and are ignored by git; scripts plus pinned refs and
     hashes are committed instead.
   - The toolchain is pure C end to end: SQLite is vendored as the C

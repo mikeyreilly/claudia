@@ -1,7 +1,7 @@
 # code-lens
 
 A native ISO C23 command-line tool and MCP server that indexes Clojure, Java,
-and C codebases into per-repo [SQLite](https://sqlite.org) databases and answers
+C, and Python codebases into per-repo [SQLite](https://sqlite.org) databases and answers
 symbol search (FTS5 full-text search ranked with BM25), definition/reference
 context, and raw SQL queries over the index.
 
@@ -48,7 +48,7 @@ make release
 # 3. Run the tests.
 make test
 
-# 4. Index a Clojure, Java, C, or mixed repository and query it.
+# 4. Index a Clojure, Java, C, Python, or mixed repository and query it.
 CODE_LENS_HOME=/tmp/code-lens-home \
   ./build/code-lens index --repo /path/to/repo
 
@@ -89,11 +89,16 @@ repository, so `--repo` accepts the repo root or any file or directory within
 it.
 
 Supported source extensions are `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`,
-`.c`, and `.h`. The Java extractor uses tree-sitter-java and indexes packages,
+`.c`, `.h`, and `.py`. The Java extractor uses tree-sitter-java and indexes packages,
 imports, types, members, Javadocs, and resolved references. The C extractor
 uses tree-sitter-c and indexes functions/prototypes, variables, typedefs,
 structs, unions, enums, fields, macros, documentation comments, calls, and
-member accesses. Repositories can mix all three languages.
+member accesses. The Python extractor uses tree-sitter-python and indexes
+modules, imports, classes, functions, methods, module variables, class and
+`self.` attributes, docstrings, and resolved references. Repositories can mix
+all four languages. Python bytecode caches and virtualenv/tool directories
+(`__pycache__`, `.venv`, `venv`, `.tox`, `.nox`, `.mypy_cache`,
+`.pytest_cache`, `.ruff_cache`, `.eggs`, `site-packages`) are skipped.
 
 ## Dependency sources
 
@@ -190,7 +195,7 @@ maintenance are deliberately absent from the model-facing interface; use the
 `index`, `list`, and `remove` CLI commands for administration. See `USAGE.txt`
 for client registration examples.
 
-`query` searches Clojure, Java, and C symbol definitions plus Clojure keyword
+`query` searches Clojure, Java, C, and Python symbol definitions plus Clojure keyword
 usage locations. Symbol results match whole words and word prefixes (names are split
 on `- . / _`), ranked by BM25; keyword results match keyword-name prefixes such
 as `:report!-fn`. Keyword locations are distributed across matching files before
@@ -201,6 +206,9 @@ substrings. Java kinds
 include `class`, `interface`, `enum`, `annotation`, `record`, `constructor`,
 `method`, `field`, `enum_constant`, and `test`; C adds `struct`, `union`,
 `typedef`, and `variable` while sharing `function`, `macro`, and related kinds.
+Python uses `class`, `function`, `method`, `constructor` (`__init__`), `field`,
+`variable`, `typedef` (`type X = ...`), and `test` (`test_*` functions and
+`test*` methods of `Test*`/`*TestCase` classes).
 Multi-term queries require every term to match; when that finds nothing the search relaxes
 to any-term matches and flags the result with a notice line. Use
 `--exclude-tests`, `--kind <kind>`, and `--path <substring>` to cut irrelevant
@@ -233,14 +241,28 @@ remain unresolved. Java definitions use the fully qualified enclosing type as
 symbols use the empty namespace, static symbols use their file path, and fields
 use their aggregate type. This resolves ordinary cross-file calls, file-local
 calls, global variables, and typed `.`/`->` member accesses without running a
-compiler. `context` accepts Java `Type.member`, `Type#member`, fully qualified
-type spellings, and C `ptr->field` spellings as well as a bare name.
+compiler. For Python, a file's module name comes from its chain of enclosing
+`__init__.py` packages (`backend/app/models.py` is `app.models` when only
+`app/` holds an `__init__.py`); files outside a regular package use their
+repository-relative path with a leading `src/` stripped. Module-level
+definitions use the module as `namespace`, and class members use
+`module.Class`. `import a.b [as x]` becomes an `Alias` row and
+`from m import n` (including relative imports) a `Referred` row. References
+resolve through imports, `self`/`cls`, `super()`, local base classes,
+constructor-assigned locals (`x = Klass()`), and annotations (including
+`Optional[...]` and `X | None`); calls on untyped receivers keep an empty
+target, and names re-exported through a package `__init__.py` resolve to the
+re-exporting package rather than the defining module. Adding or removing an
+`__init__.py` renames modules, so re-indexing then performs a full rebuild.
+`context` accepts Java `Type.member`, `Type#member`, fully qualified
+type spellings, C `ptr->field` spellings, and Python `module.func` or
+`Class.method` spellings as well as a bare name.
 `--exclude-tests` drops test-file rows. `sql` runs read-only SQL against the
 chosen repo's database (reads only -- ATTACH, PRAGMA, and writes are denied),
 with output capped at 100 rows.
 
 `list`, `query`, and `context` check whether indexed files still match their
-recorded size/mtime snapshot and whether new Clojure, Java, or C files have
+recorded size/mtime snapshot and whether new Clojure, Java, C, or Python files have
 appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
 they return any stale results with a warning. MCP instead guarantees that
 `query`, `context`, and `sql` operate on current worktree data or return an

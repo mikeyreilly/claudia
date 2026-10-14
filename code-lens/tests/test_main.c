@@ -14,6 +14,7 @@
 int test_clojure_parser(void);
 int test_java_support(void);
 int test_c_support(void);
+int test_python_support(void);
 int test_git_blobs(void);
 char *code_lens_test_mcp_call_tool(const char *tool_name, const char *args);
 const char *code_lens_test_json_object_value(const char *object, const char *key);
@@ -3023,6 +3024,16 @@ int main(void)
         return 1;
     }
 
+    if (code_lens_python_language_abi_version() == 0U) {
+        (void)fprintf(stderr, "Python language ABI version must not be zero\n");
+        return 1;
+    }
+
+    if (code_lens_python_language_symbol_count() == 0U) {
+        (void)fprintf(stderr, "Python language symbol count must not be zero\n");
+        return 1;
+    }
+
     if (test_clojure_parser() != 0) {
         return 1;
     }
@@ -3032,6 +3043,10 @@ int main(void)
     }
 
     if (test_c_support() != 0) {
+        return 1;
+    }
+
+    if (test_python_support() != 0) {
         return 1;
     }
 

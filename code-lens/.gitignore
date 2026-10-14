@@ -4,6 +4,7 @@ vendor/tree-sitter/
 vendor/tree-sitter-clojure/
 vendor/tree-sitter-java/
 vendor/tree-sitter-c/
+vendor/tree-sitter-python/
 vendor/libdeflate/
 vendor/zlib/
 .code-lens/

@@ -26,8 +26,9 @@ typedef struct {
     char *alias;
 } CodeLensNamespaceAlias;
 
-/* One symbol made visible unqualified by a Clojure :refer/:use or Java
- * static import; ":all" records whole-namespace/type wildcard visibility. */
+/* One symbol made visible unqualified by a Clojure :refer/:use, Java
+ * static import, or Python `from m import n`; ":all" records
+ * whole-namespace/type wildcard visibility. */
 typedef struct {
     char *namespace_name;
     char *symbol;
@@ -38,7 +39,9 @@ typedef struct {
  * require alias (or verbatim qualifier). The Java extractor fills the same
  * fields directly with the final type/member name and syntax-resolved fully
  * qualified target type. C uses the final identifier plus a file-local or
- * aggregate-type target when known. An empty target means global,
+ * aggregate-type target when known. Python uses the final name (the original
+ * imported name for `from m import n as k`) plus the dotted module or
+ * module.Class target when known. An empty target means global,
  * unresolved, or unqualified. All pointers outlive the parsed file. The _hash fields carry the indexer's
  * term-interner hash of each text, precomputed on parse workers. */
 typedef struct {
@@ -77,7 +80,8 @@ typedef struct {
 typedef struct {
     char *kind;
     char *name;
-    /* Clojure namespace, Java enclosing type, or C linkage/type scope. */
+    /* Clojure namespace, Java enclosing type, C linkage/type scope, or
+     * Python module / module.Class. */
     char *namespace_name;
     char *doc;
     char *source;
@@ -85,9 +89,11 @@ typedef struct {
     uint32_t end_line;
 } CodeLensSymbol;
 
-/* Parsed source-file data shared by the Clojure, Java, and C extractors.
- * namespace_name is a Clojure namespace, Java package, or empty for C. For
- * Java, Alias rows model normal imports and Referred rows model static imports. */
+/* Parsed source-file data shared by the Clojure, Java, C, and Python
+ * extractors. namespace_name is a Clojure namespace, Java package, empty for
+ * C, or the dotted Python module. For Java, Alias rows model normal imports
+ * and Referred rows model static imports; for Python, Alias rows model
+ * `import a.b [as x]` and Referred rows model `from m import n`. */
 typedef struct {
     char *file_path;
     char *namespace_name;
@@ -113,10 +119,12 @@ typedef struct {
 typedef CodeLensSourceFile CodeLensClojureFile;
 typedef CodeLensSourceFile CodeLensJavaFile;
 typedef CodeLensSourceFile CodeLensCFile;
+typedef CodeLensSourceFile CodeLensPythonFile;
 
 typedef struct CodeLensClojureParser CodeLensClojureParser;
 typedef struct CodeLensJavaParser CodeLensJavaParser;
 typedef struct CodeLensCParser CodeLensCParser;
+typedef struct CodeLensPythonParser CodeLensPythonParser;
 
 CodeLensClojureParser *code_lens_clojure_parser_new(void);
 void code_lens_clojure_parser_delete(CodeLensClojureParser *parser);
@@ -157,6 +165,26 @@ int code_lens_parse_c_source(const char *file_path,
                               size_t source_len,
                               CodeLensCFile *out_file);
 
+/* Python module names come from the file path: the chain of enclosing
+ * directories that contain __init__.py, or else the path relative to the
+ * repository root with a leading src/ component stripped. A NULL or
+ * non-enclosing repo root falls back to the file stem. */
+CodeLensPythonParser *code_lens_python_parser_new(void);
+void code_lens_python_parser_delete(CodeLensPythonParser *parser);
+int code_lens_python_parser_set_repo_root(CodeLensPythonParser *parser, const char *repo_root);
+int code_lens_parse_python_source_with_parser(CodeLensPythonParser *parser,
+                                               const char *file_path,
+                                               const char *source,
+                                               size_t source_len,
+                                               CodeLensPythonFile *out_file);
+int code_lens_parse_python_source(const char *repo_root,
+                                   const char *file_path,
+                                   const char *source,
+                                   size_t source_len,
+                                   CodeLensPythonFile *out_file);
+/* Arena-allocated dotted module name for file_path (see rules above). */
+char *code_lens_python_module_name(const char *repo_root, const char *file_path);
+
 /* Process-wide counts of files served from the git object store versus
  * read from the working tree while a git blob source was active. */
 uint64_t code_lens_git_blob_read_count(void);
@@ -169,6 +197,8 @@ uint32_t code_lens_java_language_abi_version(void);
 uint32_t code_lens_java_language_symbol_count(void);
 uint32_t code_lens_c_language_abi_version(void);
 uint32_t code_lens_c_language_symbol_count(void);
+uint32_t code_lens_python_language_abi_version(void);
+uint32_t code_lens_python_language_symbol_count(void);
 
 typedef struct {
     char *path;

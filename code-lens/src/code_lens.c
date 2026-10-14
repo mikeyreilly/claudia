@@ -37,6 +37,7 @@
 const TSLanguage *tree_sitter_clojure(void);
 const TSLanguage *tree_sitter_java(void);
 const TSLanguage *tree_sitter_c(void);
+const TSLanguage *tree_sitter_python(void);
 
 static char *copy_bytes(const char *value, size_t len)
 {
@@ -604,7 +605,13 @@ static bool should_skip_dir(const char *name)
            (strcmp(name, "build") == 0) || (strcmp(name, ".shadow-cljs") == 0) ||
            (strcmp(name, ".cpcache") == 0) || (strcmp(name, ".idea") == 0) ||
            (strcmp(name, ".vscode") == 0) || (strcmp(name, ".lsp") == 0) ||
-           (strcmp(name, ".code-lens") == 0);
+           (strcmp(name, ".code-lens") == 0) ||
+           /* Python bytecode caches, virtualenvs, and tool caches. */
+           (strcmp(name, "__pycache__") == 0) || (strcmp(name, ".venv") == 0) ||
+           (strcmp(name, "venv") == 0) || (strcmp(name, ".tox") == 0) ||
+           (strcmp(name, ".nox") == 0) || (strcmp(name, ".mypy_cache") == 0) ||
+           (strcmp(name, ".pytest_cache") == 0) || (strcmp(name, ".ruff_cache") == 0) ||
+           (strcmp(name, ".eggs") == 0) || (strcmp(name, "site-packages") == 0);
 }
 
 typedef bool (*SourceExtensionPredicate)(const char *path);
@@ -645,9 +652,19 @@ static bool has_c_extension(const char *path)
            ((strcmp(dot, ".c") == 0) || (strcmp(dot, ".h") == 0));
 }
 
+static bool has_python_extension(const char *path)
+{
+    const char *name = strrchr(path, '/');
+    const char *dot = strrchr(path, '.');
+
+    name = name == nullptr ? path : name + 1;
+    return (strncmp(name, ".#", 2U) != 0) && (dot != nullptr) && (strcmp(dot, ".py") == 0);
+}
+
 static bool has_supported_extension(const char *path)
 {
-    return has_clojure_extension(path) || has_java_extension(path) || has_c_extension(path);
+    return has_clojure_extension(path) || has_java_extension(path) || has_c_extension(path) ||
+           has_python_extension(path);
 }
 
 static bool dirent_can_skip_without_stat(const struct dirent *entry,
@@ -2462,6 +2479,16 @@ uint32_t code_lens_c_language_abi_version(void)
 uint32_t code_lens_c_language_symbol_count(void)
 {
     return ts_language_symbol_count(tree_sitter_c());
+}
+
+uint32_t code_lens_python_language_abi_version(void)
+{
+    return ts_language_abi_version(tree_sitter_python());
+}
+
+uint32_t code_lens_python_language_symbol_count(void)
+{
+    return ts_language_symbol_count(tree_sitter_python());
 }
 
 /* Database wrapper */
@@ -5616,6 +5643,7 @@ typedef struct {
     CodeLensClojureParser *clojure;
     CodeLensJavaParser *java;
     CodeLensCParser *c;
+    CodeLensPythonParser *python;
 } CodeLensSourceParser;
 
 static bool java_node_is(TSNode node, const char *type)
@@ -8446,7 +8474,2666 @@ int code_lens_parse_c_source(const char *file_path,
     return rc;
 }
 
-static CodeLensSourceParser *code_lens_source_parser_new(void)
+/* Python parser */
+
+/* Memo of "does this directory hold __init__.py", keyed by directory path.
+ * Heap-backed because it outlives any one file's arena lifetime. */
+typedef struct {
+    char *dir;
+    size_t len;
+    uint64_t hash;
+    bool has_init;
+} PyDirSlot;
+
+struct CodeLensPythonParser {
+    TSParser *parser;
+    char *repo_root;
+    size_t repo_root_len;
+    PyDirSlot *dirs;
+    size_t dir_capacity;
+    size_t dir_count;
+};
+
+static bool py_is_separator(char c)
+{
+    return (c == '/') || (c == '\\');
+}
+
+static bool py_dir_has_init_uncached(const char *dir, size_t len)
+{
+    static const char marker[] = "/__init__.py";
+    char *path = malloc(len + sizeof(marker));
+    struct stat st;
+    bool found;
+
+    if (path == nullptr) {
+        return false;
+    }
+    if (len > 0U) {
+        (void)memcpy(path, dir, len);
+    }
+    (void)memcpy(path + len, marker, sizeof(marker));
+    found = (stat(path, &st) == 0) && S_ISREG(st.st_mode);
+    free(path);
+    return found;
+}
+
+static bool py_dir_memo_grow(CodeLensPythonParser *parser)
+{
+    size_t capacity = parser->dir_capacity == 0U ? 256U : parser->dir_capacity * 2U;
+    PyDirSlot *slots;
+
+    if (capacity > (SIZE_MAX / sizeof(*slots))) {
+        return false;
+    }
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == nullptr) {
+        return false;
+    }
+    for (size_t i = 0U; i < parser->dir_capacity; i++) {
+        const PyDirSlot *slot = &parser->dirs[i];
+        size_t index;
+
+        if (slot->dir == nullptr) {
+            continue;
+        }
+        index = (size_t)slot->hash & (capacity - 1U);
+        while (slots[index].dir != nullptr) {
+            index = (index + 1U) & (capacity - 1U);
+        }
+        slots[index] = *slot;
+    }
+    free(parser->dirs);
+    parser->dirs = slots;
+    parser->dir_capacity = capacity;
+    return true;
+}
+
+static bool py_dir_has_init(CodeLensPythonParser *parser, const char *dir, size_t len)
+{
+    uint64_t hash;
+    size_t index;
+    PyDirSlot *slot;
+
+    if ((parser == nullptr) ||
+        (((parser->dir_count + 1U) * 2U > parser->dir_capacity) && !py_dir_memo_grow(parser))) {
+        return py_dir_has_init_uncached(dir, len);
+    }
+    hash = term_hash(dir, len);
+    index = (size_t)hash & (parser->dir_capacity - 1U);
+    while (parser->dirs[index].dir != nullptr) {
+        slot = &parser->dirs[index];
+        if ((slot->hash == hash) && (slot->len == len) && (memcmp(slot->dir, dir, len) == 0)) {
+            return slot->has_init;
+        }
+        index = (index + 1U) & (parser->dir_capacity - 1U);
+    }
+    slot = &parser->dirs[index];
+    slot->dir = malloc(len + 1U);
+    if (slot->dir == nullptr) {
+        return py_dir_has_init_uncached(dir, len);
+    }
+    if (len > 0U) {
+        (void)memcpy(slot->dir, dir, len);
+    }
+    slot->dir[len] = '\0';
+    slot->len = len;
+    slot->hash = hash;
+    slot->has_init = py_dir_has_init_uncached(dir, len);
+    parser->dir_count++;
+    return slot->has_init;
+}
+
+typedef struct {
+    const char *data;
+    size_t len;
+} PySlice;
+
+static size_t py_last_separator(const char *path, size_t len)
+{
+    for (size_t i = len; i > 0U; i--) {
+        if (py_is_separator(path[i - 1U])) {
+            return i - 1U;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static bool py_push_component(PySlice **parts, size_t *count, size_t *capacity, const char *data, size_t len)
+{
+    if ((*count == *capacity) && !parser_heap_grow((void **)parts, capacity, sizeof(**parts), 8U)) {
+        return false;
+    }
+    (*parts)[(*count)++] = (PySlice){.data = data, .len = len};
+    return true;
+}
+
+/* Builds the dotted module name for file_path. Components are collected
+ * innermost first and joined in reverse. */
+static char *py_module_name(CodeLensPythonParser *parser,
+                            const char *repo_root,
+                            size_t root_len,
+                            const char *file_path)
+{
+    size_t len = strlen(file_path);
+    size_t sep = py_last_separator(file_path, len);
+    size_t name_start = sep == SIZE_MAX ? 0U : sep + 1U;
+    size_t stem_len = len - name_start;
+    const char *stem = file_path + name_start;
+    bool is_init;
+    bool inside_root;
+    PySlice *parts = nullptr;
+    size_t part_count = 0U;
+    size_t part_capacity = 0U;
+    StringBuilder out = {0};
+    bool ok = true;
+
+    while ((root_len > 1U) && (repo_root != nullptr) && py_is_separator(repo_root[root_len - 1U])) {
+        root_len--;
+    }
+    if ((stem_len >= 3U) && (memcmp(stem + stem_len - 3U, ".py", 3U) == 0)) {
+        stem_len -= 3U;
+    }
+    is_init = (stem_len == sizeof("__init__") - 1U) && (memcmp(stem, "__init__", stem_len) == 0);
+    inside_root = (repo_root != nullptr) && (root_len > 0U) && (sep != SIZE_MAX) &&
+                  (sep >= root_len) && (memcmp(file_path, repo_root, root_len) == 0) &&
+                  py_is_separator(file_path[root_len]);
+
+    if (!is_init) {
+        ok = py_push_component(&parts, &part_count, &part_capacity, stem, stem_len);
+    }
+    if (ok && (sep != SIZE_MAX) && (sep > 0U) && py_dir_has_init(parser, file_path, sep)) {
+        size_t cur = sep;
+
+        for (;;) {
+            size_t parent = py_last_separator(file_path, cur);
+            size_t comp_start = parent == SIZE_MAX ? 0U : parent + 1U;
+
+            if (!py_push_component(&parts,
+                                   &part_count,
+                                   &part_capacity,
+                                   file_path + comp_start,
+                                   cur - comp_start)) {
+                ok = false;
+                break;
+            }
+            if ((parent == SIZE_MAX) || (parent == 0U) || (inside_root && (cur <= root_len)) ||
+                (inside_root && (parent < root_len)) ||
+                !py_dir_has_init(parser, file_path, parent)) {
+                break;
+            }
+            cur = parent;
+        }
+    } else if (ok && inside_root) {
+        /* Not inside a regular package: the path below the repository
+         * root (minus a leading src/) is the import path. */
+        size_t rel = root_len + 1U;
+        size_t end = sep;
+        PySlice *dirs = nullptr;
+        size_t dir_count = 0U;
+        size_t dir_capacity = 0U;
+
+        while ((rel < end) && ok) {
+            size_t next = rel;
+
+            while ((next < end) && !py_is_separator(file_path[next])) {
+                next++;
+            }
+            if (next > rel) {
+                ok = py_push_component(&dirs, &dir_count, &dir_capacity, file_path + rel, next - rel);
+            }
+            rel = next + 1U;
+        }
+        for (size_t i = dir_count; ok && (i > 0U); i--) {
+            const PySlice *dir = &dirs[i - 1U];
+
+            if ((i == 1U) && (dir->len == 3U) && (memcmp(dir->data, "src", 3U) == 0)) {
+                continue;
+            }
+            ok = py_push_component(&parts, &part_count, &part_capacity, dir->data, dir->len);
+        }
+        free(dirs);
+    } else if (ok && is_init && (sep != SIZE_MAX)) {
+        size_t parent = py_last_separator(file_path, sep);
+        size_t comp_start = parent == SIZE_MAX ? 0U : parent + 1U;
+
+        ok = py_push_component(&parts, &part_count, &part_capacity, file_path + comp_start, sep - comp_start);
+    }
+    if (ok && (part_count == 0U)) {
+        ok = py_push_component(&parts, &part_count, &part_capacity, stem, stem_len);
+    }
+    for (size_t i = part_count; ok && (i > 0U); i--) {
+        ok = ((i == part_count) || sb_append_len(&out, ".", 1U)) &&
+             sb_append_len(&out, parts[i - 1U].data, parts[i - 1U].len);
+    }
+    free(parts);
+    if (!ok) {
+        return nullptr;
+    }
+    return out.data == nullptr ? copy_cstr("") : out.data;
+}
+
+char *code_lens_python_module_name(const char *repo_root, const char *file_path)
+{
+    if (file_path == nullptr) {
+        return nullptr;
+    }
+    return py_module_name(nullptr,
+                          repo_root,
+                          repo_root == nullptr ? 0U : strlen(repo_root),
+                          file_path);
+}
+
+/* (scope, name) -> index map over source/arena-backed keys. */
+typedef struct {
+    const char *key;
+    size_t key_len;
+    uint64_t hash;
+    uint32_t scope;
+    uint32_t value;
+} PyMapSlot;
+
+typedef struct {
+    PyMapSlot *slots;
+    size_t capacity;
+    size_t count;
+} PyMap;
+
+static uint64_t py_map_hash(uint32_t scope, const char *key, size_t len)
+{
+    return term_hash(key, len) ^ ((uint64_t)(scope + 1U) * 0x9E3779B97F4A7C15ULL);
+}
+
+static bool py_map_grow(PyMap *map)
+{
+    size_t capacity = map->capacity == 0U ? 64U : map->capacity * 2U;
+    PyMapSlot *slots;
+
+    if (capacity > (SIZE_MAX / sizeof(*slots))) {
+        return false;
+    }
+    slots = calloc(capacity, sizeof(*slots));
+    if (slots == nullptr) {
+        return false;
+    }
+    for (size_t i = 0U; i < map->capacity; i++) {
+        size_t index;
+
+        if (map->slots[i].key == nullptr) {
+            continue;
+        }
+        index = (size_t)map->slots[i].hash & (capacity - 1U);
+        while (slots[index].key != nullptr) {
+            index = (index + 1U) & (capacity - 1U);
+        }
+        slots[index] = map->slots[i];
+    }
+    free(map->slots);
+    map->slots = slots;
+    map->capacity = capacity;
+    return true;
+}
+
+static bool py_map_find(const PyMap *map,
+                        uint32_t scope,
+                        const char *key,
+                        size_t len,
+                        uint32_t *out_value)
+{
+    uint64_t hash;
+    size_t index;
+
+    if (map->capacity == 0U) {
+        return false;
+    }
+    hash = py_map_hash(scope, key, len);
+    index = (size_t)hash & (map->capacity - 1U);
+    while (map->slots[index].key != nullptr) {
+        const PyMapSlot *slot = &map->slots[index];
+
+        if ((slot->hash == hash) && (slot->scope == scope) && (slot->key_len == len) &&
+            (memcmp(slot->key, key, len) == 0)) {
+            *out_value = slot->value;
+            return true;
+        }
+        index = (index + 1U) & (map->capacity - 1U);
+    }
+    return false;
+}
+
+/* Inserts a key known to be absent. */
+static bool py_map_insert(PyMap *map, uint32_t scope, const char *key, size_t len, uint32_t value)
+{
+    uint64_t hash;
+    size_t index;
+
+    if (((map->count + 1U) * 2U > map->capacity) && !py_map_grow(map)) {
+        return false;
+    }
+    hash = py_map_hash(scope, key, len);
+    index = (size_t)hash & (map->capacity - 1U);
+    while (map->slots[index].key != nullptr) {
+        index = (index + 1U) & (map->capacity - 1U);
+    }
+    map->slots[index] = (PyMapSlot){
+        .key = key, .key_len = len, .hash = hash, .scope = scope, .value = value};
+    map->count++;
+    return true;
+}
+
+typedef enum {
+    PY_BIND_LOCAL,
+    PY_BIND_GLOBAL,
+    PY_BIND_FUNCTION,
+    PY_BIND_CLASS,
+    PY_BIND_VALUE,
+    PY_BIND_MODULE,
+    PY_BIND_FROM,
+} PyBindingKind;
+
+/* path: MODULE -> bound module path; FROM -> m.n; CLASS -> class target;
+ * VALUE/LOCAL -> inferred class target or nullptr. ns is the namespace a
+ * value reference to the name targets (nullptr for function locals). */
+typedef struct {
+    PyBindingKind kind;
+    const char *path;
+    const char *ns;
+    const char *from_module;
+    const char *from_member;
+} PyBinding;
+
+typedef struct {
+    const char *target;
+    const char *base_target;
+    bool is_test;
+} PyClass;
+
+typedef enum {
+    PY_SCOPE_MODULE,
+    PY_SCOPE_CLASS,
+    PY_SCOPE_FUNCTION,
+} PyScopeKind;
+
+typedef struct {
+    uint32_t id;
+    PyScopeKind kind;
+    /* Class table index for class scopes (-1 for classes the declaration
+     * pass did not record, such as classes local to a function). */
+    int32_t class_index;
+    const char *class_target;
+} PyScope;
+
+typedef struct {
+    const char *source;
+    size_t source_len;
+    CodeLensPythonFile *file;
+    const char *module;
+    const char *package;
+    PyBinding *bindings;
+    size_t binding_count;
+    size_t binding_capacity;
+    /* (scope id, name) -> binding index */
+    PyMap names;
+    PyClass *classes;
+    size_t class_count;
+    size_t class_capacity;
+    /* (0, class target) -> class index */
+    PyMap class_by_target;
+    /* (owner + 1, member name) -> binding index; owner 0 is the module */
+    PyMap members;
+    PyScope *scopes;
+    size_t scope_count;
+    size_t scope_capacity;
+    uint32_t next_scope_id;
+    int32_t current_class;
+    /* Recursion depth of the expression walkers; subtrees nested deeper
+     * than PY_MAX_DEPTH are skipped so pathological files cannot exhaust
+     * a parse worker's stack. */
+    uint32_t depth;
+    bool wildcard;
+} PyParseContext;
+
+#define PY_MAX_DEPTH 512U
+#define PY_MAX_RESOLVE_DEPTH 128U
+
+/* PATH is a static dotted path (module, or a name imported from one);
+ * CLASS is a class this file declares (members and bases known);
+ * INSTANCE is a value of a class declared elsewhere (members unknown). */
+typedef enum {
+    PY_RES_NONE,
+    PY_RES_PATH,
+    PY_RES_CLASS,
+    PY_RES_INSTANCE,
+} PyResolvedKind;
+
+typedef struct {
+    PyResolvedKind kind;
+    const char *path;
+    bool module;
+} PyResolved;
+
+/* Node kinds and fields the extractor inspects, resolved once to the
+ * grammar's numeric symbol/field ids so hot paths compare integers. */
+typedef enum {
+    PYK_OTHER,
+    PYK_ALIASED_IMPORT,
+    PYK_AS_PATTERN,
+    PYK_ASSIGNMENT,
+    PYK_ATTRIBUTE,
+    PYK_AUGMENTED_ASSIGNMENT,
+    PYK_BINARY_OPERATOR,
+    PYK_BLOCK,
+    PYK_CALL,
+    PYK_CASE_PATTERN,
+    PYK_CLASS_DEFINITION,
+    PYK_COMMENT,
+    PYK_DECORATED_DEFINITION,
+    PYK_DECORATOR,
+    PYK_DEFAULT_PARAMETER,
+    PYK_DICTIONARY_COMPREHENSION,
+    PYK_DICTIONARY_SPLAT_PATTERN,
+    PYK_DOTTED_NAME,
+    PYK_ELIF_CLAUSE,
+    PYK_ELSE_CLAUSE,
+    PYK_EXCEPT_CLAUSE,
+    PYK_EXCEPT_GROUP_CLAUSE,
+    PYK_EXPRESSION_STATEMENT,
+    PYK_FINALLY_CLAUSE,
+    PYK_FOR_IN_CLAUSE,
+    PYK_FOR_STATEMENT,
+    PYK_FUNCTION_DEFINITION,
+    PYK_FUTURE_IMPORT_STATEMENT,
+    PYK_GENERATOR_EXPRESSION,
+    PYK_GENERIC_TYPE,
+    PYK_GLOBAL_STATEMENT,
+    PYK_IDENTIFIER,
+    PYK_IF_STATEMENT,
+    PYK_IMPORT_FROM_STATEMENT,
+    PYK_IMPORT_PREFIX,
+    PYK_IMPORT_STATEMENT,
+    PYK_KEYWORD_ARGUMENT,
+    PYK_LAMBDA,
+    PYK_LIST,
+    PYK_LIST_COMPREHENSION,
+    PYK_LIST_PATTERN,
+    PYK_LIST_SPLAT_PATTERN,
+    PYK_NAMED_EXPRESSION,
+    PYK_NONLOCAL_STATEMENT,
+    PYK_PARENTHESIZED_EXPRESSION,
+    PYK_PATTERN_LIST,
+    PYK_RELATIVE_IMPORT,
+    PYK_SET_COMPREHENSION,
+    PYK_STRING,
+    PYK_SUBSCRIPT,
+    PYK_TRY_STATEMENT,
+    PYK_TUPLE,
+    PYK_TUPLE_PATTERN,
+    PYK_TYPE,
+    PYK_TYPE_ALIAS_STATEMENT,
+    PYK_TYPE_PARAMETER,
+    PYK_TYPED_DEFAULT_PARAMETER,
+    PYK_TYPED_PARAMETER,
+    PYK_UNION_TYPE,
+    PYK_WHILE_STATEMENT,
+    PYK_WILDCARD_IMPORT,
+    PYK_WITH_STATEMENT,
+    PYK_WITH_CLAUSE,
+    PYK_WITH_ITEM,
+    PYK_MATCH_STATEMENT,
+    PYK_CASE_CLAUSE,
+    PYK_COUNT,
+} PyKind;
+
+static const char *const py_kind_names[PYK_COUNT] = {
+    [PYK_OTHER] = "",
+    [PYK_ALIASED_IMPORT] = "aliased_import",
+    [PYK_AS_PATTERN] = "as_pattern",
+    [PYK_ASSIGNMENT] = "assignment",
+    [PYK_ATTRIBUTE] = "attribute",
+    [PYK_AUGMENTED_ASSIGNMENT] = "augmented_assignment",
+    [PYK_BINARY_OPERATOR] = "binary_operator",
+    [PYK_BLOCK] = "block",
+    [PYK_CALL] = "call",
+    [PYK_CASE_PATTERN] = "case_pattern",
+    [PYK_CLASS_DEFINITION] = "class_definition",
+    [PYK_COMMENT] = "comment",
+    [PYK_DECORATED_DEFINITION] = "decorated_definition",
+    [PYK_DECORATOR] = "decorator",
+    [PYK_DEFAULT_PARAMETER] = "default_parameter",
+    [PYK_DICTIONARY_COMPREHENSION] = "dictionary_comprehension",
+    [PYK_DICTIONARY_SPLAT_PATTERN] = "dictionary_splat_pattern",
+    [PYK_DOTTED_NAME] = "dotted_name",
+    [PYK_ELIF_CLAUSE] = "elif_clause",
+    [PYK_ELSE_CLAUSE] = "else_clause",
+    [PYK_EXCEPT_CLAUSE] = "except_clause",
+    [PYK_EXCEPT_GROUP_CLAUSE] = "except_group_clause",
+    [PYK_EXPRESSION_STATEMENT] = "expression_statement",
+    [PYK_FINALLY_CLAUSE] = "finally_clause",
+    [PYK_FOR_IN_CLAUSE] = "for_in_clause",
+    [PYK_FOR_STATEMENT] = "for_statement",
+    [PYK_FUNCTION_DEFINITION] = "function_definition",
+    [PYK_FUTURE_IMPORT_STATEMENT] = "future_import_statement",
+    [PYK_GENERATOR_EXPRESSION] = "generator_expression",
+    [PYK_GENERIC_TYPE] = "generic_type",
+    [PYK_GLOBAL_STATEMENT] = "global_statement",
+    [PYK_IDENTIFIER] = "identifier",
+    [PYK_IF_STATEMENT] = "if_statement",
+    [PYK_IMPORT_FROM_STATEMENT] = "import_from_statement",
+    [PYK_IMPORT_PREFIX] = "import_prefix",
+    [PYK_IMPORT_STATEMENT] = "import_statement",
+    [PYK_KEYWORD_ARGUMENT] = "keyword_argument",
+    [PYK_LAMBDA] = "lambda",
+    [PYK_LIST] = "list",
+    [PYK_LIST_COMPREHENSION] = "list_comprehension",
+    [PYK_LIST_PATTERN] = "list_pattern",
+    [PYK_LIST_SPLAT_PATTERN] = "list_splat_pattern",
+    [PYK_NAMED_EXPRESSION] = "named_expression",
+    [PYK_NONLOCAL_STATEMENT] = "nonlocal_statement",
+    [PYK_PARENTHESIZED_EXPRESSION] = "parenthesized_expression",
+    [PYK_PATTERN_LIST] = "pattern_list",
+    [PYK_RELATIVE_IMPORT] = "relative_import",
+    [PYK_SET_COMPREHENSION] = "set_comprehension",
+    [PYK_STRING] = "string",
+    [PYK_SUBSCRIPT] = "subscript",
+    [PYK_TRY_STATEMENT] = "try_statement",
+    [PYK_TUPLE] = "tuple",
+    [PYK_TUPLE_PATTERN] = "tuple_pattern",
+    [PYK_TYPE] = "type",
+    [PYK_TYPE_ALIAS_STATEMENT] = "type_alias_statement",
+    [PYK_TYPE_PARAMETER] = "type_parameter",
+    [PYK_TYPED_DEFAULT_PARAMETER] = "typed_default_parameter",
+    [PYK_TYPED_PARAMETER] = "typed_parameter",
+    [PYK_UNION_TYPE] = "union_type",
+    [PYK_WHILE_STATEMENT] = "while_statement",
+    [PYK_WILDCARD_IMPORT] = "wildcard_import",
+    [PYK_WITH_STATEMENT] = "with_statement",
+    [PYK_WITH_CLAUSE] = "with_clause",
+    [PYK_WITH_ITEM] = "with_item",
+    [PYK_MATCH_STATEMENT] = "match_statement",
+    [PYK_CASE_CLAUSE] = "case_clause",
+};
+
+typedef enum {
+    PYF_ALIAS,
+    PYF_ATTRIBUTE,
+    PYF_BODY,
+    PYF_DEFINITION,
+    PYF_FUNCTION,
+    PYF_LEFT,
+    PYF_MODULE_NAME,
+    PYF_NAME,
+    PYF_OBJECT,
+    PYF_PARAMETERS,
+    PYF_RETURN_TYPE,
+    PYF_RIGHT,
+    PYF_SUPERCLASSES,
+    PYF_TYPE,
+    PYF_VALUE,
+    PYF_COUNT,
+} PyField;
+
+static const char *const py_field_names[PYF_COUNT] = {
+    [PYF_ALIAS] = "alias",
+    [PYF_ATTRIBUTE] = "attribute",
+    [PYF_BODY] = "body",
+    [PYF_DEFINITION] = "definition",
+    [PYF_FUNCTION] = "function",
+    [PYF_LEFT] = "left",
+    [PYF_MODULE_NAME] = "module_name",
+    [PYF_NAME] = "name",
+    [PYF_OBJECT] = "object",
+    [PYF_PARAMETERS] = "parameters",
+    [PYF_RETURN_TYPE] = "return_type",
+    [PYF_RIGHT] = "right",
+    [PYF_SUPERCLASSES] = "superclasses",
+    [PYF_TYPE] = "type",
+    [PYF_VALUE] = "value",
+};
+
+#define PY_KIND_TABLE_MAX 1024U
+
+static pthread_once_t py_ids_once = PTHREAD_ONCE_INIT;
+static uint8_t py_kind_table[PY_KIND_TABLE_MAX];
+static TSFieldId py_field_ids[PYF_COUNT];
+
+static void init_python_ids(void)
+{
+    const TSLanguage *language = tree_sitter_python();
+    uint32_t count = ts_language_symbol_count(language);
+
+    for (uint32_t symbol = 0U; (symbol < count) && (symbol < PY_KIND_TABLE_MAX); symbol++) {
+        const char *name = ts_language_symbol_name(language, (TSSymbol)symbol);
+
+        if ((name == nullptr) ||
+            (ts_language_symbol_type(language, (TSSymbol)symbol) != TSSymbolTypeRegular)) {
+            continue;
+        }
+        for (uint32_t kind = 1U; kind < PYK_COUNT; kind++) {
+            if (strcmp(name, py_kind_names[kind]) == 0) {
+                py_kind_table[symbol] = (uint8_t)kind;
+                break;
+            }
+        }
+    }
+    for (uint32_t field = 0U; field < PYF_COUNT; field++) {
+        py_field_ids[field] = ts_language_field_id_for_name(language,
+                                                            py_field_names[field],
+                                                            (uint32_t)strlen(py_field_names[field]));
+    }
+}
+
+static PyKind py_kind(TSNode node)
+{
+    TSSymbol symbol;
+
+    if (ts_node_is_null(node)) {
+        return PYK_OTHER;
+    }
+    symbol = ts_node_symbol(node);
+    return symbol < PY_KIND_TABLE_MAX ? (PyKind)py_kind_table[symbol] : PYK_OTHER;
+}
+
+static bool py_is(TSNode node, PyKind kind)
+{
+    return py_kind(node) == kind;
+}
+
+static uint32_t py_count(TSNode node)
+{
+    return ts_node_is_null(node) ? 0U : ts_node_named_child_count(node);
+}
+
+static TSNode py_child(TSNode node, uint32_t index)
+{
+    return ts_node_is_null(node) ? (TSNode){0} : ts_node_named_child(node, index);
+}
+
+static TSNode py_field(TSNode node, PyField field)
+{
+    return (ts_node_is_null(node) || (py_field_ids[field] == 0U))
+               ? (TSNode){0}
+               : ts_node_child_by_field_id(node, py_field_ids[field]);
+}
+
+static PySlice py_text(const PyParseContext *ctx, TSNode node)
+{
+    uint32_t start;
+    uint32_t end;
+
+    if (ts_node_is_null(node)) {
+        return (PySlice){.data = ctx->source, .len = 0U};
+    }
+    start = ts_node_start_byte(node);
+    end = ts_node_end_byte(node);
+    if ((end < start) || ((size_t)end > ctx->source_len)) {
+        return (PySlice){.data = ctx->source, .len = 0U};
+    }
+    return (PySlice){.data = ctx->source + start, .len = (size_t)(end - start)};
+}
+
+static bool py_slice_is(PySlice slice, const char *text)
+{
+    size_t len = strlen(text);
+
+    return (slice.len == len) && (memcmp(slice.data, text, len) == 0);
+}
+
+static bool py_slice_starts_with(PySlice slice, const char *prefix)
+{
+    size_t len = strlen(prefix);
+
+    return (slice.len >= len) && (memcmp(slice.data, prefix, len) == 0);
+}
+
+static char *py_join(const char *left, const char *right, size_t right_len)
+{
+    size_t left_len = left == nullptr ? 0U : strlen(left);
+    char *out;
+
+    if (left_len == 0U) {
+        return copy_bytes(right, right_len);
+    }
+    out = code_lens_alloc(left_len + 1U + right_len + 1U);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    (void)memcpy(out, left, left_len);
+    out[left_len] = '.';
+    if (right_len > 0U) {
+        (void)memcpy(out + left_len + 1U, right, right_len);
+    }
+    out[left_len + 1U + right_len] = '\0';
+    return out;
+}
+
+static bool py_add_binding(PyParseContext *ctx,
+                           uint32_t scope,
+                           PySlice name,
+                           PyBinding binding)
+{
+    uint32_t existing;
+
+    if (name.len == 0U) {
+        return true;
+    }
+    if (py_map_find(&ctx->names, scope, name.data, name.len, &existing)) {
+        return true;
+    }
+    if ((ctx->binding_count == ctx->binding_capacity) &&
+        !parser_heap_grow((void **)&ctx->bindings,
+                          &ctx->binding_capacity,
+                          sizeof(*ctx->bindings),
+                          64U)) {
+        return false;
+    }
+    ctx->bindings[ctx->binding_count] = binding;
+    if (!py_map_insert(&ctx->names, scope, name.data, name.len, (uint32_t)ctx->binding_count)) {
+        return false;
+    }
+    ctx->binding_count++;
+    return true;
+}
+
+static PyBinding *py_find_binding(PyParseContext *ctx, uint32_t scope, PySlice name)
+{
+    uint32_t index;
+
+    return py_map_find(&ctx->names, scope, name.data, name.len, &index) ? &ctx->bindings[index]
+                                                                          : nullptr;
+}
+
+static const PyBinding *py_lookup(PyParseContext *ctx, PySlice name)
+{
+    for (size_t i = ctx->scope_count; i > 0U; i--) {
+        const PyScope *scope = &ctx->scopes[i - 1U];
+        const PyBinding *binding;
+
+        if ((scope->kind == PY_SCOPE_CLASS) && (i != ctx->scope_count)) {
+            continue;
+        }
+        binding = py_find_binding(ctx, scope->id, name);
+        if (binding != nullptr) {
+            if (binding->kind == PY_BIND_GLOBAL) {
+                return py_find_binding(ctx, 0U, name);
+            }
+            return binding;
+        }
+    }
+    return nullptr;
+}
+
+static bool py_push_scope(PyParseContext *ctx,
+                          PyScopeKind kind,
+                          int32_t class_index,
+                          const char *class_target,
+                          uint32_t *out_id)
+{
+    if ((ctx->scope_count == ctx->scope_capacity) &&
+        !parser_heap_grow((void **)&ctx->scopes, &ctx->scope_capacity, sizeof(*ctx->scopes), 16U)) {
+        return false;
+    }
+    ctx->scopes[ctx->scope_count++] = (PyScope){
+        .id = ctx->next_scope_id, .kind = kind, .class_index = class_index, .class_target = class_target};
+    if (out_id != nullptr) {
+        *out_id = ctx->next_scope_id;
+    }
+    ctx->next_scope_id++;
+    return true;
+}
+
+static const PyScope *py_innermost_scope(const PyParseContext *ctx)
+{
+    return &ctx->scopes[ctx->scope_count - 1U];
+}
+
+static int32_t py_class_index(const PyParseContext *ctx, const char *target)
+{
+    uint32_t index;
+
+    if ((target == nullptr) ||
+        !py_map_find(&ctx->class_by_target, 0U, target, strlen(target), &index)) {
+        return -1;
+    }
+    return (int32_t)index;
+}
+
+static const PyBinding *py_member(PyParseContext *ctx, int32_t owner, PySlice name)
+{
+    uint32_t index;
+
+    return py_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &index)
+               ? &ctx->bindings[index]
+               : nullptr;
+}
+
+/* Records a declared module or class member; the first declaration wins.
+ * Returns false only on allocation failure; *out_added reports novelty. */
+static bool py_add_member(PyParseContext *ctx,
+                          int32_t owner,
+                          PySlice name,
+                          PyBinding binding,
+                          bool *out_added)
+{
+    uint32_t existing;
+
+    if (out_added != nullptr) {
+        *out_added = false;
+    }
+    if ((name.len == 0U) ||
+        py_map_find(&ctx->members, (uint32_t)(owner + 1), name.data, name.len, &existing)) {
+        return true;
+    }
+    if ((ctx->binding_count == ctx->binding_capacity) &&
+        !parser_heap_grow((void **)&ctx->bindings,
+                          &ctx->binding_capacity,
+                          sizeof(*ctx->bindings),
+                          64U)) {
+        return false;
+    }
+    ctx->bindings[ctx->binding_count] = binding;
+    if (!py_map_insert(&ctx->members,
+                       (uint32_t)(owner + 1),
+                       name.data,
+                       name.len,
+                       (uint32_t)ctx->binding_count)) {
+        return false;
+    }
+    ctx->binding_count++;
+    if (out_added != nullptr) {
+        *out_added = true;
+    }
+    return true;
+}
+
+static bool py_path_is_imported_module(const PyParseContext *ctx, const char *path)
+{
+    size_t len = strlen(path);
+
+    for (size_t i = 0U; i < ctx->file->alias_count; i++) {
+        const char *ns = ctx->file->aliases[i].namespace_name;
+
+        if ((strncmp(ns, path, len) == 0) && ((ns[len] == '\0') || (ns[len] == '.'))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool py_name_is_capitalized(const char *path)
+{
+    const char *last = strrchr(path, '.');
+
+    last = last == nullptr ? path : last + 1;
+    return isupper((unsigned char)last[0]) != 0;
+}
+
+/* A class target becomes CLASS when this file declares it (members and
+ * bases are known), otherwise an INSTANCE of an external class. */
+static PyResolved py_resolved_type(const PyParseContext *ctx, const char *target)
+{
+    if (target == nullptr) {
+        return (PyResolved){.kind = PY_RES_NONE};
+    }
+    return (PyResolved){.kind = py_class_index(ctx, target) >= 0 ? PY_RES_CLASS : PY_RES_INSTANCE,
+                        .path = target};
+}
+
+/* Finds the class that declares name, walking local base classes. Returns
+ * the first non-local base when the chain leaves this file, or the
+ * starting class when nothing declares it. */
+static const char *py_member_owner(PyParseContext *ctx, const char *class_target, PySlice name)
+{
+    const char *current = class_target;
+
+    for (int depth = 0; depth < 16; depth++) {
+        int32_t index = py_class_index(ctx, current);
+
+        if (index < 0) {
+            return current;
+        }
+        if (py_member(ctx, index, name) != nullptr) {
+            return current;
+        }
+        if (ctx->classes[index].base_target == nullptr) {
+            return class_target;
+        }
+        current = ctx->classes[index].base_target;
+    }
+    return class_target;
+}
+
+static PyResolved py_resolve(PyParseContext *ctx, TSNode node);
+
+static PyResolved py_resolve_member(PyParseContext *ctx, const char *class_target, PySlice name)
+{
+    const char *current = class_target;
+
+    for (int depth = 0; depth < 16; depth++) {
+        int32_t index = py_class_index(ctx, current);
+        const PyBinding *member;
+
+        if (index < 0) {
+            return (PyResolved){.kind = PY_RES_NONE};
+        }
+        member = py_member(ctx, index, name);
+        if (member != nullptr) {
+            if (((member->kind == PY_BIND_CLASS) || (member->kind == PY_BIND_VALUE)) &&
+                (member->path != nullptr)) {
+                return py_resolved_type(ctx, member->path);
+            }
+            return (PyResolved){.kind = PY_RES_NONE};
+        }
+        current = ctx->classes[index].base_target;
+        if (current == nullptr) {
+            break;
+        }
+    }
+    return (PyResolved){.kind = PY_RES_NONE};
+}
+
+static PyResolved py_resolve_identifier(PyParseContext *ctx, PySlice name)
+{
+    const PyBinding *binding = py_lookup(ctx, name);
+
+    if (binding == nullptr) {
+        return (PyResolved){.kind = PY_RES_NONE};
+    }
+    switch (binding->kind) {
+    case PY_BIND_LOCAL:
+    case PY_BIND_VALUE:
+    case PY_BIND_CLASS:
+        return py_resolved_type(ctx, binding->path);
+    case PY_BIND_MODULE:
+        return (PyResolved){.kind = PY_RES_PATH, .path = binding->path, .module = true};
+    case PY_BIND_FROM:
+        return (PyResolved){.kind = PY_RES_PATH, .path = binding->path};
+    case PY_BIND_FUNCTION:
+    case PY_BIND_GLOBAL:
+        break;
+    }
+    return (PyResolved){.kind = PY_RES_NONE};
+}
+
+static PyResolved py_resolve_node(PyParseContext *ctx, TSNode node);
+
+static PyResolved py_resolve(PyParseContext *ctx, TSNode node)
+{
+    PyResolved resolved;
+
+    if (ctx->depth >= PY_MAX_DEPTH + PY_MAX_RESOLVE_DEPTH) {
+        return (PyResolved){.kind = PY_RES_NONE};
+    }
+    ctx->depth++;
+    resolved = py_resolve_node(ctx, node);
+    ctx->depth--;
+    return resolved;
+}
+
+static PyResolved py_resolve_node(PyParseContext *ctx, TSNode node)
+{
+    PyKind kind;
+
+    if (ts_node_is_null(node)) {
+        return (PyResolved){.kind = PY_RES_NONE};
+    }
+    kind = py_kind(node);
+    if (kind == PYK_IDENTIFIER) {
+        return py_resolve_identifier(ctx, py_text(ctx, node));
+    }
+    if (kind == PYK_ATTRIBUTE) {
+        TSNode attribute = py_field(node, PYF_ATTRIBUTE);
+        PyResolved object = py_resolve(ctx, py_field(node, PYF_OBJECT));
+        PySlice name = py_text(ctx, attribute);
+
+        if ((object.kind == PY_RES_NONE) || (object.kind == PY_RES_INSTANCE) ||
+            ts_node_is_null(attribute)) {
+            return (PyResolved){.kind = PY_RES_NONE};
+        }
+        if (object.kind == PY_RES_CLASS) {
+            return py_resolve_member(ctx, object.path, name);
+        }
+        {
+            char *path = py_join(object.path, name.data, name.len);
+
+            if (path == nullptr) {
+                return (PyResolved){.kind = PY_RES_NONE};
+            }
+            return (PyResolved){.kind = PY_RES_PATH,
+                                .path = path,
+                                .module = object.module && py_path_is_imported_module(ctx, path)};
+        }
+    }
+    if (kind == PYK_CALL) {
+        TSNode function = py_field(node, PYF_FUNCTION);
+        PyResolved callee;
+
+        if (py_is(function, PYK_IDENTIFIER) && py_slice_is(py_text(ctx, function), "super") &&
+            (py_lookup(ctx, py_text(ctx, function)) == nullptr)) {
+            if ((ctx->current_class >= 0) &&
+                (ctx->classes[ctx->current_class].base_target != nullptr)) {
+                return py_resolved_type(ctx, ctx->classes[ctx->current_class].base_target);
+            }
+            return (PyResolved){.kind = PY_RES_NONE};
+        }
+        if (py_is(function, PYK_IDENTIFIER)) {
+            const PyBinding *binding = py_lookup(ctx, py_text(ctx, function));
+
+            if ((binding != nullptr) && (binding->kind == PY_BIND_CLASS)) {
+                return py_resolved_type(ctx, binding->path);
+            }
+            if ((binding != nullptr) && (binding->kind == PY_BIND_FROM) &&
+                py_name_is_capitalized(binding->path)) {
+                return py_resolved_type(ctx, binding->path);
+            }
+            return (PyResolved){.kind = PY_RES_NONE};
+        }
+        callee = py_resolve(ctx, function);
+        if ((callee.kind == PY_RES_PATH) && !callee.module && py_name_is_capitalized(callee.path)) {
+            return py_resolved_type(ctx, callee.path);
+        }
+        if ((callee.kind == PY_RES_CLASS) && py_is(function, PYK_ATTRIBUTE)) {
+            /* A nested class reached through its owner: Outer.Inner(). */
+            return callee;
+        }
+        return (PyResolved){.kind = PY_RES_NONE};
+    }
+    if ((kind == PYK_PARENTHESIZED_EXPRESSION) && (py_count(node) == 1U)) {
+        return py_resolve(ctx, py_child(node, 0U));
+    }
+    return (PyResolved){.kind = PY_RES_NONE};
+}
+
+static bool py_type_head_unwraps(PySlice head)
+{
+    static const char *const wrappers[] = {"Optional", "ClassVar", "Final", "Annotated", "Type", "type"};
+    size_t start = head.len;
+
+    while ((start > 0U) && (head.data[start - 1U] != '.')) {
+        start--;
+    }
+    for (size_t i = 0U; i < sizeof(wrappers) / sizeof(wrappers[0]); i++) {
+        if (py_slice_is((PySlice){.data = head.data + start, .len = head.len - start}, wrappers[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolves an annotation to a class target (nullptr when unknown). */
+static const char *py_resolve_type_expr(PyParseContext *ctx, TSNode node)
+{
+    PyKind kind;
+
+    if (ts_node_is_null(node)) {
+        return nullptr;
+    }
+    kind = py_kind(node);
+    if ((kind == PYK_TYPE) || (kind == PYK_PARENTHESIZED_EXPRESSION)) {
+        return py_count(node) == 1U
+                   ? py_resolve_type_expr(ctx, py_child(node, 0U))
+                   : nullptr;
+    }
+    if ((kind == PYK_IDENTIFIER) || (kind == PYK_ATTRIBUTE)) {
+        PyResolved resolved = py_resolve(ctx, node);
+
+        if ((resolved.kind == PY_RES_CLASS) || (resolved.kind == PY_RES_INSTANCE) ||
+            ((resolved.kind == PY_RES_PATH) && !resolved.module)) {
+            return resolved.path;
+        }
+        return nullptr;
+    }
+    if ((kind == PYK_GENERIC_TYPE) || (kind == PYK_SUBSCRIPT)) {
+        TSNode head = py_child(node, 0U);
+        TSNode argument = py_child(node, 1U);
+
+        if (ts_node_is_null(head) || ts_node_is_null(argument) ||
+            !py_type_head_unwraps(py_text(ctx, head))) {
+            return nullptr;
+        }
+        if (py_is(argument, PYK_TYPE_PARAMETER)) {
+            argument = py_child(argument, 0U);
+        }
+        return py_resolve_type_expr(ctx, argument);
+    }
+    if ((kind == PYK_UNION_TYPE) || (kind == PYK_BINARY_OPERATOR)) {
+        TSNode left = py_child(node, 0U);
+        TSNode right = py_child(node, py_count(node) - 1U);
+
+        if ((py_count(node) == 2U) && py_slice_is(py_text(ctx, right), "None")) {
+            return py_resolve_type_expr(ctx, left);
+        }
+        if ((py_count(node) == 2U) && py_slice_is(py_text(ctx, left), "None")) {
+            return py_resolve_type_expr(ctx, right);
+        }
+    }
+    return nullptr;
+}
+
+/* `x = Klass(...)` infers x as an instance of Klass. */
+static const char *py_infer_value_type(PyParseContext *ctx, TSNode value)
+{
+    PyResolved resolved;
+
+    if (!py_is(value, PYK_CALL)) {
+        return nullptr;
+    }
+    resolved = py_resolve(ctx, value);
+    if ((resolved.kind == PY_RES_CLASS) || (resolved.kind == PY_RES_INSTANCE) ||
+        ((resolved.kind == PY_RES_PATH) && !resolved.module)) {
+        return resolved.path;
+    }
+    return nullptr;
+}
+
+static bool py_bind_targets(PyParseContext *ctx, TSNode node, uint32_t scope, PyBinding binding)
+{
+    PyKind kind;
+
+    if (ts_node_is_null(node)) {
+        return true;
+    }
+    kind = py_kind(node);
+    if (kind == PYK_IDENTIFIER) {
+        return py_add_binding(ctx, scope, py_text(ctx, node), binding);
+    }
+    if ((kind == PYK_ATTRIBUTE) || (kind == PYK_SUBSCRIPT)) {
+        return true;
+    }
+    binding.path = nullptr;
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        if (!py_bind_targets(ctx, py_child(node, i), scope, binding)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Resolves the module named by an import_from_statement's module_name. */
+static char *py_from_module(PyParseContext *ctx, TSNode module_name)
+{
+    if (py_is(module_name, PYK_RELATIVE_IMPORT)) {
+        size_t dots = 0U;
+        PySlice dotted = {.data = nullptr, .len = 0U};
+        const char *package = ctx->package;
+        size_t package_len = strlen(package);
+
+        for (uint32_t i = 0U, i_count = py_count(module_name); i < i_count; i++) {
+            TSNode child = py_child(module_name, i);
+
+            if (py_is(child, PYK_IMPORT_PREFIX)) {
+                dots = py_text(ctx, child).len;
+            } else if (py_is(child, PYK_DOTTED_NAME)) {
+                dotted = py_text(ctx, child);
+            }
+        }
+        for (size_t up = 1U; up < dots; up++) {
+            size_t sep = package_len;
+
+            while ((sep > 0U) && (package[sep - 1U] != '.')) {
+                sep--;
+            }
+            package_len = sep > 0U ? sep - 1U : 0U;
+        }
+        if (dotted.len == 0U) {
+            return copy_bytes(package, package_len);
+        }
+        if (package_len == 0U) {
+            return copy_bytes(dotted.data, dotted.len);
+        }
+        {
+            char *base = copy_bytes(package, package_len);
+
+            return base == nullptr ? nullptr : py_join(base, dotted.data, dotted.len);
+        }
+    }
+    {
+        PySlice text = py_text(ctx, module_name);
+
+        return copy_bytes(text.data, text.len);
+    }
+}
+
+/* Records Alias/Referred rows for one import and binds its names in scope. */
+static bool py_process_import(PyParseContext *ctx, TSNode node, uint32_t scope)
+{
+    bool from = py_is(node, PYK_IMPORT_FROM_STATEMENT);
+    char *module = nullptr;
+
+    if (from) {
+        module = py_from_module(ctx, py_field(node, PYF_MODULE_NAME));
+        if (module == nullptr) {
+            return false;
+        }
+    }
+    for (uint32_t i = 0U; i < ts_node_child_count(node); i++) {
+        TSNode child = ts_node_child(node, i);
+        const char *field = ts_node_field_name_for_child(node, i);
+
+        if (from && py_is(child, PYK_WILDCARD_IMPORT)) {
+            ctx->wildcard = true;
+            if (!add_referred(ctx->file, copy_cstr(module), copy_cstr(":all"))) {
+                return false;
+            }
+            continue;
+        }
+        if ((field == nullptr) || (strcmp(field, "name") != 0)) {
+            continue;
+        }
+        {
+            TSNode name_node = py_is(child, PYK_ALIASED_IMPORT) ? py_field(child, PYF_NAME) : child;
+            TSNode alias_node = py_is(child, PYK_ALIASED_IMPORT) ? py_field(child, PYF_ALIAS)
+                                                               : (TSNode){0};
+            PySlice name = py_text(ctx, name_node);
+            PySlice local = ts_node_is_null(alias_node) ? name : py_text(ctx, alias_node);
+            char *name_text;
+
+            if (name.len == 0U) {
+                continue;
+            }
+            name_text = copy_bytes(name.data, name.len);
+            if (name_text == nullptr) {
+                return false;
+            }
+            if (from) {
+                char *path = py_join(module, name.data, name.len);
+
+                if ((path == nullptr) ||
+                    !add_referred(ctx->file, copy_cstr(module), copy_cstr(name_text)) ||
+                    !py_add_binding(ctx,
+                                    scope,
+                                    local,
+                                    (PyBinding){.kind = PY_BIND_FROM,
+                                                .path = path,
+                                                .ns = module,
+                                                .from_module = module,
+                                                .from_member = name_text})) {
+                    return false;
+                }
+            } else if (ts_node_is_null(alias_node)) {
+                /* `import a.b.c` binds `a` and makes a.b.c reachable. */
+                size_t first = 0U;
+                char *root;
+
+                while ((first < name.len) && (name.data[first] != '.')) {
+                    first++;
+                }
+                root = copy_bytes(name.data, first);
+                if ((root == nullptr) || !add_alias(ctx->file, name_text, copy_cstr(name_text)) ||
+                    !py_add_binding(ctx,
+                                    scope,
+                                    (PySlice){.data = name.data, .len = first},
+                                    (PyBinding){.kind = PY_BIND_MODULE, .path = root})) {
+                    return false;
+                }
+            } else {
+                if (!add_alias(ctx->file, name_text, copy_bytes(local.data, local.len)) ||
+                    !py_add_binding(ctx,
+                                    scope,
+                                    local,
+                                    (PyBinding){.kind = PY_BIND_MODULE, .path = name_text})) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool py_is_nested_scope(PyKind kind)
+{
+    return (kind == PYK_LAMBDA) || (kind == PYK_LIST_COMPREHENSION) ||
+           (kind == PYK_SET_COMPREHENSION) ||
+           (kind == PYK_DICTIONARY_COMPREHENSION) ||
+           (kind == PYK_GENERATOR_EXPRESSION);
+}
+
+/* Binds the names a scope body assigns. Function scopes run a globals-only
+ * pass first so `global x` wins wherever it appears. */
+static bool py_prescan_children(PyParseContext *ctx,
+                                TSNode node,
+                                uint32_t scope,
+                                PyScopeKind kind,
+                                const char *ns,
+                                bool globals_only);
+static bool py_is_compound_container(PyKind kind);
+
+static bool py_prescan(PyParseContext *ctx,
+                       TSNode node,
+                       uint32_t scope,
+                       PyScopeKind kind,
+                       const char *ns,
+                       bool globals_only)
+{
+    bool ok;
+
+    if (ctx->depth >= PY_MAX_DEPTH) {
+        return true;
+    }
+    ctx->depth++;
+    ok = py_prescan_children(ctx, node, scope, kind, ns, globals_only);
+    ctx->depth--;
+    return ok;
+}
+
+static bool py_prescan_children(PyParseContext *ctx,
+                                TSNode node,
+                                uint32_t scope,
+                                PyScopeKind kind,
+                                const char *ns,
+                                bool globals_only)
+{
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        TSNode child = py_child(node, i);
+        PyKind node_kind = py_kind(child);
+        PyBinding value = {.kind = kind == PY_SCOPE_FUNCTION ? PY_BIND_LOCAL : PY_BIND_VALUE,
+                           .ns = kind == PY_SCOPE_FUNCTION ? nullptr : ns};
+
+        if (node_kind == PYK_GLOBAL_STATEMENT) {
+            if (globals_only) {
+                for (uint32_t j = 0U, j_count = py_count(child); j < j_count; j++) {
+                    if (!py_add_binding(ctx,
+                                        scope,
+                                        py_text(ctx, py_child(child, j)),
+                                        (PyBinding){.kind = PY_BIND_GLOBAL})) {
+                        return false;
+                    }
+                }
+            }
+            continue;
+        }
+        if (node_kind == PYK_DECORATED_DEFINITION) {
+            child = py_field(child, PYF_DEFINITION);
+            node_kind = py_kind(child);
+        }
+        if ((node_kind == PYK_FUNCTION_DEFINITION) || (node_kind == PYK_CLASS_DEFINITION)) {
+            if (!globals_only) {
+                TSNode name = py_field(child, PYF_NAME);
+                PySlice text = py_text(ctx, name);
+                bool is_class = node_kind == PYK_CLASS_DEFINITION;
+                PyBinding binding = value;
+
+                if (kind != PY_SCOPE_FUNCTION) {
+                    binding.kind = is_class ? PY_BIND_CLASS : PY_BIND_FUNCTION;
+                    binding.path = (is_class && (ns != nullptr)) ? py_join(ns, text.data, text.len)
+                                                                 : nullptr;
+                    if (is_class && (ns != nullptr) && (binding.path == nullptr)) {
+                        return false;
+                    }
+                }
+                if (!py_add_binding(ctx, scope, text, binding)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (py_is_nested_scope(node_kind)) {
+            continue;
+        }
+        if (globals_only) {
+            if (py_is_compound_container(node_kind) &&
+                !py_prescan(ctx, child, scope, kind, ns, true)) {
+                return false;
+            }
+            continue;
+        }
+        if ((node_kind == PYK_IMPORT_STATEMENT) ||
+            (node_kind == PYK_IMPORT_FROM_STATEMENT)) {
+            if (!py_process_import(ctx, child, scope)) {
+                return false;
+            }
+            continue;
+        }
+        if (node_kind == PYK_FUTURE_IMPORT_STATEMENT) {
+            continue;
+        }
+        if (node_kind == PYK_NONLOCAL_STATEMENT) {
+            for (uint32_t j = 0U, j_count = py_count(child); j < j_count; j++) {
+                if (!py_add_binding(ctx,
+                                    scope,
+                                    py_text(ctx, py_child(child, j)),
+                                    (PyBinding){.kind = PY_BIND_LOCAL})) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if ((node_kind == PYK_ASSIGNMENT) || (node_kind == PYK_AUGMENTED_ASSIGNMENT)) {
+            TSNode value_node = py_field(child, PYF_RIGHT);
+
+            /* Chained assignment a = b = value binds every target to the
+             * final value. */
+            while (py_is(value_node, PYK_ASSIGNMENT)) {
+                value_node = py_field(value_node, PYF_RIGHT);
+            }
+            if (kind == PY_SCOPE_FUNCTION) {
+                value.path = py_resolve_type_expr(ctx, py_field(child, PYF_TYPE));
+                if (value.path == nullptr) {
+                    value.path = py_infer_value_type(ctx, value_node);
+                }
+            }
+            for (TSNode assignment = child;
+                 py_is(assignment, PYK_ASSIGNMENT) || py_is(assignment, PYK_AUGMENTED_ASSIGNMENT);
+                 assignment = py_field(assignment, PYF_RIGHT)) {
+                if (!py_bind_targets(ctx, py_field(assignment, PYF_LEFT), scope, value)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if ((node_kind == PYK_FOR_STATEMENT) || (node_kind == PYK_FOR_IN_CLAUSE)) {
+            if (!py_bind_targets(ctx, py_field(child, PYF_LEFT), scope, value) ||
+                !py_prescan(ctx, child, scope, kind, ns, false)) {
+                return false;
+            }
+            continue;
+        }
+        if (node_kind == PYK_AS_PATTERN) {
+            if (!py_bind_targets(ctx, py_field(child, PYF_ALIAS), scope, value)) {
+                return false;
+            }
+            continue;
+        }
+        /* Bindings live in statements; expressions are left to the walk,
+         * which binds walrus targets as it reaches them. */
+        if (py_is_compound_container(node_kind) &&
+            !py_prescan(ctx, child, scope, kind, ns, false)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Docstrings */
+
+static TSNode py_first_statement(TSNode block)
+{
+    for (uint32_t i = 0U, i_count = py_count(block); i < i_count; i++) {
+        TSNode child = py_child(block, i);
+
+        if (py_is(child, PYK_COMMENT)) {
+            continue;
+        }
+        if (py_is(child, PYK_EXPRESSION_STATEMENT) && (py_count(child) == 1U)) {
+            return py_child(child, 0U);
+        }
+        return child;
+    }
+    return (TSNode){0};
+}
+
+/* inspect.cleandoc-style text of a string literal node. */
+static char *py_string_doc(const PyParseContext *ctx, TSNode node)
+{
+    PySlice text = py_text(ctx, node);
+    size_t start = 0U;
+    size_t end = text.len;
+    size_t quote;
+    size_t min_indent = SIZE_MAX;
+    StringBuilder out = {0};
+    bool first_line = true;
+    size_t pending_blank = 0U;
+
+    while ((start < end) && isalpha((unsigned char)text.data[start])) {
+        start++;
+    }
+    if (start >= end) {
+        return nullptr;
+    }
+    quote = ((end - start >= 6U) &&
+             ((memcmp(text.data + start, "\"\"\"", 3U) == 0) ||
+              (memcmp(text.data + start, "'''", 3U) == 0)))
+                ? 3U
+                : 1U;
+    if (end - start < 2U * quote) {
+        return nullptr;
+    }
+    start += quote;
+    end -= quote;
+
+    for (size_t pos = start, line = 0U; pos <= end; line++) {
+        size_t line_end = pos;
+        size_t indent = 0U;
+
+        while ((line_end < end) && (text.data[line_end] != '\n')) {
+            line_end++;
+        }
+        while ((pos + indent < line_end) &&
+               ((text.data[pos + indent] == ' ') || (text.data[pos + indent] == '\t'))) {
+            indent++;
+        }
+        if ((line > 0U) && (pos + indent < line_end) && (indent < min_indent)) {
+            min_indent = indent;
+        }
+        pos = line_end + 1U;
+    }
+    if (min_indent == SIZE_MAX) {
+        min_indent = 0U;
+    }
+
+    for (size_t pos = start, line = 0U; pos <= end; line++) {
+        size_t line_end = pos;
+        size_t left = pos;
+        size_t right;
+
+        while ((line_end < end) && (text.data[line_end] != '\n')) {
+            line_end++;
+        }
+        if (line == 0U) {
+            while ((left < line_end) && isspace((unsigned char)text.data[left])) {
+                left++;
+            }
+        } else {
+            for (size_t k = 0U; (k < min_indent) && (left < line_end); k++) {
+                left++;
+            }
+        }
+        right = line_end;
+        while ((right > left) && isspace((unsigned char)text.data[right - 1U])) {
+            right--;
+        }
+        if (right == left) {
+            if (!first_line) {
+                pending_blank++;
+            }
+        } else {
+            for (; pending_blank > 0U; pending_blank--) {
+                if (!sb_append(&out, "\n")) {
+                    return nullptr;
+                }
+            }
+            if ((!first_line && !sb_append(&out, "\n")) ||
+                !sb_append_len(&out, text.data + left, right - left)) {
+                return nullptr;
+            }
+            first_line = false;
+        }
+        pos = line_end + 1U;
+    }
+    return out.data;
+}
+
+static char *py_body_docstring(const PyParseContext *ctx, TSNode definition)
+{
+    TSNode first = py_first_statement(py_field(definition, PYF_BODY));
+
+    return py_is(first, PYK_STRING) ? py_string_doc(ctx, first) : nullptr;
+}
+
+/* Symbols */
+
+static bool py_add_symbol(PyParseContext *ctx,
+                          TSNode outer,
+                          PySlice name,
+                          const char *kind,
+                          const char *ns,
+                          char *doc,
+                          char *source)
+{
+    CodeLensSymbol *symbol;
+
+    if ((name.len == 0U) || (source == nullptr)) {
+        return source != nullptr;
+    }
+    if (!reserve_symbols(ctx->file)) {
+        return false;
+    }
+    symbol = &ctx->file->symbols[ctx->file->symbol_count];
+    (void)memset(symbol, 0, sizeof(*symbol));
+    symbol->kind = copy_cstr(kind);
+    symbol->name = copy_bytes(name.data, name.len);
+    symbol->namespace_name = copy_cstr(ns);
+    symbol->doc = doc;
+    symbol->source = source;
+    symbol->start_line = ts_node_start_point(outer).row + 1U;
+    symbol->end_line = ts_node_end_point(outer).row + 1U;
+    if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
+        (symbol->namespace_name == nullptr)) {
+        (void)memset(symbol, 0, sizeof(*symbol));
+        return false;
+    }
+    ctx->file->symbol_count++;
+    return true;
+}
+
+static char *py_header_source(const PyParseContext *ctx, TSNode outer, TSNode definition)
+{
+    TSNode body = py_field(definition, PYF_BODY);
+    uint32_t start = ts_node_start_byte(outer);
+    uint32_t end = ts_node_is_null(body) ? ts_node_end_byte(outer) : ts_node_start_byte(body);
+    static const char suffix[] = " ...";
+    char *text;
+    size_t len;
+
+    while ((end > start) && isspace((unsigned char)ctx->source[end - 1U])) {
+        end--;
+    }
+    len = (size_t)(end - start);
+    text = code_lens_alloc(len + sizeof(suffix));
+    if (text == nullptr) {
+        return nullptr;
+    }
+    (void)memcpy(text, ctx->source + start, len);
+    (void)memcpy(text + len, suffix, sizeof(suffix));
+    return text;
+}
+
+static char *py_statement_source(const PyParseContext *ctx, TSNode statement)
+{
+    PySlice text = py_text(ctx, statement);
+    const char *newline = memchr(text.data, '\n', text.len);
+    static const char suffix[] = " ...";
+    size_t len;
+    char *out;
+
+    if (newline == nullptr) {
+        return copy_bytes(text.data, text.len);
+    }
+    len = (size_t)(newline - text.data);
+    while ((len > 0U) && isspace((unsigned char)text.data[len - 1U])) {
+        len--;
+    }
+    out = code_lens_alloc(len + sizeof(suffix));
+    if (out == nullptr) {
+        return nullptr;
+    }
+    (void)memcpy(out, text.data, len);
+    (void)memcpy(out + len, suffix, sizeof(suffix));
+    return out;
+}
+
+static bool py_add_class(PyParseContext *ctx, const char *target, const char *base, bool is_test, int32_t *out_index)
+{
+    uint32_t existing;
+
+    if (py_map_find(&ctx->class_by_target, 0U, target, strlen(target), &existing)) {
+        *out_index = (int32_t)existing;
+        return true;
+    }
+    if ((ctx->class_count == ctx->class_capacity) &&
+        !parser_heap_grow((void **)&ctx->classes, &ctx->class_capacity, sizeof(*ctx->classes), 16U)) {
+        return false;
+    }
+    ctx->classes[ctx->class_count] = (PyClass){.target = target, .base_target = base, .is_test = is_test};
+    if (!py_map_insert(&ctx->class_by_target, 0U, target, strlen(target), (uint32_t)ctx->class_count)) {
+        return false;
+    }
+    *out_index = (int32_t)ctx->class_count++;
+    return true;
+}
+
+static bool py_declare_block(PyParseContext *ctx, TSNode block, int32_t owner, const char *ns);
+
+/* Declares the identifiers an assignment binds at module or class level. */
+static bool py_declare_targets(PyParseContext *ctx,
+                               TSNode statement,
+                               TSNode target,
+                               int32_t owner,
+                               const char *ns,
+                               const char *value_type,
+                               char *doc)
+{
+    PyKind kind;
+
+    if (ts_node_is_null(target)) {
+        return true;
+    }
+    kind = py_kind(target);
+    if (kind == PYK_IDENTIFIER) {
+        PySlice name = py_text(ctx, target);
+        bool added = false;
+
+        if (!py_add_member(ctx,
+                           owner,
+                           name,
+                           (PyBinding){.kind = PY_BIND_VALUE, .path = value_type, .ns = ns},
+                           &added)) {
+            return false;
+        }
+        if (owner < 0) {
+            PyBinding *binding = py_find_binding(ctx, 0U, name);
+
+            if ((binding != nullptr) && (binding->kind == PY_BIND_VALUE) &&
+                (binding->path == nullptr)) {
+                binding->path = value_type;
+            }
+        }
+        return !added || py_add_symbol(ctx,
+                                       statement,
+                                       name,
+                                       owner < 0 ? "variable" : "field",
+                                       ns,
+                                       doc,
+                                       py_statement_source(ctx, statement));
+    }
+    if ((kind == PYK_PATTERN_LIST) || (kind == PYK_TUPLE_PATTERN) ||
+        (kind == PYK_LIST_PATTERN) || (kind == PYK_TUPLE) ||
+        (kind == PYK_LIST) || (kind == PYK_PARENTHESIZED_EXPRESSION) ||
+        (kind == PYK_LIST_SPLAT_PATTERN)) {
+        for (uint32_t i = 0U, i_count = py_count(target); i < i_count; i++) {
+            if (!py_declare_targets(ctx, statement, py_child(target, i), owner, ns, nullptr, doc)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool py_declare_assignment(PyParseContext *ctx,
+                                  TSNode statement,
+                                  TSNode assignment,
+                                  int32_t owner,
+                                  const char *ns,
+                                  TSNode next)
+{
+    TSNode left = py_field(assignment, PYF_LEFT);
+    TSNode right = py_field(assignment, PYF_RIGHT);
+    const char *value_type = nullptr;
+    char *doc = nullptr;
+
+    if (py_is(left, PYK_IDENTIFIER)) {
+        value_type = py_resolve_type_expr(ctx, py_field(assignment, PYF_TYPE));
+        if (value_type == nullptr) {
+            value_type = py_infer_value_type(ctx, right);
+        }
+    }
+    if (py_is(next, PYK_EXPRESSION_STATEMENT) && (py_count(next) == 1U)) {
+        next = py_child(next, 0U);
+    }
+    if (py_is(next, PYK_STRING)) {
+        doc = py_string_doc(ctx, next);
+    }
+    if (!py_declare_targets(ctx, statement, left, owner, ns, value_type, doc)) {
+        return false;
+    }
+    if (py_is(right, PYK_ASSIGNMENT)) {
+        return py_declare_assignment(ctx, statement, right, owner, ns, (TSNode){0});
+    }
+    return true;
+}
+
+/* Declares `self.name = ...` as a field of owner when assignment's
+ * target is an attribute of the method's receiver. */
+static bool py_declare_self_assignment(PyParseContext *ctx,
+                                       TSNode statement,
+                                       TSNode assignment,
+                                       PySlice self_name,
+                                       int32_t owner,
+                                       const char *ns)
+{
+    TSNode left = py_field(assignment, PYF_LEFT);
+    TSNode object = py_field(left, PYF_OBJECT);
+    PySlice object_text = py_text(ctx, object);
+    PySlice name;
+    const char *value_type;
+    bool added = false;
+
+    if (!py_is(left, PYK_ATTRIBUTE) || !py_is(object, PYK_IDENTIFIER) ||
+        (object_text.len != self_name.len) ||
+        (memcmp(object_text.data, self_name.data, self_name.len) != 0)) {
+        return true;
+    }
+    name = py_text(ctx, py_field(left, PYF_ATTRIBUTE));
+    value_type = py_resolve_type_expr(ctx, py_field(assignment, PYF_TYPE));
+    if (value_type == nullptr) {
+        value_type = py_infer_value_type(ctx, py_field(assignment, PYF_RIGHT));
+    }
+    if (!py_add_member(ctx,
+                       owner,
+                       name,
+                       (PyBinding){.kind = PY_BIND_VALUE, .path = value_type, .ns = ns},
+                       &added)) {
+        return false;
+    }
+    return !added || py_add_symbol(ctx,
+                                   statement,
+                                   name,
+                                   "field",
+                                   ns,
+                                   nullptr,
+                                   py_statement_source(ctx, statement));
+}
+
+/* Declares `self.name = ...` instance attributes as class fields. */
+static bool py_declare_self_fields(PyParseContext *ctx,
+                                   TSNode node,
+                                   PySlice self_name,
+                                   int32_t owner,
+                                   const char *ns)
+{
+    if (ctx->depth >= PY_MAX_DEPTH) {
+        return true;
+    }
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        TSNode child = py_child(node, i);
+        PyKind kind = py_kind(child);
+
+        if ((kind == PYK_FUNCTION_DEFINITION) ||
+            (kind == PYK_CLASS_DEFINITION) || (kind == PYK_DECORATED_DEFINITION) ||
+            py_is_nested_scope(kind)) {
+            continue;
+        }
+        if (kind == PYK_ASSIGNMENT) {
+            /* Walk chained targets too: self.a = self.b = None. */
+            for (TSNode assignment = child; py_is(assignment, PYK_ASSIGNMENT);
+                 assignment = py_field(assignment, PYF_RIGHT)) {
+                if (!py_declare_self_assignment(ctx, child, assignment, self_name, owner, ns)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!py_is_compound_container(kind)) {
+            continue;
+        }
+        ctx->depth++;
+        if (!py_declare_self_fields(ctx, child, self_name, owner, ns)) {
+            return false;
+        }
+        ctx->depth--;
+    }
+    return true;
+}
+
+static bool py_has_decorator(const PyParseContext *ctx, TSNode outer, const char *name)
+{
+    if (!py_is(outer, PYK_DECORATED_DEFINITION)) {
+        return false;
+    }
+    for (uint32_t i = 0U, i_count = py_count(outer); i < i_count; i++) {
+        TSNode decorator = py_child(outer, i);
+
+        if (py_is(decorator, PYK_DECORATOR) && (py_count(decorator) == 1U) &&
+            py_slice_is(py_text(ctx, py_child(decorator, 0U)), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* First parameter name of a function (the receiver for methods). */
+static PySlice py_first_parameter(const PyParseContext *ctx, TSNode function)
+{
+    TSNode parameters = py_field(function, PYF_PARAMETERS);
+
+    for (uint32_t i = 0U, i_count = py_count(parameters); i < i_count; i++) {
+        TSNode parameter = py_child(parameters, i);
+
+        if (py_is(parameter, PYK_IDENTIFIER)) {
+            return py_text(ctx, parameter);
+        }
+        if (py_is(parameter, PYK_TYPED_PARAMETER) && (py_count(parameter) > 0U) &&
+            py_is(py_child(parameter, 0U), PYK_IDENTIFIER)) {
+            return py_text(ctx, py_child(parameter, 0U));
+        }
+        if (py_is(parameter, PYK_DEFAULT_PARAMETER) || py_is(parameter, PYK_TYPED_DEFAULT_PARAMETER)) {
+            return py_text(ctx, py_field(parameter, PYF_NAME));
+        }
+        break;
+    }
+    return (PySlice){.data = ctx->source, .len = 0U};
+}
+
+static bool py_declare_function(PyParseContext *ctx,
+                                TSNode outer,
+                                TSNode function,
+                                int32_t owner,
+                                const char *ns)
+{
+    PySlice name = py_text(ctx, py_field(function, PYF_NAME));
+    const char *kind;
+
+    if (owner >= 0) {
+        if (py_slice_is(name, "__init__")) {
+            kind = "constructor";
+        } else if (ctx->classes[owner].is_test && py_slice_starts_with(name, "test")) {
+            kind = "test";
+        } else {
+            kind = "method";
+        }
+    } else {
+        kind = (py_slice_is(name, "test") || py_slice_starts_with(name, "test_")) ? "test" : "function";
+    }
+    if (!py_add_member(ctx, owner, name, (PyBinding){.kind = PY_BIND_FUNCTION, .ns = ns}, nullptr) ||
+        !py_add_symbol(ctx,
+                       outer,
+                       name,
+                       kind,
+                       ns,
+                       py_body_docstring(ctx, function),
+                       node_text(ctx->source, outer))) {
+        return false;
+    }
+    if ((owner >= 0) && !py_has_decorator(ctx, outer, "staticmethod")) {
+        PySlice self_name = py_first_parameter(ctx, function);
+
+        if ((self_name.len > 0U) &&
+            !py_declare_self_fields(ctx, py_field(function, PYF_BODY), self_name, owner, ns)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool py_class_is_test(const PyParseContext *ctx, PySlice name, TSNode superclasses)
+{
+    if (py_slice_starts_with(name, "Test")) {
+        return true;
+    }
+    for (uint32_t i = 0U, i_count = py_count(superclasses); i < i_count; i++) {
+        PySlice base = py_text(ctx, py_child(superclasses, i));
+
+        if ((base.len >= 8U) && (memcmp(base.data + base.len - 8U, "TestCase", 8U) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool py_declare_class(PyParseContext *ctx,
+                             TSNode outer,
+                             TSNode definition,
+                             int32_t owner,
+                             const char *ns)
+{
+    PySlice name = py_text(ctx, py_field(definition, PYF_NAME));
+    TSNode superclasses = py_field(definition, PYF_SUPERCLASSES);
+    char *target = py_join(ns, name.data, name.len);
+    const char *base = nullptr;
+    int32_t index;
+
+    if (target == nullptr) {
+        return false;
+    }
+    for (uint32_t i = 0U, i_count = py_count(superclasses); i < i_count; i++) {
+        TSNode candidate = py_child(superclasses, i);
+
+        if (py_is(candidate, PYK_KEYWORD_ARGUMENT) || py_is(candidate, PYK_COMMENT)) {
+            continue;
+        }
+        base = py_resolve_type_expr(ctx, candidate);
+        break;
+    }
+    if (!py_add_member(ctx,
+                       owner,
+                       name,
+                       (PyBinding){.kind = PY_BIND_CLASS, .path = target, .ns = ns},
+                       nullptr) ||
+        !py_add_class(ctx, target, base, py_class_is_test(ctx, name, superclasses), &index) ||
+        !py_add_symbol(ctx,
+                       outer,
+                       name,
+                       "class",
+                       ns,
+                       py_body_docstring(ctx, definition),
+                       py_header_source(ctx, outer, definition))) {
+        return false;
+    }
+    return py_declare_block(ctx, py_field(definition, PYF_BODY), index, target);
+}
+
+static bool py_is_compound_container(PyKind kind)
+{
+    switch (kind) {
+    case PYK_IF_STATEMENT:
+    case PYK_ELIF_CLAUSE:
+    case PYK_ELSE_CLAUSE:
+    case PYK_TRY_STATEMENT:
+    case PYK_EXCEPT_CLAUSE:
+    case PYK_EXCEPT_GROUP_CLAUSE:
+    case PYK_FINALLY_CLAUSE:
+    case PYK_WITH_STATEMENT:
+    case PYK_FOR_STATEMENT:
+    case PYK_WHILE_STATEMENT:
+    case PYK_BLOCK:
+    case PYK_EXPRESSION_STATEMENT:
+    case PYK_WITH_CLAUSE:
+    case PYK_WITH_ITEM:
+    case PYK_MATCH_STATEMENT:
+    case PYK_CASE_CLAUSE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool py_declare_block(PyParseContext *ctx, TSNode block, int32_t owner, const char *ns)
+{
+    uint32_t count = py_count(block);
+
+    for (uint32_t i = 0U; i < count; i++) {
+        TSNode child = py_child(block, i);
+        TSNode next = (i + 1U < count) ? py_child(block, i + 1U) : (TSNode){0};
+        PyKind kind = py_kind(child);
+        TSNode inner = child;
+        bool ok = true;
+
+        if ((kind == PYK_EXPRESSION_STATEMENT) && (py_count(child) == 1U) &&
+            py_is(py_child(child, 0U), PYK_ASSIGNMENT)) {
+            inner = py_child(child, 0U);
+            kind = py_kind(inner);
+        }
+        if (kind == PYK_DECORATED_DEFINITION) {
+            TSNode definition = py_field(child, PYF_DEFINITION);
+
+            if (py_is(definition, PYK_FUNCTION_DEFINITION)) {
+                ok = py_declare_function(ctx, child, definition, owner, ns);
+            } else if (py_is(definition, PYK_CLASS_DEFINITION)) {
+                ok = py_declare_class(ctx, child, definition, owner, ns);
+            }
+        } else if (kind == PYK_FUNCTION_DEFINITION) {
+            ok = py_declare_function(ctx, child, child, owner, ns);
+        } else if (kind == PYK_CLASS_DEFINITION) {
+            ok = py_declare_class(ctx, child, child, owner, ns);
+        } else if (kind == PYK_ASSIGNMENT) {
+            ok = py_declare_assignment(ctx, child, inner, owner, ns, next);
+        } else if (kind == PYK_TYPE_ALIAS_STATEMENT) {
+            TSNode left = py_field(child, PYF_LEFT);
+
+            while (!ts_node_is_null(left) && !py_is(left, PYK_IDENTIFIER) &&
+                   (py_count(left) > 0U)) {
+                left = py_child(left, 0U);
+            }
+            if (py_is(left, PYK_IDENTIFIER)) {
+                bool added = false;
+
+                ok = py_add_member(ctx,
+                                   owner,
+                                   py_text(ctx, left),
+                                   (PyBinding){.kind = PY_BIND_VALUE, .ns = ns},
+                                   &added) &&
+                     (!added || py_add_symbol(ctx,
+                                              child,
+                                              py_text(ctx, left),
+                                              "typedef",
+                                              ns,
+                                              nullptr,
+                                              py_statement_source(ctx, child)));
+            }
+        } else if (py_is_compound_container(kind)) {
+            ok = py_declare_block(ctx, child, owner, ns);
+        }
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* References */
+
+static const char *const py_builtin_names[] = {
+    "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "Ellipsis",
+    "EOFError", "Exception", "False", "FileNotFoundError", "ImportError", "IndexError",
+    "KeyError", "KeyboardInterrupt", "LookupError", "NameError", "None", "NotImplemented",
+    "NotImplementedError", "OSError", "OverflowError", "RecursionError", "RuntimeError",
+    "StopAsyncIteration", "StopIteration", "SyntaxError", "SystemExit", "True", "TypeError",
+    "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError", "ValueError", "ZeroDivisionError",
+    "__file__", "__name__", "abs", "aiter", "all", "anext", "any", "ascii", "bin", "bool",
+    "breakpoint", "bytearray", "bytes", "callable", "chr", "classmethod", "compile", "complex",
+    "delattr", "dict", "dir", "divmod", "enumerate", "eval", "exec", "filter", "float", "format",
+    "frozenset", "getattr", "globals", "hasattr", "hash", "help", "hex", "id", "input", "int",
+    "isinstance", "issubclass", "iter", "len", "list", "locals", "map", "max", "memoryview", "min",
+    "next", "object", "oct", "open", "ord", "pow", "print", "property", "range", "repr",
+    "reversed", "round", "self", "set", "setattr", "slice", "sorted", "staticmethod", "str", "sum",
+    "super", "tuple", "type", "vars", "zip",
+};
+
+static bool py_is_builtin(PySlice name)
+{
+    for (size_t i = 0U; i < sizeof(py_builtin_names) / sizeof(py_builtin_names[0]); i++) {
+        if (py_slice_is(name, py_builtin_names[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool py_add_reference(PyParseContext *ctx,
+                             uint32_t start,
+                             uint32_t end,
+                             const char *base,
+                             size_t base_len,
+                             TSNode base_node,
+                             const char *target)
+{
+    CodeLensReference *reference;
+
+    if ((end <= start) || ((size_t)end > ctx->source_len) || (base_len == 0U)) {
+        return true;
+    }
+    if (!reserve_references(ctx->file)) {
+        return false;
+    }
+    reference = &ctx->file->references[ctx->file->reference_count];
+    (void)memset(reference, 0, sizeof(*reference));
+    reference->symbol = copy_bytes(ctx->source + start, (size_t)(end - start));
+    reference->symbol_len = (size_t)(end - start);
+    reference->base = copy_bytes(base, base_len);
+    reference->base_len = base_len;
+    reference->target_namespace = copy_cstr(target == nullptr ? "" : target);
+    if ((reference->symbol == nullptr) || (reference->base == nullptr) ||
+        (reference->target_namespace == nullptr)) {
+        return false;
+    }
+    reference->target_namespace_len = strlen(reference->target_namespace);
+    reference->line = ts_node_start_point(base_node).row + 1U;
+    reference->column = ts_node_start_point(base_node).column + 1U;
+    reference->start_byte = ts_node_start_byte(base_node);
+    reference->end_byte = ts_node_end_byte(base_node);
+    reference->symbol_hash = term_hash(reference->symbol, reference->symbol_len);
+    reference->base_hash = term_hash(reference->base, reference->base_len);
+    reference->target_namespace_hash =
+        term_hash(reference->target_namespace, reference->target_namespace_len);
+    ctx->file->reference_count++;
+    return true;
+}
+
+static bool py_add_identifier_reference(PyParseContext *ctx, TSNode node)
+{
+    PySlice name = py_text(ctx, node);
+    const PyBinding *binding = py_lookup(ctx, name);
+
+    if (binding == nullptr) {
+        if (ctx->wildcard && !py_is_builtin(name)) {
+            return py_add_reference(ctx,
+                                    ts_node_start_byte(node),
+                                    ts_node_end_byte(node),
+                                    name.data,
+                                    name.len,
+                                    node,
+                                    "");
+        }
+        return true;
+    }
+    if (binding->kind == PY_BIND_FROM) {
+        return py_add_reference(ctx,
+                                ts_node_start_byte(node),
+                                ts_node_end_byte(node),
+                                binding->from_member,
+                                strlen(binding->from_member),
+                                node,
+                                binding->from_module);
+    }
+    if (((binding->kind == PY_BIND_FUNCTION) || (binding->kind == PY_BIND_CLASS) ||
+         (binding->kind == PY_BIND_VALUE)) &&
+        (binding->ns != nullptr)) {
+        return py_add_reference(ctx,
+                                ts_node_start_byte(node),
+                                ts_node_end_byte(node),
+                                name.data,
+                                name.len,
+                                node,
+                                binding->ns);
+    }
+    return true;
+}
+
+static bool py_receiver_is_simple(TSNode object)
+{
+    while (py_is(object, PYK_ATTRIBUTE)) {
+        object = py_field(object, PYF_OBJECT);
+    }
+    return py_is(object, PYK_IDENTIFIER);
+}
+
+static bool py_add_attribute_reference(PyParseContext *ctx, TSNode node)
+{
+    TSNode object = py_field(node, PYF_OBJECT);
+    TSNode attribute = py_field(node, PYF_ATTRIBUTE);
+    PySlice name;
+    PyResolved receiver;
+    const char *target = "";
+
+    if (ts_node_is_null(object) || ts_node_is_null(attribute)) {
+        return true;
+    }
+    name = py_text(ctx, attribute);
+    receiver = py_resolve(ctx, object);
+    if (receiver.kind == PY_RES_CLASS) {
+        target = py_member_owner(ctx, receiver.path, name);
+    } else if (receiver.kind == PY_RES_INSTANCE) {
+        target = receiver.path;
+    } else if (receiver.kind == PY_RES_PATH) {
+        if (receiver.module) {
+            char *path = py_join(receiver.path, name.data, name.len);
+
+            if (path == nullptr) {
+                return false;
+            }
+            if (py_path_is_imported_module(ctx, path)) {
+                return true; /* a module component, not a member */
+            }
+        }
+        target = receiver.path;
+    }
+    return py_add_reference(ctx,
+                            py_receiver_is_simple(object) ? ts_node_start_byte(object)
+                                                          : ts_node_start_byte(attribute),
+                            ts_node_end_byte(attribute),
+                            name.data,
+                            name.len,
+                            attribute,
+                            target);
+}
+
+static bool py_walk(PyParseContext *ctx, TSNode node, bool store);
+
+/* A walrus target binds in the innermost function (or module) scope. */
+static bool py_bind_walrus(PyParseContext *ctx, TSNode name)
+{
+    for (size_t i = ctx->scope_count; i > 0U; i--) {
+        const PyScope *scope = &ctx->scopes[i - 1U];
+
+        if (scope->kind == PY_SCOPE_CLASS) {
+            continue;
+        }
+        return py_bind_targets(ctx,
+                               name,
+                               scope->id,
+                               scope->kind == PY_SCOPE_MODULE
+                                   ? (PyBinding){.kind = PY_BIND_VALUE, .ns = ctx->module}
+                                   : (PyBinding){.kind = PY_BIND_LOCAL});
+    }
+    return true;
+}
+
+static bool py_walk_children(PyParseContext *ctx, TSNode node, bool store)
+{
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        if (!py_walk(ctx, py_child(node, i), store)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Walks children, treating the named target field as a binding position. */
+static bool py_walk_with_target(PyParseContext *ctx, TSNode node, PyField target_field)
+{
+    TSNode target = py_field(node, target_field);
+
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        TSNode child = py_child(node, i);
+
+        if (!py_walk(ctx, child, !ts_node_is_null(target) && ts_node_eq(child, target))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Parameter defaults and annotations evaluate in the enclosing scope. */
+static bool py_walk_parameter_outer(PyParseContext *ctx, TSNode parameters)
+{
+    for (uint32_t i = 0U, i_count = py_count(parameters); i < i_count; i++) {
+        TSNode parameter = py_child(parameters, i);
+
+        if (!py_walk(ctx, py_field(parameter, PYF_TYPE), false) ||
+            !py_walk(ctx, py_field(parameter, PYF_VALUE), false)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool py_bind_parameters(PyParseContext *ctx,
+                               TSNode parameters,
+                               uint32_t scope,
+                               const char *receiver_type)
+{
+    for (uint32_t i = 0U, i_count = py_count(parameters); i < i_count; i++) {
+        TSNode parameter = py_child(parameters, i);
+        TSNode name = parameter;
+        const char *type = nullptr;
+
+        if (py_is(parameter, PYK_TYPED_PARAMETER)) {
+            name = py_child(parameter, 0U);
+            type = py_resolve_type_expr(ctx, py_field(parameter, PYF_TYPE));
+        } else if (py_is(parameter, PYK_TYPED_DEFAULT_PARAMETER)) {
+            name = py_field(parameter, PYF_NAME);
+            type = py_resolve_type_expr(ctx, py_field(parameter, PYF_TYPE));
+        } else if (py_is(parameter, PYK_DEFAULT_PARAMETER)) {
+            name = py_field(parameter, PYF_NAME);
+        }
+        if (py_is(name, PYK_LIST_SPLAT_PATTERN) || py_is(name, PYK_DICTIONARY_SPLAT_PATTERN)) {
+            name = py_child(name, 0U);
+            type = nullptr;
+        }
+        if ((i == 0U) && (receiver_type != nullptr)) {
+            type = receiver_type;
+        }
+        if (!py_bind_targets(ctx, name, scope, (PyBinding){.kind = PY_BIND_LOCAL, .path = type})) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool py_walk_function(PyParseContext *ctx, TSNode node)
+{
+    TSNode parameters = py_field(node, PYF_PARAMETERS);
+    TSNode body = py_field(node, PYF_BODY);
+    const PyScope *enclosing = py_innermost_scope(ctx);
+    const char *receiver_type = nullptr;
+    int32_t saved_class = ctx->current_class;
+    TSNode parent = ts_node_parent(node);
+    uint32_t scope;
+    bool ok;
+
+    if (!py_walk_parameter_outer(ctx, parameters) ||
+        !py_walk(ctx, py_field(node, PYF_RETURN_TYPE), false)) {
+        return false;
+    }
+    if (enclosing->kind == PY_SCOPE_CLASS) {
+        ctx->current_class = enclosing->class_index;
+        if (!py_has_decorator(ctx, parent, "staticmethod")) {
+            receiver_type = enclosing->class_target;
+        }
+    }
+    if (!py_push_scope(ctx, PY_SCOPE_FUNCTION, -1, nullptr, &scope)) {
+        return false;
+    }
+    ok = py_bind_parameters(ctx, parameters, scope, receiver_type) &&
+         py_prescan(ctx, body, scope, PY_SCOPE_FUNCTION, nullptr, true) &&
+         py_prescan(ctx, body, scope, PY_SCOPE_FUNCTION, nullptr, false) &&
+         py_walk(ctx, body, false);
+    ctx->scope_count--;
+    ctx->current_class = saved_class;
+    return ok;
+}
+
+static bool py_walk_class(PyParseContext *ctx, TSNode node)
+{
+    PySlice name = py_text(ctx, py_field(node, PYF_NAME));
+    const PyScope *enclosing = py_innermost_scope(ctx);
+    const char *owner = enclosing->kind == PY_SCOPE_CLASS ? enclosing->class_target
+                        : enclosing->kind == PY_SCOPE_MODULE ? ctx->module
+                                                             : nullptr;
+    const char *target = nullptr;
+    int32_t index = -1;
+    uint32_t scope;
+    bool ok;
+
+    if (!py_walk(ctx, py_field(node, PYF_SUPERCLASSES), false)) {
+        return false;
+    }
+    if (owner != nullptr) {
+        target = py_join(owner, name.data, name.len);
+        if (target == nullptr) {
+            return false;
+        }
+        index = py_class_index(ctx, target);
+        if (index < 0) {
+            target = nullptr;
+        }
+    }
+    if (!py_push_scope(ctx, PY_SCOPE_CLASS, index, target, &scope)) {
+        return false;
+    }
+    ok = py_prescan(ctx, py_field(node, PYF_BODY), scope, PY_SCOPE_CLASS, target, false) &&
+         py_walk(ctx, py_field(node, PYF_BODY), false);
+    ctx->scope_count--;
+    return ok;
+}
+
+static bool py_walk_lambda(PyParseContext *ctx, TSNode node)
+{
+    TSNode parameters = py_field(node, PYF_PARAMETERS);
+    uint32_t scope;
+    bool ok;
+
+    if (!py_walk_parameter_outer(ctx, parameters) ||
+        !py_push_scope(ctx, PY_SCOPE_FUNCTION, -1, nullptr, &scope)) {
+        return false;
+    }
+    ok = py_bind_parameters(ctx, parameters, scope, nullptr) &&
+         py_prescan(ctx, py_field(node, PYF_BODY), scope, PY_SCOPE_FUNCTION, nullptr, false) &&
+         py_walk(ctx, py_field(node, PYF_BODY), false);
+    ctx->scope_count--;
+    return ok;
+}
+
+static bool py_walk_comprehension(PyParseContext *ctx, TSNode node)
+{
+    uint32_t scope;
+    bool ok = true;
+
+    if (!py_push_scope(ctx, PY_SCOPE_FUNCTION, -1, nullptr, &scope)) {
+        return false;
+    }
+    for (uint32_t i = 0U, i_count = py_count(node); ok && (i < i_count); i++) {
+        TSNode child = py_child(node, i);
+
+        if (py_is(child, PYK_FOR_IN_CLAUSE)) {
+            ok = py_bind_targets(ctx,
+                                 py_field(child, PYF_LEFT),
+                                 scope,
+                                 (PyBinding){.kind = PY_BIND_LOCAL});
+        }
+    }
+    ok = ok && py_walk_children(ctx, node, false);
+    ctx->scope_count--;
+    return ok;
+}
+
+static bool py_walk_node(PyParseContext *ctx, TSNode node, bool store);
+
+static bool py_walk(PyParseContext *ctx, TSNode node, bool store)
+{
+    bool ok;
+
+    if (ts_node_is_null(node) || (ctx->depth >= PY_MAX_DEPTH)) {
+        return true;
+    }
+    ctx->depth++;
+    ok = py_walk_node(ctx, node, store);
+    ctx->depth--;
+    return ok;
+}
+
+static bool py_walk_node(PyParseContext *ctx, TSNode node, bool store)
+{
+    PyKind kind;
+
+    kind = py_kind(node);
+    switch (kind) {
+    case PYK_IDENTIFIER:
+        return store || py_add_identifier_reference(ctx, node);
+    case PYK_ATTRIBUTE:
+        return py_add_attribute_reference(ctx, node) &&
+               py_walk(ctx, py_field(node, PYF_OBJECT), false);
+    case PYK_ASSIGNMENT:
+        return py_walk(ctx, py_field(node, PYF_LEFT), true) &&
+               py_walk(ctx, py_field(node, PYF_TYPE), false) &&
+               py_walk(ctx, py_field(node, PYF_RIGHT), false);
+    case PYK_AUGMENTED_ASSIGNMENT:
+        return py_walk(ctx, py_field(node, PYF_LEFT), true) &&
+               py_walk(ctx, py_field(node, PYF_RIGHT), false);
+    case PYK_AS_PATTERN:
+        return py_walk_with_target(ctx, node, PYF_ALIAS);
+    case PYK_FOR_STATEMENT:
+    case PYK_FOR_IN_CLAUSE:
+        return py_walk_with_target(ctx, node, PYF_LEFT);
+    case PYK_NAMED_EXPRESSION:
+        return py_bind_walrus(ctx, py_field(node, PYF_NAME)) &&
+               py_walk_with_target(ctx, node, PYF_NAME);
+    case PYK_CALL:
+    case PYK_SUBSCRIPT:
+        return py_walk_children(ctx, node, false);
+    case PYK_KEYWORD_ARGUMENT:
+        return py_walk(ctx, py_field(node, PYF_VALUE), false);
+    case PYK_FUNCTION_DEFINITION:
+        return py_walk_function(ctx, node);
+    case PYK_CLASS_DEFINITION:
+        return py_walk_class(ctx, node);
+    case PYK_LAMBDA:
+        return py_walk_lambda(ctx, node);
+    case PYK_LIST_COMPREHENSION:
+    case PYK_SET_COMPREHENSION:
+    case PYK_DICTIONARY_COMPREHENSION:
+    case PYK_GENERATOR_EXPRESSION:
+        return py_walk_comprehension(ctx, node);
+    case PYK_TYPE_ALIAS_STATEMENT:
+        return py_walk(ctx, py_field(node, PYF_RIGHT), false);
+    case PYK_IMPORT_STATEMENT:
+    case PYK_IMPORT_FROM_STATEMENT:
+    case PYK_FUTURE_IMPORT_STATEMENT:
+    case PYK_GLOBAL_STATEMENT:
+    case PYK_NONLOCAL_STATEMENT:
+    case PYK_DOTTED_NAME:
+    case PYK_COMMENT:
+    case PYK_CASE_PATTERN:
+        return true;
+    default:
+        break;
+    }
+    return py_walk_children(ctx, node, store);
+}
+
+CodeLensPythonParser *code_lens_python_parser_new(void)
+{
+    CodeLensPythonParser *parser = calloc(1U, sizeof(*parser));
+
+    (void)pthread_once(&py_ids_once, init_python_ids);
+    if (parser == nullptr) {
+        return nullptr;
+    }
+    parser->parser = ts_parser_new();
+    if (parser->parser == nullptr) {
+        free(parser);
+        return nullptr;
+    }
+    if (!ts_parser_set_language(parser->parser, tree_sitter_python())) {
+        ts_parser_delete(parser->parser);
+        free(parser);
+        return nullptr;
+    }
+    return parser;
+}
+
+void code_lens_python_parser_delete(CodeLensPythonParser *parser)
+{
+    if (parser == nullptr) {
+        return;
+    }
+    ts_parser_delete(parser->parser);
+    for (size_t i = 0U; i < parser->dir_capacity; i++) {
+        free(parser->dirs[i].dir);
+    }
+    free(parser->dirs);
+    free(parser->repo_root);
+    free(parser);
+}
+
+int code_lens_python_parser_set_repo_root(CodeLensPythonParser *parser, const char *repo_root)
+{
+    char *copy = nullptr;
+
+    if (parser == nullptr) {
+        return -1;
+    }
+    if (repo_root != nullptr) {
+        size_t len = strlen(repo_root);
+
+        copy = malloc(len + 1U);
+        if (copy == nullptr) {
+            return -1;
+        }
+        (void)memcpy(copy, repo_root, len + 1U);
+    }
+    free(parser->repo_root);
+    parser->repo_root = copy;
+    parser->repo_root_len = copy == nullptr ? 0U : strlen(copy);
+    return 0;
+}
+
+int code_lens_parse_python_source_with_parser(CodeLensPythonParser *parser,
+                                               const char *file_path,
+                                               const char *source,
+                                               size_t source_len,
+                                               CodeLensPythonFile *out_file)
+{
+    TSTree *tree;
+    TSNode root;
+    PyParseContext ctx;
+    char *module;
+    bool is_init;
+    bool ok;
+
+    if ((parser == nullptr) || (parser->parser == nullptr) || (file_path == nullptr) ||
+        (source == nullptr) || (out_file == nullptr) || (source_len > UINT32_MAX)) {
+        return -1;
+    }
+    (void)memset(out_file, 0, sizeof(*out_file));
+    out_file->file_path = copy_cstr(file_path);
+    module = py_module_name(parser, parser->repo_root, parser->repo_root_len, file_path);
+    if ((out_file->file_path == nullptr) || (module == nullptr)) {
+        return -1;
+    }
+    out_file->namespace_name = module;
+    tree = ts_parser_parse_string(parser->parser, nullptr, source, (uint32_t)source_len);
+    if (tree == nullptr) {
+        return -1;
+    }
+    root = ts_tree_root_node(tree);
+    (void)memset(&ctx, 0, sizeof(ctx));
+    ctx.source = source;
+    ctx.source_len = source_len;
+    ctx.file = out_file;
+    ctx.module = module;
+    ctx.current_class = -1;
+    {
+        size_t len = strlen(file_path);
+        size_t sep = py_last_separator(file_path, len);
+        const char *name = sep == SIZE_MAX ? file_path : file_path + sep + 1U;
+        const char *last_dot = strrchr(module, '.');
+
+        is_init = strcmp(name, "__init__.py") == 0;
+        ctx.package = is_init ? module
+                              : (last_dot == nullptr ? copy_cstr("")
+                                                     : copy_bytes(module, (size_t)(last_dot - module)));
+    }
+
+    ok = (ctx.package != nullptr) && py_push_scope(&ctx, PY_SCOPE_MODULE, -1, nullptr, nullptr) &&
+         py_prescan(&ctx, root, 0U, PY_SCOPE_MODULE, module, false) &&
+         py_declare_block(&ctx, root, -1, module) && py_walk(&ctx, root, false);
+
+    free(ctx.bindings);
+    free(ctx.names.slots);
+    free(ctx.classes);
+    free(ctx.class_by_target.slots);
+    free(ctx.members.slots);
+    free(ctx.scopes);
+    ts_tree_delete(tree);
+    return ok ? 0 : -1;
+}
+
+int code_lens_parse_python_source(const char *repo_root,
+                                   const char *file_path,
+                                   const char *source,
+                                   size_t source_len,
+                                   CodeLensPythonFile *out_file)
+{
+    CodeLensPythonParser *parser = code_lens_python_parser_new();
+    int rc;
+
+    if (parser == nullptr) {
+        return -1;
+    }
+    rc = code_lens_python_parser_set_repo_root(parser, repo_root) == 0
+             ? code_lens_parse_python_source_with_parser(parser,
+                                                          file_path,
+                                                          source,
+                                                          source_len,
+                                                          out_file)
+             : -1;
+    code_lens_python_parser_delete(parser);
+    return rc;
+}
+
+/* repo_root anchors Python module naming; nullptr (dependency sources)
+ * falls back to __init__.py package walks and file stems. */
+static CodeLensSourceParser *code_lens_source_parser_new(const char *repo_root)
 {
     CodeLensSourceParser *parser = code_lens_alloc_zeroed(1U, sizeof(*parser));
 
@@ -8456,7 +11143,10 @@ static CodeLensSourceParser *code_lens_source_parser_new(void)
     parser->clojure = code_lens_clojure_parser_new();
     parser->java = code_lens_java_parser_new();
     parser->c = code_lens_c_parser_new();
-    if ((parser->clojure == nullptr) || (parser->java == nullptr) || (parser->c == nullptr)) {
+    parser->python = code_lens_python_parser_new();
+    if ((parser->clojure == nullptr) || (parser->java == nullptr) || (parser->c == nullptr) ||
+        (parser->python == nullptr) ||
+        (code_lens_python_parser_set_repo_root(parser->python, repo_root) != 0)) {
         if (parser->clojure != nullptr) {
             code_lens_clojure_parser_delete(parser->clojure);
         }
@@ -8466,6 +11156,7 @@ static CodeLensSourceParser *code_lens_source_parser_new(void)
         if (parser->c != nullptr) {
             code_lens_c_parser_delete(parser->c);
         }
+        code_lens_python_parser_delete(parser->python);
         return nullptr;
     }
     return parser;
@@ -8479,6 +11170,7 @@ static void code_lens_source_parser_delete(CodeLensSourceParser *parser)
     code_lens_clojure_parser_delete(parser->clojure);
     code_lens_java_parser_delete(parser->java);
     code_lens_c_parser_delete(parser->c);
+    code_lens_python_parser_delete(parser->python);
 }
 
 static int code_lens_parse_source_with_parser(CodeLensSourceParser *parser,
@@ -8500,6 +11192,13 @@ static int code_lens_parse_source_with_parser(CodeLensSourceParser *parser,
                                                      source,
                                                      source_len,
                                                      out_file);
+    }
+    if (has_python_extension(file_path)) {
+        return code_lens_parse_python_source_with_parser(parser->python,
+                                                          file_path,
+                                                          source,
+                                                          source_len,
+                                                          out_file);
     }
     return code_lens_parse_clojure_source_with_parser(parser->clojure,
                                                        file_path,
@@ -8598,6 +11297,32 @@ typedef struct {
     CodeLensPathList missing;
     CodeLensPathList added;
 } RepoDiff;
+
+static bool path_list_has_python_package_marker(const CodeLensPathList *list)
+{
+    static const char marker[] = "__init__.py";
+
+    for (size_t i = 0U; i < list->count; i++) {
+        const char *path = list->paths[i];
+        size_t len = strlen(path);
+
+        if ((len >= sizeof(marker) - 1U) &&
+            (strcmp(path + len - (sizeof(marker) - 1U), marker) == 0) &&
+            ((len == sizeof(marker) - 1U) ||
+             (path[len - sizeof(marker)] == '/') || (path[len - sizeof(marker)] == '\\'))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* An added or removed __init__.py changes the package chain, and so the
+ * module name, of every Python file below it. */
+static bool repo_diff_changes_python_packages(const RepoDiff *diff)
+{
+    return path_list_has_python_package_marker(&diff->added) ||
+           path_list_has_python_package_marker(&diff->missing);
+}
 
 typedef struct FtsSidecar FtsSidecar;
 
@@ -12996,7 +15721,7 @@ static void *parallel_parse_worker_main(void *ctx)
     CodeLensSourceParser *parser;
     StreamEntry *entry = nullptr;
 
-    parser = code_lens_source_parser_new();
+    parser = code_lens_source_parser_new(worker->work->repo_path);
     if (parser == nullptr) {
         (void)fprintf(stderr, "code-lens: failed to create source parser worker\n");
         parallel_parse_abort(worker->work);
@@ -16005,7 +18730,7 @@ static int index_maven_dependency_files(IndexContext *index,
         return 0;
     }
     if (index->parser == nullptr) {
-        index->parser = code_lens_source_parser_new();
+        index->parser = code_lens_source_parser_new(index->repo_path);
         if (index->parser == nullptr) {
             return -1;
         }
@@ -16621,6 +19346,12 @@ static int index_repository_incremental(const char *repo_path,
         goto report_totals;
     }
 
+    if (repo_diff_changes_python_packages(&diff)) {
+        /* Python module names of unchanged files depend on which
+         * directories hold __init__.py; only a full rebuild renames them. */
+        goto fallback;
+    }
+
     total_changed = diff.changed.count + diff.missing.count + diff.added.count;
     if (!incremental_forced() &&
         ((status.checked_files == 0U) || (total_changed * 5U > status.checked_files))) {
@@ -16702,7 +19433,7 @@ static int index_repository_incremental(const char *repo_path,
     profile_add(&profile, &profile.secondary_index_seconds, start);
 
     start = profile_start(&profile);
-    ctx.parser = code_lens_source_parser_new();
+    ctx.parser = code_lens_source_parser_new(repo_path);
     if (ctx.parser == nullptr) {
         goto fallback;
     }
@@ -16976,7 +19707,7 @@ static int index_repository_attempt(const char *repo_path,
 
     start = profile_start(&profile);
     if (thread_count <= 1U) {
-        ctx.parser = code_lens_source_parser_new();
+        ctx.parser = code_lens_source_parser_new(repo_path);
         rc = ctx.parser == nullptr
                  ? -1
                  : code_lens_walk_source_files(repo_path, index_file_callback, &ctx);
@@ -19339,7 +22070,7 @@ static bool query_scope_known(const char *scope)
            (strcmp(scope, "all") == 0);
 }
 
-/* Symbol kinds assigned by the Clojure, Java, and C extractors, plus the
+/* Symbol kinds assigned by the Clojure, Java, C, and Python extractors, plus the
  * pseudo-kind "keyword" accepted by query filtering. Shared by the
  * unknown-kind note and the MCP tool schema documentation. */
 static const char query_kind_list[] =
@@ -23617,12 +26348,13 @@ static void respond_initialize(const char *id)
 {
     StringBuilder out = {0};
     static const char instructions[] =
-        "code-lens provides code intelligence for Clojure, Java, and C repositories. "
+        "code-lens provides code intelligence for Clojure, Java, C, and Python repositories. "
         "When working with these languages, prefer query and context over text search: "
         "query finds symbol definitions and Clojure :keyword usages by name, while context "
         "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
         "when the target is a Java type. It understands Clojure "
-        ":as/:refer, Java imports and receiver types, and C linkage and member types. Set "
+        ":as/:refer, Java imports and receiver types, C linkage and member types, and Python "
+        "imports with self, constructor, and annotated receivers. Set "
         "repo to an absolute repository root or any file or directory inside it; omit repo to "
         "use the directory where the server was started, which may not be your working "
         "directory. sql runs read-only structural queries over the "
@@ -23677,8 +26409,8 @@ static void respond_tools_list(const char *id)
         " with snippets. An exact Java type automatically returns a bounded Class Dossier"
         " with members, hierarchy, relevant inherited behavior, support types, overrides,"
         " and purpose-grouped representative usages. Resolves Clojure :as/:refer, Java"
-        " imports and receiver types, and C"
-        " linkage and aggregate members. Dependency definitions are an automatic fallback;"
+        " imports and receiver types, C linkage and aggregate members, and Python imports"
+        " and self/constructor/annotated receivers. Dependency definitions are an automatic fallback;"
         " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
         " package.Type, and ptr->field qualifiers. repo may be an absolute repository root"
         " or any path inside it. When omitted, it defaults to the directory the code-lens"
@@ -23690,9 +26422,11 @@ static void respond_tools_list(const char *id)
         " necessarily your working directory.\"},"
         "\"aliases\":{\"type\":\"string\",\"description\":\"Clojure tools.deps aliases such as :dev:reporting used while resolving dependency sources.\"},"
         "\"name\":{\"type\":\"string\",\"description\":\"Symbol name, optionally qualified"
-        " with a Clojure namespace or alias, Java type or package, or C aggregate.\"},"
+        " with a Clojure namespace or alias, Java type or package, C aggregate, or Python"
+        " module or class.\"},"
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
-        " definitions (Java enclosing type; C file or type scope).\"},"
+        " definitions (Java enclosing type; C file or type scope; Python module or"
+        " module.Class).\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
         " matching definition file paths. A workspace calling file is also accepted as"
         " dependency-resolution context.\"},"
@@ -23713,7 +26447,9 @@ static void respond_tools_list(const char *id)
         " sourcePath, modulePath). For Java, Symbol.namespace is the fully qualified enclosing"
         " type, File.namespace is the package, Alias rows are normal imports, and Referred"
         " rows are static imports. For C, global namespaces are empty, static namespaces are"
-        " file paths, and field namespaces are aggregate names. Join File via File.rowid ="
+        " file paths, and field namespaces are aggregate names. For Python, File.namespace is"
+        " the dotted module, Symbol.namespace is the module or module.Class, Alias rows are"
+        " import statements, and Referred rows are from-imports. Join File via File.rowid ="
         " fileId. repo may be an absolute repository root or any path inside it. When"
         " omitted, it defaults to the directory the code-lens server was started in, which"
         " is not necessarily your working directory.\","
@@ -24241,6 +26977,9 @@ int code_lens_cli_main(int argc, char **argv)
             (void)printf("tree-sitter-c abi=%u symbols=%u\n",
                          code_lens_c_language_abi_version(),
                          code_lens_c_language_symbol_count());
+            (void)printf("tree-sitter-python abi=%u symbols=%u\n",
+                         code_lens_python_language_abi_version(),
+                         code_lens_python_language_symbol_count());
         } else {
             (void)printf("%s\n", CODE_LENS_VERSION);
         }

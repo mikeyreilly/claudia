@@ -16,7 +16,7 @@ goto usage_error
 
 :configure
 where clang.exe >nul 2>nul || (echo code-lens: clang.exe was not found on PATH 1>&2 & goto fail)
-for %%D in (sqlite tree-sitter tree-sitter-clojure tree-sitter-java tree-sitter-c libdeflate zlib) do (
+for %%D in (sqlite tree-sitter tree-sitter-clojure tree-sitter-java tree-sitter-c tree-sitter-python libdeflate zlib) do (
   if not exist "vendor\%%D" (
     echo code-lens: vendor\%%D is missing. Run scripts\vendor-deps.bat first. 1>&2
     goto fail
@@ -50,6 +50,8 @@ call :compile_tree vendor\tree-sitter\lib\src\lib.c tree_sitter.obj -Ivendor\tre
 call :compile_tree vendor\tree-sitter-clojure\src\parser.c tree_sitter_clojure.obj -Ivendor\tree-sitter-clojure\src || goto fail
 call :compile_tree vendor\tree-sitter-java\src\parser.c tree_sitter_java.obj -Ivendor\tree-sitter-java\src || goto fail
 call :compile_tree vendor\tree-sitter-c\src\parser.c tree_sitter_c.obj -Ivendor\tree-sitter-c\src || goto fail
+call :compile_tree vendor\tree-sitter-python\src\parser.c tree_sitter_python.obj -Ivendor\tree-sitter-python\src || goto fail
+call :compile_tree vendor\tree-sitter-python\src\scanner.c tree_sitter_python_scanner.obj -Ivendor\tree-sitter-python\src || goto fail
 
 call :compile_vendor vendor\libdeflate\lib\deflate_decompress.c libdeflate_deflate_decompress.obj || goto fail
 call :compile_vendor vendor\libdeflate\lib\zlib_decompress.c libdeflate_zlib_decompress.obj || goto fail

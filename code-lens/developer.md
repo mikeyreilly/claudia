@@ -36,7 +36,7 @@ them; it is the full-depth companion to all three.
 ## 1. What code-lens is
 
 code-lens is a native ISO C23 command-line tool and MCP (Model Context
-Protocol) server that indexes Clojure, Java, and C codebases into per-repo SQLite
+Protocol) server that indexes Clojure, Java, C, and Python codebases into per-repo SQLite
 databases and answers symbol search (FTS5 full-text search ranked with
 BM25), definition/reference context, and raw SQL queries over that index.
 
@@ -91,11 +91,12 @@ default `~/.code-lens/repos/`.
 | `tests/test_clojure_parser.c` | Clojure parser assertions against an inline fixture. |
 | `tests/test_java_support.c` | Java parser and end-to-end indexing/context assertions. |
 | `tests/test_c_support.c` | C parser, linkage/member resolution, and end-to-end indexing assertions. |
+| `tests/test_python_support.c` | Python module naming, parser/receiver resolution, and end-to-end indexing assertions. |
 | `scripts/vendor-deps.sh` | Fetches and pins vendored dependencies (git clones and the SQLite amalgamation archive). |
 | `scripts/detect-c23-flag.sh` | Probes the compiler for `-std=c23` vs `-std=c2x`. |
 | `scripts/benchmark-index.sh` | Repeatable indexing benchmark harness. |
 | `vendor/deps.lock` | Pinned dependency refs (name, url, ref-or-sha256, license). |
-| `vendor/sqlite/`, `vendor/tree-sitter/`, `vendor/tree-sitter-clojure/`, `vendor/tree-sitter-java/`, `vendor/tree-sitter-c/` | Dependency trees. Local artifacts, git-ignored. |
+| `vendor/sqlite/`, `vendor/tree-sitter/`, `vendor/tree-sitter-clojure/`, `vendor/tree-sitter-java/`, `vendor/tree-sitter-c/`, `vendor/tree-sitter-python/` | Dependency trees. Local artifacts, git-ignored. |
 | `Makefile` | The whole build. No CMake anywhere. |
 | `README.md` | Project front door: overview, quick start, doc links. |
 | `USAGE.txt` | End-user CLI usage and MCP registration notes. |
@@ -193,7 +194,7 @@ pedantic/warnings-as-errors policy (with only SQLite's public-header
 | Canonical binary | `build/code-lens` (copy of the most recently built mode) |
 | Test binary | `build/<mode>/tests/test-main`, copied to `build/tests/test-main` |
 | SQLite object | `build/<mode>/obj/vendor/sqlite/sqlite3.o` |
-| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o`, `.../tree-sitter-clojure/parser.o`, `.../tree-sitter-java/parser.o`, and `.../tree-sitter-c/parser.o` |
+| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o`, `.../tree-sitter-clojure/parser.o`, `.../tree-sitter-java/parser.o`, `.../tree-sitter-c/parser.o`, and `.../tree-sitter-python/{parser,scanner}.o` (the Python grammar ships an external scanner for indentation and strings) |
 
 ### Build gotchas
 
@@ -248,6 +249,7 @@ pin a commit, archive dependencies pin the SHA-256 of the archive):
 | `tree-sitter-clojure` | `e43eff80d17cf34852dcd92ca5e6986d23a7040f` | MIT |
 | `tree-sitter-java` | `94703d5a6bed02b98e438d7cad1136c01a60ba2c` (v0.23.5) | MIT |
 | `tree-sitter-c` | `7fa1be1b694b6e763686793d97da01f36a0e5c12` (v0.24.1) | MIT |
+| `tree-sitter-python` | `26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64` | MIT |
 | `libdeflate` | `c8c56a20f8f621e6a966b716b31f1dedab6a41e3` (v1.25) | MIT |
 | `zlib` | `51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf` (v1.3.1) | zlib |
 
@@ -257,8 +259,8 @@ pinned URL, verified against the pinned SHA-256, and extracted flattened into
 `vendor/sqlite/` so `vendor/sqlite/sqlite3.c` and `sqlite3.h` sit directly in
 that directory; a `.sha256` stamp file makes re-runs no-ops until the pin
 changes. Run the script whenever `vendor/sqlite`, `vendor/tree-sitter`,
-`vendor/tree-sitter-clojure`, `vendor/tree-sitter-java`, or
-`vendor/tree-sitter-c` is missing.
+`vendor/tree-sitter-clojure`, `vendor/tree-sitter-java`,
+`vendor/tree-sitter-c`, or `vendor/tree-sitter-python` is missing.
 
 To upgrade SQLite: pick the new amalgamation from sqlite.org/download.html
 (the URL embeds the release year), verify the download against the published
@@ -276,11 +278,12 @@ by `/* Section name */` comments. Keep new code in the appropriate section.
 | Arena allocator | Thread-local bump allocator; marks and resets. |
 | Platform helpers | Home resolution, path utilities, mkdir/rmtree, file reads (heap for small files, mmap for large), supported-source file walking. |
 | String builder | Arena-backed `StringBuilder` with `sb_append`/`sb_appendf`. |
-| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C metadata, used by `version --deps` and tests. |
+| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python metadata, used by `version --deps` and tests. |
 | Database wrapper | SQLite open modes, prepared statements, parameter binding, the pipe-format result renderer, error reporting. |
 | Clojure parser | Custom-reader/tree-sitter extraction of namespaces, aliases, definitions, references, and keywords. |
 | Java parser | tree-sitter-java extraction of packages, imports, types/members, Javadocs, and resolved references. |
 | C parser | tree-sitter-c extraction of declarations, aggregate types, macros, linkage, calls, and members. |
+| Python parser | tree-sitter-python module naming plus extraction of imports, classes/functions/fields, docstrings, and scope-aware resolved references. |
 | Indexer | Schema DDL, prepared per-table INSERT writers, staging/publish paths, parallel parse workers. |
 | Search | `list`, `query`, `context`, `sql` implementations over the per-repo indexes. |
 | MCP server | stdio JSON-RPC loop, hand-rolled JSON scanning, tool dispatch. |
@@ -397,12 +400,14 @@ Rules:
   (`PROJECT_LDLIBS = -lz`, plus `-lm` on Linux for SQLite FTS5).
 - The recursive walker (`walk_path`) accepts an extension predicate. The
   indexing and staleness paths use `has_supported_extension` for `.clj`,
-  `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, and `.h`; the public Clojure compatibility
+  `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, and `.py`; the public Clojure compatibility
   walker remains Clojure-only.
   - Skipped directories (`should_skip_dir`): `.git`, `node_modules`, `vendor`,
     `target`, `build`, `.shadow-cljs`, `.cpcache`, `.idea`, `.vscode`,
-    `.lsp`. `.clj-kondo` is deliberately walked: real repos keep `.clj`
-    config/export files inside it.
+    `.lsp`, `.code-lens`, plus Python caches and environments: `__pycache__`,
+    `.venv`, `venv`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`,
+    `.ruff_cache`, `.eggs`, and `site-packages`. `.clj-kondo` is deliberately
+    walked: real repos keep `.clj` config/export files inside it.
   - A `d_type` fast path skips non-directories/non-source entries without
     calling `stat`.
   - Paths are built in a single reusable `PathBuffer` with mark/restore
@@ -643,6 +648,75 @@ Entry points are `code_lens_c_parser_new` / `_delete`,
 aggregates, calls, member accesses, walking, staleness, incremental indexing,
 kind filters, and context.
 
+### Python
+
+Python parsing uses the pinned tree-sitter-python grammar (parser plus its
+external scanner). A reusable `CodeLensPythonParser` owns one `TSParser`, the
+repository root (set by `code_lens_source_parser_new(repo_root)` through
+`code_lens_python_parser_set_repo_root`), and a heap-backed memo of which
+directories hold `__init__.py`.
+
+**Module names** (`code_lens_python_module_name`) follow import semantics
+without running Python: walk up from the file's directory while each
+directory contains `__init__.py` (never above the repository root), so
+`backend/app/models.py` is `app.models` when only `app/` is a package. A file
+outside any regular package (scripts, PEP 420 namespace packages) uses its
+repository-relative path with a leading `src/` component stripped, and a file
+outside the root falls back to its stem. `__init__.py` names its package.
+Because adding or removing an `__init__.py` renames every module below it,
+`repo_diff_changes_python_packages` sends such a diff to a full rebuild even
+under `CODE_LENS_INCREMENTAL=force`.
+
+**Representation.** `File.namespace` is the dotted module. Module-level
+definitions (`function`, `class`, `variable`, `typedef` for `type X = ...`)
+use the module as `Symbol.namespace`; class members (`method`, `constructor`
+for `__init__`, `field` for class-level and `self.x = ...` assignments,
+nested classes) use `module.Class`. `test` covers `test_*` functions and
+`test*` methods of `Test*`/`*TestCase` classes. Docstrings are cleaned
+`inspect.cleandoc`-style; a string statement after a module or class
+assignment documents that attribute. Functions store their full text with
+decorators; classes store only their header plus ` ...`; multi-line
+assignments keep their first line plus ` ...`. `import a.b [as x]` becomes
+`Alias(a.b, a.b|x)`; `from m import n [as k]` (relative imports resolved
+against the current package) becomes `Referred(m, n)` and wildcard imports
+`Referred(m, ':all')`.
+
+**Resolution** runs in three passes over one tree: a module prescan binds
+module-level names and imports, a declaration pass emits symbols and records
+classes (with their first resolvable base) and member types, and a reference
+walk keeps a scope stack. Function scopes are prescanned for bindings
+(parameters, assignment/`for`/`with`/`except` targets, nested definitions,
+imports; `global` wins) at statement level only; walrus targets bind as the
+walk reaches them. Class scopes are visible only to their own body, matching
+Python. Identifier loads emit references only when they resolve to a module
+definition (target: module), class-body definition (target: class), or
+from-import (base: the original imported name; target: the source module);
+locals, builtins, and unresolved names are skipped unless a wildcard import
+could supply them (empty target). Every `obj.attr` emits a reference whose
+target comes from the receiver: `self`/`cls` (the enclosing class, walking
+local bases and falling back to the first external base), `super()`, import
+chains (`os.path.join` targets `os.path`; pure module components are not
+references), from-imported names (`m.n`), and locals, parameters, or fields
+typed by annotation (`Optional[...]`, `X | None` unwrap) or constructor
+assignment. Untyped receivers keep an empty target, as in Java. Names
+re-exported through a package `__init__.py` resolve to the re-exporting
+package, not the defining module.
+
+**Performance and safety.** Node kinds and field names resolve once to the
+grammar's numeric symbol/field ids (`init_python_ids`), so hot paths compare
+integers. Pooled tree cursors measured slower than indexed child access and
+are not used. The expression walkers stop descending past `PY_MAX_DEPTH`
+(512) levels so pathological files cannot exhaust a parse worker's 512 KB
+stack; ASan builds need `CODE_LENS_INDEX_THREADS=1` on deeply nested inputs
+because sanitizer frames are roughly 10x larger.
+
+Entry points are `code_lens_python_parser_new` / `_delete` / `_set_repo_root`,
+`code_lens_parse_python_source_with_parser`, `code_lens_parse_python_source`,
+and `code_lens_python_module_name`. `tests/test_python_support.c` covers module
+naming, definitions, docstrings, imports, receiver resolution, scoping,
+error tolerance, deep nesting, walking/skip directories, context, and the
+`__init__.py` incremental fallback.
+
 ## 10. Database layer and schema
 
 ### Connection handling
@@ -760,7 +834,7 @@ known, and ordinary `:foo/bar` stores `foo` verbatim.
 `File.size`, `File.mtimeSec`, and `File.mtimeNsec` are a best-effort source
 snapshot recorded at index time. `list`, `query`, and `context` use it to
 warn when indexed files are missing/changed and when new supported Clojure,
-Java, or C source files exist outside the index.
+Java, C, or Python source files exist outside the index.
 
 Plain indexes: `idx_symbol_name` on `Symbol(name)`, `idx_term_text` (unique)
 on `Term(text)`, `idx_ref_symbol_base` on `RefData(symbolBaseTerm)` (the
@@ -948,7 +1022,7 @@ single-threaded and ordered.
     rule); entry chunks never move once published, so a claimed entry can be
     used without the lock.
   - Each worker owns a `CodeLensSourceParser` containing reusable Clojure,
-    Java, and C parsers and, implicitly, its own thread-local arena; allocation
+    Java, C, and Python parsers and, implicitly, its own thread-local arena; allocation
     requires no locking.
   - Workers claim the next unclaimed entry under the mutex (cond-waiting
     until the walker publishes more paths or finishes), parse (read or map
@@ -975,7 +1049,7 @@ with the project's own pipe renderer (see
 
 Explicit CLI and public-API `list`, `query`, and `context` calls run
 `check_repo_staleness` before returning indexed data. The checker reads `File`
-rows, stats each indexed path, walks the current repo for supported Clojure, Java, and C files, and
+rows, stats each indexed path, walks the current repo for supported Clojure, Java, C, and Python files, and
 reports the elapsed time in a leading `note:` or `warning:` line. These direct
 reads return stale results with the warning; `sql` skips the check and remains
 raw read-only DB access.
@@ -1136,8 +1210,9 @@ Usage:
   exits 2.
 - `version` prints `0.1.0-dev` (`CODE_LENS_VERSION`). `version --deps` adds
   `sqlite <version>`, `tree-sitter-clojure abi=<n> symbols=<n>`,
-  `tree-sitter-java abi=<n> symbols=<n>`, and
-  `tree-sitter-c abi=<n> symbols=<n>` lines.
+  `tree-sitter-java abi=<n> symbols=<n>`,
+  `tree-sitter-c abi=<n> symbols=<n>`, and
+  `tree-sitter-python abi=<n> symbols=<n>` lines.
 - `index` requires `--repo <path>` (`--path` is accepted as a legacy
   synonym); success prints exactly
   `indexed <path>: <N> files, <N> symbols, <N> references, <N> keywords, <N> aliases in <T>s (git <B>/<N>)`
@@ -1230,8 +1305,9 @@ Harness mechanics:
   the test `main` while linking the entire application and vendor objects.
 - `tests/test_main.c` checks: `CODE_LENS_C_STANDARD == "ISO C23"`, a
   non-empty `CODE_LENS_VERSION`, a non-empty SQLite version string, and
-  non-zero tree-sitter Clojure, Java, and C ABI versions and symbol counts;
+  non-zero tree-sitter Clojure, Java, C, and Python ABI versions and symbol counts;
   then calls `test_clojure_parser()`, `test_java_support()`, `test_c_support()`,
+  `test_python_support()`,
   `test_index_readback()`, and
   `test_context_alias_resolution()`.
 - `tests/test_clojure_parser.c` parses an inline Clojure fixture string (no
@@ -1256,6 +1332,14 @@ Harness mechanics:
   member references. Its end-to-end fixture verifies `.c`/`.h` walking,
   `struct` filtering, global/static/member context, C-file staleness, and an
   incremental source addition.
+- `tests/test_python_support.c` checks module naming against real
+  `__init__.py` trees (package chains, `src/` stripping, out-of-root stems),
+  parses an inline fixture for kinds, namespaces, docstrings, Alias/Referred
+  rows, and receiver resolution (imports, `self`, `super()`, inheritance,
+  annotations, constructor locals, walrus, builtins/locals skipped), proves
+  syntax-error recovery and bounded deep nesting, and indexes a fixture repo
+  for `.venv`/`__pycache__` skipping, class/context queries, the forced
+  full rebuild after adding `__init__.py`, and an incremental Python edit.
 - `test_index_readback` generates a fixture repo (12 files, >2048 symbols,
   >131072 references) in a temp directory with an isolated
   `CODE_LENS_HOME`, indexes it, and verifies through the public API:
@@ -1327,8 +1411,8 @@ changes whose median regresses beyond noise (>2% is the working threshold).
 `scripts/mcp-smoke.sh` is the pre-commit end-to-end gate: it drives
 `build/code-lens mcp` (override with `CODE_LENS_BIN`) over newline-delimited
 JSON-RPC against the committed `tests/fixtures/mcp-smoke` mixed
-Clojure/Java/C fixture. It covers initialize, tools/list, default/descendant
-repository resolution, and Clojure, Java, and C query/context and SQL. It
+Clojure/Java/C/Python fixture. It covers initialize, tools/list, default/descendant
+repository resolution, and Clojure, Java, C, and Python query/context and SQL. It
 asserts change-insensitive semantic facts (a known symbol resolves to a known
 path and `sql` sees the expected `Symbol` count) and verifies that cache and
 freshness details are absent from MCP metadata. Run it before every commit

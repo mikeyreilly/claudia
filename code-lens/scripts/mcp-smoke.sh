@@ -42,6 +42,9 @@ requests() {
     printf '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query","arguments":{"repo":"%s","query":"Counter","kind":"struct"}}}\n' "$worktree"
     printf '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"context","arguments":{"repo":"%s","name":"counter_add"}}}\n' "$worktree"
     printf '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"context","arguments":{"repo":"%s","name":"value"}}}\n' "$worktree"
+    printf '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"query","arguments":{"repo":"%s","query":"Salutation","kind":"class"}}}\n' "$worktree"
+    printf '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"context","arguments":{"repo":"%s","name":"Salutation.salute"}}}\n' "$worktree"
+    printf '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"context","arguments":{"repo":"%s","name":"format_salutation"}}}\n' "$worktree"
     printf '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"sql","arguments":{"repo":"%s","query":"SELECT COUNT(*) FROM Symbol"}}}\n' "$worktree"
     # arguments serialized BEFORE name (legal JSON member order), with a
     # \uXXXX escape in the argument: dispatch must still pick params.name.
@@ -111,8 +114,13 @@ assert_response_contains 13 'Counter|struct|' "C struct query"
 assert_response_contains 14 'counter_add|function|' "C context definition"
 assert_response_contains 14 'src/smoke/c/c_app.c' "C external call site"
 assert_response_contains 15 'counter->value -> Counter' "C member call site"
+assert_response_contains 16 'Salutation|class|smoke_py.greeting' "Python class query"
+assert_response_contains 17 'salute|method|smoke_py.greeting.Salutation' "Python context definition"
+assert_response_contains 17 's.salute -> smoke_py.greeting.Salutation' "Python typed receiver call site"
+assert_response_contains 18 'g.format_salutation -> smoke_py.greeting' "Python module alias call site"
+assert_response_contains 18 'src/smoke_py/greeting.py' "Python same-module call site"
 assert_response_contains 7 "repo: $worktree\\n" "sql repo disclosure"
-assert_response_contains 7 'COUNT(*)\n16' "mixed-language sql count"
+assert_response_contains 7 'COUNT(*)\n20' "mixed-language sql count"
 assert_response_contains 10 'format-greeting|function|smoke.util' "arguments-before-name dispatch"
 
 if [ "$failures" -gt 0 ]; then
