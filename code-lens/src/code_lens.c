@@ -12124,6 +12124,981 @@ int code_lens_parse_python_source(const char *repo_root,
     return rc;
 }
 
+/* TypeScript parser (syntax-only; deliberately no compiler or tsconfig). */
+
+static char *alloc_printf(const char *format, ...);
+
+#define TYPESCRIPT_MAX_DEPTH 128U
+
+enum {
+    TSK_NONE, TSK_PROGRAM, TSK_BLOCK, TSK_IDENTIFIER, TSK_TYPE_IDENTIFIER,
+    TSK_PROPERTY, TSK_PRIVATE_PROPERTY, TSK_SHORTHAND, TSK_SHORTHAND_PATTERN,
+    TSK_STRING, TSK_COMMENT, TSK_IMPORT, TSK_IMPORT_CLAUSE, TSK_IMPORT_SPECIFIER,
+    TSK_NAMESPACE_IMPORT, TSK_IMPORT_REQUIRE, TSK_IMPORT_ALIAS,
+    TSK_EXPORT, TSK_EXPORT_SPECIFIER, TSK_AMBIENT,
+    TSK_FUNCTION, TSK_FUNCTION_SIGNATURE, TSK_FUNCTION_EXPRESSION,
+    TSK_GENERATOR, TSK_GENERATOR_EXPRESSION, TSK_ARROW,
+    TSK_CLASS, TSK_CLASS_EXPRESSION, TSK_ABSTRACT_CLASS, TSK_INTERFACE,
+    TSK_TYPE_ALIAS, TSK_ENUM, TSK_ENUM_BODY, TSK_ENUM_ASSIGNMENT,
+    TSK_NAMESPACE, TSK_MODULE, TSK_VARIABLE, TSK_LEXICAL, TSK_VAR_STATEMENT,
+    TSK_METHOD, TSK_METHOD_SIGNATURE, TSK_ABSTRACT_METHOD,
+    TSK_FIELD, TSK_PROPERTY_SIGNATURE, TSK_REQUIRED_PARAMETER, TSK_OPTIONAL_PARAMETER,
+    TSK_TYPE_PARAMETER, TSK_TYPE_ANNOTATION, TSK_GENERIC_TYPE,
+    TSK_MEMBER, TSK_NESTED_IDENTIFIER, TSK_NESTED_TYPE, TSK_NEW, TSK_THIS,
+    TSK_PAIR_PATTERN, TSK_ASSIGNMENT_PATTERN, TSK_REST_PATTERN,
+    TSK_ARRAY_PATTERN, TSK_OBJECT_PATTERN, TSK_CATCH, TSK_FOR_IN, TSK_FOR,
+    TSK_FUNCTION_TYPE, TSK_CONSTRUCTOR_TYPE, TSK_CONSTRUCT_SIGNATURE,
+    TSK_LABEL, TSK_BREAK, TSK_CONTINUE, TSK_COUNT
+};
+static const char *const typescript_kind_names[TSK_COUNT] = {
+    "", "program", "statement_block", "identifier", "type_identifier",
+    "property_identifier", "private_property_identifier", "shorthand_property_identifier",
+    "shorthand_property_identifier_pattern", "string", "comment", "import_statement",
+    "import_clause", "import_specifier", "namespace_import", "import_require_clause", "import_alias",
+    "export_statement", "export_specifier", "ambient_declaration",
+    "function_declaration", "function_signature", "function_expression",
+    "generator_function_declaration", "generator_function", "arrow_function",
+    "class_declaration", "class", "abstract_class_declaration", "interface_declaration",
+    "type_alias_declaration", "enum_declaration", "enum_body", "enum_assignment",
+    "internal_module", "module", "variable_declarator", "lexical_declaration", "variable_declaration",
+    "method_definition", "method_signature", "abstract_method_signature",
+    "public_field_definition", "property_signature", "required_parameter", "optional_parameter",
+    "type_parameter", "type_annotation", "generic_type", "member_expression",
+    "nested_identifier", "nested_type_identifier", "new_expression", "this",
+    "pair_pattern", "assignment_pattern", "rest_pattern", "array_pattern", "object_pattern",
+    "catch_clause", "for_in_statement", "for_statement", "function_type", "constructor_type",
+    "construct_signature", "labeled_statement", "break_statement", "continue_statement"
+};
+enum {
+    TSF_NAME, TSF_BODY, TSF_TYPE, TSF_VALUE, TSF_PARAMETERS, TSF_PARAMETER,
+    TSF_PATTERN, TSF_OBJECT, TSF_PROPERTY, TSF_CONSTRUCTOR, TSF_SOURCE,
+    TSF_ALIAS, TSF_DECLARATION, TSF_LEFT, TSF_MODULE, TSF_COUNT
+};
+static const char *const typescript_field_names[TSF_COUNT] = {
+    "name", "body", "type", "value", "parameters", "parameter", "pattern",
+    "object", "property", "constructor", "source", "alias", "declaration", "left", "module"
+};
+static TshIds typescript_ids;
+static pthread_once_t typescript_ids_once = PTHREAD_ONCE_INIT;
+
+static void init_typescript_ids(void)
+{
+    typescript_ids.ok = tsh_ids_init(&typescript_ids, tree_sitter_typescript(),
+                                    typescript_kind_names, TSK_COUNT,
+                                    typescript_field_names, TSF_COUNT, true);
+}
+
+static uint32_t typescript_kind(TSNode node)
+{
+    return tsh_kind(&typescript_ids, node);
+}
+
+static TSNode typescript_field(TSNode node, uint32_t field)
+{
+    return tsh_field(&typescript_ids, node, field);
+}
+
+struct CodeLensTypeScriptParser {
+    TSParser *parser;
+    char *repo_root;
+};
+
+typedef struct {
+    const char *name;
+    const char *original;
+    const char *target;
+    const char *receiver;
+    TSNode annotation;
+    TSNode value;
+    bool local;
+    bool module;
+} TypeScriptBinding;
+
+typedef struct {
+    const char *source;
+    size_t source_len;
+    CodeLensSourceFile *file;
+    CodeLensTypeScriptParser *parser;
+    ScopeIndex scopes;
+    TypeScriptBinding *bindings;
+    size_t binding_count;
+    size_t binding_capacity;
+    ParseMap tokens; /* declaration byte -> present */
+    ParseMap members; /* owner target + name -> binding index */
+    ParseMap owners; /* declaration byte -> binding index */
+} TypeScriptContext;
+
+/* Lexical normalization also works for nonexistent files and synthetic API
+ * paths; never realpath a source just to determine its module identity. */
+static char *typescript_normalize_path(const char *path)
+{
+    size_t len = strlen(path);
+    char *out = code_lens_alloc(len + 2U);
+    size_t *starts = malloc((len + 1U) * sizeof(*starts));
+    size_t used = 0U;
+    size_t count = 0U;
+    size_t at = 0U;
+    bool absolute = path[0] == '/' || path[0] == '\\';
+
+    if ((out == nullptr) || (starts == nullptr)) {
+        free(starts);
+        return nullptr;
+    }
+    if (absolute) {
+        out[used++] = '/';
+    }
+    while (at < len) {
+        size_t start;
+        size_t part;
+        while ((at < len) && ((path[at] == '/') || (path[at] == '\\'))) {
+            at++;
+        }
+        start = at;
+        while ((at < len) && (path[at] != '/') && (path[at] != '\\')) {
+            at++;
+        }
+        part = at - start;
+        if ((part == 0U) || ((part == 1U) && (path[start] == '.'))) {
+            continue;
+        }
+        if ((part == 2U) && (path[start] == '.') && (path[start + 1U] == '.') &&
+            (count > 0U) &&
+            !((used - starts[count - 1U] == 2U) &&
+              (memcmp(out + starts[count - 1U], "..", 2U) == 0)) &&
+            !((used - starts[count - 1U] == 2U) && (out[used - 1U] == ':'))) {
+            used = starts[--count];
+            if ((used > 0U) && (out[used - 1U] == '/') && !(absolute && (used == 1U))) {
+                used--;
+            }
+            continue;
+        }
+        if (absolute && (part == 2U) && (memcmp(path + start, "..", 2U) == 0)) {
+            continue;
+        }
+        if ((used > 0U) && (out[used - 1U] != '/')) {
+            out[used++] = '/';
+        }
+        starts[count++] = used;
+        (void)memcpy(out + used, path + start, part);
+        used += part;
+    }
+    out[used] = '\0';
+    free(starts);
+    return out;
+}
+
+static const char *typescript_relative_path(const char *root, const char *path)
+{
+    size_t len;
+    if ((root == nullptr) || (root[0] == '\0')) {
+        return nullptr;
+    }
+    len = strlen(root);
+    if ((strncmp(root, path, len) == 0) &&
+        ((root[len - 1U] == '/') || (path[len] == '/'))) {
+        return path + len + (root[len - 1U] == '/' ? 0U : 1U);
+    }
+    return nullptr;
+}
+
+char *code_lens_typescript_module_name(const char *repo_root, const char *file_path)
+{
+    char *path;
+    char *root;
+    const char *relative;
+    const char *base;
+    if (file_path == nullptr) {
+        return nullptr;
+    }
+    path = typescript_normalize_path(file_path);
+    root = repo_root == nullptr ? nullptr : typescript_normalize_path(repo_root);
+    if ((path == nullptr) || ((repo_root != nullptr) && (root == nullptr))) {
+        return nullptr;
+    }
+    relative = typescript_relative_path(root, path);
+    base = strrchr(path, '/');
+    return copy_cstr(relative != nullptr ? relative : (base == nullptr ? path : base + 1U));
+}
+
+static char *typescript_text(const TypeScriptContext *ctx, TSNode node)
+{
+    uint32_t start;
+    uint32_t end;
+    if (ts_node_is_null(node)) {
+        return copy_cstr("");
+    }
+    start = ts_node_start_byte(node);
+    end = ts_node_end_byte(node);
+    if ((end < start) || ((size_t)end > ctx->source_len)) {
+        return nullptr;
+    }
+    if ((typescript_kind(node) == TSK_STRING) && (end > start + 1U)) {
+        start++;
+        end--;
+    }
+    return copy_bytes(ctx->source + start, (size_t)(end - start));
+}
+
+static bool typescript_token(TypeScriptContext *ctx, TSNode node)
+{
+    uint32_t ignored;
+    uint32_t start;
+    if (ts_node_is_null(node)) {
+        return true;
+    }
+    start = ts_node_start_byte(node);
+    return parse_map_find(&ctx->tokens, start, "", 0U, &ignored) ||
+           parse_map_insert(&ctx->tokens, start, "", 0U, 1U);
+}
+
+static bool typescript_bind(TypeScriptContext *ctx, TSNode name, TSNode scope,
+                            TypeScriptBinding binding, uint32_t *out_index)
+{
+    uint32_t index;
+    if (ts_node_is_null(name)) {
+        return true;
+    }
+    binding.name = typescript_text(ctx, name);
+    if ((binding.name == nullptr) || !typescript_token(ctx, name) ||
+        (ctx->binding_count >= UINT32_MAX) ||
+        ((ctx->binding_count == ctx->binding_capacity) &&
+         !parser_heap_grow((void **)&ctx->bindings, &ctx->binding_capacity,
+                           sizeof(*ctx->bindings), 64U))) {
+        return false;
+    }
+    index = (uint32_t)ctx->binding_count;
+    if (!scope_index_add(&ctx->scopes, binding.name, ts_node_start_byte(name),
+                         ts_node_start_byte(scope), ts_node_end_byte(scope), true)) {
+        return false;
+    }
+    ctx->bindings[ctx->binding_count++] = binding;
+    if (out_index != nullptr) {
+        *out_index = index;
+    }
+    return true;
+}
+
+static bool typescript_member(TypeScriptContext *ctx, const char *owner,
+                              const char *name, uint32_t index)
+{
+    char *key = alloc_printf("%s#%s", owner, name);
+    uint32_t *slot;
+    if (key == nullptr) {
+        return false;
+    }
+    slot = parse_map_slot(&ctx->members, 0U, key, strlen(key));
+    if (slot != nullptr) {
+        *slot = index;
+        return true;
+    }
+    return parse_map_insert(&ctx->members, 0U, key, strlen(key), index);
+}
+
+static bool typescript_symbol(TypeScriptContext *ctx, TSNode outer, TSNode definition,
+                              const char *name, const char *kind, const char *ns)
+{
+    CodeLensSymbol *symbol;
+    TSNode body = typescript_field(definition, TSF_BODY);
+    uint32_t start = ts_node_start_byte(outer);
+    uint32_t end = ts_node_is_null(body) ? ts_node_end_byte(outer) : ts_node_start_byte(body);
+    if ((name == nullptr) || (name[0] == '\0')) {
+        return name != nullptr;
+    }
+    if (!reserve_symbols(ctx->file)) {
+        return false;
+    }
+    symbol = &ctx->file->symbols[ctx->file->symbol_count];
+    *symbol = (CodeLensSymbol){.kind = copy_cstr(kind), .name = copy_cstr(name),
+        .namespace_name = copy_cstr(ns), .doc = java_doc_before(ctx->source, start),
+        .source = copy_bytes(ctx->source + start, (size_t)(end - start)),
+        .start_line = ts_node_start_point(outer).row + 1U,
+        .end_line = ts_node_end_point(outer).row + 1U};
+    if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
+        (symbol->namespace_name == nullptr) || (symbol->source == nullptr)) {
+        return false;
+    }
+    ctx->file->symbol_count++;
+    return true;
+}
+
+static bool typescript_source_extension(const char *path)
+{
+    size_t len = strlen(path);
+    return ((len >= 3U) && (strcmp(path + len - 3U, ".ts") == 0)) ||
+           ((len >= 4U) && ((strcmp(path + len - 4U, ".mts") == 0) ||
+                            (strcmp(path + len - 4U, ".cts") == 0)));
+}
+
+static char *typescript_probe(TypeScriptContext *ctx, const char *stem, const char *suffix)
+{
+    char *path = alloc_printf("%s%s", stem, suffix);
+    struct stat st;
+    if ((path == nullptr) ||
+        ((ctx->parser->repo_root != nullptr) &&
+         (typescript_relative_path(ctx->parser->repo_root, path) == nullptr)) ||
+        !typescript_source_extension(path) || (stat(path, &st) != 0) || !S_ISREG(st.st_mode)) {
+        return nullptr;
+    }
+    return code_lens_typescript_module_name(ctx->parser->repo_root, path);
+}
+
+static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
+{
+    static const char *const suffixes[] = {
+        ".ts", ".mts", ".cts", ".d.ts", ".d.mts", ".d.cts",
+        "/index.ts", "/index.mts", "/index.cts", "/index.d.ts", "/index.d.mts", "/index.d.cts"
+    };
+    char *spec = typescript_text(ctx, source);
+    char *file;
+    const char *slash;
+    char *path;
+    char *target;
+    size_t len;
+    if (spec == nullptr) {
+        return nullptr;
+    }
+    if (!((strncmp(spec, "./", 2U) == 0) || (strncmp(spec, "../", 3U) == 0))) {
+        return spec; /* external package: never execute a resolver */
+    }
+    file = typescript_normalize_path(ctx->file->file_path);
+    if (file == nullptr) {
+        return nullptr;
+    }
+    slash = strrchr(file, '/');
+    path = alloc_printf("%.*s/%s", slash == nullptr ? 1 : (int)(slash - file),
+                         slash == nullptr ? "." : file, spec);
+    if (path == nullptr) {
+        return nullptr;
+    }
+    path = typescript_normalize_path(path);
+    if (path == nullptr) {
+        return nullptr;
+    }
+    len = strlen(path);
+    if ((len >= 3U) && (strcmp(path + len - 3U, ".js") == 0)) {
+        char *stem = copy_bytes(path, len - 3U);
+        if (stem == nullptr) {
+            return nullptr;
+        }
+        target = typescript_probe(ctx, stem, ".ts");
+        return target != nullptr ? target : typescript_probe(ctx, stem, ".d.ts");
+    }
+    if ((len >= 4U) && ((strcmp(path + len - 4U, ".mjs") == 0) ||
+                        (strcmp(path + len - 4U, ".cjs") == 0))) {
+        bool esm = path[len - 3U] == 'm';
+        char *stem = copy_bytes(path, len - 4U);
+        if (stem == nullptr) {
+            return nullptr;
+        }
+        target = typescript_probe(ctx, stem, esm ? ".mts" : ".cts");
+        return target != nullptr ? target : typescript_probe(ctx, stem, esm ? ".d.mts" : ".d.cts");
+    }
+    if (typescript_source_extension(path)) {
+        return typescript_probe(ctx, path, "");
+    }
+    /* A suffix other than a TS/JS extension is not an extensionless import. */
+    slash = strrchr(path, '/');
+    if (strchr(slash == nullptr ? path : slash + 1U, '.') != nullptr) {
+        return copy_cstr("");
+    }
+    for (size_t i = 0U; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+        target = typescript_probe(ctx, path, suffixes[i]);
+        if (target != nullptr) {
+            return target;
+        }
+    }
+    return copy_cstr("");
+}
+
+static bool typescript_import_binding(TypeScriptContext *ctx, TSNode local,
+                                     TSNode scope, const char *original,
+                                     const char *target, bool module)
+{
+    TypeScriptBinding binding = {.original = original, .target = target,
+        .module = module, .receiver = module ? target : alloc_printf("%s.%s", target, original)};
+    if (ts_node_is_null(local)) {
+        return true;
+    }
+    if (!typescript_bind(ctx, local, scope, binding, nullptr)) {
+        return false;
+    }
+    if (module) {
+        return add_alias(ctx->file, copy_cstr(target), typescript_text(ctx, local));
+    }
+    return add_referred(ctx->file, copy_cstr(target), copy_cstr(original));
+}
+
+static bool typescript_import_clause(TypeScriptContext *ctx, TSNode node,
+                                    TSNode scope, const char *target, uint32_t depth)
+{
+    uint32_t kind = typescript_kind(node);
+    if (depth >= TYPESCRIPT_MAX_DEPTH) {
+        return true;
+    }
+    if (kind == TSK_IMPORT_SPECIFIER) {
+        TSNode name = typescript_field(node, TSF_NAME);
+        TSNode alias = typescript_field(node, TSF_ALIAS);
+        return typescript_import_binding(ctx, ts_node_is_null(alias) ? name : alias,
+                                         scope, typescript_text(ctx, name), target, false);
+    }
+    if ((kind == TSK_NAMESPACE_IMPORT) || (kind == TSK_IMPORT_REQUIRE)) {
+        return typescript_import_binding(ctx, tsh_named_child(node, 0U), scope, "", target, true);
+    }
+    if (kind == TSK_IDENTIFIER) {
+        return typescript_import_binding(ctx, node, scope, "default", target, false);
+    }
+    for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+        if (!typescript_import_clause(ctx, tsh_named_child(node, i), scope, target, depth + 1U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool typescript_pattern(TypeScriptContext *ctx, TSNode node, TSNode scope,
+                              TypeScriptBinding binding, bool symbols,
+                              TSNode outer, const char *ns, const char *kind, uint32_t depth)
+{
+    uint32_t k = typescript_kind(node);
+    if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH)) {
+        return true;
+    }
+    if ((k == TSK_IDENTIFIER) || (k == TSK_TYPE_IDENTIFIER) ||
+        (k == TSK_SHORTHAND_PATTERN) || (k == TSK_PROPERTY) || (k == TSK_PRIVATE_PROPERTY)) {
+        char *name = typescript_text(ctx, node);
+        return typescript_bind(ctx, node, scope, binding, nullptr) &&
+               (!symbols || typescript_symbol(ctx, outer, outer, name, kind, ns));
+    }
+    if (k == TSK_PAIR_PATTERN) {
+        return typescript_pattern(ctx, typescript_field(node, TSF_VALUE), scope, binding,
+                                  symbols, outer, ns, kind, depth + 1U);
+    }
+    if (k == TSK_ASSIGNMENT_PATTERN) {
+        return typescript_pattern(ctx, typescript_field(node, TSF_LEFT), scope, binding,
+                                  symbols, outer, ns, kind, depth + 1U);
+    }
+    for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+        if (!typescript_pattern(ctx, tsh_named_child(node, i), scope, binding, symbols,
+                                outer, ns, kind, depth + 1U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool typescript_callable(uint32_t kind)
+{
+    return (kind == TSK_FUNCTION) || (kind == TSK_FUNCTION_SIGNATURE) ||
+           (kind == TSK_FUNCTION_EXPRESSION) || (kind == TSK_GENERATOR) ||
+           (kind == TSK_GENERATOR_EXPRESSION) || (kind == TSK_ARROW) ||
+           (kind == TSK_METHOD) || (kind == TSK_METHOD_SIGNATURE) ||
+           (kind == TSK_ABSTRACT_METHOD) || (kind == TSK_FUNCTION_TYPE) ||
+           (kind == TSK_CONSTRUCTOR_TYPE) || (kind == TSK_CONSTRUCT_SIGNATURE);
+}
+
+static bool typescript_classlike(uint32_t kind)
+{
+    return (kind == TSK_CLASS) || (kind == TSK_CLASS_EXPRESSION) ||
+           (kind == TSK_ABSTRACT_CLASS) || (kind == TSK_INTERFACE) || (kind == TSK_ENUM) ||
+           (kind == TSK_NAMESPACE) || (kind == TSK_MODULE);
+}
+
+/* Declarations first, references second: forward types and imported aliases
+ * are visible without a per-use scan or a parent lookup. Scope ranges are
+ * passed down the traversal; declaration tokens have an O(1) exclusion map. */
+static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope,
+                               const char *ns, const char *owner, bool local,
+                               TSNode outer, bool default_export, uint32_t depth)
+{
+    uint32_t kind = typescript_kind(node);
+    TSNode name = typescript_field(node, TSF_NAME);
+    TSNode child_scope = scope;
+    const char *child_ns = ns;
+    const char *child_owner = owner;
+    bool child_local = local;
+    bool wrap = false;
+    if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH) || (kind == TSK_COMMENT)) {
+        return true;
+    }
+    if (ts_node_is_null(outer)) {
+        outer = node;
+    }
+    if (kind == TSK_IMPORT) {
+        TSNode source = typescript_field(node, TSF_SOURCE);
+        if (ts_node_is_null(source)) {
+            for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+                TSNode child = tsh_named_child(node, i);
+                if (typescript_kind(child) == TSK_IMPORT_REQUIRE) {
+                    source = typescript_field(child, TSF_SOURCE);
+                    break;
+                }
+            }
+        }
+        if (!ts_node_is_null(source)) {
+            char *target = typescript_import_target(ctx, source);
+            /* Missing relative imports stay unresolved, never fabricate a
+             * same-file target. Allocation failure is still a parse failure. */
+            if (target == nullptr) {
+                target = copy_cstr("");
+            }
+            if (target == nullptr) {
+                return false;
+            }
+            for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+                TSNode child = tsh_named_child(node, i);
+                if ((typescript_kind(child) == TSK_IMPORT_CLAUSE) ||
+                    (typescript_kind(child) == TSK_IMPORT_REQUIRE)) {
+                    if (!typescript_import_clause(ctx, child, scope, target, depth + 1U)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    if (kind == TSK_IMPORT_ALIAS) {
+        /* TS `import x = N.Y` is a lexical alias, not an ES module import. */
+        return typescript_pattern(ctx, tsh_named_child(node, 0U), scope,
+                                   (TypeScriptBinding){.local = true}, false, outer, ns, "", depth + 1U);
+    }
+    if (kind == TSK_EXPORT) {
+        default_export = false;
+        for (uint32_t i = 0U; i < tsh_count(node); i++) {
+            TSNode token = tsh_child(node, i);
+            uint32_t start = ts_node_start_byte(token);
+            uint32_t end = ts_node_end_byte(token);
+            if ((end - start == 7U) && (memcmp(ctx->source + start, "default", 7U) == 0)) {
+                default_export = true;
+            }
+        }
+        wrap = true;
+    } else if ((kind == TSK_AMBIENT) || (kind == TSK_LEXICAL) || (kind == TSK_VAR_STATEMENT)) {
+        wrap = true;
+    } else if (typescript_classlike(kind) || (kind == TSK_TYPE_ALIAS)) {
+        const char *symbol_kind = kind == TSK_INTERFACE ? "interface" :
+            kind == TSK_TYPE_ALIAS ? "typedef" : kind == TSK_ENUM ? "enum" :
+            ((kind == TSK_NAMESPACE) || (kind == TSK_MODULE)) ? "module" : "class";
+        char *text = ts_node_is_null(name) ? copy_cstr(default_export ? "default" : "") :
+                                            typescript_text(ctx, name);
+        char *target;
+        uint32_t index = SCOPE_INDEX_NONE;
+        if (text == nullptr) {
+            return false;
+        }
+        target = alloc_printf("%s.%s", ns, text);
+        if (target == nullptr) {
+            return false;
+        }
+        if (!ts_node_is_null(name) &&
+            !typescript_bind(ctx, name, scope,
+                (TypeScriptBinding){.target = ns, .receiver = target, .local = local,
+                                    .module = (kind == TSK_NAMESPACE) || (kind == TSK_MODULE)}, &index)) {
+            return false;
+        }
+        if (!typescript_symbol(ctx, outer, node, text, symbol_kind, ns) ||
+            (default_export && (strcmp(text, "default") != 0) &&
+             !typescript_symbol(ctx, outer, node, "default", symbol_kind, ns))) {
+            return false;
+        }
+        if ((index != SCOPE_INDEX_NONE) &&
+            !parse_map_insert(&ctx->owners, ts_node_start_byte(node), "", 0U, index)) {
+            return false;
+        }
+        if (typescript_classlike(kind)) {
+            child_ns = target;
+            child_owner = target;
+            child_scope = node;
+            child_local = false;
+        } else {
+            child_scope = node; /* generic type parameters */
+        }
+    } else if (typescript_callable(kind)) {
+        bool method = (kind == TSK_METHOD) || (kind == TSK_METHOD_SIGNATURE) || (kind == TSK_ABSTRACT_METHOD);
+        bool declaration = (kind == TSK_FUNCTION) || (kind == TSK_FUNCTION_SIGNATURE) || (kind == TSK_GENERATOR);
+        if (!ts_node_is_null(name)) {
+            uint32_t index = SCOPE_INDEX_NONE;
+            char *text = typescript_text(ctx, name);
+            const char *symbol_kind = method && (text != nullptr) && (strcmp(text, "constructor") == 0) ?
+                                      "constructor" : method ? "method" : "function";
+            if ((text == nullptr) || !typescript_bind(ctx, name, declaration || method ? scope : node,
+                (TypeScriptBinding){.target = ns, .local = !method && !declaration}, &index) ||
+                ((method && (owner != nullptr)) && !typescript_member(ctx, owner, text, index)) ||
+                ((method || declaration) && !typescript_symbol(ctx, outer, node, text, symbol_kind, ns)) ||
+                (default_export && !typescript_symbol(ctx, outer, node, "default", "function", ns))) {
+                return false;
+            }
+        } else if (default_export &&
+                   !typescript_symbol(ctx, outer, node, "default", "function", ns)) {
+            return false;
+        }
+        child_scope = node;
+        child_local = true;
+        /* Ordinary nested functions have their own dynamic this; arrows
+         * retain the lexical class receiver. */
+        if (!method && (kind != TSK_ARROW)) {
+            child_owner = nullptr;
+        }
+        if (!typescript_pattern(ctx, typescript_field(node, TSF_PARAMETER), node,
+                               (TypeScriptBinding){.local = true}, false, node, ns, "", depth + 1U)) {
+            return false;
+        }
+    } else if (kind == TSK_VARIABLE) {
+        TSNode value = typescript_field(node, TSF_VALUE);
+        const char *symbol_kind = typescript_callable(typescript_kind(value)) ? "function" : "variable";
+        if (!typescript_pattern(ctx, name, scope,
+            (TypeScriptBinding){.target = local ? nullptr : ns, .local = local,
+                                .annotation = typescript_field(node, TSF_TYPE), .value = value},
+            !local, outer, ns, symbol_kind, depth + 1U)) {
+            return false;
+        }
+    } else if ((kind == TSK_FIELD) || (kind == TSK_PROPERTY_SIGNATURE) || (kind == TSK_ENUM_ASSIGNMENT)) {
+        uint32_t index = SCOPE_INDEX_NONE;
+        char *text = typescript_text(ctx, name);
+        if (!ts_node_is_null(name) &&
+            (!typescript_bind(ctx, name, scope,
+                (TypeScriptBinding){.target = ns, .annotation = typescript_field(node, TSF_TYPE),
+                                    .value = typescript_field(node, TSF_VALUE)}, &index) ||
+             ((owner != nullptr) && !typescript_member(ctx, owner, text, index)) ||
+             !typescript_symbol(ctx, outer, node, text, kind == TSK_ENUM_ASSIGNMENT ? "enum_constant" : "field", ns))) {
+            return false;
+        }
+    } else if (kind == TSK_ENUM_BODY) {
+        for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+            TSNode child = tsh_named_child(node, i);
+            if (typescript_kind(child) == TSK_PROPERTY) {
+                uint32_t index = SCOPE_INDEX_NONE;
+                char *text = typescript_text(ctx, child);
+                if (!typescript_bind(ctx, child, scope, (TypeScriptBinding){.target = ns}, &index) ||
+                    ((owner != nullptr) && !typescript_member(ctx, owner, text, index)) ||
+                    !typescript_symbol(ctx, child, child, text, "enum_constant", ns)) {
+                    return false;
+                }
+            }
+        }
+    } else if ((kind == TSK_REQUIRED_PARAMETER) || (kind == TSK_OPTIONAL_PARAMETER)) {
+        TSNode pattern = typescript_field(node, TSF_PATTERN);
+        if (ts_node_is_null(pattern)) {
+            pattern = name;
+        }
+        if (!typescript_pattern(ctx, pattern, scope,
+            (TypeScriptBinding){.local = true, .annotation = typescript_field(node, TSF_TYPE),
+                                .value = typescript_field(node, TSF_VALUE)}, false, outer, ns, "", depth + 1U)) {
+            return false;
+        }
+    } else if (kind == TSK_TYPE_PARAMETER) {
+        if (!typescript_bind(ctx, name, scope, (TypeScriptBinding){.local = true}, nullptr)) {
+            return false;
+        }
+    } else if ((kind == TSK_CATCH) || (kind == TSK_FOR_IN)) {
+        child_scope = node;
+        if (!typescript_pattern(ctx, typescript_field(node, kind == TSK_CATCH ? TSF_PARAMETER : TSF_LEFT),
+                               node, (TypeScriptBinding){.local = true}, false, node, ns, "", depth + 1U)) {
+            return false;
+        }
+        child_local = true;
+    } else if (kind == TSK_FOR) {
+        child_scope = node;
+        child_local = true;
+    } else if (kind == TSK_BLOCK) {
+        child_scope = node;
+        /* Namespace/module bodies are still module-level declarations. */
+        child_local = local || (owner == nullptr);
+    }
+    for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+        TSNode child = tsh_named_child(node, i);
+        if (!typescript_declare(ctx, child, child_scope, child_ns, child_owner, child_local,
+                                wrap ? outer : (TSNode){0}, wrap && default_export, depth + 1U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static const TypeScriptBinding *typescript_lookup(const TypeScriptContext *ctx, TSNode node)
+{
+    char *name = typescript_text(ctx, node);
+    uint32_t index;
+    if (name == nullptr) {
+        return nullptr;
+    }
+    index = scope_index_find(&ctx->scopes, name, ts_node_start_byte(node));
+    return index == SCOPE_INDEX_NONE ? nullptr : &ctx->bindings[index];
+}
+
+static const char *typescript_receiver(TypeScriptContext *ctx, TSNode node,
+                                      const char *owner, uint32_t depth);
+
+static const char *typescript_binding_receiver(TypeScriptContext *ctx,
+                                              const TypeScriptBinding *binding,
+                                              const char *owner, uint32_t depth)
+{
+    if ((binding == nullptr) || (depth >= TYPESCRIPT_MAX_DEPTH)) {
+        return nullptr;
+    }
+    if (binding->receiver != nullptr) {
+        return binding->receiver;
+    }
+    if (!ts_node_is_null(binding->annotation)) {
+        return typescript_receiver(ctx, binding->annotation, owner, depth + 1U);
+    }
+    if (typescript_kind(binding->value) == TSK_NEW) {
+        return typescript_receiver(ctx, typescript_field(binding->value, TSF_CONSTRUCTOR), owner, depth + 1U);
+    }
+    return nullptr;
+}
+
+static const TypeScriptBinding *typescript_member_lookup(TypeScriptContext *ctx,
+                                                        const char *target, TSNode property)
+{
+    char *name;
+    char *key;
+    uint32_t index;
+    if (target == nullptr) {
+        return nullptr;
+    }
+    name = typescript_text(ctx, property);
+    key = name == nullptr ? nullptr : alloc_printf("%s#%s", target, name);
+    return ((key != nullptr) && parse_map_find(&ctx->members, 0U, key, strlen(key), &index)) ?
+           &ctx->bindings[index] : nullptr;
+}
+
+static const char *typescript_receiver(TypeScriptContext *ctx, TSNode node,
+                                      const char *owner, uint32_t depth)
+{
+    uint32_t kind = typescript_kind(node);
+    if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH)) {
+        return nullptr;
+    }
+    if (kind == TSK_THIS) {
+        return owner;
+    }
+    if ((kind == TSK_IDENTIFIER) || (kind == TSK_TYPE_IDENTIFIER)) {
+        return typescript_binding_receiver(ctx, typescript_lookup(ctx, node), owner, depth + 1U);
+    }
+    if ((kind == TSK_TYPE_ANNOTATION) || (kind == TSK_GENERIC_TYPE)) {
+        TSNode inner = kind == TSK_GENERIC_TYPE ? typescript_field(node, TSF_NAME) : tsh_named_child(node, 0U);
+        return typescript_receiver(ctx, inner, owner, depth + 1U);
+    }
+    if (kind == TSK_NEW) {
+        return typescript_receiver(ctx, typescript_field(node, TSF_CONSTRUCTOR), owner, depth + 1U);
+    }
+    if ((kind == TSK_MEMBER) || (kind == TSK_NESTED_IDENTIFIER) || (kind == TSK_NESTED_TYPE)) {
+        TSNode object = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
+        TSNode property = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
+        const TypeScriptBinding *base = typescript_lookup(ctx, object);
+        const char *target = typescript_receiver(ctx, object, owner, depth + 1U);
+        const TypeScriptBinding *member = typescript_member_lookup(ctx, target, property);
+        if (member != nullptr) {
+            return typescript_binding_receiver(ctx, member, owner, depth + 1U);
+        }
+        if ((base != nullptr) && base->module && (target != nullptr) && (target[0] != '\0')) {
+            char *name = typescript_text(ctx, property);
+            return name == nullptr ? nullptr : alloc_printf("%s.%s", target, name);
+        }
+    }
+    /* Unions, calls, anonymous structural types and arbitrary expressions
+     * do not establish a unique receiver type. */
+    return nullptr;
+}
+
+static bool typescript_reference(TypeScriptContext *ctx, TSNode span, TSNode base_node,
+                                const char *base, const char *target)
+{
+    CodeLensReference *ref;
+    char *symbol = typescript_text(ctx, span);
+    if ((symbol == nullptr) || (base == nullptr) || !reserve_references(ctx->file)) {
+        return false;
+    }
+    ref = &ctx->file->references[ctx->file->reference_count];
+    *ref = (CodeLensReference){.symbol = symbol, .symbol_len = strlen(symbol),
+        .base = copy_cstr(base), .base_len = strlen(base),
+        .target_namespace = copy_cstr(target == nullptr ? "" : target),
+        .line = ts_node_start_point(base_node).row + 1U,
+        .column = ts_node_start_point(base_node).column + 1U,
+        .start_byte = ts_node_start_byte(base_node), .end_byte = ts_node_end_byte(base_node)};
+    if ((ref->base == nullptr) || (ref->target_namespace == nullptr)) {
+        return false;
+    }
+    ref->target_namespace_len = strlen(ref->target_namespace);
+    ref->symbol_hash = term_hash(ref->symbol, ref->symbol_len);
+    ref->base_hash = term_hash(ref->base, ref->base_len);
+    ref->target_namespace_hash = term_hash(ref->target_namespace, ref->target_namespace_len);
+    ctx->file->reference_count++;
+    return true;
+}
+
+static bool typescript_walk(TypeScriptContext *ctx, TSNode node, const char *owner, uint32_t depth)
+{
+    uint32_t kind = typescript_kind(node);
+    uint32_t ignored;
+    if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH) || (kind == TSK_COMMENT) ||
+        (kind == TSK_IMPORT) || (kind == TSK_IMPORT_ALIAS) || (kind == TSK_EXPORT_SPECIFIER) ||
+        (kind == TSK_LABEL && tsh_named_count(node) == 0U) ||
+        (kind == TSK_BREAK) || (kind == TSK_CONTINUE)) {
+        return true;
+    }
+    if (typescript_classlike(kind)) {
+        uint32_t index;
+        if (parse_map_find(&ctx->owners, ts_node_start_byte(node), "", 0U, &index)) {
+            owner = ctx->bindings[index].receiver;
+        } else {
+            owner = nullptr;
+        }
+    } else if (typescript_callable(kind) && (kind != TSK_ARROW) &&
+               (kind != TSK_METHOD) && (kind != TSK_METHOD_SIGNATURE) && (kind != TSK_ABSTRACT_METHOD)) {
+        owner = nullptr;
+    }
+    if ((kind == TSK_MEMBER) || (kind == TSK_NESTED_IDENTIFIER) || (kind == TSK_NESTED_TYPE)) {
+        TSNode object = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
+        TSNode property = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
+        const TypeScriptBinding *base_binding = typescript_lookup(ctx, object);
+        const char *target = typescript_receiver(ctx, object, owner, depth + 1U);
+        const TypeScriptBinding *member = typescript_member_lookup(ctx, target, property);
+        if ((base_binding == nullptr) || !base_binding->module) {
+            /* An annotation/constructor establishes the owning type. Only
+             * recorded local members or imported types justify a target. */
+            if ((member == nullptr) && (target != nullptr) &&
+                (strncmp(target, ctx->file->namespace_name, strlen(ctx->file->namespace_name)) == 0)) {
+                target = nullptr;
+            }
+        }
+        if (!ts_node_is_null(property) &&
+            !typescript_reference(ctx, node, property, typescript_text(ctx, property), target)) {
+            return false;
+        }
+        return typescript_walk(ctx, object, owner, depth + 1U);
+    }
+    if ((kind == TSK_IDENTIFIER) || (kind == TSK_TYPE_IDENTIFIER) || (kind == TSK_SHORTHAND)) {
+        const TypeScriptBinding *binding;
+        if (parse_map_find(&ctx->tokens, ts_node_start_byte(node), "", 0U, &ignored)) {
+            return true;
+        }
+        binding = typescript_lookup(ctx, node);
+        if ((binding != nullptr) && !binding->local && !binding->module) {
+            return typescript_reference(ctx, node, node,
+                                        binding->original == nullptr ? binding->name : binding->original,
+                                        binding->target);
+        }
+        return true;
+    }
+    for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
+        TSNode child = tsh_named_child(node, i);
+        /* A labeled statement's label is not a value use. */
+        if ((kind == TSK_LABEL) && (i == 0U)) {
+            continue;
+        }
+        if (!typescript_walk(ctx, child, owner, depth + 1U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+CodeLensTypeScriptParser *code_lens_typescript_parser_new(void)
+{
+    CodeLensTypeScriptParser *parser;
+    (void)pthread_once(&typescript_ids_once, init_typescript_ids);
+    if (!typescript_ids.ok) {
+        return nullptr;
+    }
+    parser = calloc(1U, sizeof(*parser));
+    if (parser == nullptr) {
+        return nullptr;
+    }
+    parser->parser = ts_parser_new();
+    if ((parser->parser == nullptr) || !ts_parser_set_language(parser->parser, tree_sitter_typescript())) {
+        code_lens_typescript_parser_delete(parser);
+        return nullptr;
+    }
+    return parser;
+}
+
+void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser)
+{
+    if (parser != nullptr) {
+        ts_parser_delete(parser->parser);
+        free(parser->repo_root);
+        free(parser);
+    }
+}
+
+int code_lens_typescript_parser_set_repo_root(CodeLensTypeScriptParser *parser, const char *repo_root)
+{
+    char *normalized;
+    char *copy = nullptr;
+    if (parser == nullptr) {
+        return -1;
+    }
+    if (repo_root != nullptr) {
+        normalized = typescript_normalize_path(repo_root);
+        if (normalized == nullptr) {
+            return -1;
+        }
+        copy = malloc(strlen(normalized) + 1U);
+        if (copy == nullptr) {
+            return -1;
+        }
+        (void)strcpy(copy, normalized);
+    }
+    free(parser->repo_root);
+    parser->repo_root = copy;
+    return 0;
+}
+
+int code_lens_parse_typescript_source_with_parser(CodeLensTypeScriptParser *parser,
+                                                  const char *file_path, const char *source,
+                                                  size_t source_len, CodeLensTypeScriptFile *out_file)
+{
+    TypeScriptContext ctx = {0};
+    TSTree *tree;
+    TSNode root;
+    bool ok;
+    if ((parser == nullptr) || (parser->parser == nullptr) || (file_path == nullptr) ||
+        (source == nullptr) || (out_file == nullptr) || (source_len > UINT32_MAX)) {
+        return -1;
+    }
+    (void)memset(out_file, 0, sizeof(*out_file));
+    out_file->file_path = copy_cstr(file_path);
+    out_file->namespace_name = code_lens_typescript_module_name(parser->repo_root, file_path);
+    if ((out_file->file_path == nullptr) || (out_file->namespace_name == nullptr)) {
+        return -1;
+    }
+    tree = ts_parser_parse_string(parser->parser, nullptr, source, (uint32_t)source_len);
+    if (tree == nullptr) {
+        return -1;
+    }
+    ctx.source = source;
+    ctx.source_len = source_len;
+    ctx.file = out_file;
+    ctx.parser = parser;
+    root = ts_tree_root_node(tree);
+    ok = typescript_declare(&ctx, root, root, out_file->namespace_name, nullptr, false,
+                            (TSNode){0}, false, 0U) &&
+         scope_index_finish(&ctx.scopes) && typescript_walk(&ctx, root, nullptr, 0U);
+    free(ctx.bindings);
+    free(ctx.tokens.slots);
+    free(ctx.members.slots);
+    free(ctx.owners.slots);
+    scope_index_free(&ctx.scopes);
+    ts_tree_delete(tree);
+    return ok ? 0 : -1;
+}
+
+int code_lens_parse_typescript_source(const char *repo_root, const char *file_path,
+                                     const char *source, size_t source_len,
+                                     CodeLensTypeScriptFile *out_file)
+{
+    CodeLensTypeScriptParser *parser = code_lens_typescript_parser_new();
+    int rc;
+    if (parser == nullptr) {
+        return -1;
+    }
+    rc = code_lens_typescript_parser_set_repo_root(parser, repo_root) == 0 ?
+         code_lens_parse_typescript_source_with_parser(parser, file_path, source, source_len, out_file) : -1;
+    code_lens_typescript_parser_delete(parser);
+    return rc;
+}
+
 /* repo_root anchors Python module naming; nullptr (dependency sources)
  * falls back to __init__.py package walks and file stems. */
 static void code_lens_source_parser_delete(CodeLensSourceParser *parser);
