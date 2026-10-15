@@ -15,6 +15,7 @@ int test_clojure_parser(void);
 int test_java_support(void);
 int test_c_support(void);
 int test_python_support(void);
+int test_typescript_support(void);
 int test_git_blobs(void);
 char *code_lens_test_mcp_call_tool(const char *tool_name, const char *args);
 const char *code_lens_test_json_object_value(const char *object, const char *key);
@@ -3087,6 +3088,10 @@ int main(void)
     }
 
     if (test_python_support() != 0) {
+        return 1;
+    }
+
+    if (test_typescript_support() != 0) {
         return 1;
     }
 

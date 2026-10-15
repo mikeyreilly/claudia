@@ -23554,6 +23554,35 @@ static bool append_reference_snippet(StringBuilder *out,
     return true;
 }
 
+/* A TS default import names the exported type (module.default), whereas a
+ * named default declaration keeps its lexical member owner (module.Class).
+ * Expand only the selected definitions' owners to their export aliases. The
+ * paired symbols must describe the very same declaration, not merely share
+ * a line or a method name. This read-time mapping also works for existing
+ * indexes and never requires reparsing unchanged importers after an edit.
+ * Keep reference tables and snippets on exactly the same candidate set. */
+#define CONTEXT_REFERENCE_CANDIDATES_SQL \
+    "WITH selected(namespace, filePath) AS (" \
+    "SELECT DISTINCT s.namespace, s.filePath FROM Symbol s " \
+    "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath " \
+    "WHERE s.repo = ?1 AND s.name = ?2 " \
+    "AND (?3 = '' OR s.namespace = ?3) " \
+    "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) " \
+    "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) " \
+    "AND (?6 = 0 OR (s.kind != 'test' " \
+    "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 " \
+    "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0))), " \
+    "candidates(namespace) AS (SELECT namespace FROM selected UNION " \
+    "SELECT d.namespace || '.default' FROM selected c " \
+    "JOIN Symbol d ON d.repo = ?1 AND d.filePath = c.filePath " \
+    "AND d.name = 'default' AND d.kind IN ('class', 'interface') " \
+    "JOIN Symbol n ON n.repo = d.repo AND n.filePath = d.filePath " \
+    "AND n.name = substr(c.namespace, length(d.namespace) + 2) " \
+    "AND n.namespace = d.namespace AND n.kind = d.kind " \
+    "AND n.startLine = d.startLine AND n.endLine = d.endLine AND n.content = d.content " \
+    "WHERE c.namespace = n.namespace || '.' || n.name " \
+    "AND (substr(c.filePath, -3) = '.ts' OR substr(c.filePath, -4) IN ('.mts', '.cts'))) "
+
 static char *query_reference_snippets(CodeLensDb *db,
                                       const char *repo_name,
                                       const char *symbol_base,
@@ -23563,16 +23592,7 @@ static char *query_reference_snippets(CodeLensDb *db,
                                       int exclude_tests)
 {
     static const char references_sql[] =
-        "WITH candidates(namespace) AS ("
-        "SELECT DISTINCT s.namespace FROM Symbol s "
-        "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath "
-        "WHERE s.repo = ?1 AND s.name = ?2 "
-        "AND (?3 = '' OR s.namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
-        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
-        "AND (?6 = 0 OR (s.kind != 'test' "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0))) "
+        CONTEXT_REFERENCE_CANDIDATES_SQL
         "SELECT f.path, r.lineNumber, r.columnNumber, r.startByte, r.endByte, "
         "r.symbol, r.targetNamespace FROM Ref r JOIN File f ON f.rowid = r.fileId "
         "LEFT JOIN DependencyFile rdf ON rdf.repo = f.repo AND rdf.filePath = f.path "
@@ -27657,16 +27677,7 @@ static char *context_symbol_ex_internal(const char *repo_name,
         "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) "
         "ORDER BY CASE WHEN s.name = ?2 THEN 0 ELSE 1 END, s.name LIMIT 5";
     static const char references_sql[] =
-        "WITH candidates(namespace) AS ("
-        "SELECT DISTINCT s.namespace FROM Symbol s "
-        "LEFT JOIN DependencyFile df ON df.repo = s.repo AND df.filePath = s.filePath "
-        "WHERE s.repo = ?1 AND s.name = ?2 "
-        "AND (?3 = '' OR s.namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
-        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
-        "AND (?6 = 0 OR (s.kind != 'test' "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0))) "
+        CONTEXT_REFERENCE_CANDIDATES_SQL
         "SELECT f.path AS \"r.filePath\", r.lineNumber AS \"r.lineNumber\", "
         "r.columnNumber AS \"r.columnNumber\", r.startByte AS \"r.startByte\", "
         "r.endByte AS \"r.endByte\", r.symbol AS \"r.symbol\", "
@@ -28415,13 +28426,13 @@ static void respond_initialize(const char *id)
 {
     StringBuilder out = {0};
     static const char instructions[] =
-        "code-lens provides code intelligence for Clojure, Java, C, and Python repositories. "
+        "code-lens provides code intelligence for Clojure, Java, C, Python, and TypeScript repositories. "
         "When working with these languages, prefer query and context over text search: "
         "query finds symbol definitions and Clojure :keyword usages by name, while context "
         "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
         "when the target is a Java type. It understands Clojure "
-        ":as/:refer, Java imports and receiver types, C linkage and member types, and Python "
-        "imports with self, constructor, and annotated receivers. Set "
+        ":as/:refer, Java imports and receiver types, C linkage and member types, Python "
+        "imports with self, constructor, and annotated receivers, and TypeScript imports and typed receivers. Set "
         "repo to an absolute repository root or any file or directory inside it; omit repo to "
         "use the directory where the server was started, which may not be your working "
         "directory. sql runs read-only structural queries over the "
