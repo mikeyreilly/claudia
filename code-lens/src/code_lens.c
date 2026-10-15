@@ -2712,8 +2712,11 @@ uint32_t code_lens_python_language_symbol_count(void)
 #define QUERY_PROGRESS_OPS 10000
 /* 15: same schema as 14, but C/Java doc comments are now bounded to the
  * comment directly before a declaration; bumped so indexes carrying the old
- * runaway docs rebuild in full instead of being refreshed incrementally. */
-#define CODE_LENS_INDEX_FORMAT_VERSION 15
+ * runaway docs rebuild in full instead of being refreshed incrementally.
+ * 16: same schema as 15, but Maven resolution now also materializes main JARs
+ * that embed sources (Clojure libraries) when no -sources.jar exists; bumped
+ * so Maven dependency indexes reused from an unchanged pom.xml re-resolve. */
+#define CODE_LENS_INDEX_FORMAT_VERSION 16
 
 static double profile_now_seconds(void);
 
@@ -19041,6 +19044,147 @@ static int dependency_classpath_materialize_jars(MavenDependencySet *set)
     return 0;
 }
 
+static char *maven_main_jar_list_output(const char *repo_path)
+{
+    char *home = code_lens_default_home();
+    char *component = repo_dir_component(repo_path);
+    char *directory = (home == nullptr) || (component == nullptr)
+                          ? nullptr
+                          : alloc_printf("%s/dependencies/projects/%s/classpath", home, component);
+
+    if ((directory == nullptr) || (code_lens_mkdir_p(directory) != 0)) {
+        return nullptr;
+    }
+    return code_lens_join_path(directory, "maven-dependency-list.txt");
+}
+
+/* `dependency:list -DoutputAbsoluteArtifactFilename=true -Dmdep.outputScope=false`
+ * writes `group:artifact:type[:classifier]:version:<absolute path>` per line,
+ * optionally followed by ` -- module <name> [(auto)]`. Coordinates never
+ * contain path separators, so the path starts at the first `:`-preceded `/`
+ * (or `X:\` / `X:/` drive prefix on Windows). Header and blank lines have no
+ * such path and are ignored. */
+static int maven_list_line_callback(const char *line, void *ctx)
+{
+    const char *module_suffix = strstr(line, " -- module ");
+    size_t end = module_suffix == nullptr ? strlen(line) : (size_t)(module_suffix - line);
+
+    for (size_t i = 1U; i < end; i++) {
+        bool posix_path;
+        bool drive_path;
+        char *path;
+
+        if (line[i - 1U] != ':') {
+            continue;
+        }
+        posix_path = line[i] == '/';
+        drive_path = (i + 2U < end) && isalpha((unsigned char)line[i]) &&
+                     (line[i + 1U] == ':') &&
+                     ((line[i + 2U] == '\\') || (line[i + 2U] == '/'));
+        if (!posix_path && !drive_path) {
+            continue;
+        }
+        path = copy_bytes(line + i, end - i);
+        return path == nullptr ? -1 : dependency_classpath_jar_callback(path, ctx);
+    }
+    return 0;
+}
+
+/* copy-dependencies with the sources classifier silently skips artifacts that
+ * publish no -sources.jar. That is the norm for Clojure libraries, which ship
+ * their .clj files inside the main JAR, so a Maven-resolved Clojure project
+ * (including a Leiningen project with a generated pom.xml) would otherwise
+ * lose most of its Clojure dependencies. List the resolved main JARs and
+ * materialize those that carry supported sources and have no sibling
+ * -sources.jar. Best effort: a failure here keeps the source-classifier
+ * result rather than failing the whole resolution. */
+static int maven_add_main_jar_fallbacks(MavenDependencySet *set, const char *command)
+{
+    char *output_path = maven_main_jar_list_output(set->repo_path);
+    char *output_arg = output_path == nullptr ? nullptr
+                                              : alloc_printf("-DoutputFile=%s", output_path);
+    const char *argv[11];
+    CodeLensMappedFile output = {0};
+    DependencyClasspathCollect collect = {.set = set};
+    int process_rc;
+
+    if (output_arg == nullptr) {
+        return -1;
+    }
+    /* appendOutput accumulates every reactor module into one file, so a stale
+     * file from an earlier resolution must not survive. */
+    (void)remove(output_path);
+    if (code_lens_path_exists(output_path)) {
+        return -1;
+    }
+    argv[0] = command;
+    argv[1] = "-B";
+    argv[2] = "-ntp";
+    argv[3] = "org.apache.maven.plugins:maven-dependency-plugin:"
+              MAVEN_DEPENDENCY_PLUGIN_VERSION ":list";
+    argv[4] = "-DincludeScope=test";
+    argv[5] = "-DexcludeReactor=true";
+    argv[6] = "-DoutputAbsoluteArtifactFilename=true";
+    argv[7] = "-Dmdep.outputScope=false";
+    argv[8] = "-DappendOutput=true";
+    argv[9] = output_arg;
+    argv[10] = nullptr;
+    process_rc = run_process_with_timeout(set->repo_path, argv, maven_timeout_ms());
+    if (process_rc != 0) {
+        (void)fprintf(stderr,
+                      "code-lens: warning: Maven dependency listing failed with exit code %d; "
+                      "indexing source-classifier artifacts only\n",
+                      process_rc);
+        return 0;
+    }
+    if (!code_lens_path_exists(output_path)) {
+        return 0; /* no module had dependencies */
+    }
+    if ((code_lens_map_file(output_path, &output) != 0) ||
+        (dependency_classpath_split(output.data,
+                                    output.len,
+                                    '\n',
+                                    maven_list_line_callback,
+                                    &collect) != 0)) {
+        code_lens_mapped_file_free(&output);
+        (void)fprintf(stderr,
+                      "code-lens: warning: Maven dependency listing could not be read; "
+                      "indexing source-classifier artifacts only\n");
+        return 0;
+    }
+    code_lens_mapped_file_free(&output);
+    for (size_t i = 0U; i < set->classpath_jars.count; i++) {
+        const char *jar = set->classpath_jars.paths[i];
+        char *sibling = dependency_sources_sibling(jar);
+        char *repository_root;
+        size_t before = set->artifact_count;
+
+        if (((sibling != nullptr) && code_lens_path_exists(sibling)) ||
+            !zip_has_source_entries(jar)) {
+            continue; /* covered by copy-dependencies, or nothing to index */
+        }
+        repository_root = dependency_repository_root(jar);
+        if ((repository_root == nullptr) ||
+            (maven_repository_jar_add(set, jar, jar, repository_root, false, "test-classpath") !=
+             0)) {
+            return -1;
+        }
+        /* A source-classifier copy whose sibling is absent from the local
+         * repository (unusual repository layouts) must not be indexed twice. */
+        if (set->artifact_count > before) {
+            const char *added = set->artifacts[set->artifact_count - 1U].coordinate;
+
+            for (size_t j = 0U; j < before; j++) {
+                if (strcmp(set->artifacts[j].coordinate, added) == 0) {
+                    set->artifact_count--;
+                    break;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static int dependency_resolution_finish(MavenDependencySet *set)
 {
     if (set->artifact_count > 1U) {
@@ -19104,6 +19248,10 @@ static int maven_resolve_sources(MavenDependencySet *set)
                              maven_source_jar_callback,
                              &collect) != 0) {
         set->message = alloc_printf("Maven resolved sources, but the artifact cache could not be read");
+        return -1;
+    }
+    if (maven_add_main_jar_fallbacks(set, command) != 0) {
+        set->message = alloc_printf("Maven main-JAR source fallbacks could not be prepared");
         return -1;
     }
     return dependency_resolution_finish(set);

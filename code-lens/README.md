@@ -106,7 +106,10 @@ Code-lens detects one root build file in priority order:
 
 1. `pom.xml`: invoke the project's `mvnw`/`mvnw.cmd` when present, otherwise
    `mvn`, and use the pinned Maven Dependency Plugin to copy source JARs for
-   the effective test classpath.
+   the effective test classpath, then list the resolved main JARs so that
+   artifacts publishing no source JAR (typically Clojure libraries, which ship
+   their `.clj` files in the main JAR) fall back to their embedded sources.
+   This also applies to a Leiningen project that has a generated `pom.xml`.
 2. `project.clj`: invoke `lein classpath` and inspect its resolved JARs.
 3. `deps.edn`: invoke `clojure -Spath` and inspect its resolved JARs.
 

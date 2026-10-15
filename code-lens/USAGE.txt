@@ -45,7 +45,8 @@ Dependency sources:
 
   Root build files are detected in priority order: pom.xml uses mvnw/mvnw.cmd
   or Maven on PATH, project.clj uses `lein classpath`, and deps.edn uses
-  `clojure -Spath`. Pass --aliases :dev:reporting to `index` (or MCP aliases:
+  `clojure -Spath`. Maven copies -sources.jar classifiers and falls back to
+  sources embedded in the main JAR for artifacts that publish none. Pass --aliases :dev:reporting to `index` (or MCP aliases:
   ":dev:reporting" on any read tool) to select a tools.deps alias basis; it
   resolves with `clojure -Spath -M:dev:reporting` and aliases are part of the
   dependency cache identity. Direct query/context/sql accepts the option for

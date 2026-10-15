@@ -655,7 +655,14 @@ resolver outage into a code-search outage.
 On a Maven cache miss, `run_process_with_timeout` invokes the wrapper or Maven
 in batch/no-transfer-progress mode and runs the pinned Maven Dependency Plugin's
 `copy-dependencies` goal with the `sources` classifier, test classpath scope,
-reactor exclusion, and repository-layout output. Maven artifacts form a
+reactor exclusion, and repository-layout output. A second, best-effort
+invocation runs the plugin's `list` goal (test scope, reactor exclusion,
+absolute artifact filenames, appended across modules into
+`dependencies/projects/<repo>/classpath/maven-dependency-list.txt`); every
+listed main JAR without a sibling `-sources.jar` that embeds supported source
+files is materialized like a classpath main JAR. That is what picks up Clojure
+libraries, which normally publish no sources classifier. A failed listing only
+warns and keeps the source-classifier result. Maven artifacts form a
 repository-wide reactor union with scope `test-classpath`. Leiningen runs `lein
 classpath`; tools.deps runs `clojure -Spath`; their platform-separated output is
 the resolved artifact set and uses scope `classpath`. Classpath entries prefer
@@ -841,7 +848,7 @@ so headers stay stable regardless of SQLite's default column naming.
 ### Schema
 
 The schema is created by one DDL block (`index_schema_sql`), stamped with
-`PRAGMA user_version = 15` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
+`PRAGMA user_version = 16` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
 tables plus one FTS5 index table and two compatibility views:
 
 | Table | Primary key | Columns |
@@ -1580,6 +1587,8 @@ The condensed list of rules that must survive any change:
   "re-index required" message. Bump the version on any schema change, and
   on any extraction change whose old output an incremental refresh would
   keep in unchanged files (version 15 did this for the doc-comment fix;
+  version 16 for Maven main-JAR source fallbacks, so reused dependency
+  generations re-resolve;
   a stamp mismatch forces the next index to rebuild in full).
 - **Build pragmas.** `journal_mode=OFF`/`synchronous=OFF` apply only to
   staging files published by atomic rename, never to databases opened in

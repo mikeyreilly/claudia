@@ -801,11 +801,69 @@ static char *java_first_row_value(const char *rows)
     return value;
 }
 
+/* A local Maven repository as `dependency:list` reports it: demo-lib has a
+ * sibling -sources.jar (copy-dependencies already covers it, so its main JAR
+ * must be skipped), clj-lib embeds Clojure source in its main JAR and
+ * publishes no sources artifact, and binary-only carries no supported source.
+ * The listing goes to repo/maven-list-fixture.txt for the fake Maven wrapper. */
+static int java_write_maven_main_jar_fixtures(const char *root, const char *repo)
+{
+    char *m2 = code_lens_join_path(root, "m2/repository");
+    char *demo_dir = m2 == nullptr ? nullptr : code_lens_join_path(m2, "org/example/demo-lib/1.0");
+    char *clj_dir = m2 == nullptr ? nullptr : code_lens_join_path(m2, "com/acme/clj-lib/2.0");
+    char *binary_dir =
+        m2 == nullptr ? nullptr : code_lens_join_path(m2, "org/example/binary-only/3.0");
+    char *demo_jar =
+        demo_dir == nullptr ? nullptr : code_lens_join_path(demo_dir, "demo-lib-1.0.jar");
+    char *demo_sources =
+        demo_dir == nullptr ? nullptr : code_lens_join_path(demo_dir, "demo-lib-1.0-sources.jar");
+    char *clj_jar = clj_dir == nullptr ? nullptr : code_lens_join_path(clj_dir, "clj-lib-2.0.jar");
+    char *binary_jar =
+        binary_dir == nullptr ? nullptr : code_lens_join_path(binary_dir, "binary-only-3.0.jar");
+    char listing[4 * PATH_MAX];
+    int written;
+
+    if ((demo_jar == nullptr) || (demo_sources == nullptr) || (clj_jar == nullptr) ||
+        (binary_jar == nullptr) || (code_lens_mkdir_p(demo_dir) != 0) ||
+        (code_lens_mkdir_p(clj_dir) != 0) || (code_lens_mkdir_p(binary_dir) != 0) ||
+        (java_write_source_jar(demo_jar) != 0) || (java_write_source_jar(demo_sources) != 0) ||
+        (java_write_archive_entry(clj_jar,
+                                  "acme/clj_lib.clj",
+                                  "(ns acme.clj-lib)\n(defn embedded-helper [x] x)\n") != 0) ||
+        (java_write_archive_entry(binary_jar, "org/example/Binary.class", "not source") != 0)) {
+        return -1;
+    }
+    written = snprintf(listing,
+                       sizeof(listing),
+                       "\nThe following files have been resolved:\n"
+                       "   org.example:demo-lib:jar:1.0:%s\n"
+                       "   com.acme:clj-lib:jar:2.0:%s -- module acme.clj.lib (auto)\n"
+                       "   org.example:binary-only:jar:3.0:%s\n"
+                       "\n",
+                       demo_jar,
+                       clj_jar,
+                       binary_jar);
+    if ((written < 0) || ((size_t)written >= sizeof(listing))) {
+        return -1;
+    }
+    return java_write_file(repo, "maven-list-fixture.txt", listing);
+}
+
 static int test_maven_dependency_sources(void)
 {
     static const char wrapper[] =
         "#!/bin/sh\n"
         "set -eu\n"
+        "list_out=\n"
+        "for arg in \"$@\"; do\n"
+        "  case \"$arg\" in -DoutputFile=*) list_out=${arg#*=} ;; esac\n"
+        "done\n"
+        "if [ -n \"$list_out\" ]; then\n"
+        "  echo list >> maven-list-invocations.txt\n"
+        "  if [ -f fail-maven-list ]; then exit 43; fi\n"
+        "  cat maven-list-fixture.txt >> \"$list_out\"\n"
+        "  exit 0\n"
+        "fi\n"
         "echo run >> maven-invocations.txt\n"
         "if [ -f fail-maven ]; then exit 42; fi\n"
         "out=\n"
@@ -857,6 +915,7 @@ static int test_maven_dependency_sources(void)
     char *fail_path;
     char *lein_wrapper_path;
     char *lein_count_path;
+    char *list_count_path;
     CodeLensIndexStats stats = {0};
     CodeLensQueryOptions dependency_options = {
         .limit = 10,
@@ -868,6 +927,11 @@ static int test_maven_dependency_sources(void)
         .limit = 10,
         .scope = "dependencies",
         .dependency = "org.other:*",
+    };
+    CodeLensQueryOptions clj_options = {
+        .limit = 10,
+        .scope = "dependencies",
+        .dependency = "com.acme:*",
     };
     char *workspace_query;
     char *dependency_query;
@@ -905,9 +969,11 @@ static int test_maven_dependency_sources(void)
     fail_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "fail-maven");
     lein_wrapper_path = root == nullptr ? nullptr : code_lens_join_path(root, "fake-lein");
     lein_count_path = repo == nullptr ? nullptr : code_lens_join_path(repo, "lein-invocations.txt");
+    list_count_path =
+        repo == nullptr ? nullptr : code_lens_join_path(repo, "maven-list-invocations.txt");
     if ((repo == nullptr) || (home == nullptr) || (src == nullptr) ||
         (wrapper_path == nullptr) || (jar_path == nullptr) || (pom_path == nullptr) ||
-        (count_path == nullptr) || (fail_path == nullptr) ||
+        (count_path == nullptr) || (fail_path == nullptr) || (list_count_path == nullptr) ||
         (lein_wrapper_path == nullptr) || (lein_count_path == nullptr) ||
         (code_lens_mkdir_p(src) != 0) ||
         (code_lens_mkdir_p(home) != 0) ||
@@ -919,6 +985,7 @@ static int test_maven_dependency_sources(void)
         (java_write_file(repo, "mvnw", wrapper) != 0) || (chmod(wrapper_path, 0755) != 0) ||
         (java_write_file(repo, "fail-maven", "transient failure\n") != 0) ||
         (java_write_source_jar(jar_path) != 0) ||
+        (java_write_maven_main_jar_fixtures(root, repo) != 0) ||
         (setenv("CODE_LENS_HOME", home, 1) != 0) ||
         (setenv("CODE_LENS_MAVEN", "1", 1) != 0) ||
         (setenv("CODE_LENS_LEIN_COMMAND", lein_wrapper_path, 1) != 0) ||
@@ -946,12 +1013,28 @@ static int test_maven_dependency_sources(void)
         failed = 1;
         goto done;
     }
-    failed |= java_assert(stats.file_count == 3U,
+    failed |= java_assert(stats.file_count == 4U,
                           "failed Maven status retries without an input edit");
     failed |= java_assert(!code_lens_path_exists(lein_count_path),
                           "mixed pom.xml/project.clj repository uses Maven only");
     failed |= java_assert(java_count_lines(count_path) == 2,
                           "retry invokes Maven and indexes dependency sources");
+    failed |= java_assert(java_count_lines(list_count_path) == 1,
+                          "successful source copy lists main JARs once");
+    rows = code_lens_run_sql(repo,
+                             "SELECT coordinate || '=' || COUNT(*) FROM DependencyArtifact"
+                             " GROUP BY coordinate ORDER BY coordinate");
+    failed |= java_assert((rows != nullptr) &&
+                              (strstr(rows, "\ncom.acme:clj-lib:2.0=1\n") != nullptr) &&
+                              (strstr(rows, "\norg.example:demo-lib:1.0=1\n") != nullptr) &&
+                              (strstr(rows, "binary-only") == nullptr),
+                          "main JAR with embedded sources is indexed once; sources-covered and "
+                          "binary-only main JARs are not");
+    dependency_query = code_lens_query_symbols_ex(repo, "embedded-helper", &clj_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "embedded-helper|function|") != nullptr) &&
+                              (strstr(dependency_query, "com.acme:clj-lib:2.0") != nullptr),
+                          "Clojure source embedded in a Maven main JAR is queryable");
 
     workspace_query = code_lens_query_symbols(repo, "execute", 10);
     failed |= java_assert((workspace_query != nullptr) &&
@@ -1048,6 +1131,24 @@ static int test_maven_dependency_sources(void)
     failed |= java_assert((dependency_query != nullptr) &&
                               (strstr(dependency_query, "org.example:demo-lib:1.0") != nullptr),
                           "dependency remains queryable after Maven refresh");
+
+    if ((java_write_file(repo, "fail-maven-list", "listing failure\n") != 0) ||
+        (java_write_file(repo, "pom.xml", "<project><!-- listing --></project>\n") != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed = 1;
+        goto done;
+    }
+    failed |= java_assert(java_count_lines(count_path) == 6,
+                          "Maven input change re-runs source copy before failed listing");
+    dependency_query =
+        code_lens_query_symbols_ex(repo, "execute", &dependency_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "org.example:demo-lib:1.0") != nullptr),
+                          "failed main-JAR listing keeps source-classifier artifacts");
+    dependency_query = code_lens_query_symbols_ex(repo, "embedded-helper", &clj_options);
+    failed |= java_assert((dependency_query != nullptr) &&
+                              (strstr(dependency_query, "embedded-helper|function|") == nullptr),
+                          "failed main-JAR listing indexes no main-JAR fallbacks");
 
 done:
     if (had_lein_command) (void)setenv("CODE_LENS_LEIN_COMMAND", saved_lein_command, 1);
