@@ -147,6 +147,8 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 /** Agent execution, providers, tools, instructions, and persistent application state. */
 public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
     private final Map<ProviderState.Role, ProviderState> providerStates = new EnumMap<>(ProviderState.Role.class);
+    /** Stored Responses reasoning items an endpoint refused as belonging to another connection. */
+    private final Set<String> rejectedReasoningSignatures = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile boolean runtimeClosed;
     private boolean childRuntime;
     private SubagentManager subagents;
@@ -3085,12 +3087,14 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                             if (block instanceof TextContent text1) {
                                 content.addObject().put("type", "text").put("text", text1.text);
                             } else if (block instanceof ThinkingContent thinking1) {
-                                String signature1 = thinking1.thinkingSignature;
+                                String signature1 = replaysThinkingSignature(assistant, model)
+                                        ? thinking1.thinkingSignature
+                                        : null;
                                 boolean hasSignature = signature1 != null && !signature1.isBlank();
                                 if (!hasSignature) {
-// Anthropic rejects a thinking block without a non-empty opaque signature.
-// Preserve visible reasoning as ordinary context instead of replaying an
-// invalid empty signature from an interrupted or incomplete stream.
+// Anthropic rejects a thinking block without a non-empty opaque signature, and a
+// signature from another api/provider/model is invalid here. Preserve visible
+// reasoning as ordinary context instead of replaying an unusable signature.
                                     if (!thinking1.thinking.isBlank()) {
                                         content.addObject().put("type", "text").put("text", thinking1.thinking);
                                     }
@@ -3794,72 +3798,8 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                 request1.putObject("reasoning").put("effort", reasoning).put("summary", summary);
                 request1.putArray("include").add("reasoning.encrypted_content");
             }
-            ArrayNode input = request1.putArray("input");
-            for (Message message : context.messages) {
-                switch (message) {
-                    case UserMessage user -> {
-                        ObjectNode target = input.addObject().put("role", "user");
-                        ArrayNode content = target.putArray("content");
-                        for (UserContent block : user.content) {
-                            if (block instanceof TextContent text1) {
-                                content.addObject().put("type", "input_text").put("text", text1.text);
-                            } else if (block instanceof ImageContent image) {
-                                content.addObject()
-                                        .put("type", "input_image")
-                                        .put("image_url", "data:" + image.mimeType + ";base64," + image.data);
-                            }
-                        }
-                    }
-                    case AssistantMessage assistant -> {
-                        ObjectNode target = null;
-                        ArrayNode content = null;
-                        for (AssistantContent block : assistant.content) {
-                            if (block instanceof ThinkingContent thinking1 && thinking1.thinkingSignature != null) {
-                                try {
-                                    JsonNode reasoningItem = Json.MAPPER.readTree(thinking1.thinkingSignature);
-                                    if (reasoningItem != null
-                                            && reasoningItem.isObject()
-                                            && reasoningItem.path("type").asText().equals("reasoning")) {
-                                        input.add(reasoningItem);
-                                    }
-                                } catch (IOException ignored) {
-// Signatures from another provider are not OpenAI response items.
-                                }
-                            } else if (block instanceof TextContent text1) {
-                                if (target == null) {
-                                    target = input.addObject().put("role", "assistant");
-                                    content = target.putArray("content");
-                                }
-                                content.addObject().put("type", "output_text").put("text", text1.text);
-                            } else if (block instanceof ToolCall call) {
-                                ObjectNode function = input.addObject().put("type", "function_call");
-                                function.put("call_id", call.id);
-                                function.put("name", call.name);
-                                function.put("arguments", call.arguments.toString());
-                            }
-                        }
-                    }
-                    case ToolResultMessage result -> {
-                        ObjectNode item = input.addObject()
-                                .put("type", "function_call_output")
-                                .put("call_id", result.toolCallId);
-                        if (!hasImage(result.content)) {
-                            item.put("output", text(result));
-                        } else {
-                            ArrayNode parts = item.putArray("output");
-                            for (UserContent block : result.content) {
-                                if (block instanceof TextContent text1) {
-                                    parts.addObject().put("type", "input_text").put("text", text1.text);
-                                } else if (block instanceof ImageContent image) {
-                                    parts.addObject()
-                                            .put("type", "input_image")
-                                            .put("image_url", "data:" + image.mimeType + ";base64," + image.data);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            List<String> replayedReasoning = new ArrayList<>();
+            request1.set("input", openAiResponsesInput(context, model, replayedReasoning));
             if (!context.tools.isEmpty()) {
                 ArrayNode tools = request1.putArray("tools");
                 for (Tool tool : context.tools) {
@@ -3888,11 +3828,8 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                 }
                 headers.put("Authorization", "Bearer " + key);
             }
-            postJsonSse(
-                    providerBaseUrl(model, requestOptions) + "/responses",
-                    headers,
-                    request1,
-                    requestOptions,
+            String responsesUrl = providerBaseUrl(model, requestOptions) + "/responses";
+            SseOperation handler =
                     reader -> {
                         push(stream, new AssistantMessageEvent.Start(output));
                         Map<String, OpenAiResponsesProvider.OutputItem> items = new HashMap<>();
@@ -4087,8 +4024,132 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                             }
                         }
                         throw new IOException("OpenAI Responses stream ended without completion");
-                    });
+                    };
+            try {
+                postJsonSse(responsesUrl, headers, request1, requestOptions, handler);
+            } catch (HttpException error) {
+                if (replayedReasoning.isEmpty() || !isForeignConnectionItemError(error)) {
+                    throw error;
+                }
+                // GitHub Copilot binds encrypted reasoning to the connection that produced it, so
+                // reasoning saved by an earlier process (e.g. a resumed session) is refused. Forget
+                // those items for the rest of this runtime and resend the history without them.
+                rejectedReasoningSignatures.addAll(replayedReasoning);
+                request1.set("input", openAiResponsesInput(context, model, new ArrayList<>()));
+                postJsonSse(responsesUrl, headers, request1, requestOptions, handler);
+            }
         });
+    }
+
+    /**
+     * True when a Responses endpoint refuses replayed items that were produced on another
+     * connection ("input item [ID] does not belong to this connection").
+     */
+    static boolean isForeignConnectionItemError(HttpException error) {
+        return error.status == 400
+                && error.body != null
+                && error.body.contains("does not belong to this connection");
+    }
+
+    /**
+     * Reuses a provider's opaque thinking signature only for the exact model that produced it;
+     * signatures are not portable across APIs, providers, or models.
+     */
+    static boolean replaysThinkingSignature(AssistantMessage assistant, Model model) {
+        return Objects.equals(assistant.api, model.api)
+                && Objects.equals(assistant.provider, model.provider)
+                && Objects.equals(assistant.model, model.id);
+    }
+
+    /**
+     * Builds the Responses {@code input} array. Reasoning items replayed from the history are
+     * appended (by their stored signature) to {@code replayedReasoning}; signatures in
+     * {@link #rejectedReasoningSignatures} are skipped.
+     */
+    private ArrayNode openAiResponsesInput(Context context, Model model, List<String> replayedReasoning) {
+        ArrayNode input = Json.MAPPER.createArrayNode();
+        for (Message message : context.messages) {
+            switch (message) {
+                case UserMessage user -> {
+                    ObjectNode target = input.addObject().put("role", "user");
+                    ArrayNode content = target.putArray("content");
+                    for (UserContent block : user.content) {
+                        if (block instanceof TextContent text1) {
+                            content.addObject().put("type", "input_text").put("text", text1.text);
+                        } else if (block instanceof ImageContent image) {
+                            content.addObject()
+                                    .put("type", "input_image")
+                                    .put("image_url", "data:" + image.mimeType + ";base64," + image.data);
+                        }
+                    }
+                }
+                case AssistantMessage assistant -> {
+                    boolean sameModel = replaysThinkingSignature(assistant, model);
+                    ArrayNode content = null;
+                    for (AssistantContent block : assistant.content) {
+                        String visibleText = null;
+                        if (block instanceof ThinkingContent thinking1) {
+                            String signature = thinking1.thinkingSignature;
+                            if (!sameModel) {
+                                // Another model's reasoning cannot be replayed; keep it as visible context.
+                                visibleText = thinking1.thinking == null || thinking1.thinking.isBlank()
+                                        ? null
+                                        : thinking1.thinking;
+                            } else if (signature != null && !rejectedReasoningSignatures.contains(signature)) {
+                                try {
+                                    JsonNode reasoningItem = Json.MAPPER.readTree(signature);
+                                    if (reasoningItem != null
+                                            && reasoningItem.isObject()
+                                            && reasoningItem.path("type").asText().equals("reasoning")) {
+                                        // Requests use store=false, so the encrypted_content carries the
+                                        // reasoning state and the server item ID is meaningless. GitHub
+                                        // Copilot rejects IDs from another connection.
+                                        ((ObjectNode) reasoningItem).remove("id");
+                                        input.add(reasoningItem);
+                                        replayedReasoning.add(signature);
+                                    }
+                                } catch (IOException ignored) {
+// Signatures from another provider are not OpenAI response items.
+                                }
+                            }
+                        } else if (block instanceof TextContent text1) {
+                            visibleText = text1.text;
+                        } else if (block instanceof ToolCall call) {
+                            ObjectNode function = input.addObject().put("type", "function_call");
+                            function.put("call_id", call.id);
+                            function.put("name", call.name);
+                            function.put("arguments", call.arguments.toString());
+                        }
+                        if (visibleText != null) {
+                            if (content == null) {
+                                content = input.addObject().put("role", "assistant").putArray("content");
+                            }
+                            content.addObject().put("type", "output_text").put("text", visibleText);
+                        }
+                    }
+                }
+                case ToolResultMessage result -> {
+                    ObjectNode item = input.addObject()
+                            .put("type", "function_call_output")
+                            .put("call_id", result.toolCallId);
+                    if (!hasImage(result.content)) {
+                        item.put("output", text(result));
+                    } else {
+                        ArrayNode parts = item.putArray("output");
+                        for (UserContent block : result.content) {
+                            if (block instanceof TextContent text1) {
+                                parts.addObject().put("type", "input_text").put("text", text1.text);
+                            } else if (block instanceof ImageContent image) {
+                                parts.addObject()
+                                        .put("type", "input_image")
+                                        .put("image_url", "data:" + image.mimeType + ";base64," + image.data);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return input;
     }
 
     private void openAiResponsesAppendThinkingDelta(
@@ -4498,7 +4559,7 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                                         parts.addObject().put("text", text1.text);
                                     } else if (block1 instanceof ThinkingContent thinking1) {
                                         ObjectNode part1 = parts.addObject().put("text", thinking1.thinking).put("thought", true);
-                                        if (thinking1.thinkingSignature != null) {
+                                        if (thinking1.thinkingSignature != null && replaysThinkingSignature(assistant, model)) {
                                             part1.put("thoughtSignature", thinking1.thinkingSignature);
                                         }
                                     } else if (block1 instanceof ToolCall call1) {

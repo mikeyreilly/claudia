@@ -2155,6 +2155,7 @@ class ClaudiaOperationsTest {
 			JsonNode input = Json.MAPPER.readTree(request.get()).path("input");
 			assertEquals("reasoning", input.get(0).path("type").asText());
 			assertEquals("opaque", input.get(0).path("encrypted_content").asText());
+			assertTrue(!input.get(0).has("id"), "stored reasoning item IDs must not be replayed");
 			assertEquals("function_call", input.get(1).path("type").asText());
 			assertEquals("call_1", input.get(1).path("call_id").asText());
 			assertEquals("function_call_output", input.get(2).path("type").asText());
@@ -2184,6 +2185,131 @@ class ClaudiaOperationsTest {
 	private static Model withImageInput(Model model) {
 		model.input = new ArrayList<>(List.of("text", "image"));
 		return model;
+	}
+
+	@Test
+	void resendsWithoutReasoningRefusedAsBelongingToAnotherConnection() throws Exception {
+		List<JsonNode> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+		HttpServer server = responsesServer(exchange -> {
+			JsonNode body = Json.MAPPER.readTree(exchange.getRequestBody().readAllBytes());
+			requests.add(body);
+			boolean replaysReasoning = false;
+			for (JsonNode item : body.path("input")) {
+				replaysReasoning |= item.path("type").asText().equals("reasoning");
+			}
+			if (replaysReasoning) {
+				byte[] error = """
+						{"error":{"message":"input item does not belong to this connection","code":""}}"""
+						.getBytes(StandardCharsets.UTF_8);
+				exchange.getResponseHeaders().set("content-type", "application/json");
+				exchange.sendResponseHeaders(400, error.length);
+				exchange.getResponseBody().write(error);
+				return;
+			}
+			writeResponsesSse(
+					exchange,
+					"""
+					data: {"type":"response.output_item.added","item":{"id":"m","type":"message"}}
+
+					data: {"type":"response.output_text.delta","item_id":"m","delta":"ok"}
+
+					data: {"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}
+
+					""");
+		});
+		try {
+			Model model = responsesModel(responsesUrl(server));
+			OpenAiResponsesProvider provider = new OpenAiResponsesProvider(
+					"openai", "OpenAI", List.of(model), List.of("OPENAI_API_KEY"), null,
+					OpenAiResponsesProvider.RequestProfile.STANDARD);
+			Context context = new Context();
+			context.messages.add(ClaudiaOperations.userMessage("earlier question"));
+			AssistantMessage assistant = new AssistantMessage(model.api, model.provider, model.id);
+			assistant.content.add(new ThinkingContent(
+					"thought",
+					"{\"type\":\"reasoning\",\"id\":\"rs_old\",\"summary\":[],\"encrypted_content\":\"old\"}",
+					false));
+			assistant.content.add(new TextContent("earlier answer", null));
+			context.messages.add(assistant);
+			context.messages.add(ClaudiaOperations.userMessage("resumed question"));
+
+			assertEquals("ok", ClaudiaOperations.text(
+					ClaudiaOperations.result(runtime.stream(provider, model, context, responsesOptions("test-key")))));
+			assertEquals(2, requests.size());
+			JsonNode retried = requests.get(1).path("input");
+			assertEquals(3, retried.size(), retried.toString());
+			assertEquals("earlier answer", retried.get(1).path("content").get(0).path("text").asText());
+
+			// The refused item stays excluded, so later turns do not pay for another rejection.
+			assertEquals("ok", ClaudiaOperations.text(
+					ClaudiaOperations.result(runtime.stream(provider, model, context, responsesOptions("test-key")))));
+			assertEquals(3, requests.size());
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void replaysThinkingSignaturesOnlyToTheModelThatProducedThem() throws Exception {
+		List<JsonNode> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			requests.add(Json.MAPPER.readTree(exchange.getRequestBody().readAllBytes()));
+			writeCopilotSse(exchange, """
+					event: message_start
+					data: {"message":{"id":"a","usage":{"input_tokens":1}}}
+
+					event: message_delta
+					data: {"delta":{"stop_reason":"end_turn"}}
+
+					event: message_stop
+					data: {}
+
+					""");
+		});
+		server.start();
+		try {
+			String base = "http://127.0.0.1:" + server.getAddress().getPort();
+			Model claude = copilotModel("claude", "anthropic-messages", base);
+			ClaudiaOperations store = runtime;
+			store.fileCredentialStore(Files.createTempDirectory("copilot-auth").resolve("auth.json"), null);
+			runtime.modifyCredential(
+					store,
+					ClaudiaOperations.GITHUB_COPILOT_PROVIDER_ID,
+					ignored -> new Credential.OAuthCredential(
+							"copilot-token", "github-token", Long.MAX_VALUE, null, Map.of()));
+			ProviderState provider = runtime.providerState(ProviderState.Role.GITHUB_COPILOT);
+			runtime.gitHubCopilotAuth(provider, store, URI.create(base), URI.create(base + "/token"), URI.create(base));
+			runtime.newGitHubCopilotProvider(provider, List.of(claude));
+
+			Context context = new Context();
+			context.messages.add(ClaudiaOperations.userMessage("first"));
+			AssistantMessage gpt = new AssistantMessage(
+					"openai-responses", ClaudiaOperations.GITHUB_COPILOT_PROVIDER_ID, "gpt-test");
+			gpt.content.add(new ThinkingContent(
+					"gpt reasoning", "{\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}", false));
+			gpt.content.add(new TextContent("gpt answer", null));
+			context.messages.add(gpt);
+			context.messages.add(ClaudiaOperations.userMessage("second"));
+			AssistantMessage own = new AssistantMessage(claude.api, claude.provider, claude.id);
+			own.content.add(new ThinkingContent("claude reasoning", "claude-signature", false));
+			own.content.add(new TextContent("claude answer", null));
+			context.messages.add(own);
+			context.messages.add(ClaudiaOperations.userMessage("third"));
+
+			ClaudiaOperations.result(runtime.stream(provider, claude, context, copilotOptions(null)));
+
+			JsonNode messages = requests.get(0).path("messages");
+			JsonNode foreign = messages.get(1).path("content").get(0);
+			assertEquals("text", foreign.path("type").asText(), messages.toString());
+			assertEquals("gpt reasoning", foreign.path("text").asText());
+			assertFalse(foreign.has("signature"));
+			JsonNode native1 = messages.get(3).path("content").get(0);
+			assertEquals("thinking", native1.path("type").asText(), messages.toString());
+			assertEquals("claude-signature", native1.path("signature").asText());
+		} finally {
+			server.stop(0);
+		}
 	}
 
 	@Test
