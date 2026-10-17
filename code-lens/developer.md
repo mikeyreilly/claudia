@@ -655,7 +655,8 @@ Java context lookup.
 ### Dependency source sets
 
 `maven_dependencies_prepare` detects a root build file in priority order:
-`pom.xml`, `project.clj`, then `deps.edn`. Maven projects snapshot every reactor
+`pom.xml`, `project.clj`, then `deps.edn`, then a root Python virtualenv
+(`.venv/pyvenv.cfg` or `venv/pyvenv.cfg`). Maven projects snapshot every reactor
 POM, recursively discovered local parent POM, `mvnw`/`mvnw.cmd`, and every file
 below `.mvn`; Leiningen/tools.deps snapshot their root build file. The legacy
 `MavenProject.rootPom` column stores that selected build path. A repository with
@@ -692,6 +693,24 @@ a sibling `-sources.jar` and otherwise materialize the main JAR. All modes set
 `CODE_LENS_MAVEN_COMMAND`, `CODE_LENS_LEIN_COMMAND`, and
 `CODE_LENS_CLOJURE_COMMAND`. POSIX uses `fork`/`exec` plus timed `waitpid`;
 Windows uses the CRT spawn API plus `WaitForSingleObject`.
+
+Python virtualenvs run nothing. `python_resolve_venv` enumerates each
+`lib/python*/site-packages` (or Windows `Lib/site-packages`), reads every
+`*.dist-info/RECORD`, and indexes the listed `.py` files in place (skipping
+`__pycache__`, paths escaping site-packages, and files another distribution
+already claimed). Each distribution with sources becomes artifact
+`pypi:<name>:<version>` (from the dist-info directory name; scope `venv`,
+`direct = -1`, `sourceJar` the dist-info directory, `sourceRoot` the
+site-packages directory, empty checksum). Editable installs list only a `.pth`
+file and contribute nothing, so the workspace is never indexed twice. The
+inputs are `pyvenv.cfg` plus every RECORD, so installs, upgrades, and removals
+are detected; prior generations are never reused (re-reading RECORDs is
+cheaper than validating a reuse), and the extraction-cache marker checks skip
+`pypi` artifacts. `CODE_LENS_MAVEN=0` disables it like the build-tool modes.
+
+Dependency source files of every kind ride the parallel parse pipeline: the
+stream walker appends them after the workspace walk (`StreamWalker.extra_paths`)
+in artifact order, which matches the sequential path's emission order.
 
 Maven repository layouts supply GAV metadata without filename guessing. The
 built-in ZIP reader validates central/local bounds, rejects encrypted, ZIP64,
@@ -783,10 +802,12 @@ nested classes) use `module.Class`. `test` covers `test_*` functions and
 `inspect.cleandoc`-style; a string statement after a module or class
 assignment documents that attribute. Functions store their full text with
 decorators; classes store only their header plus ` ...`; multi-line
-assignments keep their first line plus ` ...`. `import a.b [as x]` becomes
+assignments keep their first line plus ` ...` (every symbol's
+`startByte`/`endByte` still span the whole definition, decorators included,
+for `source()` read-back). `import a.b [as x]` becomes
 `Alias(a.b, a.b|x)`; `from m import n [as k]` (relative imports resolved
-against the current package) becomes `Referred(m, n)` and wildcard imports
-`Referred(m, ':all')`.
+against the current package) becomes `Referred(m, n, alias n|k)` and wildcard
+imports `Referred(m, ':all', alias '')`.
 
 **Resolution** runs in three passes over one tree: a module prescan binds
 module-level names and imports, a declaration pass emits symbols and records
@@ -805,9 +826,55 @@ local bases and falling back to the first external base), `super()`, import
 chains (`os.path.join` targets `os.path`; pure module components are not
 references), from-imported names (`m.n`), and locals, parameters, or fields
 typed by annotation (`Optional[...]`, `X | None` unwrap) or constructor
-assignment. Untyped receivers keep an empty target, as in Java. Names
-re-exported through a package `__init__.py` resolve to the re-exporting
-package, not the defining module.
+assignment. Untyped receivers keep an empty target, as in Java. Plain
+`from pkg import Name` references still target the re-exporting package rather
+than the defining module; member references are canonicalized by the link pass
+below.
+
+**Type strings.** Annotations resolve to type strings: a dotted class path with
+optional generic arguments (`pkg.Ctx[pkg.Deps]`, unknown arguments as `?`,
+`tuple[X, ...]` as `tuple[X]`), `~N` for the N-th type parameter of the class
+whose members are being declared (PEP 695 `class C[T]`, explicit
+`Generic[...]`/`Protocol[...]`, else the TypeVars used by its bases), and
+expressions appending `|.name` (member type), `|*` (iteration element), `|#`
+(mapping value), or `|@` (subscript item). Builtin and typing/collections
+containers are classified by `type_container_kind`; their members (`append`,
+`get`, ...) stay untargeted. Beyond annotations and constructor calls, locals
+take the type of a typed attribute, name, subscript, or slice they are assigned
+from; loop and comprehension targets take the element type (`enumerate`, `zip`,
+`.items()`/`.keys()`/`.values()` included); methods bind their typed
+parameters during declaration so `self.x = x` records x's annotation; and
+`isinstance(x, T)` narrows x inside the if/elif body (through `and`, `or`, and
+`not`), after `assert isinstance(...)`, and after an exiting
+`if not isinstance(...): return|raise|continue|break` guard.
+
+**Cross-file type facts and the link pass.** Each file also records
+`CodeLensTypeFact`s: CLASS (type-parameter count), BASE (ordinal plus base type
+string, Generic/Protocol markers excluded), MEMBER (every class member with its
+declared type, `~N`, or empty), EXPORT (module-level `from m import n [as k]`),
+and DEFER for each attribute reference whose receiver type crosses files (an
+external or deferred receiver, or a local class whose member walk leaves the
+file). A DEFER row stores the receiver type expression, the member name, and
+the locally resolved fallback target. After every file is emitted,
+`type_link_run` loads all non-DEFER facts, evaluates each DEFER expression
+(following EXPORT re-exports to indexed classes, walking bases depth-first with
+generic argument substitution, and taking container or container-base element
+types), and rewrites the reference's `targetNamespace` to the declaring class,
+the first unindexed base on the walk, or the resolved receiver class; when
+evaluation fails it restores the fallback. The pass re-evaluates the whole
+table on full builds (`type_link_staging`, on the closed staging database
+before publish, skipped when no facts were written) and inside every
+incremental refresh, so a changed file can retarget references in unchanged
+files and the result depends only on the final fact set. Duplicate facts
+resolve by preference (non-empty member types, then lexical order), never by
+row order. On a python repo with a 10K-file virtualenv the pass takes ~0.25 s
+over ~360K facts, dominated by loading the structural facts.
+
+**Virtualenv dependencies.** A root `.venv/pyvenv.cfg` (or `venv/pyvenv.cfg`)
+makes the repository a Python dependency project (see
+[dependency source sets](#dependency-source-sets)). Module names of files below
+a `site-packages`/`dist-packages` directory are computed relative to it, so
+top-level modules (`typing_extensions.py`) and packages name as they import.
 
 **Performance and safety.** Node kinds and field names resolve once to the
 grammar's numeric symbol/field ids through the shared tree-sitter helpers
@@ -893,23 +960,31 @@ so headers stay stable regardless of SQLite's default column naming.
 ### Schema
 
 The schema is created by one DDL block (`index_schema_sql`), stamped with
-`PRAGMA user_version = 16` (`CODE_LENS_INDEX_FORMAT_VERSION`). Twelve row
+`PRAGMA user_version = 18` (`CODE_LENS_INDEX_FORMAT_VERSION`). Thirteen row
 tables plus one FTS5 index table and two compatibility views:
 
 | Table | Primary key | Columns |
 | --- | --- | --- |
 | `Repo` | `path` | `path`, `indexedAt` (TEXT); `fileCount`, `symbolCount`, `referenceCount`, `keywordCount`, `aliasCount` (INTEGER) |
 | `File` | `id` | `id`, `repo`, `path`, `namespace` (TEXT); stat snapshot and per-file Ref/Keyword/Symbol range columns (INTEGER) |
-| `Symbol` | `id` | `id`, `repo`, `name`, `kind`, `namespace`, `filePath` (TEXT); `startLine`, `endLine` (INTEGER); `content`, `doc` (TEXT) |
+| `Symbol` | `id` | `id`, `repo`, `name`, `kind`, `namespace`, `filePath` (TEXT); `startLine`, `endLine` (INTEGER); `content`, `doc` (TEXT); `startByte`, `endByte` (INTEGER) |
 | `Term` | `id` | `id` (INTEGER); `text` (TEXT, unique) |
 | `RefData` | `id` | `id`, `fileId`, `symbolTerm`, `lineNumber`, `columnNumber`, `startByte`, `endByte`, `symbolBaseTerm`, `targetNamespaceTerm` (all INTEGER) |
 | `KeywordData` | `id` | `id`, `fileId`, `keywordTerm`, `lineNumber`, `columnNumber`, `keywordBaseTerm`, `qualifierTerm`, `targetNamespaceTerm` (all INTEGER) |
 | `Alias` | `id` | `id`, `repo`, `filePath`, `namespace`, `alias` (TEXT) |
-| `Referred` | `id` | `id`, `repo`, `filePath`, `namespace`, `symbol` (TEXT) |
+| `Referred` | `id` | `id`, `repo`, `filePath`, `namespace`, `symbol`, `alias` (TEXT) |
 | `MavenProject` | `repo` | `repo`, `rootPom`, `status`, `resolvedAt`, `message` (TEXT) |
 | `MavenInput` | `id` | `id`, `repo`, `path` (TEXT); `size`, `mtimeSec`, `mtimeNsec` (INTEGER) |
 | `DependencyArtifact` | `id` | `id`, `repo`, `coordinate`, `groupId`, `artifactId`, `version`, `scope`, `sourceJar`, `sourceRoot`, `checksum` (TEXT); `direct` (INTEGER, `-1` when Maven did not expose directness) |
 | `DependencyFile` | `id` | `id`, `repo`, `filePath`, `artifactId`, `sourcePath`, `modulePath` (TEXT) |
+| `TypeFact` | (rowid) | `fileId`, `kind`, `num` (INTEGER); `owner`, `name`, `type` (TEXT); indexed by `fileId` |
+
+`TypeFact` holds the per-file cross-file type facts (`CodeLensTypeFact`, see
+[Python](#python)) that the type link pass reads. It is written with ordinary
+prepared statements during emit (also under the raw emitter), keyed by the
+`File` rowid so incremental refreshes delete a changed file's facts before its
+`File` row, and `num` holds the base ordinal, type-parameter count, or, for
+deferred rows, the absolute `RefData` id.
 
 Maven rows are low-volume metadata. `DependencyArtifact` records the resolved
 GAV, copied source JAR, checksum-keyed extraction root, and classpath scope.
@@ -1006,11 +1081,33 @@ retained and every app query still filters `WHERE repo = ?` (via the `File`
 join for `Ref`/`Keyword` rows), even though each database holds exactly one
 repo.
 
-`Referred` records what Clojure `:refer` / `:refer :all` / `(:use …)` and
-Java static imports make visible unqualified in each file — one row per
-referred symbol, with the sentinel symbol `:all` for whole-namespace/type
-referral. `context` reads it to decide which unqualified references can
-actually resolve to the looked-up symbol.
+`Referred` records what Clojure `:refer` / `:refer :all` / `(:use …)`,
+Java static imports, Python `from m import n`, and TypeScript named/default
+imports make visible unqualified in each file — one row per referred
+symbol, with the sentinel symbol `:all` for whole-namespace/type referral.
+`symbol` is the imported (original) name and `alias` the local binding name:
+equal to `symbol` unless renamed (`from m import n as k` records alias `k`;
+`import x from './m'` records symbol `default`, alias `x`), and empty for
+`:all`. Clojure `:rename` is not modelled, so Clojure aliases always equal
+the symbol. `context` reads `symbol` to decide which unqualified references
+can actually resolve to the looked-up symbol; `alias` is informational.
+
+`Symbol.content` is the short indexed form: the whole definition for most
+symbols, but a header ending in `...` / `{ ... }` where a language elides
+bodies (Python classes and multi-line assignments, Java/C/TypeScript type
+bodies). `Symbol.startByte`/`endByte` are the zero-based, end-exclusive byte
+span of the whole definition (the same node `startLine`/`endLine` describe;
+for Python that includes decorators). Full text is never stored: the
+`source(filePath, startByte, endByte [, fallback])` SQL function, registered
+on every current-format read connection by `code_lens_db_open_read`
+(`db_register_read_functions`), maps the file and returns the span at read
+time. It only reads paths that have a `File` row, compares the file's
+size/mtime with that row (a mismatch, unreadable file, or out-of-range span
+is an error, or returns `fallback` when given), returns NULL for NULL
+arguments or an empty span, and truncates results longer than
+`SOURCE_FUNCTION_MAX_BYTES` (256 KiB) with a trailing marker. It works on
+`Ref` spans too. It is registered `SQLITE_DIRECTONLY`, so schema objects
+cannot call it.
 
 ID composition (see `insert_*_row`; `{repo}` is the canonical repo path):
 
@@ -1296,6 +1393,12 @@ CLI/public API but are not MCP tools.
   - `exclude_tests` (MCP `excludeTests`, CLI `--exclude-tests`) applies
     query's test-path predicate (`/test/`, `/tests/`) to all three queries
     and additionally drops `test`-kind definition rows.
+  - `full_source` (MCP `fullSource`, CLI `--full-source`) selects the
+    `CONTEXT_DEFINITIONS_SQL` variant whose `s.content` column is
+    `source(s.filePath, s.startByte, s.endByte, s.content)`: exact
+    definitions render their whole source, falling back to the indexed short
+    form when the file changed since indexing (the staleness note already
+    reports that for direct reads). The Java Class Dossier is unaffected.
   - `namespace` (CLI `--namespace`) and `path` (CLI `--path`) filter the
     definition candidates by namespace and case-insensitive file-path
     substring before reference resolution. They therefore return only
@@ -1332,7 +1435,8 @@ Usage:
   code-lens query --repo <path> [--scope workspace|dependencies|all]
                   [--dependency <gav-glob>] "<terms>"
   code-lens context --repo <path> --name <symbol> [--exclude-tests]
-                     [--namespace <namespace>] [--path <substring>]
+                     [--full-source] [--namespace <namespace>]
+                     [--path <substring>]
   code-lens sql --repo <path> "<query>"
   code-lens mcp
 ```
@@ -1399,7 +1503,7 @@ stdio. Protocol version `2024-11-05`, server name `code-lens`, capabilities
 | Tool | Arguments | Internal operation |
 | --- | --- | --- |
 | `query` | `query` (required), optional absolute `repo` (omitted: server start directory), `limit` (default 10), `excludeTests` (default false), `kind`, `path`, `scope`, `dependency` | prepares the worktree, then calls `query_symbols_ex_internal` with its open database |
-| `context` | `name` (required), optional absolute `repo` (omitted: server start directory), `excludeTests` (default false), `namespace`, `path` | prepares the worktree, then calls `context_symbol_ex_internal` with its open database |
+| `context` | `name` (required), optional absolute `repo` (omitted: server start directory), `excludeTests` (default false), `fullSource` (default false), `namespace`, `path` | prepares the worktree, then calls `context_symbol_ex_internal` with its open database |
 | `sql` | `query` (required), optional absolute `repo` (omitted: server start directory) | prepares the worktree, then calls `query_with_open_repo_db` and prefixes successful results with the resolved repo |
 
 There are exactly three MCP tools: `query`, `context`, and `sql`. Cache
@@ -1634,8 +1738,13 @@ The condensed list of rules that must survive any change:
   on any extraction change whose old output an incremental refresh would
   keep in unchanged files (version 15 did this for the doc-comment fix;
   version 16 for Maven main-JAR source fallbacks, so reused dependency
-  generations re-resolve;
+  generations re-resolve; version 17 for the `TypeFact` table and Python type
+  linking; version 18 for `Symbol.startByte`/`endByte` and `Referred.alias`;
   a stamp mismatch forces the next index to rebuild in full).
+- **Type link determinism.** `type_link_run` re-evaluates every deferred
+  reference from the whole `TypeFact` table before each publish, full or
+  incremental, and its result must depend only on that final fact set (no
+  row-order dependence), or incremental refreshes stop matching full rebuilds.
 - **Build pragmas.** `journal_mode=OFF`/`synchronous=OFF` apply only to
   staging files published by atomic rename, never to databases opened in
   place.

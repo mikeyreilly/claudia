@@ -1558,11 +1558,13 @@ static char *gather_comparison_bundle(const char *repo_id)
         " startByte, endByte FROM Ref ORDER BY filePath, lineNumber, columnNumber, symbol",
         "SELECT keyword, keywordBase, qualifier, targetNamespace, filePath, lineNumber,"
         " columnNumber FROM Keyword ORDER BY filePath, lineNumber, columnNumber, keyword",
-        "SELECT repo, name, kind, namespace, filePath, startLine, endLine, content, doc"
+        "SELECT repo, name, kind, namespace, filePath, startLine, endLine, content, doc,"
+        " startByte, endByte, source(filePath, startByte, endByte)"
         " FROM Symbol ORDER BY filePath, startLine, name",
         "SELECT path, namespace, size FROM File ORDER BY path",
         "SELECT filePath, namespace, alias FROM Alias ORDER BY filePath, namespace, alias",
-        "SELECT filePath, namespace, symbol FROM Referred ORDER BY filePath, namespace, symbol",
+        "SELECT filePath, namespace, symbol, alias FROM Referred"
+        " ORDER BY filePath, namespace, symbol, alias",
     };
     char *parts[8] = {nullptr};
     size_t total = 0U;
@@ -1593,6 +1595,213 @@ static char *gather_comparison_bundle(const char *repo_id)
     }
     bundle[pos] = '\0';
     return bundle;
+}
+
+/* Symbol byte spans and their read-back: source() over Symbol and Ref spans,
+ * the indexed-files-only rule, staleness errors and the fallback form,
+ * truncation, context fullSource, and Referred.alias. */
+static int source_assert(bool condition, const char *message)
+{
+    if (!condition) {
+        (void)fprintf(stderr, "source span test failed: %s\n", message);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_source_spans(void)
+{
+    static const char models[] =
+        "\"\"\"Models.\"\"\"\n"
+        "from typing import Optional as Opt\n"
+        "\n"
+        "\n"
+        "class Result:\n"
+        "    \"\"\"A result.\"\"\"\n"
+        "\n"
+        "    value: int = 0\n"
+        "\n"
+        "    def total(self) -> int:\n"
+        "        return self.value\n"
+        "\n"
+        "\n"
+        "LIMITS = {\n"
+        "    \"a\": 1,\n"
+        "}\n";
+    static const char *const env_names[] = {"CODE_LENS_HOME", "CODE_LENS_MAVEN",
+                                             "CODE_LENS_INCREMENTAL"};
+    char *saved[3] = {nullptr};
+    char root_template[1024];
+    const char *tmp_dir = getenv("TMPDIR");
+    char *root;
+    char *repo_dir = nullptr;
+    char *pkg_dir = nullptr;
+    char *home_dir = nullptr;
+    char *big = nullptr;
+    char *text;
+    char *before;
+    char *after;
+    FILE *out;
+    CodeLensIndexStats stats = {0};
+    CodeLensContextOptions options = {0};
+    int failed = 0;
+    size_t big_len = 300000U;
+
+    for (size_t i = 0U; i < 3U; i++) {
+        const char *value = getenv(env_names[i]);
+        if (value != nullptr) {
+            size_t len = strlen(value) + 1U;
+            saved[i] = code_lens_alloc(len);
+            if (saved[i] == nullptr) {
+                return 1;
+            }
+            (void)memcpy(saved[i], value, len);
+        }
+    }
+    if ((tmp_dir == nullptr) || (tmp_dir[0] == '\0')) {
+        tmp_dir = "/tmp";
+    }
+    (void)snprintf(root_template, sizeof(root_template), "%s/code-lens-spans-XXXXXX", tmp_dir);
+    root = canonical_temp_root(root_template);
+    if (root == nullptr) {
+        return source_assert(false, "mkdtemp");
+    }
+    repo_dir = code_lens_join_path(root, "repo");
+    home_dir = code_lens_join_path(root, "home");
+    pkg_dir = repo_dir == nullptr ? nullptr : code_lens_join_path(repo_dir, "pkg");
+    big = code_lens_alloc(big_len + 64U);
+    if ((repo_dir == nullptr) || (home_dir == nullptr) || (pkg_dir == nullptr) ||
+        (big == nullptr) || (code_lens_mkdir_p(pkg_dir) != 0) ||
+        (code_lens_mkdir_p(home_dir) != 0)) {
+        failed = source_assert(false, "fixture directories");
+        goto done;
+    }
+    (void)memcpy(big, "BIG = \"", 7U);
+    (void)memset(big + 7U, 'x', big_len);
+    (void)memcpy(big + 7U + big_len, "\"\n", 3U);
+    if ((write_text_file(pkg_dir, "models.py", models) != 0) ||
+        (write_text_file(pkg_dir, "big.py", big) != 0) ||
+        (setenv("CODE_LENS_HOME", home_dir, 1) != 0) ||
+        (setenv("CODE_LENS_MAVEN", "0", 1) != 0) ||
+        (unsetenv("CODE_LENS_INCREMENTAL") != 0) ||
+        (code_lens_index_repository(repo_dir, &stats) != 0)) {
+        failed = source_assert(false, "fixture indexing");
+        goto done;
+    }
+
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT content FROM Symbol WHERE name = 'Result'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "class Result: ...") != nullptr) &&
+                                (strstr(text, "return self.value") == nullptr),
+                            "indexed content keeps the short header form");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, startByte, endByte) FROM Symbol"
+                             " WHERE name = 'Result'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "class Result:") != nullptr) &&
+                                (strstr(text, "\"\"\"A result.\"\"\"") != nullptr) &&
+                                (strstr(text, "return self.value") != nullptr) &&
+                                (strstr(text, "LIMITS") == nullptr),
+                            "source() returns exactly the whole class");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, startByte, endByte) FROM Symbol"
+                             " WHERE name = 'LIMITS'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "\"a\": 1,\n}") != nullptr),
+                            "source() returns a multi-line assignment");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, startByte, endByte) = 'value' FROM Ref"
+                             " WHERE symbol = 'self.value'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "\n1") != nullptr),
+                            "source() also reads Ref spans (the member name)");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT length(source(filePath, startByte, endByte)),"
+                             " instr(source(filePath, startByte, endByte), '[truncated')"
+                             " > 0 FROM Symbol WHERE name = 'BIG'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "|1") != nullptr),
+                            "oversized spans are truncated with a marker");
+    text = code_lens_run_sql(repo_dir, "SELECT source('/etc/hosts', 0, 4)");
+    failed |= source_assert((text != nullptr) && (strstr(text, "is not an indexed file") != nullptr),
+                            "source() refuses paths that are not indexed files");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, NULL, endByte) IS NULL, "
+                             "source(filePath, startByte, startByte) IS NULL "
+                             "FROM Symbol WHERE name = 'Result'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "1|1") != nullptr),
+                            "NULL and empty spans yield NULL");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT symbol, alias FROM Referred WHERE namespace = 'typing'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "Optional|Opt") != nullptr),
+                            "Referred.alias records the local import name");
+
+    options.full_source = true;
+    text = code_lens_context_symbol_ex(repo_dir, "Result", &options);
+    failed |= source_assert((text != nullptr) && (strstr(text, "return self.value") != nullptr),
+                            "context fullSource renders the whole definition");
+    options.full_source = false;
+    text = code_lens_context_symbol_ex(repo_dir, "Result", &options);
+    failed |= source_assert((text != nullptr) && (strstr(text, "class Result: ...") != nullptr) &&
+                                (strstr(text, "return self.value") == nullptr),
+                            "context defaults to the indexed short form");
+
+    /* Grow the file without re-indexing: spans no longer describe it. */
+    out = fopen(code_lens_join_path(pkg_dir, "models.py"), "a");
+    if ((out == nullptr) || (fputs("\nEXTRA = 1\n", out) == EOF) || (fclose(out) != 0)) {
+        failed |= source_assert(false, "stale edit");
+        goto done;
+    }
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, startByte, endByte) FROM Symbol"
+                             " WHERE name = 'Result'");
+    failed |= source_assert((text != nullptr) &&
+                                (strstr(text, "changed since it was indexed") != nullptr),
+                            "source() reports a file changed since indexing");
+    text = code_lens_run_sql(repo_dir,
+                             "SELECT source(filePath, startByte, endByte, 'FALLBACK') FROM Symbol"
+                             " WHERE name = 'Result'");
+    failed |= source_assert((text != nullptr) && (strstr(text, "FALLBACK") != nullptr),
+                            "source() fallback form degrades instead of failing");
+    options.full_source = true;
+    text = code_lens_context_symbol_ex(repo_dir, "Result", &options);
+    failed |= source_assert((text != nullptr) && (strstr(text, "class Result: ...") != nullptr),
+                            "context fullSource falls back to the short form for stale files");
+
+    /* Incremental refresh and a full rebuild agree on spans and read-back. */
+    if ((setenv("CODE_LENS_INCREMENTAL", "force", 1) != 0) ||
+        (code_lens_index_repository(repo_dir, &stats) != 0)) {
+        failed |= source_assert(false, "incremental refresh");
+        goto done;
+    }
+    before = code_lens_run_sql(repo_dir,
+                               "SELECT name, startByte, endByte,"
+                               " substr(source(filePath, startByte, endByte), 1, 200),"
+                               " (SELECT group_concat(symbol || '>' || alias) FROM Referred)"
+                               " FROM Symbol ORDER BY filePath, startByte, name");
+    if ((setenv("CODE_LENS_INCREMENTAL", "0", 1) != 0) ||
+        (code_lens_index_repository(repo_dir, &stats) != 0)) {
+        failed |= source_assert(false, "full rebuild");
+        goto done;
+    }
+    after = code_lens_run_sql(repo_dir,
+                              "SELECT name, startByte, endByte,"
+                              " substr(source(filePath, startByte, endByte), 1, 200),"
+                              " (SELECT group_concat(symbol || '>' || alias) FROM Referred)"
+                              " FROM Symbol ORDER BY filePath, startByte, name");
+    failed |= source_assert((before != nullptr) && (after != nullptr) &&
+                                (strcmp(before, after) == 0) &&
+                                (strstr(after, "EXTRA|") != nullptr),
+                            "incremental and full rebuild spans agree");
+
+done:
+    for (size_t i = 0U; i < 3U; i++) {
+        if (saved[i] != nullptr) {
+            (void)setenv(env_names[i], saved[i], 1);
+        } else {
+            (void)unsetenv(env_names[i]);
+        }
+    }
+    if (root != nullptr) {
+        (void)code_lens_remove_tree(root);
+    }
+    return failed;
 }
 
 static int test_incremental_reindex(void)
@@ -3104,6 +3313,10 @@ int main(void)
     }
 
     if (test_query_filters() != 0) {
+        return 1;
+    }
+
+    if (test_source_spans() != 0) {
         return 1;
     }
 

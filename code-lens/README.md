@@ -118,6 +118,15 @@ Code-lens detects one root build file in priority order:
    This also applies to a Leiningen project that has a generated `pom.xml`.
 2. `project.clj`: invoke `lein classpath` and inspect its resolved JARs.
 3. `deps.edn`: invoke `clojure -Spath` and inspect its resolved JARs.
+4. `.venv/pyvenv.cfg` (or `venv/pyvenv.cfg`): read the repository-root Python
+   virtualenv's installed distributions. Nothing is executed: each
+   `site-packages/*.dist-info/RECORD` lists the `.py` files its distribution
+   installed, and those files are indexed in place as artifact
+   `pypi:<name>:<version>` (scope `venv`). Editable installs list only a
+   `.pth` file and add no sources. Module names are relative to
+   `site-packages`. The `pyvenv.cfg` and RECORD files are the snapshotted
+   inputs, so installing, upgrading, or removing a package triggers a
+   rebuild.
 
 Maven applies the project's normal parent POMs, dependency management,
 profiles, mirrors, credentials, proxies, and reactor rules. Leiningen and
@@ -169,7 +178,7 @@ safely publish another current workspace-only generation while resolution
 continues to be retried by `index`.
 
 `CODE_LENS_MAVEN=0` is the global dependency-resolution kill switch for Maven,
-Leiningen, and tools.deps; `CODE_LENS_MAVEN_TIMEOUT_MS` changes the shared
+Leiningen, tools.deps, and Python virtualenvs; `CODE_LENS_MAVEN_TIMEOUT_MS` changes the shared
 120-second timeout. Hermetic installations can override executables with
 `CODE_LENS_MAVEN_COMMAND`, `CODE_LENS_LEIN_COMMAND`, and
 `CODE_LENS_CLOJURE_COMMAND`. Automatic dependency resolution is enabled by
@@ -187,7 +196,7 @@ code-lens remove --repo <path>
 code-lens list
 code-lens query --repo <path> [--aliases :a[:b...]] [--scope workspace|dependencies|all]
                 [--dependency <gav-glob>] "<terms>"
-code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--exclude-tests]
+code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--exclude-tests] [--full-source]
                    [--namespace <namespace>] [--path <substring>]
 code-lens sql --repo <path> [--aliases :a[:b...]] "<query>"
 code-lens mcp
@@ -238,8 +247,12 @@ references include alias-qualified and fully-qualified uses resolved through
 each file's require aliases, plus unqualified uses in files that `:refer` or
 `:use` the symbol in (or define it themselves), and a qualifier in the given
 name (for example `str/join`) is ignored for the lookup. `context` also
-accepts `--exclude-tests` (`excludeTests` over MCP), `--namespace <namespace>`
-(`namespace` over MCP), and `--path <substring>` (`path` over MCP).
+accepts `--exclude-tests` (`excludeTests` over MCP), `--full-source`
+(`fullSource` over MCP; render exact definitions' whole source from their byte
+spans instead of the stored short form, which elides Python class and
+multi-line assignment bodies and Java/C/TypeScript type bodies),
+`--namespace <namespace>` (`namespace` over MCP), and `--path <substring>`
+(`path` over MCP).
 Namespace and path filters normally select matching definition candidates, so only
 references that resolve to those candidates are shown. When workspace lookup
 finds no definition and `path` identifies a workspace calling file, dependency
@@ -260,9 +273,17 @@ definitions use the module as `namespace`, and class members use
 `from m import n` (including relative imports) a `Referred` row. References
 resolve through imports, `self`/`cls`, `super()`, local base classes,
 constructor-assigned locals (`x = Klass()`), and annotations (including
-`Optional[...]` and `X | None`); calls on untyped receivers keep an empty
-target, and names re-exported through a package `__init__.py` resolve to the
-re-exporting package rather than the defining module. Adding or removing an
+`Optional[...]`, `X | None`, and generic arguments such as `Ctx[Deps]`).
+Types also flow through locals assigned from typed attributes or subscripts
+(`rca = loaded.rca`, `first = rows[0]`), loop targets over annotated
+containers (`for x in xs`, `enumerate`, `zip`, `.items()`), and
+`isinstance()` narrowing (if bodies, `assert`, and exiting `if not
+isinstance(...)` guards). Member chains that cross files (`ctx.deps.budget.spend()`),
+re-exports, inherited members, and generic class parameters are resolved by a
+link pass over every file's type facts after parsing, including installed
+Python dependencies. Calls on untyped receivers keep an empty
+target; plain `from pkg import Name` references still target the re-exporting
+package rather than the defining module. Adding or removing an
 `__init__.py` renames modules, so re-indexing then performs a full rebuild.
 For TypeScript, the module namespace is the repository-relative POSIX file path
 **including its extension**, for example `src/models.ts`; members use
@@ -277,7 +298,16 @@ type spellings, C `ptr->field` spellings, and Python `module.func` or
 `Class.method` spellings as well as a bare name.
 `--exclude-tests` drops test-file rows. `sql` runs read-only SQL against the
 chosen repo's database (reads only -- ATTACH, PRAGMA, and writes are denied),
-with output capped at 100 rows.
+with output capped at 100 rows. The index stores definition byte spans
+(`Symbol.startByte`/`endByte`, like `Ref.startByte`/`endByte`) rather than
+full bodies; `source(filePath, startByte, endByte)` reads a span back from an
+indexed file at query time (size/mtime-checked; `source(..., fallback)`
+returns `fallback` instead of an error for changed files; results past 256 KiB
+are truncated). `Referred.alias` records an imported symbol's local name
+(`from m import n as k` gives `symbol` `n`, `alias` `k`). `File`, `Symbol`, and
+`Ref` include resolved dependency sources; filter to workspace files with
+`NOT EXISTS (SELECT 1 FROM DependencyFile d WHERE d.repo = f.repo AND
+d.filePath = f.path)`.
 
 `list`, `query`, and `context` check whether indexed files still match their
 recorded size/mtime snapshot and whether new Clojure, Java, C, Python, or

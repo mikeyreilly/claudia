@@ -111,11 +111,28 @@ static int test_java_parser(void)
                                      "demo.util.Constants") == 0 &&
                                   strcmp(file.referred[1].symbol, ":all") == 0,
                               "wildcard static import mapping");
+        failed |= java_assert(strcmp(file.referred[0].alias, "make") == 0 &&
+                                  strcmp(file.referred[1].alias, "") == 0,
+                              "static import aliases are the member name, empty for wildcards");
     }
 
     app = java_find_symbol(&file, "App", "class");
     run = java_find_symbol(&file, "run", "test");
     failed |= java_assert(app != nullptr, "class definition extracted");
+    if (app != nullptr) {
+        static const char head[] = "public class App extends BaseApp {";
+        static const char tail[] = "record Result(String value) {}\n}";
+        uint32_t span = app->end_byte - app->start_byte;
+
+        failed |= java_assert((app->end_byte > app->start_byte) &&
+                                  (app->end_byte <= sizeof(source) - 1U) &&
+                                  (span >= sizeof(head) - 1U + sizeof(tail) - 1U) &&
+                                  (memcmp(source + app->start_byte, head, sizeof(head) - 1U) == 0) &&
+                                  (memcmp(source + app->end_byte - (sizeof(tail) - 1U), tail,
+                                          sizeof(tail) - 1U) == 0) &&
+                                  (strstr(app->source, "{ ... }") != nullptr),
+                              "header-only class source keeps a byte span over the whole body");
+    }
     failed |= java_assert(java_find_symbol(&file, "App", "constructor") != nullptr,
                           "constructor definition extracted");
     failed |= java_assert(java_find_symbol(&file, "service", "field") != nullptr,

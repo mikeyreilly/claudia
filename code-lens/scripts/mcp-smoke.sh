@@ -102,6 +102,7 @@ for hidden in list_repos remove_repo index stale cache; do
     fi
 done
 assert_response_contains 2 '"required":["query"]' "repo is optional"
+assert_response_contains 2 '"fullSource"' "context advertises fullSource"
 assert_response_contains 4 'format-greeting|function|smoke.util' "default-repo query"
 assert_response_contains 4 'src/smoke/util.clj' "first query file path"
 assert_response_contains 6 'format-greeting|function|smoke.util' "context definition"

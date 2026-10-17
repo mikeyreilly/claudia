@@ -311,7 +311,8 @@ static int compare_parses(const CodeLensClojureFile *a, const CodeLensClojureFil
     }
     for (size_t i = 0U; i < a->referred_count; i++) {
         if (!cstr_eq(a->referred[i].namespace_name, b->referred[i].namespace_name) ||
-            !cstr_eq(a->referred[i].symbol, b->referred[i].symbol)) {
+            !cstr_eq(a->referred[i].symbol, b->referred[i].symbol) ||
+            !cstr_eq(a->referred[i].alias, b->referred[i].alias)) {
             return diff_fail("referred fields", i);
         }
     }
@@ -326,11 +327,15 @@ static int compare_parses(const CodeLensClojureFile *a, const CodeLensClojureFil
         if (!cstr_eq(sa->kind, sb->kind) || !cstr_eq(sa->name, sb->name) ||
             !cstr_eq(sa->namespace_name, sb->namespace_name) ||
             !cstr_eq(sa->source, sb->source) || !cstr_eq(sa->doc, sb->doc) ||
-            (sa->start_line != sb->start_line) || (sa->end_line != sb->end_line)) {
+            (sa->start_line != sb->start_line) || (sa->end_line != sb->end_line) ||
+            (sa->start_byte != sb->start_byte) || (sa->end_byte != sb->end_byte)) {
             (void)fprintf(stderr,
-                          "  a: kind=%s name=%s lines=%u..%u\n  b: kind=%s name=%s lines=%u..%u\n",
+                          "  a: kind=%s name=%s lines=%u..%u bytes=%u..%u\n"
+                          "  b: kind=%s name=%s lines=%u..%u bytes=%u..%u\n",
                           sa->kind, sa->name, sa->start_line, sa->end_line,
-                          sb->kind, sb->name, sb->start_line, sb->end_line);
+                          sa->start_byte, sa->end_byte,
+                          sb->kind, sb->name, sb->start_line, sb->end_line,
+                          sb->start_byte, sb->end_byte);
             return diff_fail("symbol fields", i);
         }
     }

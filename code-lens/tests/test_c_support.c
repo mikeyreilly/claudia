@@ -6,6 +6,18 @@
 #include <string.h>
 #include <unistd.h>
 
+static bool c_span_contains(const char *span, size_t span_len, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+
+    for (size_t i = 0U; i + needle_len <= span_len; i++) {
+        if (memcmp(span + i, needle, needle_len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int c_assert(bool condition, const char *message)
 {
     if (!condition) {
@@ -106,6 +118,18 @@ static int test_c_parser(void)
                        "function-like macro extracted");
     failed |= c_assert(c_find_symbol(&file, "Point", "struct", "") != nullptr,
                        "struct definition extracted");
+    {
+        const CodeLensSymbol *point = c_find_symbol(&file, "Point", "struct", "");
+        static const char body[] = "struct Point { int x, y; }";
+
+        failed |= c_assert((point != nullptr) && (point->end_byte > point->start_byte) &&
+                               (point->end_byte <= sizeof(source) - 1U) &&
+                               (point->end_byte - point->start_byte >= sizeof(body) - 1U) &&
+                               c_span_contains(source + point->start_byte,
+                                               point->end_byte - point->start_byte,
+                                               body),
+                           "struct span covers its whole body");
+    }
     failed |= c_assert(c_find_symbol(&file, "Point", "typedef", "") != nullptr,
                        "typedef definition extracted");
     failed |= c_assert(c_find_symbol(&file, "Value", "union", "") != nullptr,

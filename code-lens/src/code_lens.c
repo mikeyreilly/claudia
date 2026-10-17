@@ -2769,7 +2769,9 @@ uint32_t code_lens_typescript_language_symbol_count(void)
     return ts_language_symbol_count(tree_sitter_typescript());
 }
 
-#define CODE_LENS_INDEX_FORMAT_VERSION 16
+/* 18 added Symbol.startByte/endByte (full-definition spans read back by the
+ * source() SQL function) and Referred.alias (local import binding names). */
+#define CODE_LENS_INDEX_FORMAT_VERSION 18
 
 static double profile_now_seconds(void);
 
@@ -2849,6 +2851,162 @@ static int db_open_read_any_format(CodeLensDb *db,
     return 0;
 }
 
+/* Upper bound on the text one source() call returns; longer spans are cut
+ * with a trailing marker so one huge definition cannot flood a result. */
+#define SOURCE_FUNCTION_MAX_BYTES (256U * 1024U)
+
+static char *alloc_printf(const char *format, ...);
+
+/* Reports a source() failure: the 4-argument form returns its fallback
+ * value instead, so callers such as context can degrade to the indexed
+ * short form when a file changed or vanished after indexing. */
+static void sql_source_fail(sqlite3_context *context,
+                            int argc,
+                            sqlite3_value **argv,
+                            const char *message)
+{
+    if (argc == 4) {
+        sqlite3_result_value(context, argv[3]);
+        return;
+    }
+    sqlite3_result_error(context, message != nullptr ? message : "source() failed", -1);
+}
+
+/* SQL function source(filePath, startByte, endByte [, fallback]): the
+ * [startByte, endByte) bytes of an indexed file, read from disk at query
+ * time. The index stores spans (Symbol.startByte/endByte,
+ * Ref.startByte/endByte), not full definition text, so this is how full
+ * bodies are read back. Only paths recorded in File are readable (the same
+ * no-arbitrary-file-reads rule that denies ATTACH to the sql tool), and a
+ * file whose size or mtime differs from its File row is an error rather
+ * than a silently misaligned slice; with a fourth argument every such
+ * failure returns that fallback instead. NULL path/span arguments or an
+ * empty span yield NULL. Results longer than SOURCE_FUNCTION_MAX_BYTES are
+ * truncated with a trailing marker. */
+static void sql_source_function(sqlite3_context *context, int argc, sqlite3_value **argv)
+{
+    sqlite3 *handle = sqlite3_context_db_handle(context);
+    sqlite3_stmt *stmt = nullptr;
+    const char *path;
+    int64_t start;
+    int64_t end;
+    int64_t indexed_size;
+    int64_t indexed_mtime_sec;
+    int64_t indexed_mtime_nsec;
+    CodeLensMappedFile mapped = {0};
+    size_t len;
+    int rc;
+
+    if ((argc != 3) && (argc != 4)) {
+        sqlite3_result_error(context, "source() takes (filePath, startByte, endByte [, fallback])", -1);
+        return;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (sqlite3_value_type(argv[i]) == SQLITE_NULL) {
+            sqlite3_result_null(context);
+            return;
+        }
+    }
+    path = (const char *)sqlite3_value_text(argv[0]);
+    start = sqlite3_value_int64(argv[1]);
+    end = sqlite3_value_int64(argv[2]);
+    if ((path == nullptr) || (start < 0) || (end < start)) {
+        sql_source_fail(context, argc, argv, "source(): invalid path or byte span");
+        return;
+    }
+    if (end == start) {
+        sqlite3_result_null(context);
+        return;
+    }
+    if (sqlite3_prepare_v2(handle,
+                           "SELECT size, mtimeSec, mtimeNsec FROM File WHERE path = ?1 LIMIT 1",
+                           -1,
+                           &stmt,
+                           nullptr) != SQLITE_OK) {
+        sqlite3_result_error(context, sqlite3_errmsg(handle), -1);
+        return;
+    }
+    (void)sqlite3_bind_text(stmt, 1, path, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        (void)sqlite3_finalize(stmt);
+        if (rc == SQLITE_DONE) {
+            sql_source_fail(context,
+                            argc,
+                            argv,
+                            alloc_printf("source(): %s is not an indexed file", path));
+        } else {
+            sqlite3_result_error(context, sqlite3_errmsg(handle), -1);
+        }
+        return;
+    }
+    indexed_size = sqlite3_column_int64(stmt, 0);
+    indexed_mtime_sec = sqlite3_column_int64(stmt, 1);
+    indexed_mtime_nsec = sqlite3_column_int64(stmt, 2);
+    (void)sqlite3_finalize(stmt);
+
+    if (code_lens_map_file(path, &mapped) != 0) {
+        sql_source_fail(context,
+                        argc,
+                        argv,
+                        alloc_printf("source(): cannot read %s; re-index required", path));
+        return;
+    }
+    if (!mapped.has_stat || (mapped.stat_size != indexed_size) ||
+        (mapped.stat_mtime_sec != indexed_mtime_sec) ||
+        (mapped.stat_mtime_nsec != indexed_mtime_nsec) || ((uint64_t)end > (uint64_t)mapped.len)) {
+        code_lens_mapped_file_free(&mapped);
+        sql_source_fail(
+            context,
+            argc,
+            argv,
+            alloc_printf("source(): %s changed since it was indexed; re-index required", path));
+        return;
+    }
+    len = (size_t)(end - start);
+    if (len > SOURCE_FUNCTION_MAX_BYTES) {
+        char marker[64];
+        int marker_len = snprintf(marker,
+                                  sizeof(marker),
+                                  "\n... [truncated %zu bytes]",
+                                  len - (size_t)SOURCE_FUNCTION_MAX_BYTES);
+        size_t total = (size_t)SOURCE_FUNCTION_MAX_BYTES + (size_t)(marker_len < 0 ? 0 : marker_len);
+        char *text = code_lens_alloc(total);
+
+        if ((marker_len < 0) || (text == nullptr)) {
+            sqlite3_result_error_nomem(context);
+        } else {
+            (void)memcpy(text, mapped.data + start, SOURCE_FUNCTION_MAX_BYTES);
+            (void)memcpy(text + SOURCE_FUNCTION_MAX_BYTES, marker, (size_t)marker_len);
+            sqlite3_result_text(context, text, (int)total, SQLITE_TRANSIENT);
+        }
+    } else {
+        sqlite3_result_text(context, mapped.data + start, (int)len, SQLITE_TRANSIENT);
+    }
+    code_lens_mapped_file_free(&mapped);
+}
+
+/* Application functions available to every current-format read connection
+ * (query, context, and the sql tool). DIRECTONLY keeps them out of schema
+ * objects such as views and triggers. */
+static int db_register_read_functions(CodeLensDb *db)
+{
+    for (int argc = 3; argc <= 4; argc++) {
+        if (sqlite3_create_function_v2(db->handle,
+                                       "source",
+                                       argc,
+                                       SQLITE_UTF8 | SQLITE_DIRECTONLY,
+                                       nullptr,
+                                       sql_source_function,
+                                       nullptr,
+                                       nullptr,
+                                       nullptr) != SQLITE_OK) {
+            return report_sqlite_error(db->handle, "register source() function");
+        }
+    }
+    return 0;
+}
+
 int code_lens_db_open_read(CodeLensDb *db, const char *path)
 {
     int format_version = 0;
@@ -2864,6 +3022,10 @@ int code_lens_db_open_read(CodeLensDb *db, const char *path)
                       path,
                       format_version,
                       CODE_LENS_INDEX_FORMAT_VERSION);
+        code_lens_db_close(db);
+        return -1;
+    }
+    if (db_register_read_functions(db) != 0) {
         code_lens_db_close(db);
         return -1;
     }
@@ -3496,17 +3658,66 @@ static bool add_alias(CodeLensClojureFile *file, char *namespace_name, char *ali
     return true;
 }
 
-static bool add_referred(CodeLensClojureFile *file, char *namespace_name, char *symbol)
+/* alias is the local binding name; nullptr means "not renamed" (alias =
+ * symbol), and the ":all" wildcard always records an empty alias. */
+static bool add_referred_as(CodeLensClojureFile *file,
+                            char *namespace_name,
+                            char *symbol,
+                            char *alias)
 {
     CodeLensReferred *item;
 
     if ((namespace_name == nullptr) || (symbol == nullptr) || !reserve_referred(file)) {
         return false;
     }
+    if (strcmp(symbol, ":all") == 0) {
+        alias = copy_cstr("");
+    } else if (alias == nullptr) {
+        alias = symbol;
+    }
+    if (alias == nullptr) {
+        return false;
+    }
 
     item = &file->referred[file->referred_count++];
     item->namespace_name = namespace_name;
     item->symbol = symbol;
+    item->alias = alias;
+    return true;
+}
+
+static bool add_referred(CodeLensClojureFile *file, char *namespace_name, char *symbol)
+{
+    return add_referred_as(file, namespace_name, symbol, nullptr);
+}
+
+/* Appends one cross-file type fact; texts are copied into the arena. */
+static bool add_type_fact(CodeLensSourceFile *file,
+                          CodeLensTypeFactKind kind,
+                          uint32_t number,
+                          const char *owner,
+                          const char *name,
+                          const char *type)
+{
+    CodeLensTypeFact *fact;
+
+    if ((file->type_fact_count == file->type_fact_capacity) &&
+        !grow_array((void **)&file->type_facts,
+                    &file->type_fact_capacity,
+                    sizeof(file->type_facts[0]),
+                    32U)) {
+        return false;
+    }
+    fact = &file->type_facts[file->type_fact_count];
+    fact->kind = kind;
+    fact->number = number;
+    fact->owner = copy_cstr(owner == nullptr ? "" : owner);
+    fact->name = copy_cstr(name == nullptr ? "" : name);
+    fact->type = copy_cstr(type == nullptr ? "" : type);
+    if ((fact->owner == nullptr) || (fact->name == nullptr) || (fact->type == nullptr)) {
+        return false;
+    }
+    file->type_fact_count++;
     return true;
 }
 
@@ -3766,6 +3977,8 @@ static bool add_definition(const char *source,
     symbol->source = node_text(source, list);
     symbol->start_line = ts_node_start_point(list).row + 1U;
     symbol->end_line = ts_node_end_point(list).row + 1U;
+    symbol->start_byte = ts_node_start_byte(list);
+    symbol->end_byte = ts_node_end_byte(list);
 
     for (size_t i = name_index + 1U; i < count; i++) {
         if (is_str_lit(values[i])) {
@@ -5257,6 +5470,8 @@ static bool cp_add_definition(const char *source,
     symbol->source = copy_source_slice(cp_span_slice(source, list_node));
     symbol->start_line = list_node->start_row + 1U;
     symbol->end_line = list_node->end_row + 1U;
+    symbol->start_byte = list_node->start_byte;
+    symbol->end_byte = list_node->end_byte;
 
     for (uint32_t i = cp_next_value(nodes, name_idx); i != 0U; i = cp_next_value(nodes, i)) {
         if (nodes[i].kind == CP_NODE_STR) {
@@ -6989,6 +7204,8 @@ static bool java_add_definition(JavaParseContext *ctx,
                                             header_only);
     symbol->start_line = ts_node_start_point(declaration).row + 1U;
     symbol->end_line = ts_node_end_point(declaration).row + 1U;
+    symbol->start_byte = ts_node_start_byte(declaration);
+    symbol->end_byte = ts_node_end_byte(declaration);
     if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
         (symbol->namespace_name == nullptr) || (symbol->source == nullptr)) {
         (void)memset(symbol, 0, sizeof(*symbol));
@@ -8686,6 +8903,8 @@ static bool c_add_definition(CParseContext *ctx,
                                  : node_text(ctx->source, declaration);
     symbol->start_line = ts_node_start_point(declaration).row + 1U;
     symbol->end_line = ts_node_end_point(declaration).row + 1U;
+    symbol->start_byte = ts_node_start_byte(declaration);
+    symbol->end_byte = ts_node_end_byte(declaration);
     if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
         (symbol->namespace_name == nullptr) || (symbol->source == nullptr)) {
         (void)memset(symbol, 0, sizeof(*symbol));
@@ -9744,6 +9963,27 @@ static char *py_module_name(CodeLensPythonParser *parser,
     while ((root_len > 1U) && (repo_root != nullptr) && py_is_separator(repo_root[root_len - 1U])) {
         root_len--;
     }
+    /* Installed distributions import relative to their site-packages (or
+     * Debian dist-packages) directory, not the repository: that directory
+     * is the root for top-level modules and namespace packages. */
+    for (size_t i = sep == SIZE_MAX ? 0U : sep; i > 0U; i--) {
+        if (!py_is_separator(file_path[i])) {
+            continue;
+        }
+        for (size_t k = 0U; k < 2U; k++) {
+            static const char *const roots[] = {"site-packages", "dist-packages"};
+            size_t root_name_len = strlen(roots[k]);
+
+            if ((i >= root_name_len + 1U) &&
+                (memcmp(file_path + i - root_name_len, roots[k], root_name_len) == 0) &&
+                py_is_separator(file_path[i - root_name_len - 1U])) {
+                repo_root = file_path;
+                root_len = i;
+                i = 1U; /* stop scanning */
+                break;
+            }
+        }
+    }
     if ((stem_len >= 3U) && (memcmp(stem + stem_len - 3U, ".py", 3U) == 0)) {
         stem_len -= 3U;
     }
@@ -9837,6 +10077,196 @@ char *code_lens_python_module_name(const char *repo_root, const char *file_path)
                           file_path);
 }
 
+/* Type strings (see CodeLensTypeFact in code_lens.h): `path[arg,arg]`,
+ * `~N` type parameters, `?` unknown, and `|.name` (member), `|*`
+ * (iteration element), `|#` (mapping value), and `|@` (subscript item)
+ * expression operations. Shared by the Python extractor and the type link
+ * pass. */
+
+#define TYPE_STR_MAX_LEN 1024U
+
+static bool type_str_is_expr(const char *type)
+{
+    return (type != nullptr) && (strchr(type, '|') != nullptr);
+}
+
+/* Length of the leading dotted path (stops at '[', '|', ',' or ']'). */
+static size_t type_str_head_len(const char *type)
+{
+    size_t len = 0U;
+
+    if (type == nullptr) {
+        return 0U;
+    }
+    while ((type[len] != '\0') && (type[len] != '[') && (type[len] != '|') &&
+           (type[len] != ',') && (type[len] != ']')) {
+        len++;
+    }
+    return len;
+}
+
+/* Splits a non-expression `head[a,b]` into its top-level arguments: returns
+ * the argument count and, when index is in range, its span. */
+static size_t type_str_arg(const char *type, size_t index, const char **out_arg, size_t *out_len)
+{
+    size_t head = type_str_head_len(type);
+    size_t count = 0U;
+    size_t start;
+    int depth = 0;
+
+    if ((type == nullptr) || (type[head] != '[')) {
+        return 0U;
+    }
+    start = head + 1U;
+    for (size_t i = start; type[i] != '\0'; i++) {
+        char c = type[i];
+
+        if (c == '[') {
+            depth++;
+        } else if ((c == ']') && (depth > 0)) {
+            depth--;
+        } else if (((c == ',') || (c == ']')) && (depth == 0)) {
+            if (count == index) {
+                if (out_arg != nullptr) {
+                    *out_arg = type + start;
+                }
+                if (out_len != nullptr) {
+                    *out_len = i - start;
+                }
+            }
+            count++;
+            if (c == ']') {
+                return count;
+            }
+            start = i + 1U;
+        }
+    }
+    return 0U; /* unterminated */
+}
+
+typedef enum {
+    TYPE_CONTAINER_NONE,
+    TYPE_CONTAINER_SEQUENCE, /* iterates arg 0 */
+    TYPE_CONTAINER_MAPPING,  /* iterates keys (arg 0); values are arg 1 */
+    TYPE_CONTAINER_TUPLE,    /* `tuple[X]` is homogeneous; others unknown */
+} TypeContainerKind;
+
+static bool type_str_span_is(const char *text, size_t len, const char *literal)
+{
+    return (strlen(literal) == len) && (memcmp(text, literal, len) == 0);
+}
+
+/* Classifies builtin and typing/collections container heads so iteration
+ * and subscripts can yield element types. */
+static TypeContainerKind type_container_kind(const char *head, size_t len)
+{
+    static const char *const modules[] = {
+        "typing", "typing_extensions", "collections.abc", "collections", "builtins"};
+    static const char *const sequences[] = {
+        "list", "set", "frozenset", "deque", "List", "Set", "FrozenSet", "Deque",
+        "Sequence", "MutableSequence", "Iterable", "Iterator", "Collection",
+        "AbstractSet", "MutableSet", "Generator", "AsyncIterator", "AsyncIterable",
+        "AsyncGenerator", "KeysView", "ValuesView", "Reversible"};
+    static const char *const mappings[] = {
+        "dict", "defaultdict", "OrderedDict", "Counter", "ChainMap", "Dict", "DefaultDict",
+        "Mapping", "MutableMapping"};
+    size_t sep = len;
+    const char *last;
+    size_t last_len;
+    bool bare;
+
+    while ((sep > 0U) && (head[sep - 1U] != '.')) {
+        sep--;
+    }
+    last = head + sep;
+    last_len = len - sep;
+    bare = sep == 0U;
+    if (!bare) {
+        bool known = false;
+
+        for (size_t i = 0U; i < sizeof(modules) / sizeof(modules[0]); i++) {
+            known = known || type_str_span_is(head, sep - 1U, modules[i]);
+        }
+        if (!known) {
+            return TYPE_CONTAINER_NONE;
+        }
+    }
+    for (size_t i = 0U; i < sizeof(sequences) / sizeof(sequences[0]); i++) {
+        if (type_str_span_is(last, last_len, sequences[i])) {
+            /* Bare names are only the lowercase builtins. */
+            return (!bare || islower((unsigned char)last[0])) ? TYPE_CONTAINER_SEQUENCE
+                                                             : TYPE_CONTAINER_NONE;
+        }
+    }
+    for (size_t i = 0U; i < sizeof(mappings) / sizeof(mappings[0]); i++) {
+        if (type_str_span_is(last, last_len, mappings[i])) {
+            return (!bare || type_str_span_is(last, last_len, "dict")) ? TYPE_CONTAINER_MAPPING
+                                                                     : TYPE_CONTAINER_NONE;
+        }
+    }
+    if (type_str_span_is(last, last_len, "tuple") || (!bare && type_str_span_is(last, last_len, "Tuple"))) {
+        return TYPE_CONTAINER_TUPLE;
+    }
+    return TYPE_CONTAINER_NONE;
+}
+
+static TypeContainerKind type_str_container(const char *type)
+{
+    return (type == nullptr) || type_str_is_expr(type)
+               ? TYPE_CONTAINER_NONE
+               : type_container_kind(type, type_str_head_len(type));
+}
+
+/* Element (or, for mappings, value) type of a non-expression container
+ * type string, copied into the arena; nullptr when unknown. */
+static char *type_str_element(const char *type, bool mapping_value)
+{
+    TypeContainerKind kind = type_str_container(type);
+    const char *arg = nullptr;
+    size_t arg_len = 0U;
+    size_t index;
+    size_t count;
+
+    if (kind == TYPE_CONTAINER_NONE) {
+        return nullptr;
+    }
+    if (mapping_value && (kind != TYPE_CONTAINER_MAPPING)) {
+        return nullptr;
+    }
+    index = mapping_value ? 1U : 0U;
+    count = type_str_arg(type, index, &arg, &arg_len);
+    if ((arg == nullptr) || (index >= count) ||
+        ((kind == TYPE_CONTAINER_TUPLE) && (count != 1U)) ||
+        ((arg_len == 1U) && (arg[0] == '?'))) {
+        return nullptr;
+    }
+    return copy_bytes(arg, arg_len);
+}
+
+/* Builds `base|op[name]` in the arena; nullptr past TYPE_STR_MAX_LEN. */
+static char *type_str_append_op(const char *base, const char *op, const char *name, size_t name_len)
+{
+    size_t base_len = strlen(base);
+    size_t op_len = strlen(op);
+    size_t total = base_len + op_len + name_len;
+    char *out;
+
+    if (total > TYPE_STR_MAX_LEN) {
+        return nullptr;
+    }
+    out = code_lens_alloc(total + 1U);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    (void)memcpy(out, base, base_len);
+    (void)memcpy(out + base_len, op, op_len);
+    if (name_len > 0U) {
+        (void)memcpy(out + base_len + op_len, name, name_len);
+    }
+    out[total] = '\0';
+    return out;
+}
+
 typedef enum {
     PY_BIND_LOCAL,
     PY_BIND_GLOBAL,
@@ -9863,6 +10293,13 @@ typedef struct {
     const char *base_target;
     bool is_test;
 } PyClass;
+
+/* An isinstance() narrowing active over part of a walk: while pushed, the
+ * binding resolves as type instead of its declared or inferred type. */
+typedef struct {
+    uint32_t binding;
+    const char *type;
+} PyNarrowing;
 
 typedef enum {
     PY_SCOPE_MODULE,
@@ -9907,6 +10344,13 @@ typedef struct {
      * a parse worker's stack. */
     uint32_t depth;
     bool wildcard;
+    /* Type parameters of the class whose members are being declared;
+     * annotations naming one serialize as `~N` in type facts. */
+    const PySlice *decl_params;
+    uint32_t decl_param_count;
+    PyNarrowing *narrowings;
+    size_t narrowing_count;
+    size_t narrowing_capacity;
 } PyParseContext;
 
 #define PY_MAX_DEPTH 512U
@@ -9914,12 +10358,16 @@ typedef struct {
 
 /* PATH is a static dotted path (module, or a name imported from one);
  * CLASS is a class this file declares (members and bases known);
- * INSTANCE is a value of a class declared elsewhere (members unknown). */
+ * INSTANCE is a value of a class declared elsewhere (members unknown);
+ * DEFERRED is a value whose type is a type-string expression only the
+ * cross-file link pass can evaluate. CLASS/INSTANCE paths may carry
+ * `[args]`. */
 typedef enum {
     PY_RES_NONE,
     PY_RES_PATH,
     PY_RES_CLASS,
     PY_RES_INSTANCE,
+    PY_RES_DEFERRED,
 } PyResolvedKind;
 
 typedef struct {
@@ -9996,6 +10444,18 @@ typedef enum {
     PYK_WITH_ITEM,
     PYK_MATCH_STATEMENT,
     PYK_CASE_CLAUSE,
+    PYK_BOOLEAN_OPERATOR,
+    PYK_NOT_OPERATOR,
+    PYK_ASSERT_STATEMENT,
+    PYK_RETURN_STATEMENT,
+    PYK_RAISE_STATEMENT,
+    PYK_CONTINUE_STATEMENT,
+    PYK_BREAK_STATEMENT,
+    PYK_ARGUMENT_LIST,
+    PYK_ELLIPSIS,
+    PYK_NONE,
+    PYK_SLICE,
+    PYK_CONSTRAINED_TYPE,
     PYK_COUNT,
 } PyKind;
 
@@ -10065,6 +10525,18 @@ static const char *const py_kind_names[PYK_COUNT] = {
     [PYK_WITH_ITEM] = "with_item",
     [PYK_MATCH_STATEMENT] = "match_statement",
     [PYK_CASE_CLAUSE] = "case_clause",
+    [PYK_BOOLEAN_OPERATOR] = "boolean_operator",
+    [PYK_NOT_OPERATOR] = "not_operator",
+    [PYK_ASSERT_STATEMENT] = "assert_statement",
+    [PYK_RETURN_STATEMENT] = "return_statement",
+    [PYK_RAISE_STATEMENT] = "raise_statement",
+    [PYK_CONTINUE_STATEMENT] = "continue_statement",
+    [PYK_BREAK_STATEMENT] = "break_statement",
+    [PYK_ARGUMENT_LIST] = "argument_list",
+    [PYK_ELLIPSIS] = "ellipsis",
+    [PYK_NONE] = "none",
+    [PYK_SLICE] = "slice",
+    [PYK_CONSTRAINED_TYPE] = "constrained_type",
 };
 
 typedef enum {
@@ -10083,6 +10555,13 @@ typedef enum {
     PYF_SUPERCLASSES,
     PYF_TYPE,
     PYF_VALUE,
+    PYF_ALTERNATIVE,
+    PYF_ARGUMENT,
+    PYF_ARGUMENTS,
+    PYF_CONDITION,
+    PYF_CONSEQUENCE,
+    PYF_OPERATOR,
+    PYF_TYPE_PARAMETERS,
     PYF_COUNT,
 } PyField;
 
@@ -10102,6 +10581,13 @@ static const char *const py_field_names[PYF_COUNT] = {
     [PYF_SUPERCLASSES] = "superclasses",
     [PYF_TYPE] = "type",
     [PYF_VALUE] = "value",
+    [PYF_ALTERNATIVE] = "alternative",
+    [PYF_ARGUMENT] = "argument",
+    [PYF_ARGUMENTS] = "arguments",
+    [PYF_CONDITION] = "condition",
+    [PYF_CONSEQUENCE] = "consequence",
+    [PYF_OPERATOR] = "operator",
+    [PYF_TYPE_PARAMETERS] = "type_parameters",
 };
 
 static pthread_once_t py_ids_once = PTHREAD_ONCE_INIT;
@@ -10280,8 +10766,10 @@ static int32_t py_class_index(const PyParseContext *ctx, const char *target)
 {
     uint32_t index;
 
-    if ((target == nullptr) ||
-        !parse_map_find(&ctx->class_by_target, 0U, target, strlen(target), &index)) {
+    /* Generic arguments do not change the class; expressions are not
+     * classes until the link pass evaluates them. */
+    if ((target == nullptr) || type_str_is_expr(target) ||
+        !parse_map_find(&ctx->class_by_target, 0U, target, type_str_head_len(target), &index)) {
         return -1;
     }
     return (int32_t)index;
@@ -10332,6 +10820,23 @@ static bool py_add_member(PyParseContext *ctx,
     if (out_added != nullptr) {
         *out_added = true;
     }
+    if (owner >= 0) {
+        /* Every class member is a link-pass fact: owner walks need the
+         * untyped ones too. */
+        char *member = copy_bytes(name.data, name.len);
+        const char *type = ((binding.kind == PY_BIND_VALUE) && (binding.path != nullptr))
+                               ? binding.path
+                               : "";
+
+        if ((member == nullptr) || !add_type_fact(ctx->file,
+                                                  CODE_LENS_FACT_MEMBER,
+                                                  0U,
+                                                  ctx->classes[owner].target,
+                                                  member,
+                                                  type)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -10358,23 +10863,42 @@ static bool py_name_is_capitalized(const char *path)
 }
 
 /* A class target becomes CLASS when this file declares it (members and
- * bases are known), otherwise an INSTANCE of an external class. */
+ * bases are known), otherwise an INSTANCE of an external class; type
+ * expressions stay DEFERRED for the link pass, and type parameters or
+ * unknowns resolve to nothing. */
 static PyResolved py_resolved_type(const PyParseContext *ctx, const char *target)
 {
-    if (target == nullptr) {
+    if ((target == nullptr) || (target[0] == '\0') || (target[0] == '~') || (target[0] == '?')) {
         return (PyResolved){.kind = PY_RES_NONE};
+    }
+    if (type_str_is_expr(target)) {
+        return (PyResolved){.kind = PY_RES_DEFERRED, .path = target};
     }
     return (PyResolved){.kind = py_class_index(ctx, target) >= 0 ? PY_RES_CLASS : PY_RES_INSTANCE,
                         .path = target};
 }
 
+/* `receiver|.name`: the member's type, evaluated by the link pass. */
+static PyResolved py_deferred_member(const char *receiver, PySlice name)
+{
+    char *expr = type_str_append_op(receiver, "|.", name.data, name.len);
+
+    return expr == nullptr ? (PyResolved){.kind = PY_RES_NONE}
+                           : (PyResolved){.kind = PY_RES_DEFERRED, .path = expr};
+}
+
 /* Finds the class that declares name, walking local base classes. Returns
  * the first non-local base when the chain leaves this file, or the
- * starting class when nothing declares it. */
-static const char *py_member_owner(PyParseContext *ctx, const char *class_target, PySlice name)
+ * starting class when nothing declares it; *out_local reports whether a
+ * class in this file declares it (no link-pass refinement needed). */
+static const char *py_member_owner(PyParseContext *ctx,
+                                   const char *class_target,
+                                   PySlice name,
+                                   bool *out_local)
 {
     const char *current = class_target;
 
+    *out_local = false;
     for (int depth = 0; depth < 16; depth++) {
         int32_t index = py_class_index(ctx, current);
 
@@ -10382,6 +10906,7 @@ static const char *py_member_owner(PyParseContext *ctx, const char *class_target
             return current;
         }
         if (py_member(ctx, index, name) != nullptr) {
+            *out_local = true;
             return current;
         }
         if (ctx->classes[index].base_target == nullptr) {
@@ -10403,12 +10928,18 @@ static PyResolved py_resolve_member(PyParseContext *ctx, const char *class_targe
         const PyBinding *member;
 
         if (index < 0) {
-            return (PyResolved){.kind = PY_RES_NONE};
+            /* The chain left this file: the link pass knows the rest. */
+            return py_deferred_member(current, name);
         }
         member = py_member(ctx, index, name);
         if (member != nullptr) {
             if (((member->kind == PY_BIND_CLASS) || (member->kind == PY_BIND_VALUE)) &&
                 (member->path != nullptr)) {
+                if (strchr(member->path, '~') != nullptr) {
+                    /* Typed by a class type parameter: substitution needs
+                     * the receiver's arguments, which the link pass has. */
+                    return py_deferred_member(class_target, name);
+                }
                 return py_resolved_type(ctx, member->path);
             }
             return (PyResolved){.kind = PY_RES_NONE};
@@ -10417,16 +10948,40 @@ static PyResolved py_resolve_member(PyParseContext *ctx, const char *class_targe
         if (current == nullptr) {
             break;
         }
+        if (strchr(current, '~') != nullptr) {
+            return py_deferred_member(class_target, name);
+        }
     }
     return (PyResolved){.kind = PY_RES_NONE};
+}
+
+/* The innermost isinstance() narrowing of binding, or nullptr. */
+static const char *py_narrowed_type(const PyParseContext *ctx, const PyBinding *binding)
+{
+    uint32_t index;
+
+    if ((binding == nullptr) || (ctx->narrowing_count == 0U)) {
+        return nullptr;
+    }
+    index = (uint32_t)(binding - ctx->bindings);
+    for (size_t i = ctx->narrowing_count; i > 0U; i--) {
+        if (ctx->narrowings[i - 1U].binding == index) {
+            return ctx->narrowings[i - 1U].type;
+        }
+    }
+    return nullptr;
 }
 
 static PyResolved py_resolve_identifier(PyParseContext *ctx, PySlice name)
 {
     const PyBinding *binding = py_lookup(ctx, name);
+    const char *narrowed = py_narrowed_type(ctx, binding);
 
     if (binding == nullptr) {
         return (PyResolved){.kind = PY_RES_NONE};
+    }
+    if (narrowed != nullptr) {
+        return py_resolved_type(ctx, narrowed);
     }
     switch (binding->kind) {
     case PY_BIND_LOCAL:
@@ -10475,9 +11030,17 @@ static PyResolved py_resolve_node(PyParseContext *ctx, TSNode node)
         PyResolved object = py_resolve(ctx, py_field(node, PYF_OBJECT));
         PySlice name = py_text(ctx, attribute);
 
-        if ((object.kind == PY_RES_NONE) || (object.kind == PY_RES_INSTANCE) ||
-            ts_node_is_null(attribute)) {
+        if ((object.kind == PY_RES_NONE) || ts_node_is_null(attribute)) {
             return (PyResolved){.kind = PY_RES_NONE};
+        }
+        if (object.kind == PY_RES_INSTANCE) {
+            /* Container members (append, get, ...) carry no useful type. */
+            return type_str_container(object.path) != TYPE_CONTAINER_NONE
+                       ? (PyResolved){.kind = PY_RES_NONE}
+                       : py_deferred_member(object.path, name);
+        }
+        if (object.kind == PY_RES_DEFERRED) {
+            return py_deferred_member(object.path, name);
         }
         if (object.kind == PY_RES_CLASS) {
             return py_resolve_member(ctx, object.path, name);
@@ -10549,67 +11112,283 @@ static bool py_type_head_unwraps(PySlice head)
     return false;
 }
 
-/* Resolves an annotation to a class target (nullptr when unknown). */
+/* Steps through `type` wrappers and single-child parentheses. */
+static TSNode py_type_unwrap_node(TSNode node)
+{
+    for (int i = 0; (i < 8) && (py_is(node, PYK_TYPE) || py_is(node, PYK_PARENTHESIZED_EXPRESSION)) &&
+                    (py_count(node) == 1U);
+         i++) {
+        node = py_child(node, 0U);
+    }
+    return node;
+}
+
+static bool py_slice_last_is(PySlice text, const char *name)
+{
+    size_t start = text.len;
+
+    while ((start > 0U) && (text.data[start - 1U] != '.')) {
+        start--;
+    }
+    return py_slice_is((PySlice){.data = text.data + start, .len = text.len - start}, name);
+}
+
+/* Whether name is a module-level TypeVar/ParamSpec/TypeVarTuple, which is
+ * a type parameter rather than a type. */
+static bool py_names_type_variable(PyParseContext *ctx, PySlice name)
+{
+    const PyBinding *binding = py_lookup(ctx, name);
+
+    if ((binding == nullptr) || (binding->kind != PY_BIND_VALUE) || (binding->path == nullptr)) {
+        return false;
+    }
+    {
+        PySlice path = {.data = binding->path, .len = strlen(binding->path)};
+
+        return py_slice_last_is(path, "TypeVar") || py_slice_last_is(path, "ParamSpec") ||
+               py_slice_last_is(path, "TypeVarTuple");
+    }
+}
+
+#define PY_MAX_TYPE_ARGS 16U
+
+static const char *py_resolve_type_expr(PyParseContext *ctx, TSNode node);
+
+/* `Head[args]` for a generic_type or subscript annotation. */
+static const char *py_resolve_generic_type(PyParseContext *ctx, TSNode node)
+{
+    TSNode head;
+    TSNode args[PY_MAX_TYPE_ARGS];
+    const char *arg_types[PY_MAX_TYPE_ARGS];
+    uint32_t arg_count = 0U;
+    const char *head_path;
+    PySlice head_text;
+    size_t total;
+    bool any_known = false;
+    char *out;
+    size_t at;
+
+    if (py_is(node, PYK_GENERIC_TYPE)) {
+        TSNode parameters = py_child(node, 1U);
+
+        head = py_child(node, 0U);
+        if (!py_is(parameters, PYK_TYPE_PARAMETER)) {
+            return nullptr;
+        }
+        for (uint32_t i = 0U, i_count = py_count(parameters); i < i_count; i++) {
+            if (arg_count == PY_MAX_TYPE_ARGS) {
+                return nullptr;
+            }
+            args[arg_count++] = py_child(parameters, i);
+        }
+    } else {
+        head = py_field(node, PYF_VALUE);
+        for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+            TSNode child = py_child(node, i);
+
+            if (ts_node_eq(child, head) || py_is(child, PYK_COMMENT)) {
+                continue;
+            }
+            if (arg_count == PY_MAX_TYPE_ARGS) {
+                return nullptr;
+            }
+            args[arg_count++] = child;
+        }
+    }
+    if (ts_node_is_null(head) || (arg_count == 0U)) {
+        return nullptr;
+    }
+    head_text = py_text(ctx, head);
+    if (py_type_head_unwraps(head_text)) {
+        return py_resolve_type_expr(ctx, args[0]);
+    }
+    if (py_slice_last_is(head_text, "Union")) {
+        TSNode kept = {0};
+        uint32_t kept_count = 0U;
+
+        for (uint32_t i = 0U; i < arg_count; i++) {
+            if (!py_slice_is(py_text(ctx, py_type_unwrap_node(args[i])), "None")) {
+                kept = args[i];
+                kept_count++;
+            }
+        }
+        return kept_count == 1U ? py_resolve_type_expr(ctx, kept) : nullptr;
+    }
+    head_path = py_resolve_type_expr(ctx, head);
+    if ((head_path == nullptr) || (head_path[0] == '~') ||
+        (head_path[type_str_head_len(head_path)] != '\0')) {
+        return nullptr;
+    }
+    /* tuple[X, ...] is homogeneous: serialize it as tuple[X]. */
+    if ((arg_count == 2U) &&
+        (type_container_kind(head_path, strlen(head_path)) == TYPE_CONTAINER_TUPLE) &&
+        py_is(py_type_unwrap_node(args[1]), PYK_ELLIPSIS)) {
+        arg_count = 1U;
+    }
+    total = strlen(head_path) + 2U;
+    for (uint32_t i = 0U; i < arg_count; i++) {
+        const char *arg = py_resolve_type_expr(ctx, args[i]);
+
+        if ((arg == nullptr) || type_str_is_expr(arg)) {
+            arg = "?";
+        } else {
+            any_known = true;
+        }
+        arg_types[i] = arg;
+        total += strlen(arg) + 1U;
+    }
+    if (!any_known) {
+        return head_path;
+    }
+    if (total > TYPE_STR_MAX_LEN) {
+        return nullptr;
+    }
+    out = code_lens_alloc(total + 1U);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    at = strlen(head_path);
+    (void)memcpy(out, head_path, at);
+    out[at++] = '[';
+    for (uint32_t i = 0U; i < arg_count; i++) {
+        size_t len = strlen(arg_types[i]);
+
+        if (i > 0U) {
+            out[at++] = ',';
+        }
+        (void)memcpy(out + at, arg_types[i], len);
+        at += len;
+    }
+    out[at++] = ']';
+    out[at] = '\0';
+    return out;
+}
+
+/* Resolves an annotation to a type string (nullptr when unknown): a class
+ * target, optionally with `[args]`; `~N` for a type parameter of the class
+ * whose members are being declared. */
 static const char *py_resolve_type_expr(PyParseContext *ctx, TSNode node)
 {
     PyKind kind;
+    const char *result = nullptr;
 
-    if (ts_node_is_null(node)) {
+    if (ts_node_is_null(node) || (ctx->depth >= PY_MAX_DEPTH + PY_MAX_RESOLVE_DEPTH)) {
         return nullptr;
     }
+    ctx->depth++;
     kind = py_kind(node);
     if ((kind == PYK_TYPE) || (kind == PYK_PARENTHESIZED_EXPRESSION)) {
-        return py_count(node) == 1U
-                   ? py_resolve_type_expr(ctx, py_child(node, 0U))
-                   : nullptr;
-    }
-    if ((kind == PYK_IDENTIFIER) || (kind == PYK_ATTRIBUTE)) {
+        result = py_count(node) == 1U ? py_resolve_type_expr(ctx, py_child(node, 0U)) : nullptr;
+    } else if (kind == PYK_IDENTIFIER) {
+        PySlice name = py_text(ctx, node);
+
+        for (uint32_t i = 0U; i < ctx->decl_param_count; i++) {
+            if ((ctx->decl_params[i].len == name.len) &&
+                (memcmp(ctx->decl_params[i].data, name.data, name.len) == 0)) {
+                char buffer[16];
+
+                (void)snprintf(buffer, sizeof(buffer), "~%u", (unsigned int)i);
+                ctx->depth--;
+                return copy_cstr(buffer);
+            }
+        }
+        if (py_names_type_variable(ctx, name)) {
+            result = nullptr;
+        } else {
+            PyResolved resolved = py_resolve(ctx, node);
+
+            if ((resolved.kind == PY_RES_CLASS) || (resolved.kind == PY_RES_INSTANCE) ||
+                ((resolved.kind == PY_RES_PATH) && !resolved.module)) {
+                result = resolved.path;
+            } else if ((resolved.kind == PY_RES_NONE) && (py_lookup(ctx, name) == nullptr) &&
+                       (type_container_kind(name.data, name.len) != TYPE_CONTAINER_NONE)) {
+                /* Unshadowed builtin container (list, dict, ...). */
+                result = copy_bytes(name.data, name.len);
+            }
+        }
+    } else if (kind == PYK_ATTRIBUTE) {
         PyResolved resolved = py_resolve(ctx, node);
 
         if ((resolved.kind == PY_RES_CLASS) || (resolved.kind == PY_RES_INSTANCE) ||
             ((resolved.kind == PY_RES_PATH) && !resolved.module)) {
-            return resolved.path;
+            result = resolved.path;
         }
-        return nullptr;
-    }
-    if ((kind == PYK_GENERIC_TYPE) || (kind == PYK_SUBSCRIPT)) {
-        TSNode head = py_child(node, 0U);
-        TSNode argument = py_child(node, 1U);
-
-        if (ts_node_is_null(head) || ts_node_is_null(argument) ||
-            !py_type_head_unwraps(py_text(ctx, head))) {
-            return nullptr;
-        }
-        if (py_is(argument, PYK_TYPE_PARAMETER)) {
-            argument = py_child(argument, 0U);
-        }
-        return py_resolve_type_expr(ctx, argument);
-    }
-    if ((kind == PYK_UNION_TYPE) || (kind == PYK_BINARY_OPERATOR)) {
+    } else if ((kind == PYK_GENERIC_TYPE) || (kind == PYK_SUBSCRIPT)) {
+        result = py_resolve_generic_type(ctx, node);
+    } else if ((kind == PYK_UNION_TYPE) || (kind == PYK_BINARY_OPERATOR)) {
         TSNode left = py_child(node, 0U);
         TSNode right = py_child(node, py_count(node) - 1U);
 
         if ((py_count(node) == 2U) && py_slice_is(py_text(ctx, right), "None")) {
-            return py_resolve_type_expr(ctx, left);
-        }
-        if ((py_count(node) == 2U) && py_slice_is(py_text(ctx, left), "None")) {
-            return py_resolve_type_expr(ctx, right);
+            result = py_resolve_type_expr(ctx, left);
+        } else if ((py_count(node) == 2U) && py_slice_is(py_text(ctx, left), "None")) {
+            result = py_resolve_type_expr(ctx, right);
         }
     }
-    return nullptr;
+    ctx->depth--;
+    return result;
 }
 
-/* `x = Klass(...)` infers x as an instance of Klass. */
+/* The type a value expression evaluates to: constructor calls (`x =
+ * Klass(...)`), typed names and attributes (`rca = loaded.rca`), and
+ * container subscripts (`first = items[0]`); nullptr when unknown. */
 static const char *py_infer_value_type(PyParseContext *ctx, TSNode value)
 {
     PyResolved resolved;
+    PyKind kind = py_kind(value);
 
-    if (!py_is(value, PYK_CALL)) {
+    if (kind == PYK_SUBSCRIPT) {
+        TSNode container = py_field(value, PYF_VALUE);
+        bool is_slice = false;
+
+        for (uint32_t i = 0U, i_count = py_count(value); i < i_count; i++) {
+            is_slice = is_slice || py_is(py_child(value, i), PYK_SLICE);
+        }
+        resolved = py_resolve(ctx, container);
+        if (is_slice) {
+            /* Slicing a sequence keeps its type: batch = rows[a:b]. */
+            TypeContainerKind container_kind = (resolved.kind == PY_RES_INSTANCE)
+                                                   ? type_str_container(resolved.path)
+                                                   : TYPE_CONTAINER_NONE;
+
+            return ((container_kind == TYPE_CONTAINER_SEQUENCE) ||
+                    (container_kind == TYPE_CONTAINER_TUPLE))
+                       ? resolved.path
+                       : nullptr;
+        }
+        if ((resolved.kind == PY_RES_INSTANCE) || (resolved.kind == PY_RES_CLASS)) {
+            TypeContainerKind container_kind = type_str_container(resolved.path);
+
+            if (container_kind == TYPE_CONTAINER_NONE) {
+                return type_str_append_op(resolved.path, "|@", "", 0U);
+            }
+            return type_str_element(resolved.path, container_kind == TYPE_CONTAINER_MAPPING);
+        }
+        if (resolved.kind == PY_RES_DEFERRED) {
+            return type_str_append_op(resolved.path, "|@", "", 0U);
+        }
         return nullptr;
+    }
+    if ((kind != PYK_CALL) && (kind != PYK_ATTRIBUTE) && (kind != PYK_IDENTIFIER)) {
+        return nullptr;
+    }
+    if (kind == PYK_IDENTIFIER) {
+        /* Only typed variables carry a type; a bare class or function name
+         * is the object itself, not an instance. */
+        const PyBinding *binding = py_lookup(ctx, py_text(ctx, value));
+
+        if ((binding == nullptr) ||
+            ((binding->kind != PY_BIND_LOCAL) && (binding->kind != PY_BIND_VALUE))) {
+            return nullptr;
+        }
+        if ((binding->path != nullptr) && (binding->path[0] == '~')) {
+            return binding->path; /* `self.x = x` with `x: T` */
+        }
     }
     resolved = py_resolve(ctx, value);
     if ((resolved.kind == PY_RES_CLASS) || (resolved.kind == PY_RES_INSTANCE) ||
-        ((resolved.kind == PY_RES_PATH) && !resolved.module)) {
+        (resolved.kind == PY_RES_DEFERRED) ||
+        ((kind == PYK_CALL) && (resolved.kind == PY_RES_PATH) && !resolved.module)) {
         return resolved.path;
     }
     return nullptr;
@@ -10636,6 +11415,96 @@ static bool py_bind_targets(PyParseContext *ctx, TSNode node, uint32_t scope, Py
         }
     }
     return true;
+}
+
+/* The element type of iterating iterable (or, with mapping_value, of its
+ * mapping values): a local container argument when the annotation is
+ * known, else a `|*`/`|#` expression for the link pass. */
+static const char *py_iter_element(PyParseContext *ctx, TSNode iterable, bool mapping_value)
+{
+    PyResolved resolved;
+
+    iterable = py_type_unwrap_node(iterable);
+    if (py_is(iterable, PYK_CALL) && py_is(py_field(iterable, PYF_FUNCTION), PYK_ATTRIBUTE) &&
+        (py_count(py_field(iterable, PYF_ARGUMENTS)) == 0U)) {
+        TSNode function = py_field(iterable, PYF_FUNCTION);
+        PySlice method = py_text(ctx, py_field(function, PYF_ATTRIBUTE));
+
+        if (!mapping_value && py_slice_is(method, "values")) {
+            return py_iter_element(ctx, py_field(function, PYF_OBJECT), true);
+        }
+        if (!mapping_value && py_slice_is(method, "keys")) {
+            return py_iter_element(ctx, py_field(function, PYF_OBJECT), false);
+        }
+        return nullptr;
+    }
+    resolved = py_resolve(ctx, iterable);
+    if ((resolved.kind == PY_RES_INSTANCE) || (resolved.kind == PY_RES_CLASS)) {
+        if (type_str_container(resolved.path) != TYPE_CONTAINER_NONE) {
+            return type_str_element(resolved.path, mapping_value);
+        }
+        return type_str_append_op(resolved.path, mapping_value ? "|#" : "|*", "", 0U);
+    }
+    if (resolved.kind == PY_RES_DEFERRED) {
+        return type_str_append_op(resolved.path, mapping_value ? "|#" : "|*", "", 0U);
+    }
+    return nullptr;
+}
+
+/* Whether call invokes the unshadowed builtin name. */
+static bool py_calls_builtin(PyParseContext *ctx, TSNode call, const char *name)
+{
+    TSNode function = py_field(call, PYF_FUNCTION);
+
+    return py_is(call, PYK_CALL) && py_is(function, PYK_IDENTIFIER) &&
+           py_slice_is(py_text(ctx, function), name) &&
+           (py_lookup(ctx, py_text(ctx, function)) == nullptr);
+}
+
+/* Binds a for statement's or comprehension clause's targets, typing them
+ * by element: `for x in xs`, `for i, x in enumerate(xs)`, `for a, b in
+ * zip(as, bs)`, and `for k, v in d.items()`. */
+static bool py_bind_loop_targets(PyParseContext *ctx, TSNode loop, uint32_t scope, PyBinding binding)
+{
+    TSNode left = py_field(loop, PYF_LEFT);
+    TSNode right = py_type_unwrap_node(py_field(loop, PYF_RIGHT));
+
+    if (py_is(left, PYK_IDENTIFIER)) {
+        binding.path = py_iter_element(ctx, right, false);
+        return py_bind_targets(ctx, left, scope, binding);
+    }
+    if ((py_is(left, PYK_PATTERN_LIST) || py_is(left, PYK_TUPLE_PATTERN)) &&
+        (py_count(left) == 2U) && py_is(py_child(left, 0U), PYK_IDENTIFIER) &&
+        py_is(py_child(left, 1U), PYK_IDENTIFIER) && py_is(right, PYK_CALL)) {
+        TSNode arguments = py_field(right, PYF_ARGUMENTS);
+        TSNode function = py_field(right, PYF_FUNCTION);
+        const char *first = nullptr;
+        const char *second = nullptr;
+        bool typed = false;
+
+        if (py_calls_builtin(ctx, right, "enumerate") && (py_count(arguments) >= 1U)) {
+            second = py_iter_element(ctx, py_child(arguments, 0U), false);
+            typed = true;
+        } else if (py_calls_builtin(ctx, right, "zip") && (py_count(arguments) == 2U)) {
+            first = py_iter_element(ctx, py_child(arguments, 0U), false);
+            second = py_iter_element(ctx, py_child(arguments, 1U), false);
+            typed = true;
+        } else if (py_is(function, PYK_ATTRIBUTE) && (py_count(arguments) == 0U) &&
+                   py_slice_is(py_text(ctx, py_field(function, PYF_ATTRIBUTE)), "items")) {
+            first = py_iter_element(ctx, py_field(function, PYF_OBJECT), false);
+            second = py_iter_element(ctx, py_field(function, PYF_OBJECT), true);
+            typed = true;
+        }
+        if (typed) {
+            PyBinding first_binding = binding;
+
+            first_binding.path = first;
+            binding.path = second;
+            return py_bind_targets(ctx, py_child(left, 0U), scope, first_binding) &&
+                   py_bind_targets(ctx, py_child(left, 1U), scope, binding);
+        }
+    }
+    return py_bind_targets(ctx, left, scope, binding);
 }
 
 /* Resolves the module named by an import_from_statement's module_name. */
@@ -10726,9 +11595,13 @@ static bool py_process_import(PyParseContext *ctx, TSNode node, uint32_t scope)
             }
             if (from) {
                 char *path = py_join(module, name.data, name.len);
+                bool novel = py_find_binding(ctx, scope, local) == nullptr;
 
                 if ((path == nullptr) ||
-                    !add_referred(ctx->file, copy_cstr(module), copy_cstr(name_text)) ||
+                    !add_referred_as(ctx->file,
+                                     copy_cstr(module),
+                                     copy_cstr(name_text),
+                                     copy_bytes(local.data, local.len)) ||
                     !py_add_binding(ctx,
                                     scope,
                                     local,
@@ -10738,6 +11611,21 @@ static bool py_process_import(PyParseContext *ctx, TSNode node, uint32_t scope)
                                                 .from_module = module,
                                                 .from_member = name_text})) {
                     return false;
+                }
+                /* Module-level from-imports re-export the name: the link
+                 * pass follows `pkg.Name` to its defining module. */
+                if (novel && (scope == 0U)) {
+                    char *local_text = copy_bytes(local.data, local.len);
+
+                    if ((local_text == nullptr) ||
+                        !add_type_fact(ctx->file,
+                                       CODE_LENS_FACT_EXPORT,
+                                       0U,
+                                       ctx->module,
+                                       local_text,
+                                       path)) {
+                        return false;
+                    }
                 }
             } else if (ts_node_is_null(alias_node)) {
                 /* `import a.b.c` binds `a` and makes a.b.c reachable. */
@@ -10911,7 +11799,7 @@ static bool py_prescan_children(PyParseContext *ctx,
             continue;
         }
         if ((node_kind == PYK_FOR_STATEMENT) || (node_kind == PYK_FOR_IN_CLAUSE)) {
-            if (!py_bind_targets(ctx, py_field(child, PYF_LEFT), scope, value) ||
+            if (!py_bind_loop_targets(ctx, child, scope, value) ||
                 !py_prescan(ctx, child, scope, kind, ns, false)) {
                 return false;
             }
@@ -11076,6 +11964,8 @@ static bool py_add_symbol(PyParseContext *ctx,
     symbol->source = source;
     symbol->start_line = ts_node_start_point(outer).row + 1U;
     symbol->end_line = ts_node_end_point(outer).row + 1U;
+    symbol->start_byte = ts_node_start_byte(outer);
+    symbol->end_byte = ts_node_end_byte(outer);
     if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
         (symbol->namespace_name == nullptr)) {
         (void)memset(symbol, 0, sizeof(*symbol));
@@ -11363,6 +12253,134 @@ static PySlice py_first_parameter(const PyParseContext *ctx, TSNode function)
     return (PySlice){.data = ctx->source, .len = 0U};
 }
 
+/* Whether a superclass entry is the Generic[...]/Protocol[...] marker
+ * that only declares type parameters. */
+static bool py_is_generic_marker(PyParseContext *ctx, TSNode candidate)
+{
+    TSNode head = py_is(candidate, PYK_SUBSCRIPT) ? py_field(candidate, PYF_VALUE) : candidate;
+    PySlice text = py_text(ctx, head);
+
+    return py_slice_last_is(text, "Generic") || py_slice_last_is(text, "Protocol");
+}
+
+/* Appends the TypeVars named inside a base's subscript arguments, in
+ * first-appearance order (PEP 484's implicit parameter order). */
+static void py_collect_type_vars(PyParseContext *ctx,
+                                 TSNode node,
+                                 PySlice *names,
+                                 uint32_t *count,
+                                 int depth)
+{
+    node = py_type_unwrap_node(node);
+    if ((depth > 8) || ts_node_is_null(node)) {
+        return;
+    }
+    if (py_is(node, PYK_IDENTIFIER)) {
+        PySlice name = py_text(ctx, node);
+
+        if (!py_names_type_variable(ctx, name) || (*count == PY_MAX_TYPE_ARGS)) {
+            return;
+        }
+        for (uint32_t i = 0U; i < *count; i++) {
+            if ((names[i].len == name.len) && (memcmp(names[i].data, name.data, name.len) == 0)) {
+                return;
+            }
+        }
+        names[(*count)++] = name;
+        return;
+    }
+    if (py_is(node, PYK_SUBSCRIPT) || py_is(node, PYK_GENERIC_TYPE) ||
+        py_is(node, PYK_TYPE_PARAMETER) || py_is(node, PYK_TUPLE)) {
+        TSNode head = py_is(node, PYK_SUBSCRIPT) ? py_field(node, PYF_VALUE) : (TSNode){0};
+
+        for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+            TSNode child = py_child(node, i);
+
+            if (!ts_node_is_null(head) && ts_node_eq(child, head)) {
+                continue;
+            }
+            if (py_is(node, PYK_GENERIC_TYPE) && (i == 0U)) {
+                continue;
+            }
+            py_collect_type_vars(ctx, child, names, count, depth + 1);
+        }
+    }
+}
+
+/* A class's type parameters: PEP 695 `class C[T]`, else the explicit
+ * Generic[...]/Protocol[...] list, else TypeVars used by its bases. */
+static bool py_class_type_params(PyParseContext *ctx,
+                                 TSNode definition,
+                                 TSNode superclasses,
+                                 const PySlice **out_params,
+                                 uint32_t *out_count)
+{
+    PySlice names[PY_MAX_TYPE_ARGS];
+    uint32_t count = 0U;
+    TSNode declared = py_field(definition, PYF_TYPE_PARAMETERS);
+    PySlice *copy;
+
+    *out_params = nullptr;
+    *out_count = 0U;
+    if (!ts_node_is_null(declared)) {
+        for (uint32_t i = 0U, i_count = py_count(declared); i < i_count; i++) {
+            TSNode parameter = py_type_unwrap_node(py_child(declared, i));
+
+            if (py_is(parameter, PYK_CONSTRAINED_TYPE)) {
+                parameter = py_type_unwrap_node(py_child(parameter, 0U));
+            }
+            if (py_is(parameter, PYK_IDENTIFIER) && (count < PY_MAX_TYPE_ARGS)) {
+                names[count++] = py_text(ctx, parameter);
+            }
+        }
+    } else {
+        bool explicit_list = false;
+
+        for (uint32_t i = 0U, i_count = py_count(superclasses); i < i_count; i++) {
+            TSNode candidate = py_child(superclasses, i);
+
+            if (py_is(candidate, PYK_SUBSCRIPT) && py_is_generic_marker(ctx, candidate)) {
+                TSNode head = py_field(candidate, PYF_VALUE);
+
+                for (uint32_t j = 0U, j_count = py_count(candidate); j < j_count; j++) {
+                    TSNode arg = py_type_unwrap_node(py_child(candidate, j));
+
+                    if (!ts_node_eq(arg, head) && py_is(arg, PYK_IDENTIFIER) &&
+                        (count < PY_MAX_TYPE_ARGS)) {
+                        names[count++] = py_text(ctx, arg);
+                    }
+                }
+                explicit_list = true;
+                break;
+            }
+        }
+        for (uint32_t i = 0U, i_count = py_count(superclasses); !explicit_list && (i < i_count);
+             i++) {
+            TSNode candidate = py_child(superclasses, i);
+
+            if (py_is(candidate, PYK_SUBSCRIPT)) {
+                py_collect_type_vars(ctx, candidate, names, &count, 0);
+            }
+        }
+    }
+    if (count == 0U) {
+        return true;
+    }
+    copy = code_lens_alloc(count * sizeof(*copy));
+    if (copy == nullptr) {
+        return false;
+    }
+    (void)memcpy(copy, names, count * sizeof(*copy));
+    *out_params = copy;
+    *out_count = count;
+    return true;
+}
+
+static bool py_bind_parameters(PyParseContext *ctx,
+                               TSNode parameters,
+                               uint32_t scope,
+                               const char *receiver_type);
+
 static bool py_declare_function(PyParseContext *ctx,
                                 TSNode outer,
                                 TSNode function,
@@ -11396,9 +12414,24 @@ static bool py_declare_function(PyParseContext *ctx,
     if ((owner >= 0) && !py_has_decorator(ctx, outer, "staticmethod")) {
         PySlice self_name = py_first_parameter(ctx, function);
 
-        if ((self_name.len > 0U) &&
-            !py_declare_self_fields(ctx, py_field(function, PYF_BODY), self_name, owner, ns)) {
-            return false;
+        if (self_name.len > 0U) {
+            /* Parameters are bound in a scratch scope so `self.x = x`
+             * takes x's annotation. */
+            uint32_t scope;
+            bool ok;
+
+            if (!py_push_scope(ctx, PY_SCOPE_FUNCTION, -1, nullptr, &scope)) {
+                return false;
+            }
+            ok = py_bind_parameters(ctx,
+                                    py_field(function, PYF_PARAMETERS),
+                                    scope,
+                                    ctx->classes[owner].target) &&
+                 py_declare_self_fields(ctx, py_field(function, PYF_BODY), self_name, owner, ns);
+            ctx->scope_count--;
+            if (!ok) {
+                return false;
+            }
         }
     }
     return true;
@@ -11429,19 +12462,44 @@ static bool py_declare_class(PyParseContext *ctx,
     TSNode superclasses = py_field(definition, PYF_SUPERCLASSES);
     char *target = py_join(ns, name.data, name.len);
     const char *base = nullptr;
+    bool base_chosen = false;
+    const PySlice *saved_params = ctx->decl_params;
+    uint32_t saved_param_count = ctx->decl_param_count;
+    const PySlice *params = nullptr;
+    uint32_t param_count = 0U;
+    uint32_t base_ordinal = 0U;
     int32_t index;
+    bool ok;
 
-    if (target == nullptr) {
+    if ((target == nullptr) ||
+        !py_class_type_params(ctx, definition, superclasses, &params, &param_count)) {
+        return false;
+    }
+    /* Bases and member annotations serialize the class's own type
+     * parameters as ~N. */
+    ctx->decl_params = params;
+    ctx->decl_param_count = param_count;
+    if (!add_type_fact(ctx->file, CODE_LENS_FACT_CLASS, param_count, target, "", "")) {
         return false;
     }
     for (uint32_t i = 0U, i_count = py_count(superclasses); i < i_count; i++) {
         TSNode candidate = py_child(superclasses, i);
+        const char *base_type;
 
-        if (py_is(candidate, PYK_KEYWORD_ARGUMENT) || py_is(candidate, PYK_COMMENT)) {
+        if (py_is(candidate, PYK_KEYWORD_ARGUMENT) || py_is(candidate, PYK_COMMENT) ||
+            py_is_generic_marker(ctx, candidate)) {
             continue;
         }
-        base = py_resolve_type_expr(ctx, candidate);
-        break;
+        base_type = py_resolve_type_expr(ctx, candidate);
+        if (!base_chosen) {
+            /* Local member walks follow the first real base only. */
+            base = base_type;
+            base_chosen = true;
+        }
+        if ((base_type != nullptr) &&
+            !add_type_fact(ctx->file, CODE_LENS_FACT_BASE, base_ordinal++, target, "", base_type)) {
+            return false;
+        }
     }
     if (!py_add_member(ctx,
                        owner,
@@ -11458,7 +12516,10 @@ static bool py_declare_class(PyParseContext *ctx,
                        py_header_source(ctx, outer, definition))) {
         return false;
     }
-    return py_declare_block(ctx, py_field(definition, PYF_BODY), index, target);
+    ok = py_declare_block(ctx, py_field(definition, PYF_BODY), index, target);
+    ctx->decl_params = saved_params;
+    ctx->decl_param_count = saved_param_count;
+    return ok;
 }
 
 static bool py_is_compound_container(PyKind kind)
@@ -11672,6 +12733,10 @@ static bool py_add_attribute_reference(PyParseContext *ctx, TSNode node)
     PySlice name;
     PyResolved receiver;
     const char *target = "";
+    /* Receiver type the link pass evaluates to refine the target across
+     * files (re-exports, inherited members, member chains). */
+    const char *deferred = nullptr;
+    size_t before;
 
     if (ts_node_is_null(object) || ts_node_is_null(attribute)) {
         return true;
@@ -11679,9 +12744,20 @@ static bool py_add_attribute_reference(PyParseContext *ctx, TSNode node)
     name = py_text(ctx, attribute);
     receiver = py_resolve(ctx, object);
     if (receiver.kind == PY_RES_CLASS) {
-        target = py_member_owner(ctx, receiver.path, name);
+        bool local = false;
+        const char *owner = py_member_owner(ctx, receiver.path, name, &local);
+
+        target = copy_bytes(owner, type_str_head_len(owner));
+        if (!local && (py_class_index(ctx, owner) < 0)) {
+            deferred = receiver.path;
+        }
     } else if (receiver.kind == PY_RES_INSTANCE) {
-        target = receiver.path;
+        if (type_str_container(receiver.path) == TYPE_CONTAINER_NONE) {
+            target = copy_bytes(receiver.path, type_str_head_len(receiver.path));
+            deferred = receiver.path;
+        }
+    } else if (receiver.kind == PY_RES_DEFERRED) {
+        deferred = receiver.path;
     } else if (receiver.kind == PY_RES_PATH) {
         if (receiver.module) {
             char *path = py_join(receiver.path, name.data, name.len);
@@ -11695,14 +12771,34 @@ static bool py_add_attribute_reference(PyParseContext *ctx, TSNode node)
         }
         target = receiver.path;
     }
-    return py_add_reference(ctx,
-                            py_receiver_is_simple(object) ? ts_node_start_byte(object)
-                                                          : ts_node_start_byte(attribute),
-                            ts_node_end_byte(attribute),
-                            name.data,
-                            name.len,
-                            attribute,
-                            target);
+    if (target == nullptr) {
+        return false;
+    }
+    before = ctx->file->reference_count;
+    if (!py_add_reference(ctx,
+                          py_receiver_is_simple(object) ? ts_node_start_byte(object)
+                                                        : ts_node_start_byte(attribute),
+                          ts_node_end_byte(attribute),
+                          name.data,
+                          name.len,
+                          attribute,
+                          target)) {
+        return false;
+    }
+    if ((deferred != nullptr) && (ctx->file->reference_count > before)) {
+        char *member = copy_bytes(name.data, name.len);
+
+        if ((member == nullptr) ||
+            !add_type_fact(ctx->file,
+                           CODE_LENS_FACT_DEFER,
+                           (uint32_t)before,
+                           target,
+                           member,
+                           deferred)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool py_walk(PyParseContext *ctx, TSNode node, bool store);
@@ -11894,10 +12990,7 @@ static bool py_walk_comprehension(PyParseContext *ctx, TSNode node)
         TSNode child = py_child(node, i);
 
         if (py_is(child, PYK_FOR_IN_CLAUSE)) {
-            ok = py_bind_targets(ctx,
-                                 py_field(child, PYF_LEFT),
-                                 scope,
-                                 (PyBinding){.kind = PY_BIND_LOCAL});
+            ok = py_bind_loop_targets(ctx, child, scope, (PyBinding){.kind = PY_BIND_LOCAL});
         }
     }
     ok = ok && py_walk_children(ctx, node, false);
@@ -11906,6 +12999,132 @@ static bool py_walk_comprehension(PyParseContext *ctx, TSNode node)
 }
 
 static bool py_walk_node(PyParseContext *ctx, TSNode node, bool store);
+
+static bool py_push_narrowing(PyParseContext *ctx, uint32_t binding, const char *type)
+{
+    if ((ctx->narrowing_count == ctx->narrowing_capacity) &&
+        !parser_heap_grow((void **)&ctx->narrowings,
+                          &ctx->narrowing_capacity,
+                          sizeof(*ctx->narrowings),
+                          8U)) {
+        return false;
+    }
+    ctx->narrowings[ctx->narrowing_count++] = (PyNarrowing){.binding = binding, .type = type};
+    return true;
+}
+
+/* Pushes the isinstance() narrowings implied by condition evaluating to
+ * truth: `isinstance(x, T)` when true, through `not`, `and` (true), and
+ * `or` (false). Returns false only on allocation failure. */
+static bool py_collect_narrowings(PyParseContext *ctx, TSNode condition, bool truth, int depth)
+{
+    condition = py_type_unwrap_node(condition);
+    if ((depth > 16) || ts_node_is_null(condition)) {
+        return true;
+    }
+    if (py_is(condition, PYK_NOT_OPERATOR)) {
+        return py_collect_narrowings(ctx, py_field(condition, PYF_ARGUMENT), !truth, depth + 1);
+    }
+    if (py_is(condition, PYK_BOOLEAN_OPERATOR)) {
+        bool conjunction = py_slice_is(py_text(ctx, py_field(condition, PYF_OPERATOR)), "and");
+
+        if (conjunction == truth) {
+            return py_collect_narrowings(ctx, py_field(condition, PYF_LEFT), truth, depth + 1) &&
+                   py_collect_narrowings(ctx, py_field(condition, PYF_RIGHT), truth, depth + 1);
+        }
+        return true;
+    }
+    if (truth && py_calls_builtin(ctx, condition, "isinstance")) {
+        TSNode arguments = py_field(condition, PYF_ARGUMENTS);
+        TSNode subject = py_child(arguments, 0U);
+        const PyBinding *binding;
+        const char *type;
+
+        if ((py_count(arguments) != 2U) || !py_is(subject, PYK_IDENTIFIER)) {
+            return true;
+        }
+        binding = py_lookup(ctx, py_text(ctx, subject));
+        type = py_resolve_type_expr(ctx, py_child(arguments, 1U));
+        if ((binding == nullptr) || (type == nullptr) || (type[0] == '~')) {
+            return true;
+        }
+        return py_push_narrowing(ctx, (uint32_t)(binding - ctx->bindings), type);
+    }
+    return true;
+}
+
+/* if/elif: the consequence sees the condition's narrowings. */
+static bool py_walk_conditional(PyParseContext *ctx, TSNode node)
+{
+    TSNode condition = py_field(node, PYF_CONDITION);
+    TSNode consequence = py_field(node, PYF_CONSEQUENCE);
+
+    if (!py_walk(ctx, condition, false)) {
+        return false;
+    }
+    for (uint32_t i = 0U, i_count = py_count(node); i < i_count; i++) {
+        TSNode child = py_child(node, i);
+
+        if (ts_node_eq(child, condition)) {
+            continue;
+        }
+        if (ts_node_eq(child, consequence)) {
+            size_t saved = ctx->narrowing_count;
+            bool ok = py_collect_narrowings(ctx, condition, true, 0) && py_walk(ctx, child, false);
+
+            ctx->narrowing_count = saved;
+            if (!ok) {
+                return false;
+            }
+            continue;
+        }
+        if (!py_walk(ctx, child, false)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Whether a block always leaves its enclosing flow (return/raise/...). */
+static bool py_block_exits(TSNode block)
+{
+    for (uint32_t i = py_count(block); i > 0U; i--) {
+        TSNode last = py_child(block, i - 1U);
+
+        if (py_is(last, PYK_COMMENT)) {
+            continue;
+        }
+        return py_is(last, PYK_RETURN_STATEMENT) || py_is(last, PYK_RAISE_STATEMENT) ||
+               py_is(last, PYK_CONTINUE_STATEMENT) || py_is(last, PYK_BREAK_STATEMENT);
+    }
+    return false;
+}
+
+/* Statements after `assert isinstance(x, T)` or an exiting
+ * `if not isinstance(x, T): return` guard see x narrowed to T. */
+static bool py_walk_block(PyParseContext *ctx, TSNode block)
+{
+    size_t saved = ctx->narrowing_count;
+    bool ok = true;
+
+    for (uint32_t i = 0U, i_count = py_count(block); ok && (i < i_count); i++) {
+        TSNode child = py_child(block, i);
+
+        ok = py_walk(ctx, child, false);
+        if (!ok) {
+            break;
+        }
+        if (py_is(child, PYK_ASSERT_STATEMENT)) {
+            ok = py_collect_narrowings(ctx, py_child(child, 0U), true, 0);
+        } else if (py_is(child, PYK_IF_STATEMENT) &&
+                   ts_node_is_null(py_field(child, PYF_ALTERNATIVE)) &&
+                   py_block_exits(py_field(child, PYF_CONSEQUENCE))) {
+            ok = py_collect_narrowings(ctx, py_field(child, PYF_CONDITION), false, 0);
+        }
+    }
+    ctx->narrowing_count = saved;
+    return ok;
+}
 
 static bool py_walk(PyParseContext *ctx, TSNode node, bool store)
 {
@@ -11964,6 +13183,11 @@ static bool py_walk_node(PyParseContext *ctx, TSNode node, bool store)
         return py_walk_comprehension(ctx, node);
     case PYK_TYPE_ALIAS_STATEMENT:
         return py_walk(ctx, py_field(node, PYF_RIGHT), false);
+    case PYK_IF_STATEMENT:
+    case PYK_ELIF_CLAUSE:
+        return py_walk_conditional(ctx, node);
+    case PYK_BLOCK:
+        return py_walk_block(ctx, node);
     case PYK_IMPORT_STATEMENT:
     case PYK_IMPORT_FROM_STATEMENT:
     case PYK_FUTURE_IMPORT_STATEMENT:
@@ -12092,6 +13316,7 @@ int code_lens_parse_python_source_with_parser(CodeLensPythonParser *parser,
          py_declare_block(&ctx, root, -1, module) && py_walk(&ctx, root, false);
 
     free(ctx.bindings);
+    free(ctx.narrowings);
     free(ctx.names.slots);
     free(ctx.classes);
     free(ctx.class_by_target.slots);
@@ -12412,7 +13637,9 @@ static bool typescript_symbol(TypeScriptContext *ctx, TSNode outer, TSNode defin
         .namespace_name = copy_cstr(ns), .doc = java_doc_before(ctx->source, start),
         .source = copy_bytes(ctx->source + start, (size_t)(end - start)),
         .start_line = ts_node_start_point(outer).row + 1U,
-        .end_line = ts_node_end_point(outer).row + 1U};
+        .end_line = ts_node_end_point(outer).row + 1U,
+        .start_byte = ts_node_start_byte(outer),
+        .end_byte = ts_node_end_byte(outer)};
     if ((symbol->kind == nullptr) || (symbol->name == nullptr) ||
         (symbol->namespace_name == nullptr) || (symbol->source == nullptr)) {
         return false;
@@ -12525,7 +13752,10 @@ static bool typescript_import_binding(TypeScriptContext *ctx, TSNode local,
     if (module) {
         return add_alias(ctx->file, copy_cstr(target), typescript_text(ctx, local));
     }
-    return add_referred(ctx->file, copy_cstr(target), copy_cstr(original));
+    return add_referred_as(ctx->file,
+                           copy_cstr(target),
+                           copy_cstr(original),
+                           typescript_text(ctx, local));
 }
 
 static bool typescript_import_clause(TypeScriptContext *ctx, TSNode node,
@@ -13170,6 +14400,8 @@ typedef struct {
      * (fewer than 16 left in a file) drain through the single-row stmts. */
     sqlite3_stmt *ref_batch;
     sqlite3_stmt *keyword_batch;
+    /* TypeFact rows always go through SQL (also under the raw emitter). */
+    sqlite3_stmt *type_fact;
 } IndexWriters;
 
 /* String interner backing the Term dictionary. Emission is single-threaded,
@@ -13207,6 +14439,7 @@ typedef struct {
     double commit_seconds;
     double publish_seconds;
     double repo_write_seconds;
+    double type_link_seconds;
 } IndexProfile;
 
 typedef struct {
@@ -13384,6 +14617,9 @@ typedef struct {
     int64_t symbol_rowid_base;
     RawIndexMirror raw_mirror;
     RawEmitter raw_emit;
+    /* TypeFact rows written by this run; a full build skips the type link
+     * pass when none were. */
+    size_t type_fact_count;
 } IndexContext;
 
 static double profile_now_seconds(void)
@@ -13471,6 +14707,7 @@ static void profile_report(const IndexProfile *profile, const CodeLensIndexStats
                   profile->fts_seconds,
                   profile->commit_seconds,
                   profile->publish_seconds);
+    (void)fprintf(stderr, "code-lens profile: type_link %.6fs\n", profile->type_link_seconds);
     if (stats != nullptr) {
         (void)fprintf(stderr,
                       "code-lens profile: counts %zu files %zu symbols %zu references "
@@ -13555,9 +14792,12 @@ static const char index_schema_sql[] =
     " size INTEGER, mtimeSec INTEGER, mtimeNsec INTEGER,"
     " refFirst INTEGER, refCount INTEGER, keywordFirst INTEGER, keywordCount INTEGER,"
     " symbolFirst INTEGER, symbolCount INTEGER);"
+    /* content is the short indexed form (searched by SymbolFts); the whole
+     * definition is the file's [startByte, endByte) span, read back on
+     * demand by the source() SQL function rather than stored. */
     "CREATE TABLE Symbol (id TEXT PRIMARY KEY, repo TEXT, name TEXT, kind TEXT,"
     " namespace TEXT, filePath TEXT, startLine INTEGER, endLine INTEGER,"
-    " content TEXT, doc TEXT);"
+    " content TEXT, doc TEXT, startByte INTEGER, endByte INTEGER);"
     /* Ref ids are global emission ordinals, so INTEGER PRIMARY KEY makes the
      * id the rowid: 452k-row loads append to the table b-tree instead of
      * churning a separate text-key index. Hot rows are deliberately narrow:
@@ -13608,11 +14848,13 @@ static const char index_schema_sql[] =
     " LEFT JOIN File f ON f.rowid = k.fileId;"
     "CREATE TABLE Alias (id TEXT PRIMARY KEY, repo TEXT, filePath TEXT,"
     " namespace TEXT, alias TEXT);"
-    /* Symbols made visible unqualified by :refer / :refer :all / (:use ...);
-     * the sentinel symbol ':all' stands for whole-namespace referral. Read
-     * by context's unqualified-reference filter. */
+    /* Symbols made visible unqualified by :refer / :refer :all / (:use ...),
+     * Java static imports, Python from-imports, and TypeScript named/default
+     * imports; the sentinel symbol ':all' stands for whole-namespace
+     * referral. symbol (the imported name) is read by context's
+     * unqualified-reference filter; alias is the local binding name. */
     "CREATE TABLE Referred (id TEXT PRIMARY KEY, repo TEXT, filePath TEXT,"
-    " namespace TEXT, symbol TEXT);"
+    " namespace TEXT, symbol TEXT, alias TEXT);"
     /* Dependency-source metadata is deliberately separate from the hot
      * File/Symbol/Ref tables. Dependency source files use the same parser and
      * index rows as workspace files; these legacy-named tables identify their
@@ -13631,6 +14873,15 @@ static const char index_schema_sql[] =
     "CREATE INDEX idx_dependency_artifact_coordinate ON DependencyArtifact(repo, coordinate);"
     "CREATE INDEX idx_dependency_file_path ON DependencyFile(repo, filePath);"
     "CREATE INDEX idx_dependency_file_artifact ON DependencyFile(artifactId);"
+    /* Cross-file type facts (CodeLensTypeFact): low volume, written with
+     * ordinary prepared statements even under the raw emitter, deleted per
+     * file by incremental refreshes, and read by the type link pass that
+     * rewrites deferred references' RefData.targetNamespaceTerm before
+     * every publish. fileId is the File rowid; num is the base ordinal,
+     * parameter count, or (for deferred rows) the absolute RefData id. */
+    "CREATE TABLE TypeFact (fileId INTEGER, kind INTEGER, owner TEXT, name TEXT,"
+    " type TEXT, num INTEGER);"
+    "CREATE INDEX idx_type_fact_file ON TypeFact(fileId);"
     /* Secondary indexes on Symbol/Ref/Keyword are created after the bulk
      * load (see index_secondary_indexes_sql): one sort-based build beats
      * incremental b-tree maintenance across ~700k streamed inserts. */
@@ -13677,8 +14928,9 @@ static const char *const index_insert_sql[IDX_TABLE_COUNT] = {
                        " symbolFirst, symbolCount)"
                        " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     [IDX_TABLE_SYMBOL] = "INSERT INTO Symbol (id, repo, name, kind, namespace,"
-                         " filePath, startLine, endLine, content, doc)"
-                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                         " filePath, startLine, endLine, content, doc, startByte,"
+                         " endByte)"
+                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     [IDX_TABLE_REF] = "INSERT INTO RefData (id, fileId, symbolTerm, lineNumber,"
                       " columnNumber, startByte, endByte, symbolBaseTerm,"
                       " targetNamespaceTerm)"
@@ -13689,8 +14941,8 @@ static const char *const index_insert_sql[IDX_TABLE_COUNT] = {
                           " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     [IDX_TABLE_ALIAS] = "INSERT INTO Alias (id, repo, filePath, namespace, alias)"
                         " VALUES (?1, ?2, ?3, ?4, ?5)",
-    [IDX_TABLE_REFERRED] = "INSERT INTO Referred (id, repo, filePath, namespace, symbol)"
-                           " VALUES (?1, ?2, ?3, ?4, ?5)",
+    [IDX_TABLE_REFERRED] = "INSERT INTO Referred (id, repo, filePath, namespace, symbol,"
+                           " alias) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
 };
 
 /* Multi-row INSERT batching for Ref and Keyword: one statement carries 16
@@ -13732,6 +14984,10 @@ static void finalize_index_writers(IndexWriters *writers)
         (void)sqlite3_finalize(writers->keyword_batch);
         writers->keyword_batch = nullptr;
     }
+    if (writers->type_fact != nullptr) {
+        (void)sqlite3_finalize(writers->type_fact);
+        writers->type_fact = nullptr;
+    }
 }
 
 static int prepare_index_writers(CodeLensDb *db, IndexWriters *writers)
@@ -13748,7 +15004,11 @@ static int prepare_index_writers(CodeLensDb *db, IndexWriters *writers)
         }
     }
     if ((db_prepare(db, ref_batch_insert_sql, &writers->ref_batch) != 0) ||
-        (db_prepare(db, keyword_batch_insert_sql, &writers->keyword_batch) != 0)) {
+        (db_prepare(db, keyword_batch_insert_sql, &writers->keyword_batch) != 0) ||
+        (db_prepare(db,
+                    "INSERT INTO TypeFact (fileId, kind, owner, name, type, num)"
+                    " VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    &writers->type_fact) != 0)) {
         finalize_index_writers(writers);
         return -1;
     }
@@ -16805,7 +18065,7 @@ static int insert_symbol_row(IndexContext *index,
     }
     if (index->raw_emit.active) {
         RawEmitter *emit = &index->raw_emit;
-        RawColumn cols[10] = {CP_RAW_TEXT(id),
+        RawColumn cols[12] = {CP_RAW_TEXT(id),
                               CP_RAW_TEXT(index->repo_path),
                               CP_RAW_TEXT(symbol->name),
                               CP_RAW_TEXT(symbol->kind),
@@ -16814,13 +18074,15 @@ static int insert_symbol_row(IndexContext *index,
                               CP_RAW_INT((int64_t)symbol->start_line),
                               CP_RAW_INT((int64_t)symbol->end_line),
                               CP_RAW_TEXT(symbol->source),
-                              CP_RAW_TEXT(symbol->doc)};
+                              CP_RAW_TEXT(symbol->doc),
+                              CP_RAW_INT((int64_t)symbol->start_byte),
+                              CP_RAW_INT((int64_t)symbol->end_byte)};
 
         if (raw_ptr_push(&emit->symbol_ids, &emit->symbol_id_count, &emit->symbol_id_cap, id) !=
             0) {
             return -1;
         }
-        if (raw_emit_encoded(emit, &emit->symbol, (int64_t)emit->symbol_id_count, cols, 10U) !=
+        if (raw_emit_encoded(emit, &emit->symbol, (int64_t)emit->symbol_id_count, cols, 12U) !=
             0) {
             return -1;
         }
@@ -16831,7 +18093,9 @@ static int insert_symbol_row(IndexContext *index,
             (bind_text(stmt, 6, path) != 0) ||
             (sqlite3_bind_int64(stmt, 7, (int64_t)symbol->start_line) != SQLITE_OK) ||
             (sqlite3_bind_int64(stmt, 8, (int64_t)symbol->end_line) != SQLITE_OK) ||
-            (bind_text(stmt, 9, symbol->source) != 0) || (bind_text(stmt, 10, symbol->doc) != 0)) {
+            (bind_text(stmt, 9, symbol->source) != 0) || (bind_text(stmt, 10, symbol->doc) != 0) ||
+            (sqlite3_bind_int64(stmt, 11, (int64_t)symbol->start_byte) != SQLITE_OK) ||
+            (sqlite3_bind_int64(stmt, 12, (int64_t)symbol->end_byte) != SQLITE_OK)) {
             return -1;
         }
         if (writer_step(stmt) != 0) {
@@ -17192,11 +18456,12 @@ static int insert_referred_row(IndexContext *index,
     }
     if (index->raw_emit.active) {
         RawEmitter *emit = &index->raw_emit;
-        RawColumn cols[5] = {CP_RAW_TEXT(id),
+        RawColumn cols[6] = {CP_RAW_TEXT(id),
                              CP_RAW_TEXT(index->repo_path),
                              CP_RAW_TEXT(path),
                              CP_RAW_TEXT(referred->namespace_name),
-                             CP_RAW_TEXT(referred->symbol)};
+                             CP_RAW_TEXT(referred->symbol),
+                             CP_RAW_TEXT(referred->alias)};
 
         if (raw_ptr_push(&emit->referred_ids,
                          &emit->referred_id_count,
@@ -17208,12 +18473,13 @@ static int insert_referred_row(IndexContext *index,
                                 &emit->referred,
                                 (int64_t)emit->referred_id_count,
                                 cols,
-                                5U);
+                                6U);
     }
     if ((bind_text(stmt, 1, id) != 0) || (bind_text(stmt, 2, index->repo_path) != 0) ||
         (bind_text(stmt, 3, path) != 0) ||
         (bind_text(stmt, 4, referred->namespace_name) != 0) ||
-        (bind_text(stmt, 5, referred->symbol) != 0)) {
+        (bind_text(stmt, 5, referred->symbol) != 0) ||
+        (bind_text(stmt, 6, referred->alias) != 0)) {
         return -1;
     }
     return writer_step(stmt);
@@ -17421,6 +18687,7 @@ static int emit_parsed_file(IndexContext *index, ParsedFileResult *result)
 {
     const CodeLensSourceFile *parsed;
     double start;
+    int64_t ref_first;
     int rc;
 
     if ((index == nullptr) || (result == nullptr) || !result->has_file ||
@@ -17428,6 +18695,9 @@ static int emit_parsed_file(IndexContext *index, ParsedFileResult *result)
         return -1;
     }
     parsed = &result->file;
+    /* The file's references take ids from here (deferred type facts store
+     * absolute RefData ids). */
+    ref_first = (int64_t)index->stats.reference_count;
 
     start = profile_start(index->profile);
     rc = insert_file_row(index, parsed->file_path, parsed->namespace_name, result);
@@ -17546,6 +18816,26 @@ static int emit_parsed_file(IndexContext *index, ParsedFileResult *result)
         (void)fprintf(stderr, "code-lens: failed to write Alias row\n");
         return -1;
     }
+
+    for (size_t i = 0U; (rc == 0) && (i < parsed->type_fact_count); i++) {
+        const CodeLensTypeFact *fact = &parsed->type_facts[i];
+        sqlite3_stmt *stmt = index->writers.type_fact;
+        int64_t num = fact->kind == CODE_LENS_FACT_DEFER ? ref_first + (int64_t)fact->number
+                                                         : (int64_t)fact->number;
+
+        if ((sqlite3_bind_int64(stmt, 1, index->current_file_rowid) != SQLITE_OK) ||
+            (sqlite3_bind_int(stmt, 2, (int)fact->kind) != SQLITE_OK) ||
+            (bind_text(stmt, 3, fact->owner) != 0) || (bind_text(stmt, 4, fact->name) != 0) ||
+            (bind_text(stmt, 5, fact->type) != 0) ||
+            (sqlite3_bind_int64(stmt, 6, num) != SQLITE_OK) || (writer_step(stmt) != 0)) {
+            rc = -1;
+        }
+    }
+    if (rc != 0) {
+        (void)fprintf(stderr, "code-lens: failed to write TypeFact row\n");
+        return -1;
+    }
+    index->type_fact_count += parsed->type_fact_count;
 
     return 0;
 }
@@ -17752,6 +19042,10 @@ static int stream_append_path(const char *path, void *ctx)
 typedef struct {
     ParallelParseWork *work;
     const char *repo_path;
+    /* Dependency source files streamed after the workspace walk, in the
+     * same order the sequential path indexes them. */
+    char *const *extra_paths;
+    size_t extra_count;
     double collect_seconds;
     bool profile_enabled;
 } StreamWalker;
@@ -17764,6 +19058,9 @@ static void *stream_walk_main(void *ctx)
     double start = walker->profile_enabled ? profile_now_seconds() : 0.0;
     int rc = code_lens_walk_source_files(walker->repo_path, stream_append_path, &batch);
 
+    for (size_t i = 0U; (rc == 0) && (i < walker->extra_count); i++) {
+        rc = stream_append_path(walker->extra_paths[i], &batch);
+    }
     if ((rc == 0) && (stream_flush_batch(&batch) != 0)) {
         rc = -1;
     }
@@ -17784,7 +19081,9 @@ static void *stream_walk_main(void *ctx)
 
 static int index_source_files_parallel(IndexContext *index,
                                         const char *repo_path,
-                                        size_t thread_count)
+                                        size_t thread_count,
+                                        char *const *extra_paths,
+                                        size_t extra_count)
 {
     ParallelParseWork work;
     StreamWalker walker;
@@ -17829,6 +19128,8 @@ static int index_source_files_parallel(IndexContext *index,
     (void)memset(&walker, 0, sizeof(walker));
     walker.work = &work;
     walker.repo_path = repo_path;
+    walker.extra_paths = extra_paths;
+    walker.extra_count = extra_count;
     walker.profile_enabled = profile_enabled;
     err = pthread_create(&walk_thread, nullptr, stream_walk_main, &walker);
     if (err != 0) {
@@ -18350,6 +19651,7 @@ typedef enum {
     DEPENDENCY_PROJECT_MAVEN,
     DEPENDENCY_PROJECT_LEININGEN,
     DEPENDENCY_PROJECT_TOOLS_DEPS,
+    DEPENDENCY_PROJECT_PYTHON,
 } DependencyProjectKind;
 
 typedef struct {
@@ -18378,6 +19680,11 @@ typedef struct {
     size_t skipped_artifacts;
 } MavenDependencySet;
 
+/* Python virtualenv sources (see python_resolve_venv). */
+static const char *const python_venv_dirs[] = {".venv", "venv"};
+static int python_collect_inputs(MavenDependencySet *set);
+static int python_resolve_venv(MavenDependencySet *set);
+
 static const char *dependency_project_name(DependencyProjectKind kind)
 {
     switch (kind) {
@@ -18387,6 +19694,8 @@ static const char *dependency_project_name(DependencyProjectKind kind)
             return "Leiningen";
         case DEPENDENCY_PROJECT_TOOLS_DEPS:
             return "tools.deps";
+        case DEPENDENCY_PROJECT_PYTHON:
+            return "Python virtualenv";
         case DEPENDENCY_PROJECT_NONE:
             return "dependency";
     }
@@ -18416,6 +19725,21 @@ static int dependency_project_detect(const char *repo_path, MavenDependencySet *
         }
         if (code_lens_path_exists(path)) {
             set->project_kind = candidates[i].kind;
+            set->root_pom = path;
+            return 0;
+        }
+    }
+    /* A repository-root virtualenv (marked by pyvenv.cfg) supplies Python
+     * dependency sources. */
+    for (size_t i = 0U; i < sizeof(python_venv_dirs) / sizeof(python_venv_dirs[0]); i++) {
+        char *venv = code_lens_join_path(repo_path, python_venv_dirs[i]);
+        char *path = venv == nullptr ? nullptr : code_lens_join_path(venv, "pyvenv.cfg");
+
+        if (path == nullptr) {
+            return -1;
+        }
+        if (code_lens_path_exists(path)) {
+            set->project_kind = DEPENDENCY_PROJECT_PYTHON;
             set->root_pom = path;
             return 0;
         }
@@ -18743,6 +20067,9 @@ static int maven_collect_inputs(const char *repo_path, MavenDependencySet *set)
 
     if (set->project_kind == DEPENDENCY_PROJECT_NONE) {
         return 0;
+    }
+    if (set->project_kind == DEPENDENCY_PROJECT_PYTHON) {
+        return python_collect_inputs(set);
     }
     if ((set->project_kind == DEPENDENCY_PROJECT_LEININGEN) ||
         (set->project_kind == DEPENDENCY_PROJECT_TOOLS_DEPS)) {
@@ -20370,6 +21697,316 @@ static int maven_resolve_classpath(MavenDependencySet *set)
     return dependency_resolution_finish(set);
 }
 
+/* Python virtualenv dependency sources --------------------------------- */
+
+/* A repository-root virtualenv (`.venv` or `venv`) is the dependency
+ * project for Python: its pyvenv.cfg is the root build file, and its
+ * installed distributions are the dependency artifacts. Nothing executes;
+ * each distribution's *.dist-info/RECORD lists exactly the files it
+ * installed, so the .py sources index in place (no extraction cache) and
+ * the RECORD snapshot is the input set that detects installs, upgrades,
+ * and removals. Editable installs list only a .pth file and contribute no
+ * sources, which keeps the workspace from being indexed twice. */
+
+static int python_path_ptr_compare(const void *left, const void *right)
+{
+    return strcmp(*(char *const *)left, *(char *const *)right);
+}
+
+/* Every site-packages directory of the virtualenv whose pyvenv.cfg is
+ * marker: lib/pythonX.Y/site-packages (POSIX) and Lib/site-packages
+ * (Windows), sorted. */
+static int python_site_packages(const char *marker, CodeLensPathList *out)
+{
+    const char *slash = strrchr(marker, '/');
+    char *venv = slash == nullptr ? nullptr : copy_bytes(marker, (size_t)(slash - marker));
+    char *lib = venv == nullptr ? nullptr : code_lens_join_path(venv, "lib");
+    char *windows = venv == nullptr ? nullptr : code_lens_join_path(venv, "Lib/site-packages");
+    DIR *dir;
+    struct dirent *entry;
+
+    if ((lib == nullptr) || (windows == nullptr)) {
+        return -1;
+    }
+    dir = opendir(lib);
+    while ((dir != nullptr) && ((entry = readdir(dir)) != nullptr)) {
+        char *version_dir;
+        char *site;
+
+        if (strncmp(entry->d_name, "python", 6U) != 0) {
+            continue;
+        }
+        version_dir = code_lens_join_path(lib, entry->d_name);
+        site = version_dir == nullptr ? nullptr : code_lens_join_path(version_dir, "site-packages");
+        if (site == nullptr) {
+            (void)closedir(dir);
+            return -1;
+        }
+        if (code_lens_is_directory(site) && (path_list_append(out, site) != 0)) {
+            (void)closedir(dir);
+            return -1;
+        }
+    }
+    if (dir != nullptr) {
+        (void)closedir(dir);
+    }
+    if ((out->count == 0U) && code_lens_is_directory(windows) &&
+        (path_list_append(out, windows) != 0)) {
+        return -1;
+    }
+    if (out->count > 1U) {
+        qsort(out->paths, out->count, sizeof(*out->paths), python_path_ptr_compare);
+    }
+    return 0;
+}
+
+/* The *.dist-info directories of one site-packages, sorted. */
+static int python_dist_infos(const char *site, CodeLensPathList *out)
+{
+    DIR *dir = opendir(site);
+    struct dirent *entry;
+    size_t first = out->count;
+
+    if (dir == nullptr) {
+        return 0;
+    }
+    while ((entry = readdir(dir)) != nullptr) {
+        size_t len = strlen(entry->d_name);
+        char *path;
+
+        if ((len <= 10U) || (strcmp(entry->d_name + len - 10U, ".dist-info") != 0)) {
+            continue;
+        }
+        path = code_lens_join_path(site, entry->d_name);
+        if ((path == nullptr) ||
+            (code_lens_is_directory(path) && (path_list_append(out, path) != 0))) {
+            (void)closedir(dir);
+            return -1;
+        }
+    }
+    (void)closedir(dir);
+    if (out->count - first > 1U) {
+        qsort(out->paths + first, out->count - first, sizeof(*out->paths), python_path_ptr_compare);
+    }
+    return 0;
+}
+
+/* Inputs: pyvenv.cfg plus every distribution's RECORD. */
+static int python_collect_inputs(MavenDependencySet *set)
+{
+    CodeLensPathList sites = {0};
+    CodeLensPathList dists = {0};
+
+    if ((maven_input_callback(set->root_pom, set) != 0) ||
+        (python_site_packages(set->root_pom, &sites) != 0)) {
+        return -1;
+    }
+    for (size_t i = 0U; i < sites.count; i++) {
+        if (python_dist_infos(sites.paths[i], &dists) != 0) {
+            return -1;
+        }
+    }
+    for (size_t i = 0U; i < dists.count; i++) {
+        char *record = code_lens_join_path(dists.paths[i], "RECORD");
+
+        if (record == nullptr) {
+            return -1;
+        }
+        if (code_lens_path_exists(record) && (maven_input_callback(record, set) != 0)) {
+            return -1;
+        }
+    }
+    if (set->input_count > 1U) {
+        qsort(set->inputs, set->input_count, sizeof(*set->inputs), maven_input_compare);
+    }
+    return 0;
+}
+
+/* Next RECORD row's path field (CSV, optionally double-quoted with ""
+ * escapes); advances *cursor past the line. nullptr at end of input. */
+static char *python_record_path(const char **cursor, const char *end)
+{
+    const char *c = *cursor;
+    StringBuilder field = {0};
+    bool ok = true;
+
+    if (c >= end) {
+        return nullptr;
+    }
+    if (*c == '"') {
+        c++;
+        while ((c < end) && ok) {
+            if ((*c == '"') && (c + 1 < end) && (c[1] == '"')) {
+                ok = sb_append_len(&field, "\"", 1U);
+                c += 2;
+            } else if (*c == '"') {
+                c++;
+                break;
+            } else {
+                ok = sb_append_len(&field, c, 1U);
+                c++;
+            }
+        }
+    } else {
+        const char *start = c;
+
+        while ((c < end) && (*c != ',') && (*c != '\n') && (*c != '\r')) {
+            c++;
+        }
+        ok = sb_append_len(&field, start, (size_t)(c - start));
+    }
+    while ((c < end) && (*c != '\n')) {
+        c++;
+    }
+    *cursor = c < end ? c + 1 : end;
+    if (!ok) {
+        return nullptr;
+    }
+    return field.data == nullptr ? copy_cstr("") : field.data;
+}
+
+/* Installed .py sources a distribution's RECORD lists, as absolute paths
+ * below site; files another distribution already claimed are skipped. */
+static int python_record_sources(const char *site,
+                                 const char *dist_info,
+                                 ParseMap *claimed,
+                                 CodeLensPathList *out)
+{
+    char *record = code_lens_join_path(dist_info, "RECORD");
+    CodeLensMappedFile content = {0};
+    const char *cursor;
+    const char *end;
+    int rc = 0;
+
+    if ((record == nullptr) || (code_lens_map_file(record, &content) != 0)) {
+        return record == nullptr ? -1 : 0; /* no RECORD: nothing to index */
+    }
+    cursor = content.data;
+    end = content.data + content.len;
+    while ((rc == 0) && (cursor < end)) {
+        char *relative = python_record_path(&cursor, end);
+        size_t len;
+        char *path;
+        uint32_t existing;
+
+        if (relative == nullptr) {
+            break;
+        }
+        len = strlen(relative);
+        if ((len < 4U) || (strcmp(relative + len - 3U, ".py") != 0) || (relative[0] == '/') ||
+            (strncmp(relative, "..", 2U) == 0) || (strstr(relative, "__pycache__") != nullptr) ||
+            (strstr(relative, "/../") != nullptr)) {
+            continue;
+        }
+        path = code_lens_join_path(site, relative);
+        if (path == nullptr) {
+            rc = -1;
+            break;
+        }
+        {
+            int64_t size;
+            int64_t mtime_sec;
+            int64_t mtime_nsec;
+
+            if (parse_map_find(claimed, 0U, path, strlen(path), &existing) ||
+                (stat_regular_file(path, &size, &mtime_sec, &mtime_nsec) != 0)) {
+                continue;
+            }
+        }
+        if (!parse_map_insert(claimed, 0U, path, strlen(path), 0U) ||
+            (path_list_append(out, path) != 0)) {
+            rc = -1;
+        }
+    }
+    code_lens_mapped_file_free(&content);
+    if ((rc == 0) && (out->count > 1U)) {
+        qsort(out->paths, out->count, sizeof(*out->paths), python_path_ptr_compare);
+    }
+    return rc;
+}
+
+static int python_resolve_venv(MavenDependencySet *set)
+{
+    CodeLensPathList sites = {0};
+    ParseMap claimed = {0};
+    int rc = -1;
+
+    if (python_site_packages(set->root_pom, &sites) != 0) {
+        goto done;
+    }
+    for (size_t s = 0U; s < sites.count; s++) {
+        CodeLensPathList dists = {0};
+
+        if (python_dist_infos(sites.paths[s], &dists) != 0) {
+            goto done;
+        }
+        for (size_t d = 0U; d < dists.count; d++) {
+            const char *dist_info = dists.paths[d];
+            const char *base = strrchr(dist_info, '/');
+            const char *name;
+            size_t stem_len;
+            const char *dash;
+            char *dist_name;
+            char *version;
+            char *coordinate;
+            MavenSourceArtifact *artifact;
+
+            /* <name>-<version>.dist-info; wheel names escape '-' to '_'. */
+            name = base == nullptr ? dist_info : base + 1;
+            stem_len = strlen(name) - strlen(".dist-info");
+            dash = memchr(name, '-', stem_len);
+            dist_name = copy_bytes(name, dash == nullptr ? stem_len : (size_t)(dash - name));
+            version = dash == nullptr ? copy_cstr("")
+                                      : copy_bytes(dash + 1, stem_len - (size_t)(dash + 1 - name));
+            coordinate = (dist_name == nullptr) || (version == nullptr)
+                             ? nullptr
+                             : alloc_printf("pypi:%s:%s", dist_name, version);
+            if (coordinate == nullptr) {
+                goto done;
+            }
+            if ((set->artifact_count == set->artifact_capacity) &&
+                !grow_array((void **)&set->artifacts,
+                            &set->artifact_capacity,
+                            sizeof(*set->artifacts),
+                            16U)) {
+                goto done;
+            }
+            artifact = &set->artifacts[set->artifact_count];
+            (void)memset(artifact, 0, sizeof(*artifact));
+            if (python_record_sources(sites.paths[s], dist_info, &claimed, &artifact->files) != 0) {
+                goto done;
+            }
+            if (artifact->files.count == 0U) {
+                continue; /* metadata-only, compiled, or editable install */
+            }
+            artifact->coordinate = coordinate;
+            artifact->group_id = copy_cstr("pypi");
+            artifact->artifact_id = dist_name;
+            artifact->version = version;
+            artifact->scope = copy_cstr("venv");
+            artifact->direct = -1;
+            artifact->source_jar = copy_cstr(dist_info);
+            artifact->source_root = copy_cstr(sites.paths[s]);
+            artifact->checksum = copy_cstr("");
+            artifact->id = alloc_printf("%s|dependency|%s|", set->repo_path, coordinate);
+            if ((artifact->group_id == nullptr) || (artifact->scope == nullptr) ||
+                (artifact->source_jar == nullptr) || (artifact->source_root == nullptr) ||
+                (artifact->checksum == nullptr) || (artifact->id == nullptr)) {
+                goto done;
+            }
+            set->artifact_count++;
+        }
+    }
+    rc = dependency_resolution_finish(set);
+
+done:
+    free(claimed.slots);
+    if (rc != 0) {
+        set->message = copy_cstr("reading the Python virtualenv's installed distributions failed");
+    }
+    return rc;
+}
+
 static bool maven_inputs_match_db(CodeLensDb *db, MavenDependencySet *set)
 {
     sqlite3_stmt *count_stmt = nullptr;
@@ -20615,14 +22252,16 @@ static int maven_dependencies_prepare(const char *repo_path,
     }
     db_path = repo_db_path(repo_path);
     had_index = (db_path != nullptr) && code_lens_path_exists(db_path);
-    if (had_index && (maven_try_reuse(db_path, set) == 0)) {
+    /* Python sources index in place from RECORD listings: re-reading them
+     * is cheaper than validating a reuse, and runs nothing. */
+    if (had_index && (set->project_kind != DEPENDENCY_PROJECT_PYTHON) &&
+        (maven_try_reuse(db_path, set) == 0)) {
         return 0;
     }
     if (set->project_kind == DEPENDENCY_PROJECT_NONE) {
         set->status = copy_bytes("none", strlen("none"));
-        set->message = copy_bytes(
-            "no pom.xml, project.clj, or deps.edn; no supported dependency project was detected",
-            strlen("no pom.xml, project.clj, or deps.edn; no supported dependency project was detected"));
+        set->message = copy_cstr("no pom.xml, project.clj, deps.edn, or .venv/pyvenv.cfg; no "
+                                 "supported dependency project was detected");
         return (set->status == nullptr) || (set->message == nullptr) ? -1 : 0;
     }
     if (!maven_enabled()) {
@@ -20637,9 +22276,9 @@ static int maven_dependencies_prepare(const char *repo_path,
                   "code-lens: resolving %s dependency sources for %s\n",
                   dependency_project_name(set->project_kind),
                   repo_path);
-    if (((set->project_kind == DEPENDENCY_PROJECT_MAVEN)
-             ? maven_resolve_sources(set)
-             : maven_resolve_classpath(set)) == 0) {
+    if (((set->project_kind == DEPENDENCY_PROJECT_MAVEN)    ? maven_resolve_sources(set)
+         : (set->project_kind == DEPENDENCY_PROJECT_PYTHON) ? python_resolve_venv(set)
+                                                            : maven_resolve_classpath(set)) == 0) {
         if (set->artifact_count == 0U) {
             (void)fprintf(stderr,
                           "code-lens: warning: %s resolved no dependency source artifacts; "
@@ -21196,6 +22835,7 @@ enum {
     INC_STMT_SYMBOL_RANGE,
     INC_STMT_ALIAS,
     INC_STMT_REFERRED,
+    INC_STMT_TYPE_FACT,
     INC_STMT_FILE,
     INC_STMT_COUNT
 };
@@ -21220,6 +22860,9 @@ static int incremental_delete_files_ranged(CodeLensDb *db,
         [INC_STMT_SYMBOL_RANGE] = "DELETE FROM Symbol WHERE rowid BETWEEN ?1 AND ?2",
         [INC_STMT_ALIAS] = "DELETE FROM Alias WHERE repo = ?1 AND filePath = ?2",
         [INC_STMT_REFERRED] = "DELETE FROM Referred WHERE repo = ?1 AND filePath = ?2",
+        /* Before the File row goes: the fileId is its rowid. */
+        [INC_STMT_TYPE_FACT] = "DELETE FROM TypeFact WHERE fileId IN"
+                               " (SELECT rowid FROM File WHERE repo = ?1 AND path = ?2)",
         [INC_STMT_FILE] = "DELETE FROM File WHERE repo = ?1 AND path = ?2",
     };
     sqlite3_stmt *stmts[INC_STMT_COUNT] = {nullptr};
@@ -21323,6 +22966,796 @@ static int incremental_delete_files_ranged(CodeLensDb *db,
             (void)sqlite3_finalize(stmts[i]);
         }
     }
+    return rc;
+}
+
+/* Type link pass
+ *
+ * Python extraction resolves receivers one file at a time. A reference whose
+ * receiver type crosses files (an imported class, a package re-export, a
+ * member chain, a generic parameter, an iterated element) carries a
+ * CODE_LENS_FACT_DEFER row. This pass loads every file's class, base,
+ * member, and export facts, evaluates each deferred receiver expression,
+ * and rewrites the reference's targetNamespace to the class that declares
+ * the member; references it cannot resolve keep (or get back) their
+ * locally resolved target. It always re-evaluates the whole TypeFact table,
+ * on full builds and incremental refreshes alike, so results depend only
+ * on the final fact set and an incremental refresh stays equivalent to a
+ * full rebuild. Duplicate facts (a module indexed twice) resolve by a
+ * deterministic preference, never by row order. */
+
+#define TYPE_LINK_MAX_DEPTH 24
+#define TYPE_LINK_KEY_MAX 2048U
+
+typedef struct TypeLinkType TypeLinkType;
+
+struct TypeLinkType {
+    const char *head; /* canonical dotted path; nullptr when unknown */
+    uint32_t arg_count;
+    const TypeLinkType **args;
+};
+
+typedef struct {
+    const char *path;
+    uint32_t base_first;
+    uint32_t base_count;
+} TypeLinkClass;
+
+typedef struct {
+    const char *owner;
+    int64_t ordinal;
+    const char *type;
+} TypeLinkBase;
+
+typedef struct {
+    TypeLinkClass *classes;
+    size_t class_count;
+    size_t class_capacity;
+    ParseMap class_index; /* (0, class path) -> classes[] */
+    TypeLinkBase *bases;  /* sorted by (owner, ordinal) */
+    size_t base_count;
+    size_t base_capacity;
+    const char **values; /* member types, export paths, canonical paths */
+    size_t value_count;
+    size_t value_capacity;
+    ParseMap members;   /* (0, owner \x1f name) -> values[] */
+    ParseMap exports;   /* (0, module \x1f name) -> values[] */
+    ParseMap canonical; /* (0, path) -> values[] */
+    ParseMap evaluated; /* (0, expression) -> types[] */
+    const TypeLinkType **types;
+    size_t type_count;
+    size_t type_capacity;
+} TypeLinker;
+
+static const TypeLinkType type_link_unknown = {.head = nullptr, .arg_count = 0U, .args = nullptr};
+
+static void type_linker_destroy(TypeLinker *linker)
+{
+    free(linker->classes);
+    free(linker->class_index.slots);
+    free(linker->bases);
+    free(linker->values);
+    free(linker->members.slots);
+    free(linker->exports.slots);
+    free(linker->canonical.slots);
+    free(linker->evaluated.slots);
+    free(linker->types);
+    (void)memset(linker, 0, sizeof(*linker));
+}
+
+static bool type_link_push_value(TypeLinker *linker, const char *value, uint32_t *out_index)
+{
+    if ((linker->value_count == linker->value_capacity) &&
+        !parser_heap_grow((void **)&linker->values,
+                          &linker->value_capacity,
+                          sizeof(*linker->values),
+                          256U)) {
+        return false;
+    }
+    *out_index = (uint32_t)linker->value_count;
+    linker->values[linker->value_count++] = value;
+    return true;
+}
+
+/* `left \x1f right` composite key in buffer; false when it does not fit. */
+static bool type_link_key(char *buffer,
+                          const char *left,
+                          size_t left_len,
+                          const char *right,
+                          size_t right_len,
+                          size_t *out_len)
+{
+    if (left_len + right_len + 1U > TYPE_LINK_KEY_MAX) {
+        return false;
+    }
+    (void)memcpy(buffer, left, left_len);
+    buffer[left_len] = '\x1f';
+    (void)memcpy(buffer + left_len + 1U, right, right_len);
+    *out_len = left_len + right_len + 1U;
+    return true;
+}
+
+static int32_t type_link_class(const TypeLinker *linker, const char *path, size_t len)
+{
+    uint32_t index;
+
+    return parse_map_find(&linker->class_index, 0U, path, len, &index) ? (int32_t)index : -1;
+}
+
+static bool type_link_add_class(TypeLinker *linker, const char *path)
+{
+    uint32_t existing;
+
+    if (parse_map_find(&linker->class_index, 0U, path, strlen(path), &existing)) {
+        return true;
+    }
+    if ((linker->class_count == linker->class_capacity) &&
+        !parser_heap_grow((void **)&linker->classes,
+                          &linker->class_capacity,
+                          sizeof(*linker->classes),
+                          256U)) {
+        return false;
+    }
+    linker->classes[linker->class_count] = (TypeLinkClass){.path = path};
+    if (!parse_map_insert(&linker->class_index,
+                          0U,
+                          path,
+                          strlen(path),
+                          (uint32_t)linker->class_count)) {
+        return false;
+    }
+    linker->class_count++;
+    return true;
+}
+
+/* Records `owner \x1f name -> value` keeping the preferred value on
+ * duplicates: non-empty over empty, then the lexically smallest. */
+static bool type_link_add_keyed(TypeLinker *linker,
+                                ParseMap *map,
+                                const char *owner,
+                                const char *name,
+                                const char *value)
+{
+    size_t owner_len = strlen(owner);
+    size_t name_len = strlen(name);
+    char *key = code_lens_alloc(owner_len + name_len + 2U);
+    uint32_t *slot;
+    uint32_t index;
+
+    if (key == nullptr) {
+        return false;
+    }
+    (void)memcpy(key, owner, owner_len);
+    key[owner_len] = '\x1f';
+    (void)memcpy(key + owner_len + 1U, name, name_len);
+    key[owner_len + name_len + 1U] = '\0';
+    slot = parse_map_slot(map, 0U, key, owner_len + name_len + 1U);
+    if (slot != nullptr) {
+        const char *current = linker->values[*slot];
+
+        if (((current[0] == '\0') && (value[0] != '\0')) ||
+            ((value[0] != '\0') && (strcmp(value, current) < 0))) {
+            linker->values[*slot] = value;
+        }
+        return true;
+    }
+    return type_link_push_value(linker, value, &index) &&
+           parse_map_insert(map, 0U, key, owner_len + name_len + 1U, index);
+}
+
+static int type_link_base_compare(const void *left, const void *right)
+{
+    const TypeLinkBase *a = left;
+    const TypeLinkBase *b = right;
+    int order = strcmp(a->owner, b->owner);
+
+    if (order != 0) {
+        return order;
+    }
+    if (a->ordinal != b->ordinal) {
+        return a->ordinal < b->ordinal ? -1 : 1;
+    }
+    return strcmp(a->type, b->type);
+}
+
+static char *type_link_column(sqlite3_stmt *stmt, int column)
+{
+    const unsigned char *text = sqlite3_column_text(stmt, column);
+    int len = sqlite3_column_bytes(stmt, column);
+
+    return copy_bytes(text == nullptr ? "" : (const char *)text, len < 0 ? 0U : (size_t)len);
+}
+
+static int type_link_load(TypeLinker *linker, CodeLensDb *db)
+{
+    sqlite3_stmt *stmt = nullptr;
+    int step;
+    size_t kept = 0U;
+
+    if (db_prepare(db,
+                   "SELECT kind, owner, name, type, num FROM TypeFact WHERE kind <> 5",
+                   &stmt) != 0) {
+        return -1;
+    }
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int kind = sqlite3_column_int(stmt, 0);
+        char *owner = type_link_column(stmt, 1);
+        char *name = type_link_column(stmt, 2);
+        char *type = type_link_column(stmt, 3);
+        bool ok = (owner != nullptr) && (name != nullptr) && (type != nullptr);
+
+        if (ok && (kind == (int)CODE_LENS_FACT_CLASS)) {
+            ok = type_link_add_class(linker, owner);
+        } else if (ok && (kind == (int)CODE_LENS_FACT_MEMBER)) {
+            ok = type_link_add_keyed(linker, &linker->members, owner, name, type);
+        } else if (ok && (kind == (int)CODE_LENS_FACT_EXPORT)) {
+            ok = (type[0] == '\0') || type_link_add_keyed(linker, &linker->exports, owner, name, type);
+        } else if (ok && (kind == (int)CODE_LENS_FACT_BASE)) {
+            if ((linker->base_count == linker->base_capacity) &&
+                !parser_heap_grow((void **)&linker->bases,
+                                  &linker->base_capacity,
+                                  sizeof(*linker->bases),
+                                  256U)) {
+                ok = false;
+            } else {
+                linker->bases[linker->base_count++] = (TypeLinkBase){
+                    .owner = owner, .ordinal = sqlite3_column_int64(stmt, 4), .type = type};
+            }
+        }
+        if (!ok) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+    }
+    (void)sqlite3_finalize(stmt);
+    if (step != SQLITE_DONE) {
+        return -1;
+    }
+    /* Sort, drop duplicate (owner, ordinal) rows keeping the smallest type,
+     * and attach each class's contiguous base run. */
+    if (linker->base_count > 1U) {
+        qsort(linker->bases, linker->base_count, sizeof(*linker->bases), type_link_base_compare);
+    }
+    for (size_t i = 0U; i < linker->base_count; i++) {
+        if ((kept > 0U) && (strcmp(linker->bases[kept - 1U].owner, linker->bases[i].owner) == 0) &&
+            (linker->bases[kept - 1U].ordinal == linker->bases[i].ordinal)) {
+            continue;
+        }
+        linker->bases[kept++] = linker->bases[i];
+    }
+    linker->base_count = kept;
+    for (size_t i = 0U; i < linker->base_count;) {
+        size_t run = i + 1U;
+        int32_t index;
+
+        while ((run < linker->base_count) &&
+               (strcmp(linker->bases[run].owner, linker->bases[i].owner) == 0)) {
+            run++;
+        }
+        if (!type_link_add_class(linker, linker->bases[i].owner)) {
+            return -1;
+        }
+        index = type_link_class(linker, linker->bases[i].owner, strlen(linker->bases[i].owner));
+        linker->classes[index].base_first = (uint32_t)i;
+        linker->classes[index].base_count = (uint32_t)(run - i);
+        i = run;
+    }
+    return 0;
+}
+
+/* Follows module re-exports (`from m import N` in a package) until the
+ * path names an indexed class or no export applies. */
+static const char *type_link_canonical(TypeLinker *linker, const char *path, size_t len, int depth)
+{
+    uint32_t index;
+    const char *result;
+    char key[TYPE_LINK_KEY_MAX];
+    size_t key_len;
+    size_t dot = len;
+    char *stored;
+
+    if (parse_map_find(&linker->canonical, 0U, path, len, &index)) {
+        return linker->values[index];
+    }
+    stored = copy_bytes(path, len);
+    if (stored == nullptr) {
+        return nullptr;
+    }
+    result = stored;
+    while ((dot > 0U) && (path[dot - 1U] != '.')) {
+        dot--;
+    }
+    if ((depth < TYPE_LINK_MAX_DEPTH) && (type_link_class(linker, path, len) < 0) && (dot > 1U)) {
+        const char *module = path;
+        size_t module_len = dot - 1U;
+        const char *name = path + dot;
+        size_t name_len = len - dot;
+
+        if (type_link_key(key, module, module_len, name, name_len, &key_len) &&
+            parse_map_find(&linker->exports, 0U, key, key_len, &index)) {
+            const char *exported = linker->values[index];
+
+            result = type_link_canonical(linker, exported, strlen(exported), depth + 1);
+        } else {
+            /* The module part itself may be a re-export (pkg.sub.Name). */
+            const char *canonical_module =
+                type_link_canonical(linker, module, module_len, depth + 1);
+
+            if ((canonical_module != nullptr) &&
+                ((strlen(canonical_module) != module_len) ||
+                 (memcmp(canonical_module, module, module_len) != 0))) {
+                char *joined = py_join(canonical_module, name, name_len);
+
+                if (joined != nullptr) {
+                    result = type_link_canonical(linker, joined, strlen(joined), depth + 1);
+                }
+            }
+        }
+        if (result == nullptr) {
+            result = stored;
+        }
+    }
+    if (!type_link_push_value(linker, result, &index) ||
+        !parse_map_insert(&linker->canonical, 0U, stored, len, index)) {
+        return nullptr;
+    }
+    return result;
+}
+
+static const TypeLinkType *type_link_eval(TypeLinker *linker,
+                                          const char *text,
+                                          const TypeLinkType *owner,
+                                          int depth);
+
+static bool type_link_is_path_char(char c)
+{
+    return (isalnum((unsigned char)c) != 0) || (c == '_') || (c == '.');
+}
+
+/* Parses one type at *cursor; `~N` takes owner's N-th argument. */
+static const TypeLinkType *type_link_parse(TypeLinker *linker,
+                                           const char **cursor,
+                                           const TypeLinkType *owner,
+                                           int depth)
+{
+    const char *c = *cursor;
+    const char *head;
+    size_t head_len = 0U;
+    TypeLinkType *type;
+    const TypeLinkType *args[PY_MAX_TYPE_ARGS];
+    uint32_t arg_count = 0U;
+
+    if (*c == '~') {
+        unsigned long param = 0UL;
+
+        c++;
+        while (isdigit((unsigned char)*c) != 0) {
+            param = (param * 10UL) + (unsigned long)(*c - '0');
+            c++;
+        }
+        *cursor = c;
+        return ((owner != nullptr) && (param < owner->arg_count)) ? owner->args[param]
+                                                                   : &type_link_unknown;
+    }
+    if (*c == '?') {
+        *cursor = c + 1;
+        return &type_link_unknown;
+    }
+    head = c;
+    while (type_link_is_path_char(c[head_len])) {
+        head_len++;
+    }
+    c += head_len;
+    if (*c == '[') {
+        c++;
+        while ((*c != '\0') && (*c != ']')) {
+            const TypeLinkType *arg = depth < TYPE_LINK_MAX_DEPTH
+                                          ? type_link_parse(linker, &c, owner, depth + 1)
+                                          : &type_link_unknown;
+
+            if (arg_count < PY_MAX_TYPE_ARGS) {
+                args[arg_count++] = arg;
+            }
+            if (*c == ',') {
+                c++;
+            } else if (*c != ']') {
+                /* Malformed: skip to the closing bracket. */
+                while ((*c != '\0') && (*c != ']')) {
+                    c++;
+                }
+            }
+        }
+        if (*c == ']') {
+            c++;
+        }
+    }
+    *cursor = c;
+    if (head_len == 0U) {
+        return &type_link_unknown;
+    }
+    type = code_lens_alloc(sizeof(*type));
+    if (type == nullptr) {
+        return &type_link_unknown;
+    }
+    type->head = type_link_canonical(linker, head, head_len, 0);
+    type->arg_count = arg_count;
+    type->args = nullptr;
+    if (arg_count > 0U) {
+        const TypeLinkType **copy = code_lens_alloc(arg_count * sizeof(*copy));
+
+        if (copy == nullptr) {
+            type->arg_count = 0U;
+        } else {
+            (void)memcpy(copy, args, arg_count * sizeof(*copy));
+            type->args = copy;
+        }
+    }
+    return type->head == nullptr ? &type_link_unknown : type;
+}
+
+/* Finds name on type's class or its indexed bases (depth-first, in base
+ * order, arguments substituted). *out_external keeps the first class on
+ * the walk that is not indexed: the most specific owner when the member
+ * is not found. */
+static bool type_link_find_member(TypeLinker *linker,
+                                  const TypeLinkType *type,
+                                  const char *name,
+                                  size_t name_len,
+                                  int depth,
+                                  const char **out_owner,
+                                  const TypeLinkType **out_type,
+                                  const char **out_external)
+{
+    int32_t index;
+    char key[TYPE_LINK_KEY_MAX];
+    size_t key_len;
+    uint32_t value;
+
+    if ((type->head == nullptr) || (depth > TYPE_LINK_MAX_DEPTH)) {
+        return false;
+    }
+    index = type_link_class(linker, type->head, strlen(type->head));
+    if (index < 0) {
+        if (*out_external == nullptr) {
+            *out_external = type->head;
+        }
+        return false;
+    }
+    if (type_link_key(key, type->head, strlen(type->head), name, name_len, &key_len) &&
+        parse_map_find(&linker->members, 0U, key, key_len, &value)) {
+        const char *member_type = linker->values[value];
+
+        *out_owner = type->head;
+        if (out_type != nullptr) {
+            *out_type = member_type[0] == '\0'
+                            ? &type_link_unknown
+                            : type_link_eval(linker, member_type, type, depth + 1);
+        }
+        return true;
+    }
+    for (uint32_t i = 0U; i < linker->classes[index].base_count; i++) {
+        const TypeLinkBase *base = &linker->bases[linker->classes[index].base_first + i];
+        const TypeLinkType *base_type = type_link_eval(linker, base->type, type, depth + 1);
+
+        if (type_link_find_member(
+                linker, base_type, name, name_len, depth + 1, out_owner, out_type, out_external)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+typedef enum {
+    TYPE_LINK_ITERATE,       /* `|*` */
+    TYPE_LINK_MAPPING_VALUE, /* `|#` */
+    TYPE_LINK_ITEM,          /* `|@` */
+} TypeLinkElementMode;
+
+static const TypeLinkType *type_link_element(TypeLinker *linker,
+                                             const TypeLinkType *type,
+                                             TypeLinkElementMode mode,
+                                             int depth)
+{
+    TypeContainerKind kind;
+    int32_t index;
+
+    if ((type->head == nullptr) || (depth > TYPE_LINK_MAX_DEPTH)) {
+        return &type_link_unknown;
+    }
+    kind = type_container_kind(type->head, strlen(type->head));
+    if (kind == TYPE_CONTAINER_SEQUENCE) {
+        return ((mode != TYPE_LINK_MAPPING_VALUE) && (type->arg_count >= 1U)) ? type->args[0]
+                                                                              : &type_link_unknown;
+    }
+    if (kind == TYPE_CONTAINER_MAPPING) {
+        uint32_t arg = mode == TYPE_LINK_ITERATE ? 0U : 1U;
+
+        return type->arg_count > arg ? type->args[arg] : &type_link_unknown;
+    }
+    if (kind == TYPE_CONTAINER_TUPLE) {
+        return ((mode != TYPE_LINK_MAPPING_VALUE) && (type->arg_count == 1U)) ? type->args[0]
+                                                                              : &type_link_unknown;
+    }
+    /* A class deriving from a container (class Rows(list[Row])). */
+    index = type_link_class(linker, type->head, strlen(type->head));
+    for (uint32_t i = 0U; (index >= 0) && (i < linker->classes[index].base_count); i++) {
+        const TypeLinkBase *base = &linker->bases[linker->classes[index].base_first + i];
+        const TypeLinkType *element = type_link_element(
+            linker, type_link_eval(linker, base->type, type, depth + 1), mode, depth + 1);
+
+        if (element->head != nullptr) {
+            return element;
+        }
+    }
+    return &type_link_unknown;
+}
+
+/* Evaluates a type string or expression; owner supplies `~N` arguments. */
+static const TypeLinkType *type_link_eval(TypeLinker *linker,
+                                          const char *text,
+                                          const TypeLinkType *owner,
+                                          int depth)
+{
+    const char *cursor = text;
+    const TypeLinkType *type;
+
+    if (depth > TYPE_LINK_MAX_DEPTH) {
+        return &type_link_unknown;
+    }
+    type = type_link_parse(linker, &cursor, owner, depth);
+    while ((*cursor == '|') && (type->head != nullptr)) {
+        char op = cursor[1];
+
+        cursor += 2;
+        if (op == '.') {
+            const char *name = cursor;
+            size_t name_len = 0U;
+            const char *member_owner = nullptr;
+            const char *external = nullptr;
+            const TypeLinkType *member_type = &type_link_unknown;
+
+            while ((name[name_len] != '\0') && (name[name_len] != '|')) {
+                name_len++;
+            }
+            cursor += name_len;
+            if (!type_link_find_member(linker,
+                                       type,
+                                       name,
+                                       name_len,
+                                       depth,
+                                       &member_owner,
+                                       &member_type,
+                                       &external)) {
+                member_type = &type_link_unknown;
+            }
+            type = member_type;
+        } else if (op == '*') {
+            type = type_link_element(linker, type, TYPE_LINK_ITERATE, depth);
+        } else if (op == '#') {
+            type = type_link_element(linker, type, TYPE_LINK_MAPPING_VALUE, depth);
+        } else if (op == '@') {
+            type = type_link_element(linker, type, TYPE_LINK_ITEM, depth);
+        } else {
+            return &type_link_unknown;
+        }
+    }
+    return type;
+}
+
+/* Cached evaluation of a deferred receiver expression. */
+static const TypeLinkType *type_link_receiver(TypeLinker *linker, const char *expression)
+{
+    uint32_t index;
+    const TypeLinkType *type;
+
+    if (parse_map_find(&linker->evaluated, 0U, expression, strlen(expression), &index)) {
+        return linker->types[index];
+    }
+    type = type_link_eval(linker, expression, nullptr, 0);
+    if ((linker->type_count == linker->type_capacity) &&
+        !parser_heap_grow((void **)&linker->types,
+                          &linker->type_capacity,
+                          sizeof(*linker->types),
+                          256U)) {
+        return type;
+    }
+    linker->types[linker->type_count] = type;
+    if (parse_map_insert(&linker->evaluated,
+                         0U,
+                         expression,
+                         strlen(expression),
+                         (uint32_t)linker->type_count)) {
+        linker->type_count++;
+    }
+    return type;
+}
+
+/* The reference target for member name on a deferred receiver. */
+static const char *type_link_target(TypeLinker *linker,
+                                    const char *expression,
+                                    const char *name,
+                                    const char *fallback)
+{
+    const TypeLinkType *receiver = type_link_receiver(linker, expression);
+    const char *owner = nullptr;
+    const char *external = nullptr;
+
+    if (receiver->head == nullptr) {
+        return fallback;
+    }
+    if (type_container_kind(receiver->head, strlen(receiver->head)) != TYPE_CONTAINER_NONE) {
+        return ""; /* container members (append, get, ...) stay untargeted */
+    }
+    if (type_link_find_member(
+            linker, receiver, name, strlen(name), 0, &owner, nullptr, &external)) {
+        return owner;
+    }
+    return external != nullptr ? external : receiver->head;
+}
+
+typedef struct {
+    int64_t ref_id;
+    int64_t term_id;
+} TypeLinkUpdate;
+
+/* Term id for text, inserting it when new. */
+static int64_t type_link_term(CodeLensDb *db,
+                              sqlite3_stmt *find,
+                              sqlite3_stmt *insert,
+                              const char *text)
+{
+    int64_t id = -1;
+
+    (void)sqlite3_reset(find);
+    if (bind_text(find, 1, text) != 0) {
+        return -1;
+    }
+    if (sqlite3_step(find) == SQLITE_ROW) {
+        id = sqlite3_column_int64(find, 0);
+    }
+    (void)sqlite3_reset(find);
+    if (id >= 0) {
+        return id;
+    }
+    if ((bind_text(insert, 1, text) != 0) || (writer_step(insert) != 0)) {
+        return -1;
+    }
+    return sqlite3_last_insert_rowid(db->handle);
+}
+
+/* Re-targets every deferred reference from the current TypeFact table. Runs
+ * inside the caller's write transaction. */
+static int type_link_run(CodeLensDb *db)
+{
+    TypeLinker linker;
+    sqlite3_stmt *defer = nullptr;
+    sqlite3_stmt *find = nullptr;
+    sqlite3_stmt *insert = nullptr;
+    sqlite3_stmt *update = nullptr;
+    TypeLinkUpdate *updates = nullptr;
+    size_t update_count = 0U;
+    size_t update_capacity = 0U;
+    CodeLensArenaMark mark = code_lens_arena_mark();
+    int step;
+    int rc = -1;
+
+    (void)memset(&linker, 0, sizeof(linker));
+    if (type_link_load(&linker, db) != 0) {
+        goto done;
+    }
+    if (db_prepare(db,
+                   "SELECT f.num, f.owner, f.name, f.type, t.text FROM TypeFact f"
+                   " JOIN RefData r ON r.id = f.num JOIN Term t ON t.id = r.targetNamespaceTerm"
+                   " WHERE f.kind = 5",
+                   &defer) != 0) {
+        goto done;
+    }
+    /* Collect first, write after: no updates under an open RefData read. */
+    while ((step = sqlite3_step(defer)) == SQLITE_ROW) {
+        const char *fallback = (const char *)sqlite3_column_text(defer, 1);
+        const char *name = (const char *)sqlite3_column_text(defer, 2);
+        const char *expression = (const char *)sqlite3_column_text(defer, 3);
+        const char *current = (const char *)sqlite3_column_text(defer, 4);
+        char *expression_copy;
+        const char *target;
+
+        if ((fallback == nullptr) || (name == nullptr) || (expression == nullptr) ||
+            (current == nullptr)) {
+            continue;
+        }
+        /* Cache keys and canonical strings outlive the row. */
+        expression_copy = copy_cstr(expression);
+        if (expression_copy == nullptr) {
+            goto done;
+        }
+        target = type_link_target(&linker, expression_copy, name, fallback);
+        if (target == nullptr) {
+            goto done;
+        }
+        if (strcmp(target, current) == 0) {
+            continue;
+        }
+        if ((update_count == update_capacity) &&
+            !parser_heap_grow((void **)&updates, &update_capacity, sizeof(*updates), 256U)) {
+            goto done;
+        }
+        updates[update_count].ref_id = sqlite3_column_int64(defer, 0);
+        /* Stash the target until the read finishes; term_id holds an
+         * index into the arena-backed string table below. */
+        {
+            uint32_t value;
+            char *stored = copy_cstr(target);
+
+            if ((stored == nullptr) || !type_link_push_value(&linker, stored, &value)) {
+                goto done;
+            }
+            updates[update_count].term_id = (int64_t)value;
+        }
+        update_count++;
+    }
+    (void)sqlite3_finalize(defer);
+    defer = nullptr;
+    if (step != SQLITE_DONE) {
+        goto done;
+    }
+    if (update_count > 0U) {
+        if ((db_prepare(db, "SELECT id FROM Term WHERE text = ?1", &find) != 0) ||
+            (db_prepare(db, "INSERT INTO Term (text) VALUES (?1)", &insert) != 0) ||
+            (db_prepare(db,
+                        "UPDATE RefData SET targetNamespaceTerm = ?2 WHERE id = ?1",
+                        &update) != 0)) {
+            goto done;
+        }
+        for (size_t i = 0U; i < update_count; i++) {
+            int64_t term = type_link_term(
+                db, find, insert, linker.values[(size_t)updates[i].term_id]);
+
+            if ((term < 0) || (sqlite3_bind_int64(update, 1, updates[i].ref_id) != SQLITE_OK) ||
+                (sqlite3_bind_int64(update, 2, term) != SQLITE_OK) || (writer_step(update) != 0)) {
+                goto done;
+            }
+        }
+    }
+    rc = 0;
+
+done:
+    if (defer != nullptr) {
+        (void)sqlite3_finalize(defer);
+    }
+    if (find != nullptr) {
+        (void)sqlite3_finalize(find);
+    }
+    if (insert != nullptr) {
+        (void)sqlite3_finalize(insert);
+    }
+    if (update != nullptr) {
+        (void)sqlite3_finalize(update);
+    }
+    free(updates);
+    type_linker_destroy(&linker);
+    code_lens_arena_reset(mark);
+    if (rc != 0) {
+        (void)fprintf(stderr, "code-lens: type link pass failed\n");
+    }
+    return rc;
+}
+
+/* Runs the type link pass over a closed staging database. */
+static int type_link_staging(const char *staging_db_path)
+{
+    CodeLensDb db;
+    int rc;
+
+    (void)memset(&db, 0, sizeof(db));
+    if (code_lens_db_open_build(&db, staging_db_path) != 0) {
+        return -1;
+    }
+    rc = code_lens_db_exec(&db, "BEGIN");
+    if (rc == 0) {
+        rc = type_link_run(&db);
+        rc = code_lens_db_exec(&db, rc == 0 ? "COMMIT" : "ROLLBACK") == 0 ? rc : -1;
+    }
+    code_lens_db_close(&db);
     return rc;
 }
 
@@ -21518,6 +23951,15 @@ static int index_repository_incremental(const char *repo_path,
             goto fallback;
         }
     }
+
+    /* Re-link every deferred reference: a changed file's facts can retarget
+     * references in unchanged files, so the whole table is re-evaluated. */
+    start = profile_start(&profile);
+    if ((db_query_int64(&db, "SELECT EXISTS (SELECT 1 FROM TypeFact WHERE kind = 5)", 0) != 0) &&
+        (type_link_run(&db) != 0)) {
+        goto fallback;
+    }
+    profile_add(&profile, &profile.type_link_seconds, start);
 
     /* Repo row: fresh timestamp plus totals computed as stored - deleted +
      * inserted, avoiding COUNT(*) scans over the big tables. */
@@ -21778,11 +24220,30 @@ static int index_repository_attempt(const char *repo_path,
         rc = ctx.parser == nullptr
                  ? -1
                  : code_lens_walk_source_files(repo_path, index_file_callback, &ctx);
+        if (rc == 0) {
+            rc = index_maven_dependency_files(&ctx, maven_dependencies);
+        }
     } else {
-        rc = index_source_files_parallel(&ctx, repo_path, thread_count);
-    }
-    if (rc == 0) {
-        rc = index_maven_dependency_files(&ctx, maven_dependencies);
+        /* Dependency sources ride the parallel pipeline after the
+         * workspace walk, in artifact order (as the sequential path). */
+        size_t extra_count = maven_dependency_file_count(maven_dependencies);
+        char **extra = extra_count == 0U ? nullptr
+                                         : code_lens_alloc(extra_count * sizeof(*extra));
+
+        if ((extra_count > 0U) && (extra == nullptr)) {
+            rc = -1;
+        } else {
+            size_t at = 0U;
+
+            for (size_t i = 0U; i < maven_dependencies->artifact_count; i++) {
+                const MavenSourceArtifact *artifact = &maven_dependencies->artifacts[i];
+
+                for (size_t f = 0U; f < artifact->files.count; f++) {
+                    extra[at++] = artifact->files.paths[f];
+                }
+            }
+            rc = index_source_files_parallel(&ctx, repo_path, thread_count, extra, extra_count);
+        }
     }
     profile_add(&profile, &profile.walk_seconds, start);
     if (rc != 0) {
@@ -21910,6 +24371,17 @@ static int index_repository_attempt(const char *repo_path,
         }
     }
     term_interner_destroy(&ctx.interner);
+
+    /* Cross-file Python receiver types: rewrite deferred references now
+     * that every file's facts are in the staging database. */
+    if (ctx.type_fact_count > 0U) {
+        start = profile_start(&profile);
+        rc = type_link_staging(paths.staging_db_path);
+        profile_add(&profile, &profile.type_link_seconds, start);
+        if (rc != 0) {
+            goto cleanup;
+        }
+    }
 
 #ifdef _WIN32
     /* Windows does not allow an attached/open database file to be renamed.
@@ -22449,8 +24921,10 @@ static bool maven_artifact_cache_markers_current(CodeLensDb *db, const char *rep
     bool current = false;
     int step;
 
+    /* Python artifacts index in place and have no extraction cache marker. */
     if ((db_prepare(db,
-                    "SELECT sourceRoot, checksum FROM DependencyArtifact WHERE repo=?1",
+                    "SELECT sourceRoot, checksum FROM DependencyArtifact"
+                    " WHERE repo=?1 AND groupId <> 'pypi'",
                     &stmt) != 0) || (bind_text(stmt, 1, repo_path) != 0)) {
         (void)sqlite3_finalize(stmt);
         return false;
@@ -27651,31 +30125,38 @@ static char *class_dossier_render(CodeLensDb *db,
     return out.data;
 }
 
+/* Substring fallback rows return location but only exact definitions carry
+ * content. content_expr is the indexed short form, or (fullSource) the whole
+ * definition read back from its span, falling back to the short form when the
+ * file changed since indexing (the staleness note reports that). */
+#define CONTEXT_DEFINITIONS_SQL(content_expr) \
+    "SELECT s.name AS \"s.name\", s.kind AS \"s.kind\", " \
+    "s.namespace AS \"s.namespace\", s.filePath AS \"s.filePath\", " \
+    "s.startLine AS \"s.startLine\", s.endLine AS \"s.endLine\", " \
+    "s.doc AS \"s.doc\", CASE WHEN s.name = ?2 THEN " content_expr " ELSE '' END AS \"s.content\", " \
+    "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"s.scope\", " \
+    "COALESCE(da.coordinate, '') AS \"s.dependency\", " \
+    "COALESCE(da.scope, '') AS \"s.dependencyScope\" " \
+    "FROM Symbol s LEFT JOIN DependencyFile df " \
+    "ON df.repo = s.repo AND df.filePath = s.filePath " \
+    "LEFT JOIN DependencyArtifact da ON da.id = df.artifactId " \
+    "WHERE s.repo = ?1 AND (s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0) " \
+    "AND (?3 = '' OR s.namespace = ?3) " \
+    "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) " \
+    "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) " \
+    "AND (?6 = 0 OR (s.kind != 'test' " \
+    "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 " \
+    "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) " \
+    "ORDER BY CASE WHEN s.name = ?2 THEN 0 ELSE 1 END, s.name LIMIT 5"
+
 static char *context_symbol_ex_internal(const char *repo_name,
                                          const char *symbol_name,
                                          const CodeLensContextOptions *options,
                                         CodeLensDb *prepared_db)
 {
-    /* Substring fallback rows return location but only exact definitions carry content. */
-    static const char definitions_sql[] =
-        "SELECT s.name AS \"s.name\", s.kind AS \"s.kind\", "
-        "s.namespace AS \"s.namespace\", s.filePath AS \"s.filePath\", "
-        "s.startLine AS \"s.startLine\", s.endLine AS \"s.endLine\", "
-        "s.doc AS \"s.doc\", CASE WHEN s.name = ?2 THEN s.content ELSE '' END AS \"s.content\", "
-        "CASE WHEN df.id IS NULL THEN 'workspace' ELSE 'dependency' END AS \"s.scope\", "
-        "COALESCE(da.coordinate, '') AS \"s.dependency\", "
-        "COALESCE(da.scope, '') AS \"s.dependencyScope\" "
-        "FROM Symbol s LEFT JOIN DependencyFile df "
-        "ON df.repo = s.repo AND df.filePath = s.filePath "
-        "LEFT JOIN DependencyArtifact da ON da.id = df.artifactId "
-        "WHERE s.repo = ?1 AND (s.name = ?2 OR instr(lower(s.name), lower(?2)) > 0) "
-        "AND (?3 = '' OR s.namespace = ?3) "
-        "AND (?4 = '' OR instr(lower(s.filePath), lower(?4)) > 0) "
-        "AND ((?5 = 'workspace' AND df.id IS NULL) OR (?5 = 'dependencies' AND df.id IS NOT NULL)) "
-        "AND (?6 = 0 OR (s.kind != 'test' "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/test/') = 0 "
-        "AND instr(lower(replace(s.filePath, '\\', '/')), '/tests/') = 0)) "
-        "ORDER BY CASE WHEN s.name = ?2 THEN 0 ELSE 1 END, s.name LIMIT 5";
+    static const char definitions_sql[] = CONTEXT_DEFINITIONS_SQL("s.content");
+    static const char definitions_full_sql[] = CONTEXT_DEFINITIONS_SQL(
+        "COALESCE(source(s.filePath, s.startByte, s.endByte, s.content), s.content)");
     static const char references_sql[] =
         CONTEXT_REFERENCE_CANDIDATES_SQL
         "SELECT f.path AS \"r.filePath\", r.lineNumber AS \"r.lineNumber\", "
@@ -27822,7 +30303,13 @@ static char *context_symbol_ex_internal(const char *repo_name,
     params[3] = path_filter;
     params[4] = definition_scope;
     symbol_rows =
-        db_render_query(db, definitions_sql, params, 5U, &exclude_tests, &symbol_row_count);
+        db_render_query(db,
+                        ((options != nullptr) && options->full_source) ? definitions_full_sql
+                                                                       : definitions_sql,
+                        params,
+                        5U,
+                        &exclude_tests,
+                        &symbol_row_count);
     if (symbol_rows != nullptr) {
         ref_rows = db_render_query(db,
                                    references_sql,
@@ -28510,19 +30997,33 @@ static void respond_tools_list(const char *id)
         " dependency-resolution context.\"},"
         "\"excludeTests\":{\"type\":\"boolean\",\"default\":false,"
         "\"description\":\"Drop definitions, references, and snippets in test files and"
-        " test-kind definitions.\"}},\"required\":[\"name\"]}}";
+        " test-kind definitions.\"},"
+        "\"fullSource\":{\"type\":\"boolean\",\"default\":false,"
+        "\"description\":\"Show each exact definition's whole source (read from the file via"
+        " its byte span) instead of the stored short form, which elides class, type, and"
+        " multi-line assignment bodies in some languages. Not applied to the Java Class"
+        " Dossier.\"}},\"required\":[\"name\"]}}";
     static const char sql_tool[] =
         "{\"name\":\"sql\",\"description\":\"Run a read-only SQLite SELECT over extracted"
         " code data when query and context do not fit. ATTACH, PRAGMA, and writes are denied;"
         " output is capped at 100 rows and only the first statement runs. Tables and views:"
-        " Symbol(repo, name, kind, namespace, filePath, startLine, endLine, content, doc),"
-        " Ref(fileId, filePath, symbol, symbolBase, targetNamespace, lineNumber, columnNumber,"
-        " startByte, endByte), Keyword(fileId, filePath, keyword, keywordBase, qualifier,"
-        " targetNamespace, lineNumber, columnNumber), File(rowid, repo, path, namespace, size),"
-        " Alias(repo, filePath, namespace, alias), Referred(repo, filePath, namespace, symbol),"
-        " DependencyArtifact(repo, coordinate, groupId, artifactId, version, scope, direct,"
-        " sourceJar, sourceRoot, checksum), and DependencyFile(repo, filePath, artifactId,"
-        " sourcePath, modulePath). For Java, Symbol.namespace is the fully qualified enclosing"
+        " Symbol(repo, name, kind, namespace, filePath, startLine, endLine, content, doc,"
+        " startByte, endByte), Ref(fileId, filePath, symbol, symbolBase, targetNamespace,"
+        " lineNumber, columnNumber, startByte, endByte), Keyword(fileId, filePath, keyword,"
+        " keywordBase, qualifier, targetNamespace, lineNumber, columnNumber), File(rowid, repo,"
+        " path, namespace, size), Alias(repo, filePath, namespace, alias), Referred(repo,"
+        " filePath, namespace, symbol, alias), DependencyArtifact(repo, coordinate, groupId,"
+        " artifactId, version, scope, direct, sourceJar, sourceRoot, checksum), and"
+        " DependencyFile(repo, filePath, artifactId, sourcePath, modulePath). File, Symbol,"
+        " and Ref include resolved dependency sources (e.g. a Python .venv); keep workspace"
+        " files only with NOT EXISTS (SELECT 1 FROM DependencyFile d WHERE d.repo = f.repo AND"
+        " d.filePath = f.path), or join DependencyFile for dependencies only. Symbol.content is"
+        " a short form that elides class, type, and multi-line assignment bodies in some"
+        " languages; source(filePath, startByte, endByte) returns the whole span read from the"
+        " file on disk (also works on Ref spans; only files listed in File are readable;"
+        " source(..., fallback) returns fallback instead of an error when the file changed"
+        " after it was read). Referred.symbol is the imported"
+        " name and Referred.alias its local binding name. For Java, Symbol.namespace is the fully qualified enclosing"
         " type, File.namespace is the package, Alias rows are normal imports, and Referred"
         " rows are static imports. For C, global namespaces are empty, static namespaces are"
         " file paths, and field namespaces are aggregate names. For Python, File.namespace is"
@@ -28591,6 +31092,7 @@ static char *call_tool(const char *tool_name, const char *args)
     } else if (strcmp(tool_name, "context") == 0) {
         CodeLensContextOptions options = {
             .exclude_tests = json_get_bool(args, "excludeTests", false),
+            .full_source = json_get_bool(args, "fullSource", false),
             .namespace_name = namespace_name,
             .path = path,
             .tools_deps_aliases = tools_deps_aliases,
@@ -28788,7 +31290,7 @@ static void print_usage(FILE *stream)
                   "[--path <substring>] [--scope workspace|dependencies|all] "
                   "[--dependency <gav-glob>] [--limit <n>] \"<terms>\"\n"
                   "  code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--namespace <namespace>] "
-                  "[--path <substring>] [--exclude-tests]\n"
+                  "[--path <substring>] [--exclude-tests] [--full-source]\n"
                   "  code-lens sql --repo <path> [--aliases :a[:b...]] \"<query>\"\n"
                   "  code-lens mcp\n"
                   "\n"
@@ -28846,7 +31348,7 @@ static bool arg_consumes_value(const char *arg)
 
 static bool arg_is_standalone_flag(const char *arg)
 {
-    return strcmp(arg, "--exclude-tests") == 0;
+    return (strcmp(arg, "--exclude-tests") == 0) || (strcmp(arg, "--full-source") == 0);
 }
 
 static char *free_arg_text(int argc, char **argv)
@@ -29003,6 +31505,7 @@ static int run_query_like(int argc, char **argv, const char *command)
         const char *name = arg_value(argc, argv, "--name");
         CodeLensContextOptions options = {
             .exclude_tests = arg_present(argc, argv, "--exclude-tests"),
+            .full_source = arg_present(argc, argv, "--full-source"),
             .namespace_name = arg_value(argc, argv, "--namespace"),
             .path = arg_value(argc, argv, "--path"),
             .tools_deps_aliases = aliases,

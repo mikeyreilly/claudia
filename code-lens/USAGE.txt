@@ -14,7 +14,7 @@ Initial command surface:
                    [--path <substring>] [--scope workspace|dependencies|all]
                    [--dependency <gav-glob>] [--limit <n>] "<terms>"
   code-lens context --repo <path> --name <symbol> [--aliases :a[:b...]] [--exclude-tests]
-                     [--namespace <namespace>] [--path <substring>]
+                     [--full-source] [--namespace <namespace>] [--path <substring>]
   code-lens sql --repo <path> [--aliases :a[:b...]] "<query>"
   code-lens mcp
 
@@ -30,7 +30,7 @@ Python caches and virtualenvs (__pycache__, .venv, venv, .tox, .nox,
 MCP tool surface:
 
   query(query, repo?, aliases?, limit?, excludeTests?, kind?, path?, scope?, dependency?)
-  context(name, repo?, aliases?, excludeTests?, namespace?, path?)
+  context(name, repo?, aliases?, excludeTests?, fullSource?, namespace?, path?)
   sql(query, repo?, aliases?)
 
   `repo` accepts an absolute repository root or any file or directory inside a
@@ -44,8 +44,10 @@ MCP tool surface:
 Dependency sources:
 
   Root build files are detected in priority order: pom.xml uses mvnw/mvnw.cmd
-  or Maven on PATH, project.clj uses `lein classpath`, and deps.edn uses
-  `clojure -Spath`. Maven copies -sources.jar classifiers and falls back to
+  or Maven on PATH, project.clj uses `lein classpath`, deps.edn uses
+  `clojure -Spath`, and a root .venv/pyvenv.cfg (or venv/pyvenv.cfg) indexes
+  the virtualenv's installed .py files in place, as listed by each
+  *.dist-info/RECORD (artifact pypi:<name>:<version>; nothing is executed). Maven copies -sources.jar classifiers and falls back to
   sources embedded in the main JAR for artifacts that publish none. Pass --aliases :dev:reporting to `index` (or MCP aliases:
   ":dev:reporting" on any read tool) to select a tools.deps alias basis; it
   resolves with `clojure -Spath -M:dev:reporting` and aliases are part of the
@@ -109,6 +111,18 @@ checked out next to this repository):
   rather than arbitrary mid-word substrings. Multi-term queries require every
   term to match; when that yields nothing the search relaxes to any-term matches
   and prefixes the output with a notice line.
+  `context --full-source` (MCP fullSource) shows each exact definition's whole
+  source, read from the file through its byte span, instead of the stored
+  short form (which ends in "..." for Python classes and multi-line
+  assignments and "{ ... }" for Java/C/TypeScript type bodies). In `sql`,
+  source(filePath, startByte, endByte) returns the same text for any Symbol or
+  Ref span; it reads only indexed files, errors when a file changed since
+  indexing (source(..., fallback) returns fallback instead), and truncates
+  past 256 KiB. Referred.alias is the local name of an imported symbol
+  (`from m import n as k` gives symbol n, alias k). File, Symbol, and Ref also
+  hold dependency sources; keep workspace files with
+  NOT EXISTS (SELECT 1 FROM DependencyFile d WHERE d.repo = f.repo AND
+  d.filePath = f.path).
   Use `--exclude-tests` to drop test symbols and files below `test/` or
   `tests/`, `--kind <kind>` to restrict symbol rows (for example `function`,
   `class`, `method`, `field`, or `test`), and `--path <substring>` to restrict
@@ -139,7 +153,11 @@ checked out next to this repository):
   package, by the repository-relative path minus a leading src/); module-level
   definitions use the module as namespace and class members use module.Class.
   Imports (including relative ones), self/cls, super(), constructor-assigned
-  locals, and annotations resolve receivers; untyped receivers stay
+  locals, and annotations (with generic arguments) resolve receivers, as do
+  locals assigned from typed attributes, loop targets over annotated
+  containers, and isinstance() narrowing; cross-file member chains,
+  re-exports, inherited members, and generic parameters are linked after
+  parsing. Untyped receivers stay
   unresolved. Qualifiers in Clojure `alias/name`, Java `Type.member`,
   `Type#member`, and fully qualified type spellings, and Python `module.func` or
   `Class.method` spellings are ignored for lookup when no exact dotted

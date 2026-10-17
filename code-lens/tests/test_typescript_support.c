@@ -264,6 +264,12 @@ static int test_typescript_index(void)
                          (strstr(text, "cjs|cjs.cts") != nullptr) &&
                          (strstr(text, "ambient|decl.d.ts") != nullptr),
                          "JS import spellings resolve to TS and declaration sources");
+    text = code_lens_run_sql(repo, "SELECT namespace, symbol, alias FROM Referred "
+                                  "WHERE filePath LIKE '%usage.ts' ORDER BY alias");
+    failed |= ts_assert((text != nullptr) && (strstr(text, "named.ts|default|First") != nullptr) &&
+                         (strstr(text, "named.ts|Greeter|Named") != nullptr) &&
+                         (strstr(text, "other.ts|default|Other") != nullptr),
+                         "Referred rows record default and renamed named-import local aliases");
     if ((setenv("CODE_LENS_INCREMENTAL", "force", 1) != 0) ||
         (ts_write(repo, "usage.ts", "import First from './named'; const edited = new First(); edited.hello();\n") != 0) ||
         (code_lens_index_repository(repo, &stats) != 0)) {

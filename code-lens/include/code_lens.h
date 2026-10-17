@@ -27,11 +27,15 @@ typedef struct {
 } CodeLensNamespaceAlias;
 
 /* One symbol made visible unqualified by a Clojure :refer/:use, Java
- * static import, or Python `from m import n`; ":all" records
- * whole-namespace/type wildcard visibility. */
+ * static import, Python `from m import n`, or TypeScript named/default
+ * import; ":all" records whole-namespace/type wildcard visibility.
+ * symbol is the imported (original) name; alias is the local binding
+ * name, equal to symbol unless renamed (`from m import n as k` gives
+ * alias "k") and empty for ":all". */
 typedef struct {
     char *namespace_name;
     char *symbol;
+    char *alias;
 } CodeLensReferred;
 
 /* For Clojure, base and target_namespace are filled by a post-parse pass:
@@ -84,10 +88,46 @@ typedef struct {
      * Python module / module.Class, or TypeScript module path / path.Type. */
     char *namespace_name;
     char *doc;
+    /* Indexed short form: full text for small definitions, a header ending
+     * in "..." for bodies some languages elide (classes, types, multi-line
+     * assignments). The whole definition is source[start_byte, end_byte). */
     char *source;
     uint32_t start_line;
     uint32_t end_line;
+    /* Zero-based byte span of the whole definition (the same node that
+     * start_line/end_line describe); end_byte is exclusive. */
+    uint32_t start_byte;
+    uint32_t end_byte;
 } CodeLensSymbol;
+
+/* Cross-file type facts (Python today), persisted in the TypeFact table and
+ * consumed by the post-build type link pass. Type strings use a small
+ * serialization: a dotted path with optional `[arg,arg]` arguments, `~N` for
+ * the owning class's N-th type parameter, `?` for unknown, and expressions
+ * append `|.name` (member type), `|*` (iteration element), `|#` (mapping
+ * value), or `|@` (subscript item) operations. */
+typedef enum {
+    /* owner: class; number: type-parameter count. */
+    CODE_LENS_FACT_CLASS = 1,
+    /* owner: class; number: base ordinal; type: base type. */
+    CODE_LENS_FACT_BASE = 2,
+    /* owner: class; name: member; type: declared type or "". */
+    CODE_LENS_FACT_MEMBER = 3,
+    /* owner: module; name: module-level name; type: imported dotted path. */
+    CODE_LENS_FACT_EXPORT = 4,
+    /* number: per-file reference ordinal (the emitter stores the absolute
+     * RefData id); owner: locally resolved target kept when linking fails;
+     * name: member name; type: receiver type expression. */
+    CODE_LENS_FACT_DEFER = 5,
+} CodeLensTypeFactKind;
+
+typedef struct {
+    CodeLensTypeFactKind kind;
+    uint32_t number;
+    char *owner;
+    char *name;
+    char *type;
+} CodeLensTypeFact;
 
 /* Parsed source-file data shared by the Clojure, Java, C, Python, and TypeScript
  * extractors. namespace_name is a Clojure namespace, Java package, empty for
@@ -114,6 +154,9 @@ typedef struct {
     CodeLensKeyword *keywords;
     size_t keyword_count;
     size_t keyword_capacity;
+    CodeLensTypeFact *type_facts;
+    size_t type_fact_count;
+    size_t type_fact_capacity;
 } CodeLensSourceFile;
 
 /* Language-specific aliases keep the original Clojure parser API source
@@ -341,6 +384,10 @@ char *code_lens_query_symbols_ex(const char *repo_name,
 char *code_lens_query_symbols(const char *repo_name, const char *query_text, int limit);
 typedef struct {
     bool exclude_tests;
+    /* Render exact definitions' whole source, read back from their indexed
+     * byte spans, instead of the indexed short form (which elides class and
+     * type bodies in some languages). The Java Class Dossier is unaffected. */
+    bool full_source;
     /* Narrow candidate definitions before collecting references. namespace_name
      * is exact; path is a case-insensitive definition-file substring. */
     const char *namespace_name;
