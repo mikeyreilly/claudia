@@ -233,11 +233,19 @@ int code_lens_parse_python_source(const char *repo_root,
 char *code_lens_python_module_name(const char *repo_root, const char *file_path);
 
 /* TypeScript module names are repository-relative POSIX paths INCLUDING
- * the source extension (.ts/.mts/.cts, including declaration files). A NULL
- * or non-enclosing root uses the full basename, not the stem. Relative
+ * the source extension (.ts/.mts/.cts/.tsx, including declaration files). A
+ * NULL or non-enclosing root uses the full basename, not the stem. Relative
  * imports probe source files within the root; bare packages, tsconfig paths,
- * and barrel/re-export chains are not resolved. No JavaScript/TSX grammar. */
+ * and barrel/re-export chains are not resolved. No JavaScript grammar.
+ *
+ * A parser is bound to one grammar for its lifetime:
+ * code_lens_typescript_parser_new() parses TypeScript and
+ * code_lens_tsx_parser_new() parses TSX (TypeScript plus JSX; `<T>expr`
+ * assertions are not TSX syntax). Both share the delete/set_repo_root/parse
+ * functions below. code_lens_parse_typescript_source() picks the grammar
+ * from the file extension (.tsx -> TSX). */
 CodeLensTypeScriptParser *code_lens_typescript_parser_new(void);
+CodeLensTypeScriptParser *code_lens_tsx_parser_new(void);
 void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser);
 int code_lens_typescript_parser_set_repo_root(CodeLensTypeScriptParser *parser,
                                                const char *repo_root);
@@ -269,6 +277,8 @@ uint32_t code_lens_python_language_abi_version(void);
 uint32_t code_lens_python_language_symbol_count(void);
 uint32_t code_lens_typescript_language_abi_version(void);
 uint32_t code_lens_typescript_language_symbol_count(void);
+uint32_t code_lens_tsx_language_abi_version(void);
+uint32_t code_lens_tsx_language_symbol_count(void);
 
 /* Supported source languages in registry order (the order `version --deps`
  * prints). Strings are static; extensions is nullptr-terminated and each

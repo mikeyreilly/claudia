@@ -83,11 +83,11 @@ SQLITE_DEFINES := -DSQLITE_ENABLE_FTS5 -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_LOAD_
 	-DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_USE_ALLOCA
 TREE_SITTER_OBJ := $(OBJ_DIR)/vendor/tree-sitter/lib.o
 # Grammars linked into the binary (pinned in vendor/deps.lock). TypeScript
-# lives in a nested typescript/src directory; TSX is deliberately not linked.
-# External scanner.c files are compiled when present. Keep GRAMMARS in sync
-# with build.bat.
-GRAMMARS := clojure java c python typescript
-grammar_src = vendor/tree-sitter-$(1)/$(if $(filter typescript,$(1)),typescript/)src
+# and TSX are the two nested grammars of the tree-sitter-typescript checkout
+# (typescript/src and tsx/src). External scanner.c files are compiled when
+# present. Keep GRAMMARS in sync with build.bat.
+GRAMMARS := clojure java c python typescript tsx
+grammar_src = $(if $(filter typescript tsx,$(1)),vendor/tree-sitter-typescript/$(1)/src,vendor/tree-sitter-$(1)/src)
 TREE_SITTER_GRAMMAR_OBJS := $(foreach g,$(GRAMMARS),$(OBJ_DIR)/vendor/tree-sitter-$(g)/parser.o) \
 	$(foreach g,$(GRAMMARS),$(if $(wildcard $(call grammar_src,$(g))/scanner.c),$(OBJ_DIR)/vendor/tree-sitter-$(g)/scanner.o))
 # Decompression-only slice of libdeflate; the cpu_features files are
@@ -147,8 +147,9 @@ $(OBJ_DIR)/vendor/tree-sitter-$(1)/scanner.o: $(call grammar_src,$(1))/scanner.c
 endef
 $(foreach g,$(GRAMMARS),$(eval $(call grammar_rules,$(g))))
 
-# The TypeScript scanner includes ../../common/scanner.h.
+# The TypeScript and TSX scanners include ../../common/scanner.h.
 $(OBJ_DIR)/vendor/tree-sitter-typescript/scanner.o: vendor/tree-sitter-typescript/common/scanner.h
+$(OBJ_DIR)/vendor/tree-sitter-tsx/scanner.o: vendor/tree-sitter-typescript/common/scanner.h
 
 $(OBJ_DIR)/vendor/libdeflate/%.o: vendor/libdeflate/lib/%.c
 	@mkdir -p $(dir $@)

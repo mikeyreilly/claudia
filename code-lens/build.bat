@@ -18,8 +18,9 @@ goto usage_error
 where clang.exe >nul 2>nul || (echo code-lens: clang.exe was not found on PATH 1>&2 & goto fail)
 rem Grammars linked into the binary (vendor\tree-sitter-<name>); keep in sync
 rem with GRAMMARS in the Makefile. scanner.c is compiled when present;
-rem TypeScript uses typescript\src (not the TSX grammar).
-set "GRAMMARS=clojure java c python typescript"
+rem TypeScript and TSX are the nested typescript\src and tsx\src grammars of
+rem vendor\tree-sitter-typescript.
+set "GRAMMARS=clojure java c python typescript tsx"
 for %%D in (sqlite tree-sitter libdeflate zlib) do (
   if not exist "vendor\%%D" (
     echo code-lens: vendor\%%D is missing. Run scripts\vendor-deps.bat first. 1>&2
@@ -27,10 +28,7 @@ for %%D in (sqlite tree-sitter libdeflate zlib) do (
   )
 )
 for %%G in (%GRAMMARS%) do (
-  if not exist "vendor\tree-sitter-%%G" (
-    echo code-lens: vendor\tree-sitter-%%G is missing. Run scripts\vendor-deps.bat first. 1>&2
-    goto fail
-  )
+  call :check_grammar %%G || goto fail
 )
 
 set "BUILD_ROOT=build\windows-%MODE%"
@@ -97,9 +95,22 @@ echo [CC] %~1
 clang %INCLUDES% %VENDOR_FLAGS% -DSQLITE_ENABLE_FTS5 -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DEPRECATED -DSQLITE_USE_ALLOCA -c "%~1" -o "%OBJ_DIR%\%~2"
 exit /b %ERRORLEVEL%
 
-:compile_grammar
+:grammar_src
 set "GRAMMAR_SRC=vendor\tree-sitter-%~1\src"
 if "%~1"=="typescript" set "GRAMMAR_SRC=vendor\tree-sitter-typescript\typescript\src"
+if "%~1"=="tsx" set "GRAMMAR_SRC=vendor\tree-sitter-typescript\tsx\src"
+exit /b 0
+
+:check_grammar
+call :grammar_src %~1
+if not exist "%GRAMMAR_SRC%\parser.c" (
+  echo code-lens: %GRAMMAR_SRC% is missing. Run scripts\vendor-deps.bat first. 1>&2
+  exit /b 1
+)
+exit /b 0
+
+:compile_grammar
+call :grammar_src %~1
 call :compile_tree "%GRAMMAR_SRC%\parser.c" tree_sitter_%~1.obj -I%GRAMMAR_SRC% || exit /b 1
 if exist "%GRAMMAR_SRC%\scanner.c" (
   call :compile_tree "%GRAMMAR_SRC%\scanner.c" tree_sitter_%~1_scanner.obj -I%GRAMMAR_SRC% || exit /b 1

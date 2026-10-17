@@ -1,7 +1,7 @@
 code-lens
 ==========
 
-Native ISO C23 MCP server and CLI for querying indexed Clojure, Java, C, and Python codebases.
+Native ISO C23 MCP server and CLI for querying indexed Clojure, Java, C, Python, TypeScript, and TSX codebases.
 
 Initial command surface:
 
@@ -23,7 +23,9 @@ there are no repo names. Their paths are canonicalized (with `~/` expansion);
 they retain support for plain directories, and any path inside an indexed
 repository resolves to that repository, so `--repo` accepts the repo root or
 any file or directory within it. Supported source extensions are .clj, .cljc,
-.cljs, .bb, .java, .c, .h, and .py; mixed-language repositories are supported.
+.cljs, .bb, .java, .c, .h, .py, .ts, .mts, .cts (including .d.ts declaration
+files), and .tsx; mixed-language repositories are supported. JavaScript (.js,
+.jsx) is not indexed.
 Python caches and virtualenvs (__pycache__, .venv, venv, .tox, .nox,
 .mypy_cache, .pytest_cache, .ruff_cache, .eggs, site-packages) are skipped.
 
@@ -158,7 +160,13 @@ checked out next to this repository):
   containers, and isinstance() narrowing; cross-file member chains,
   re-exports, inherited members, and generic parameters are linked after
   parsing. Untyped receivers stay
-  unresolved. Qualifiers in Clojure `alias/name`, Java `Type.member`,
+  unresolved. TypeScript and TSX modules are named by their repository-relative
+  path including the extension (src/App.tsx; members use src/App.tsx.Class);
+  relative imports (extensionless, index, and .js/.jsx spellings) resolve to
+  .ts/.tsx sources, while tsconfig paths/baseUrl, bare packages, and
+  re-export chains are not resolved. In .tsx files a JSX element such as
+  <Button> or <Kit.Icon> is a reference to the component binding; intrinsic
+  elements such as <div> are not. Qualifiers in Clojure `alias/name`, Java `Type.member`,
   `Type#member`, and fully qualified type spellings, and Python `module.func` or
   `Class.method` spellings are ignored for lookup when no exact dotted
   definition exists. Its `--namespace <namespace>`/MCP `namespace` and

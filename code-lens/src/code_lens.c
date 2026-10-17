@@ -39,6 +39,7 @@ const TSLanguage *tree_sitter_java(void);
 const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_python(void);
 const TSLanguage *tree_sitter_typescript(void);
+const TSLanguage *tree_sitter_tsx(void);
 
 static char *copy_bytes(const char *value, size_t len)
 {
@@ -327,6 +328,7 @@ typedef enum {
     LANG_C,
     LANG_PYTHON,
     LANG_TYPESCRIPT,
+    LANG_TSX,
     LANG_COUNT,
 } LanguageId;
 
@@ -487,6 +489,19 @@ static int typescript_parse_adapter(void *parser,
     return code_lens_parse_typescript_source_with_parser(parser, file_path, source, source_len, out_file);
 }
 
+/* TSX shares the TypeScript extractor; only the grammar (and with it the
+ * node-kind ids) differs, so delete/parse reuse the TypeScript adapters. */
+static void *tsx_parser_new_adapter(const char *repo_root)
+{
+    CodeLensTypeScriptParser *parser = code_lens_tsx_parser_new();
+
+    if ((parser != nullptr) && (code_lens_typescript_parser_set_repo_root(parser, repo_root) != 0)) {
+        code_lens_typescript_parser_delete(parser);
+        return nullptr;
+    }
+    return parser;
+}
+
 /* Any added/removed source can change extensionless or index import probes. */
 static bool typescript_forces_full_rebuild(const char *path)
 {
@@ -499,6 +514,7 @@ static const char *const java_extensions[] = {".java", nullptr};
 static const char *const c_extensions[] = {".c", ".h", nullptr};
 static const char *const python_extensions[] = {".py", nullptr};
 static const char *const typescript_extensions[] = {".ts", ".mts", ".cts", nullptr};
+static const char *const tsx_extensions[] = {".tsx", nullptr};
 
 static const LanguageSpec languages[LANG_COUNT] = {
     [LANG_CLOJURE] = {.name = "clojure",
@@ -540,6 +556,14 @@ static const LanguageSpec languages[LANG_COUNT] = {
                          .parser_delete = typescript_parser_delete_adapter,
                          .parse = typescript_parse_adapter,
                          .forces_full_rebuild = typescript_forces_full_rebuild},
+    [LANG_TSX] = {.name = "tsx",
+                  .grammar = "tree-sitter-tsx",
+                  .extensions = tsx_extensions,
+                  .ts_language = tree_sitter_tsx,
+                  .parser_new = tsx_parser_new_adapter,
+                  .parser_delete = typescript_parser_delete_adapter,
+                  .parse = typescript_parse_adapter,
+                  .forces_full_rebuild = typescript_forces_full_rebuild},
 };
 
 /* The language owning path's extension, or LANG_COUNT. The extension is the
@@ -2769,9 +2793,22 @@ uint32_t code_lens_typescript_language_symbol_count(void)
     return ts_language_symbol_count(tree_sitter_typescript());
 }
 
+uint32_t code_lens_tsx_language_abi_version(void)
+{
+    return ts_language_abi_version(tree_sitter_tsx());
+}
+
+uint32_t code_lens_tsx_language_symbol_count(void)
+{
+    return ts_language_symbol_count(tree_sitter_tsx());
+}
+
 /* 18 added Symbol.startByte/endByte (full-definition spans read back by the
- * source() SQL function) and Referred.alias (local import binding names). */
-#define CODE_LENS_INDEX_FORMAT_VERSION 18
+ * source() SQL function) and Referred.alias (local import binding names).
+ * 19: same schema as 18, but .tsx files are now indexed (TSX grammar) and
+ * TypeScript imports resolve to them; bumped so existing TypeScript indexes
+ * rebuild in full instead of keeping stale unresolved import targets. */
+#define CODE_LENS_INDEX_FORMAT_VERSION 19
 
 static double profile_now_seconds(void);
 
@@ -13349,7 +13386,9 @@ int code_lens_parse_python_source(const char *repo_root,
     return rc;
 }
 
-/* TypeScript parser (syntax-only; deliberately no compiler or tsconfig). */
+/* TypeScript and TSX parser (syntax-only; deliberately no compiler or
+ * tsconfig). One extractor serves both grammars; TSX adds JSX element
+ * references. */
 
 static char *alloc_printf(const char *format, ...);
 
@@ -13373,7 +13412,11 @@ enum {
     TSK_PAIR_PATTERN, TSK_ASSIGNMENT_PATTERN, TSK_REST_PATTERN,
     TSK_ARRAY_PATTERN, TSK_OBJECT_PATTERN, TSK_CATCH, TSK_FOR_IN, TSK_FOR,
     TSK_FUNCTION_TYPE, TSK_CONSTRUCTOR_TYPE, TSK_CONSTRUCT_SIGNATURE,
-    TSK_LABEL, TSK_BREAK, TSK_CONTINUE, TSK_COUNT
+    TSK_LABEL, TSK_BREAK, TSK_CONTINUE,
+    /* JSX kinds exist only in the TSX grammar. The TypeScript grammar
+     * resolves kinds below TSK_TS_COUNT, so its trees never yield these. */
+    TSK_JSX_OPENING, TSK_JSX_SELF_CLOSING, TSK_JSX_CLOSING, TSK_COUNT,
+    TSK_TS_COUNT = TSK_JSX_OPENING
 };
 static const char *const typescript_kind_names[TSK_COUNT] = {
     "", "program", "statement_block", "identifier", "type_identifier",
@@ -13392,7 +13435,8 @@ static const char *const typescript_kind_names[TSK_COUNT] = {
     "nested_identifier", "nested_type_identifier", "new_expression", "this",
     "pair_pattern", "assignment_pattern", "rest_pattern", "array_pattern", "object_pattern",
     "catch_clause", "for_in_statement", "for_statement", "function_type", "constructor_type",
-    "construct_signature", "labeled_statement", "break_statement", "continue_statement"
+    "construct_signature", "labeled_statement", "break_statement", "continue_statement",
+    "jsx_opening_element", "jsx_self_closing_element", "jsx_closing_element"
 };
 enum {
     TSF_NAME, TSF_BODY, TSF_TYPE, TSF_VALUE, TSF_PARAMETERS, TSF_PARAMETER,
@@ -13403,29 +13447,32 @@ static const char *const typescript_field_names[TSF_COUNT] = {
     "name", "body", "type", "value", "parameters", "parameter", "pattern",
     "object", "property", "constructor", "source", "alias", "declaration", "left", "module"
 };
+/* One id table per grammar: TSX numbers its symbols differently, so a
+ * TypeScript id must never be compared against a TSX tree (or vice versa).
+ * The extractor reads the table through its parser (typescript_kind). */
 static TshIds typescript_ids;
 static pthread_once_t typescript_ids_once = PTHREAD_ONCE_INIT;
+static TshIds tsx_ids;
+static pthread_once_t tsx_ids_once = PTHREAD_ONCE_INIT;
 
 static void init_typescript_ids(void)
 {
     typescript_ids.ok = tsh_ids_init(&typescript_ids, tree_sitter_typescript(),
-                                    typescript_kind_names, TSK_COUNT,
+                                    typescript_kind_names, TSK_TS_COUNT,
                                     typescript_field_names, TSF_COUNT, true);
 }
 
-static uint32_t typescript_kind(TSNode node)
+static void init_tsx_ids(void)
 {
-    return tsh_kind(&typescript_ids, node);
-}
-
-static TSNode typescript_field(TSNode node, uint32_t field)
-{
-    return tsh_field(&typescript_ids, node, field);
+    tsx_ids.ok = tsh_ids_init(&tsx_ids, tree_sitter_tsx(),
+                             typescript_kind_names, TSK_COUNT,
+                             typescript_field_names, TSF_COUNT, true);
 }
 
 struct CodeLensTypeScriptParser {
     TSParser *parser;
     char *repo_root;
+    const TshIds *ids;
 };
 
 typedef struct {
@@ -13452,6 +13499,16 @@ typedef struct {
     ParseMap members; /* owner target + name -> binding index */
     ParseMap owners; /* declaration byte -> binding index */
 } TypeScriptContext;
+
+static uint32_t typescript_kind(const TypeScriptContext *ctx, TSNode node)
+{
+    return tsh_kind(ctx->parser->ids, node);
+}
+
+static TSNode typescript_field(const TypeScriptContext *ctx, TSNode node, uint32_t field)
+{
+    return tsh_field(ctx->parser->ids, node, field);
+}
 
 /* Lexical normalization also works for nonexistent files and synthetic API
  * paths; never realpath a source just to determine its module identity. */
@@ -13557,7 +13614,7 @@ static char *typescript_text(const TypeScriptContext *ctx, TSNode node)
     if ((end < start) || ((size_t)end > ctx->source_len)) {
         return nullptr;
     }
-    if ((typescript_kind(node) == TSK_STRING) && (end > start + 1U)) {
+    if ((typescript_kind(ctx, node) == TSK_STRING) && (end > start + 1U)) {
         start++;
         end--;
     }
@@ -13623,7 +13680,7 @@ static bool typescript_symbol(TypeScriptContext *ctx, TSNode outer, TSNode defin
                               const char *name, const char *kind, const char *ns)
 {
     CodeLensSymbol *symbol;
-    TSNode body = typescript_field(definition, TSF_BODY);
+    TSNode body = typescript_field(ctx, definition, TSF_BODY);
     uint32_t start = ts_node_start_byte(outer);
     uint32_t end = ts_node_is_null(body) ? ts_node_end_byte(outer) : ts_node_start_byte(body);
     if ((name == nullptr) || (name[0] == '\0')) {
@@ -13653,7 +13710,8 @@ static bool typescript_source_extension(const char *path)
     size_t len = strlen(path);
     return ((len >= 3U) && (strcmp(path + len - 3U, ".ts") == 0)) ||
            ((len >= 4U) && ((strcmp(path + len - 4U, ".mts") == 0) ||
-                            (strcmp(path + len - 4U, ".cts") == 0)));
+                            (strcmp(path + len - 4U, ".cts") == 0) ||
+                            (strcmp(path + len - 4U, ".tsx") == 0)));
 }
 
 static char *typescript_probe(TypeScriptContext *ctx, const char *stem, const char *suffix)
@@ -13671,9 +13729,11 @@ static char *typescript_probe(TypeScriptContext *ctx, const char *stem, const ch
 
 static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
 {
+    /* TypeScript's own extensionless order: .ts, .tsx, .d.ts, then index. */
     static const char *const suffixes[] = {
-        ".ts", ".mts", ".cts", ".d.ts", ".d.mts", ".d.cts",
-        "/index.ts", "/index.mts", "/index.cts", "/index.d.ts", "/index.d.mts", "/index.d.cts"
+        ".ts", ".tsx", ".mts", ".cts", ".d.ts", ".d.mts", ".d.cts",
+        "/index.ts", "/index.tsx", "/index.mts", "/index.cts",
+        "/index.d.ts", "/index.d.mts", "/index.d.cts"
     };
     char *spec = typescript_text(ctx, source);
     char *file;
@@ -13708,6 +13768,17 @@ static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
             return nullptr;
         }
         target = typescript_probe(ctx, stem, ".ts");
+        if (target == nullptr) {
+            target = typescript_probe(ctx, stem, ".tsx");
+        }
+        return target != nullptr ? target : typescript_probe(ctx, stem, ".d.ts");
+    }
+    if ((len >= 4U) && (strcmp(path + len - 4U, ".jsx") == 0)) {
+        char *stem = copy_bytes(path, len - 4U);
+        if (stem == nullptr) {
+            return nullptr;
+        }
+        target = typescript_probe(ctx, stem, ".tsx");
         return target != nullptr ? target : typescript_probe(ctx, stem, ".d.ts");
     }
     if ((len >= 4U) && ((strcmp(path + len - 4U, ".mjs") == 0) ||
@@ -13761,13 +13832,13 @@ static bool typescript_import_binding(TypeScriptContext *ctx, TSNode local,
 static bool typescript_import_clause(TypeScriptContext *ctx, TSNode node,
                                     TSNode scope, const char *target, uint32_t depth)
 {
-    uint32_t kind = typescript_kind(node);
+    uint32_t kind = typescript_kind(ctx, node);
     if (depth >= TYPESCRIPT_MAX_DEPTH) {
         return true;
     }
     if (kind == TSK_IMPORT_SPECIFIER) {
-        TSNode name = typescript_field(node, TSF_NAME);
-        TSNode alias = typescript_field(node, TSF_ALIAS);
+        TSNode name = typescript_field(ctx, node, TSF_NAME);
+        TSNode alias = typescript_field(ctx, node, TSF_ALIAS);
         return typescript_import_binding(ctx, ts_node_is_null(alias) ? name : alias,
                                          scope, typescript_text(ctx, name), target, false);
     }
@@ -13789,7 +13860,7 @@ static bool typescript_pattern(TypeScriptContext *ctx, TSNode node, TSNode scope
                               TypeScriptBinding binding, bool symbols,
                               TSNode outer, const char *ns, const char *kind, uint32_t depth)
 {
-    uint32_t k = typescript_kind(node);
+    uint32_t k = typescript_kind(ctx, node);
     if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH)) {
         return true;
     }
@@ -13800,11 +13871,11 @@ static bool typescript_pattern(TypeScriptContext *ctx, TSNode node, TSNode scope
                (!symbols || typescript_symbol(ctx, outer, outer, name, kind, ns));
     }
     if (k == TSK_PAIR_PATTERN) {
-        return typescript_pattern(ctx, typescript_field(node, TSF_VALUE), scope, binding,
+        return typescript_pattern(ctx, typescript_field(ctx, node, TSF_VALUE), scope, binding,
                                   symbols, outer, ns, kind, depth + 1U);
     }
     if (k == TSK_ASSIGNMENT_PATTERN) {
-        return typescript_pattern(ctx, typescript_field(node, TSF_LEFT), scope, binding,
+        return typescript_pattern(ctx, typescript_field(ctx, node, TSF_LEFT), scope, binding,
                                   symbols, outer, ns, kind, depth + 1U);
     }
     for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
@@ -13840,8 +13911,8 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
                                const char *ns, const char *owner, bool local,
                                TSNode outer, bool default_export, uint32_t depth)
 {
-    uint32_t kind = typescript_kind(node);
-    TSNode name = typescript_field(node, TSF_NAME);
+    uint32_t kind = typescript_kind(ctx, node);
+    TSNode name = typescript_field(ctx, node, TSF_NAME);
     TSNode child_scope = scope;
     const char *child_ns = ns;
     const char *child_owner = owner;
@@ -13854,12 +13925,12 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
         outer = node;
     }
     if (kind == TSK_IMPORT) {
-        TSNode source = typescript_field(node, TSF_SOURCE);
+        TSNode source = typescript_field(ctx, node, TSF_SOURCE);
         if (ts_node_is_null(source)) {
             for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
                 TSNode child = tsh_named_child(node, i);
-                if (typescript_kind(child) == TSK_IMPORT_REQUIRE) {
-                    source = typescript_field(child, TSF_SOURCE);
+                if (typescript_kind(ctx, child) == TSK_IMPORT_REQUIRE) {
+                    source = typescript_field(ctx, child, TSF_SOURCE);
                     break;
                 }
             }
@@ -13876,8 +13947,8 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
             }
             for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
                 TSNode child = tsh_named_child(node, i);
-                if ((typescript_kind(child) == TSK_IMPORT_CLAUSE) ||
-                    (typescript_kind(child) == TSK_IMPORT_REQUIRE)) {
+                if ((typescript_kind(ctx, child) == TSK_IMPORT_CLAUSE) ||
+                    (typescript_kind(ctx, child) == TSK_IMPORT_REQUIRE)) {
                     if (!typescript_import_clause(ctx, child, scope, target, depth + 1U)) {
                         return false;
                     }
@@ -13968,16 +14039,16 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
         if (!method && (kind != TSK_ARROW)) {
             child_owner = nullptr;
         }
-        if (!typescript_pattern(ctx, typescript_field(node, TSF_PARAMETER), node,
+        if (!typescript_pattern(ctx, typescript_field(ctx, node, TSF_PARAMETER), node,
                                (TypeScriptBinding){.local = true}, false, node, ns, "", depth + 1U)) {
             return false;
         }
     } else if (kind == TSK_VARIABLE) {
-        TSNode value = typescript_field(node, TSF_VALUE);
-        const char *symbol_kind = typescript_callable(typescript_kind(value)) ? "function" : "variable";
+        TSNode value = typescript_field(ctx, node, TSF_VALUE);
+        const char *symbol_kind = typescript_callable(typescript_kind(ctx, value)) ? "function" : "variable";
         if (!typescript_pattern(ctx, name, scope,
             (TypeScriptBinding){.target = local ? nullptr : ns, .local = local,
-                                .annotation = typescript_field(node, TSF_TYPE), .value = value},
+                                .annotation = typescript_field(ctx, node, TSF_TYPE), .value = value},
             !local, outer, ns, symbol_kind, depth + 1U)) {
             return false;
         }
@@ -13986,8 +14057,8 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
         char *text = typescript_text(ctx, name);
         if (!ts_node_is_null(name) &&
             (!typescript_bind(ctx, name, scope,
-                (TypeScriptBinding){.target = ns, .annotation = typescript_field(node, TSF_TYPE),
-                                    .value = typescript_field(node, TSF_VALUE)}, &index) ||
+                (TypeScriptBinding){.target = ns, .annotation = typescript_field(ctx, node, TSF_TYPE),
+                                    .value = typescript_field(ctx, node, TSF_VALUE)}, &index) ||
              ((owner != nullptr) && !typescript_member(ctx, owner, text, index)) ||
              !typescript_symbol(ctx, outer, node, text, kind == TSK_ENUM_ASSIGNMENT ? "enum_constant" : "field", ns))) {
             return false;
@@ -13995,7 +14066,7 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
     } else if (kind == TSK_ENUM_BODY) {
         for (uint32_t i = 0U; i < tsh_named_count(node); i++) {
             TSNode child = tsh_named_child(node, i);
-            if (typescript_kind(child) == TSK_PROPERTY) {
+            if (typescript_kind(ctx, child) == TSK_PROPERTY) {
                 uint32_t index = SCOPE_INDEX_NONE;
                 char *text = typescript_text(ctx, child);
                 if (!typescript_bind(ctx, child, scope, (TypeScriptBinding){.target = ns}, &index) ||
@@ -14006,13 +14077,13 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
             }
         }
     } else if ((kind == TSK_REQUIRED_PARAMETER) || (kind == TSK_OPTIONAL_PARAMETER)) {
-        TSNode pattern = typescript_field(node, TSF_PATTERN);
+        TSNode pattern = typescript_field(ctx, node, TSF_PATTERN);
         if (ts_node_is_null(pattern)) {
             pattern = name;
         }
         if (!typescript_pattern(ctx, pattern, scope,
-            (TypeScriptBinding){.local = true, .annotation = typescript_field(node, TSF_TYPE),
-                                .value = typescript_field(node, TSF_VALUE)}, false, outer, ns, "", depth + 1U)) {
+            (TypeScriptBinding){.local = true, .annotation = typescript_field(ctx, node, TSF_TYPE),
+                                .value = typescript_field(ctx, node, TSF_VALUE)}, false, outer, ns, "", depth + 1U)) {
             return false;
         }
     } else if (kind == TSK_TYPE_PARAMETER) {
@@ -14021,7 +14092,7 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
         }
     } else if ((kind == TSK_CATCH) || (kind == TSK_FOR_IN)) {
         child_scope = node;
-        if (!typescript_pattern(ctx, typescript_field(node, kind == TSK_CATCH ? TSF_PARAMETER : TSF_LEFT),
+        if (!typescript_pattern(ctx, typescript_field(ctx, node, kind == TSK_CATCH ? TSF_PARAMETER : TSF_LEFT),
                                node, (TypeScriptBinding){.local = true}, false, node, ns, "", depth + 1U)) {
             return false;
         }
@@ -14071,8 +14142,8 @@ static const char *typescript_binding_receiver(TypeScriptContext *ctx,
     if (!ts_node_is_null(binding->annotation)) {
         return typescript_receiver(ctx, binding->annotation, owner, depth + 1U);
     }
-    if (typescript_kind(binding->value) == TSK_NEW) {
-        return typescript_receiver(ctx, typescript_field(binding->value, TSF_CONSTRUCTOR), owner, depth + 1U);
+    if (typescript_kind(ctx, binding->value) == TSK_NEW) {
+        return typescript_receiver(ctx, typescript_field(ctx, binding->value, TSF_CONSTRUCTOR), owner, depth + 1U);
     }
     return nullptr;
 }
@@ -14095,7 +14166,7 @@ static const TypeScriptBinding *typescript_member_lookup(TypeScriptContext *ctx,
 static const char *typescript_receiver(TypeScriptContext *ctx, TSNode node,
                                       const char *owner, uint32_t depth)
 {
-    uint32_t kind = typescript_kind(node);
+    uint32_t kind = typescript_kind(ctx, node);
     if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH)) {
         return nullptr;
     }
@@ -14106,15 +14177,15 @@ static const char *typescript_receiver(TypeScriptContext *ctx, TSNode node,
         return typescript_binding_receiver(ctx, typescript_lookup(ctx, node), owner, depth + 1U);
     }
     if ((kind == TSK_TYPE_ANNOTATION) || (kind == TSK_GENERIC_TYPE)) {
-        TSNode inner = kind == TSK_GENERIC_TYPE ? typescript_field(node, TSF_NAME) : tsh_named_child(node, 0U);
+        TSNode inner = kind == TSK_GENERIC_TYPE ? typescript_field(ctx, node, TSF_NAME) : tsh_named_child(node, 0U);
         return typescript_receiver(ctx, inner, owner, depth + 1U);
     }
     if (kind == TSK_NEW) {
-        return typescript_receiver(ctx, typescript_field(node, TSF_CONSTRUCTOR), owner, depth + 1U);
+        return typescript_receiver(ctx, typescript_field(ctx, node, TSF_CONSTRUCTOR), owner, depth + 1U);
     }
     if ((kind == TSK_MEMBER) || (kind == TSK_NESTED_IDENTIFIER) || (kind == TSK_NESTED_TYPE)) {
-        TSNode object = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
-        TSNode property = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
+        TSNode object = typescript_field(ctx, node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
+        TSNode property = typescript_field(ctx, node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
         const TypeScriptBinding *base = typescript_lookup(ctx, object);
         const char *target = typescript_receiver(ctx, object, owner, depth + 1U);
         const TypeScriptBinding *member = typescript_member_lookup(ctx, target, property);
@@ -14157,9 +14228,31 @@ static bool typescript_reference(TypeScriptContext *ctx, TSNode span, TSNode bas
     return true;
 }
 
+/* React's rule: a lowercase or dashed tag name is a host element, and a
+ * namespaced name (`svg:rect`) is never a binding. Member names
+ * (`<Foo.Bar>`) are always value references. */
+static bool typescript_jsx_intrinsic(const TypeScriptContext *ctx, TSNode name)
+{
+    uint32_t start;
+    uint32_t end;
+    if (ts_node_is_null(name)) {
+        return false;
+    }
+    if (typescript_kind(ctx, name) != TSK_IDENTIFIER) {
+        return typescript_kind(ctx, name) != TSK_MEMBER;
+    }
+    start = ts_node_start_byte(name);
+    end = ts_node_end_byte(name);
+    if ((end <= start) || ((size_t)end > ctx->source_len)) {
+        return true;
+    }
+    return ((ctx->source[start] >= 'a') && (ctx->source[start] <= 'z')) ||
+           (memchr(ctx->source + start, '-', (size_t)(end - start)) != nullptr);
+}
+
 static bool typescript_walk(TypeScriptContext *ctx, TSNode node, const char *owner, uint32_t depth)
 {
-    uint32_t kind = typescript_kind(node);
+    uint32_t kind = typescript_kind(ctx, node);
     uint32_t ignored;
     if (ts_node_is_null(node) || (depth >= TYPESCRIPT_MAX_DEPTH) || (kind == TSK_COMMENT) ||
         (kind == TSK_IMPORT) || (kind == TSK_IMPORT_ALIAS) || (kind == TSK_EXPORT_SPECIFIER) ||
@@ -14178,9 +14271,29 @@ static bool typescript_walk(TypeScriptContext *ctx, TSNode node, const char *own
                (kind != TSK_METHOD) && (kind != TSK_METHOD_SIGNATURE) && (kind != TSK_ABSTRACT_METHOD)) {
         owner = nullptr;
     }
+    if (kind == TSK_JSX_CLOSING) {
+        return true; /* `</Name>` repeats the opening tag's reference */
+    }
+    if ((kind == TSK_JSX_OPENING) || (kind == TSK_JSX_SELF_CLOSING)) {
+        /* `<Name ...>` references the component binding; intrinsic
+         * elements (`<div>`, `<my-element>`, `<svg:rect>`) are not
+         * variable uses. Attributes and type arguments are walked as usual. */
+        TSNode name = typescript_field(ctx, node, TSF_NAME);
+        bool intrinsic = typescript_jsx_intrinsic(ctx, name);
+        for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
+            TSNode child = tsh_named_child(node, i);
+            if (intrinsic && ts_node_eq(child, name)) {
+                continue;
+            }
+            if (!typescript_walk(ctx, child, owner, depth + 1U)) {
+                return false;
+            }
+        }
+        return true;
+    }
     if ((kind == TSK_MEMBER) || (kind == TSK_NESTED_IDENTIFIER) || (kind == TSK_NESTED_TYPE)) {
-        TSNode object = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
-        TSNode property = typescript_field(node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
+        TSNode object = typescript_field(ctx, node, kind == TSK_NESTED_TYPE ? TSF_MODULE : TSF_OBJECT);
+        TSNode property = typescript_field(ctx, node, kind == TSK_NESTED_TYPE ? TSF_NAME : TSF_PROPERTY);
         const TypeScriptBinding *base_binding = typescript_lookup(ctx, object);
         const char *target = typescript_receiver(ctx, object, owner, depth + 1U);
         const TypeScriptBinding *member = typescript_member_lookup(ctx, target, property);
@@ -14224,23 +14337,36 @@ static bool typescript_walk(TypeScriptContext *ctx, TSNode node, const char *own
     return true;
 }
 
-CodeLensTypeScriptParser *code_lens_typescript_parser_new(void)
+static CodeLensTypeScriptParser *typescript_parser_new_for(const TSLanguage *language,
+                                                            const TshIds *ids)
 {
     CodeLensTypeScriptParser *parser;
-    (void)pthread_once(&typescript_ids_once, init_typescript_ids);
-    if (!typescript_ids.ok) {
+    if (!ids->ok) {
         return nullptr;
     }
     parser = calloc(1U, sizeof(*parser));
     if (parser == nullptr) {
         return nullptr;
     }
+    parser->ids = ids;
     parser->parser = ts_parser_new();
-    if ((parser->parser == nullptr) || !ts_parser_set_language(parser->parser, tree_sitter_typescript())) {
+    if ((parser->parser == nullptr) || !ts_parser_set_language(parser->parser, language)) {
         code_lens_typescript_parser_delete(parser);
         return nullptr;
     }
     return parser;
+}
+
+CodeLensTypeScriptParser *code_lens_typescript_parser_new(void)
+{
+    (void)pthread_once(&typescript_ids_once, init_typescript_ids);
+    return typescript_parser_new_for(tree_sitter_typescript(), &typescript_ids);
+}
+
+CodeLensTypeScriptParser *code_lens_tsx_parser_new(void)
+{
+    (void)pthread_once(&tsx_ids_once, init_tsx_ids);
+    return typescript_parser_new_for(tree_sitter_tsx(), &tsx_ids);
 }
 
 void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser)
@@ -14318,7 +14444,9 @@ int code_lens_parse_typescript_source(const char *repo_root, const char *file_pa
                                      const char *source, size_t source_len,
                                      CodeLensTypeScriptFile *out_file)
 {
-    CodeLensTypeScriptParser *parser = code_lens_typescript_parser_new();
+    size_t path_len = file_path == nullptr ? 0U : strlen(file_path);
+    bool tsx = (path_len >= 4U) && (strcmp(file_path + path_len - 4U, ".tsx") == 0);
+    CodeLensTypeScriptParser *parser = tsx ? code_lens_tsx_parser_new() : code_lens_typescript_parser_new();
     int rc;
     if (parser == nullptr) {
         return -1;
@@ -26055,7 +26183,7 @@ static bool append_reference_snippet(StringBuilder *out,
     "AND n.namespace = d.namespace AND n.kind = d.kind " \
     "AND n.startLine = d.startLine AND n.endLine = d.endLine AND n.content = d.content " \
     "WHERE c.namespace = n.namespace || '.' || n.name " \
-    "AND (substr(c.filePath, -3) = '.ts' OR substr(c.filePath, -4) IN ('.mts', '.cts'))) "
+    "AND (substr(c.filePath, -3) = '.ts' OR substr(c.filePath, -4) IN ('.mts', '.cts', '.tsx'))) "
 
 static char *query_reference_snippets(CodeLensDb *db,
                                       const char *repo_name,
@@ -30913,13 +31041,14 @@ static void respond_initialize(const char *id)
 {
     StringBuilder out = {0};
     static const char instructions[] =
-        "code-lens provides code intelligence for Clojure, Java, C, Python, and TypeScript repositories. "
+        "code-lens provides code intelligence for Clojure, Java, C, Python, TypeScript, and TSX repositories. "
         "When working with these languages, prefer query and context over text search: "
         "query finds symbol definitions and Clojure :keyword usages by name, while context "
         "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
         "when the target is a Java type. It understands Clojure "
         ":as/:refer, Java imports and receiver types, C linkage and member types, Python "
-        "imports with self, constructor, and annotated receivers, and TypeScript imports and typed receivers. Set "
+        "imports with self, constructor, and annotated receivers, and TypeScript/TSX imports, typed receivers, "
+        "and JSX component usages. Set "
         "repo to an absolute repository root or any file or directory inside it; omit repo to "
         "use the directory where the server was started, which may not be your working "
         "directory. sql runs read-only structural queries over the "
@@ -30974,8 +31103,9 @@ static void respond_tools_list(const char *id)
         " with snippets. An exact Java type automatically returns a bounded Class Dossier"
         " with members, hierarchy, relevant inherited behavior, support types, overrides,"
         " and purpose-grouped representative usages. Resolves Clojure :as/:refer, Java"
-        " imports and receiver types, C linkage and aggregate members, and Python imports"
-        " and self/constructor/annotated receivers. Dependency definitions are an automatic fallback;"
+        " imports and receiver types, C linkage and aggregate members, Python imports"
+        " and self/constructor/annotated receivers, and TypeScript/TSX relative imports,"
+        " typed receivers, and JSX component usages. Dependency definitions are an automatic fallback;"
         " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
         " package.Type, and ptr->field qualifiers. repo may be an absolute repository root"
         " or any path inside it. When omitted, it defaults to the directory the code-lens"
@@ -30987,11 +31117,11 @@ static void respond_tools_list(const char *id)
         " necessarily your working directory.\"},"
         "\"aliases\":{\"type\":\"string\",\"description\":\"Clojure tools.deps aliases such as :dev:reporting used while resolving dependency sources.\"},"
         "\"name\":{\"type\":\"string\",\"description\":\"Symbol name, optionally qualified"
-        " with a Clojure namespace or alias, Java type or package, C aggregate, or Python"
-        " module or class.\"},"
+        " with a Clojure namespace or alias, Java type or package, C aggregate, Python"
+        " module or class, or TypeScript type.\"},"
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
         " definitions (Java enclosing type; C file or type scope; Python module or"
-        " module.Class).\"},"
+        " module.Class; TypeScript/TSX file path with extension, or path.Type).\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
         " matching definition file paths. A workspace calling file is also accepted as"
         " dependency-resolution context.\"},"
@@ -31028,7 +31158,10 @@ static void respond_tools_list(const char *id)
         " rows are static imports. For C, global namespaces are empty, static namespaces are"
         " file paths, and field namespaces are aggregate names. For Python, File.namespace is"
         " the dotted module, Symbol.namespace is the module or module.Class, Alias rows are"
-        " import statements, and Referred rows are from-imports. Join File via File.rowid ="
+        " import statements, and Referred rows are from-imports. For TypeScript and TSX,"
+        " File.namespace and Symbol.namespace are the repository-relative file path"
+        " including its extension (members use path.Type), Alias rows are namespace"
+        " imports, and Referred rows are named and default imports. Join File via File.rowid ="
         " fileId. repo may be an absolute repository root or any path inside it. When"
         " omitted, it defaults to the directory the code-lens server was started in, which"
         " is not necessarily your working directory.\","

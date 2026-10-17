@@ -120,6 +120,93 @@ static int test_typescript_parser(void)
     return failed;
 }
 
+static size_t ts_reference_count(const CodeLensTypeScriptFile *file, const char *base)
+{
+    size_t count = 0U;
+    for (size_t i = 0U; i < file->reference_count; i++) {
+        if (strcmp(file->references[i].base, base) == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static int test_tsx_parser(void)
+{
+    static const char source[] =
+        "import { Button } from 'ui-kit/button';\n"
+        "import * as Kit from 'ui-kit';\n"
+        "import { format } from 'fmt';\n"
+        "const span = 'module-level binding shadowed by the host element';\n"
+        "export interface Props { label: string; }\n"
+        "export const Panel = (props: Props) => (\n"
+        "  <section className='panel'>\n"
+        "    <Button onClick={() => format(props.label)}>{format(props.label)}</Button>\n"
+        "    <Kit.Icon />\n"
+        "    <Local />\n"
+        "    <my-element data-x='1' />\n"
+        "    <span>text</span>\n"
+        "    <></>\n"
+        "  </section>\n"
+        ");\n"
+        "function Local() { return <div>{identity<number>(1)}</div>; }\n"
+        "const identity = <T,>(value: T): T => value;\n"
+        "export default function App() { const div = 1; return <div>{div}<Panel label='x' /></div>; }\n";
+    CodeLensTypeScriptFile file = {0};
+    CodeLensTypeScriptParser *parser = code_lens_tsx_parser_new();
+    int failed = 0;
+
+    if ((parser == nullptr) ||
+        (code_lens_typescript_parser_set_repo_root(parser, "/project") != 0) ||
+        (code_lens_parse_typescript_source_with_parser(parser, "/project/src/panel.tsx",
+                                                       source, sizeof(source) - 1U, &file) != 0)) {
+        code_lens_typescript_parser_delete(parser);
+        return ts_assert(false, "TSX parser creation and source parse");
+    }
+    failed |= ts_assert(strcmp(file.namespace_name, "src/panel.tsx") == 0,
+                         "TSX module identity keeps the .tsx extension");
+    failed |= ts_assert(ts_symbol(&file, "Panel", "function", "src/panel.tsx") != nullptr &&
+                         ts_symbol(&file, "Props", "interface", "src/panel.tsx") != nullptr &&
+                         ts_symbol(&file, "Local", "function", "src/panel.tsx") != nullptr &&
+                         ts_symbol(&file, "identity", "function", "src/panel.tsx") != nullptr &&
+                         ts_symbol(&file, "App", "function", "src/panel.tsx") != nullptr &&
+                         ts_symbol(&file, "default", "function", "src/panel.tsx") != nullptr,
+                         "TSX components, generic arrows and default export are symbols");
+    failed |= ts_assert(ts_reference(&file, "Button", "Button", "ui-kit/button") &&
+                         (ts_reference_count(&file, "Button") == 1U),
+                         "JSX element references its import once (closing tag not repeated)");
+    failed |= ts_assert(ts_reference(&file, "Kit.Icon", "Icon", "ui-kit"),
+                         "JSX member element resolves through a namespace import");
+    failed |= ts_assert(ts_reference(&file, "Local", "Local", "src/panel.tsx") &&
+                         ts_reference(&file, "Panel", "Panel", "src/panel.tsx"),
+                         "JSX elements reference same-file components");
+    failed |= ts_assert(ts_reference_count(&file, "format") == 2U,
+                         "JSX attribute and child expressions are walked");
+    failed |= ts_assert(ts_reference(&file, "Props", "Props", "src/panel.tsx") &&
+                         ts_reference(&file, "identity", "identity", "src/panel.tsx"),
+                         "TypeScript type and value references inside TSX");
+    failed |= ts_assert((ts_reference_count(&file, "div") == 0U) &&
+                         (ts_reference_count(&file, "section") == 0U) &&
+                         (ts_reference_count(&file, "span") == 0U) &&
+                         (ts_reference_count(&file, "my-element") == 0U),
+                         "intrinsic elements are not references, even when a module binding shares the name");
+    for (size_t i = 0U; i < file.reference_count; i++) {
+        const CodeLensReference *ref = &file.references[i];
+        failed |= ts_assert((ref->start_byte <= ref->end_byte) &&
+                             (ref->end_byte <= sizeof(source) - 1U),
+                             "TSX reference spans are valid");
+    }
+    code_lens_typescript_parser_delete(parser);
+    /* The convenience entry point picks the grammar from the extension. */
+    file = (CodeLensTypeScriptFile){0};
+    failed |= ts_assert((code_lens_parse_typescript_source("/project", "/project/view.tsx",
+                                                            source, sizeof(source) - 1U, &file) == 0) &&
+                         ts_reference(&file, "Button", "Button", "ui-kit/button") &&
+                         (ts_reference_count(&file, "Button") == 1U),
+                         "code_lens_parse_typescript_source uses TSX for .tsx paths");
+    return failed;
+}
+
 static int ts_write(const char *root, const char *name, const char *source)
 {
     char *path = code_lens_join_path(root, name);
@@ -213,7 +300,12 @@ static int test_typescript_index(void)
         (ts_write(repo, "esm.mts", "export const esm = 1;\n") != 0) ||
         (ts_write(repo, "cjs.cts", "export const cjs = 1;\n") != 0) ||
         (ts_write(repo, "decl.d.ts", "export declare function ambient(): number;\n") != 0) ||
-        (ts_write(repo, "ignored.tsx", "export const ExcludedTSX = <div/>;\n") != 0) ||
+        (ts_write(repo, "widget.tsx", "export const Widget = () => <div/>;\n"
+                                       "export default function Fancy() { return <Widget/>; }\n") != 0) ||
+        (ts_write(repo, "page.tsx", "import { Widget } from './widget';\n"
+                                     "import Fancy from './widget.js';\n"
+                                     "export const Page = () => <main><Widget></Widget><Fancy /></main>;\n") != 0) ||
+        (ts_write(repo, "route.ts", "import { Page } from './page';\nexport const route = Page;\n") != 0) ||
         (ts_write(repo, "ignored.js", "export const ExcludedJS = 1;\n") != 0) ||
         (ts_write(tests, "use.ts", "import First from '../named'; const testUser = new First(); testUser.hello();\n") != 0) ||
         (setenv("CODE_LENS_HOME", home, 1) != 0) ||
@@ -222,7 +314,24 @@ static int test_typescript_index(void)
         failed = ts_assert(false, "fixture indexing");
         goto done;
     }
-    failed |= ts_assert(stats.file_count == 10U, "TypeScript extensions discovered; JS/TSX excluded");
+    failed |= ts_assert(stats.file_count == 13U, "TypeScript and TSX extensions discovered; JS excluded");
+    options = (CodeLensContextOptions){0};
+    text = code_lens_context_symbol_ex(repo, "Widget", &options);
+    failed |= ts_assert((text != nullptr) &&
+                         (strstr(text, "Widget|function|widget.tsx") != nullptr) &&
+                         (strstr(text, "page.tsx:3:") != nullptr) &&
+                         (strstr(text, "widget.tsx:2:") != nullptr) &&
+                         (strstr(text, "Widget -> widget.tsx") != nullptr),
+                         "TSX component definitions and JSX usages across .tsx files");
+    text = code_lens_run_sql(repo, "SELECT f.path, r.symbolBase, r.targetNamespace FROM Ref r "
+                                  "JOIN File f ON f.rowid = r.fileId WHERE r.symbolBase IN "
+                                  "('default', 'Page', 'Widget') AND f.path NOT LIKE '%usage.ts' "
+                                  "ORDER BY f.path, r.lineNumber, r.columnNumber");
+    failed |= ts_assert((text != nullptr) &&
+                         (strstr(text, "page.tsx|default|widget.tsx") != nullptr) &&
+                         (strstr(text, "route.ts|Page|page.tsx") != nullptr),
+                         "extensionless and .js import specifiers resolve to .tsx modules");
+    options = (CodeLensContextOptions){.namespace_name = "named.ts.Greeter"};
     text = code_lens_query_symbols(repo, "Greeter", 10);
     failed |= ts_assert((text != nullptr) && (strstr(text, "Greeter|class|named.ts") != nullptr),
                          "class query read-back");
@@ -330,9 +439,10 @@ done:
 int test_typescript_support(void)
 {
     int failed = test_typescript_parser();
+    failed |= test_tsx_parser();
     failed |= test_typescript_index();
     if (failed == 0) {
-        (void)fprintf(stderr, "TypeScript parser and indexing tests passed\n");
+        (void)fprintf(stderr, "TypeScript/TSX parser and indexing tests passed\n");
     }
     return failed == 0 ? 0 : 1;
 }

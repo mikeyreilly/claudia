@@ -36,7 +36,7 @@ them; it is the full-depth companion to all three.
 ## 1. What code-lens is
 
 code-lens is a native ISO C23 command-line tool and MCP (Model Context
-Protocol) server that indexes Clojure, Java, C, Python, and TypeScript codebases
+Protocol) server that indexes Clojure, Java, C, Python, TypeScript, and TSX codebases
 into per-repo SQLite databases and answers symbol search (FTS5 full-text search ranked with
 BM25), definition/reference context, and raw SQL queries over that index.
 
@@ -195,14 +195,17 @@ pedantic/warnings-as-errors policy (with only SQLite's public-header
 | Canonical binary | `build/code-lens` (copy of the most recently built mode) |
 | Test binary | `build/<mode>/tests/test-main`, copied to `build/tests/test-main` |
 | SQLite object | `build/<mode>/obj/vendor/sqlite/sqlite3.o` |
-| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o` plus `.../tree-sitter-<grammar>/parser.o` for each `GRAMMARS` entry and `.../tree-sitter-<grammar>/scanner.o` when the grammar ships an external scanner (Python and TypeScript do) |
+| tree-sitter objects | `build/<mode>/obj/vendor/tree-sitter/lib.o` plus `.../tree-sitter-<grammar>/parser.o` for each `GRAMMARS` entry and `.../tree-sitter-<grammar>/scanner.o` when the grammar ships an external scanner (Python, TypeScript, and TSX do) |
 
 Grammar source directories are selected by `grammar_src` in the Makefile and
 `:compile_grammar` in `build.bat`. Existing grammars use
-`vendor/tree-sitter-<grammar>/src`; TypeScript uses
-`vendor/tree-sitter-typescript/typescript/src/parser.c` and `scanner.c`.
-The scanner includes `../../common/scanner.h`, which is an explicit Make
-prerequisite so header changes rebuild it. TSX is not compiled or linked.
+`vendor/tree-sitter-<grammar>/src`; TypeScript and TSX are the two nested
+grammars of the one tree-sitter-typescript checkout, so they use
+`vendor/tree-sitter-typescript/typescript/src` and
+`vendor/tree-sitter-typescript/tsx/src` (`parser.c` and `scanner.c` each; their
+objects land under `.../tree-sitter-typescript/` and `.../tree-sitter-tsx/`).
+Both scanners include `../../common/scanner.h`, which is an explicit Make
+prerequisite so header changes rebuild them.
 `TEST_SRC` includes `tests/test_typescript_support.c` alongside the other
 language suites; the test pattern rule retains `include/code_lens.h` as a
 prerequisite.
@@ -273,8 +276,8 @@ that directory; a `.sha256` stamp file makes re-runs no-ops until the pin
 changes. Run the script whenever `vendor/sqlite`, `vendor/tree-sitter`, or
 any `vendor/tree-sitter-<grammar>` directory listed in the Makefile's
 `GRAMMARS` is missing. On native Windows use `scripts\vendor-deps.bat`;
-its lock-driven bootstrap also fetches the nested TypeScript grammar without
-any vendor patches.
+its lock-driven bootstrap also fetches the nested TypeScript and TSX grammars
+without any vendor patches.
 
 To upgrade SQLite: pick the new amalgamation from sqlite.org/download.html
 (the URL embeds the release year), verify the download against the published
@@ -293,14 +296,14 @@ by `/* Section name */` comments. Keep new code in the appropriate section.
 | Language registry | `languages[]` (`LanguageSpec` per language), `language_for_path`, parser adapters, `CodeLensSourceParser`, `code_lens_language_info`; see [Language parsers](#9-language-parsers). |
 | Platform helpers | Home resolution, path utilities, mkdir/rmtree, file reads (heap for small files, mmap for large), supported-source file walking. |
 | String builder | Arena-backed `StringBuilder` with `sb_append`/`sb_appendf`. |
-| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python/TypeScript metadata, used by `version --deps` and tests. |
+| Dependency adapters | `code_lens_sqlite_version` and tree-sitter Clojure/Java/C/Python/TypeScript/TSX metadata, used by `version --deps` and tests. |
 | Database wrapper | SQLite open modes, prepared statements, parameter binding, the pipe-format result renderer, error reporting. |
 | Clojure parser | Custom-reader/tree-sitter extraction of namespaces, aliases, definitions, references, and keywords. |
-| Tree-sitter helpers | `TshIds` kind/field id tables (`tsh_ids_init`), null-safe node accessors, and the `ParseMap`/`ScopeIndex` lookup structures shared by the Java, C, Python, and TypeScript extractors. |
+| Tree-sitter helpers | `TshIds` kind/field id tables (`tsh_ids_init`), null-safe node accessors, and the `ParseMap`/`ScopeIndex` lookup structures shared by the Java, C, Python, and TypeScript/TSX extractors. |
 | Java parser | tree-sitter-java extraction of packages, imports, types/members, Javadocs, and resolved references. |
 | C parser | tree-sitter-c extraction of declarations, aggregate types, macros, linkage, calls, and members. |
 | Python parser | tree-sitter-python module naming plus extraction of imports, classes/functions/fields, docstrings, and scope-aware resolved references. |
-| TypeScript parser | Native tree-sitter-typescript syntax indexing, path-based module namespaces, and relative-import resolution. |
+| TypeScript parser | Native tree-sitter-typescript/tree-sitter-tsx syntax indexing (one extractor, per-grammar id tables), JSX element references, path-based module namespaces, and relative-import resolution. |
 | Indexer | Schema DDL, prepared per-table INSERT writers, staging/publish paths, parallel parse workers. |
 | Search | `list`, `query`, `context`, `sql` implementations over the per-repo indexes. |
 | MCP server | stdio JSON-RPC loop, hand-rolled JSON scanning, tool dispatch. |
@@ -419,7 +422,8 @@ Rules:
   indexing and staleness paths use `has_supported_extension`, which routes
   through the language registry (`language_for_path`, see section 9) and so
   accepts `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`, `.c`, `.h`, `.py`,
-  `.ts`, `.mts`, and `.cts` (including `.d.ts`, `.d.mts`, and `.d.cts`); the
+  `.ts`, `.mts`, `.cts`, and `.tsx` (including `.d.ts`, `.d.mts`, and
+  `.d.cts`); the
   public Clojure compatibility walker remains Clojure-only.
   - Skipped directories (`should_skip_dir`): `.git`, `node_modules`, `vendor`,
     `target`, `build`, `.shadow-cljs`, `.cpcache`, `.idea`, `.vscode`,
@@ -508,7 +512,8 @@ Adding a language:
    reads it) and append `<name>` to `GRAMMARS` in the `Makefile` and
    `build.bat`; both compile `src/parser.c` plus `src/scanner.c` when the
    grammar ships an external scanner. For nested grammar layouts, update
-   `grammar_src` and `:compile_grammar` (TypeScript uses `typescript/src`)
+   `grammar_src` and `:grammar_src` (TypeScript and TSX use
+   `tree-sitter-typescript/typescript/src` and `.../tsx/src`)
    and declare any scanner header prerequisites. `.gitignore` already covers
    `vendor/*/`.
 2. Declare `tree_sitter_<name>()` beside the others at the top of
@@ -896,25 +901,51 @@ error tolerance, deep nesting, walking/skip directories, context, and the
 TypeScript uses the pinned native tree-sitter-typescript grammar, with its
 external scanner; there is no compiler or Node.js runtime requirement for
 indexing. Supported sources are `.ts`, `.mts`, and `.cts`, including declaration
-files such as `.d.ts`, `.d.mts`, and `.d.cts`. TSX and JavaScript are deliberately
-out of scope; the sibling `tsx` grammar is not linked.
+files such as `.d.ts`, `.d.mts`, and `.d.cts`, plus `.tsx`. JavaScript is out of
+scope.
+
+`.tsx` is its own registry entry (`LANG_TSX`, grammar `tree-sitter-tsx`, the
+sibling `tsx/src` grammar of the same checkout) but shares every line of the
+TypeScript extractor. The grammars number their symbols differently, so each
+has its own `TshIds` table (`typescript_ids`, `tsx_ids`) and a parser carries
+the table it was built with (`code_lens_typescript_parser_new` vs
+`code_lens_tsx_parser_new`); `typescript_kind`/`typescript_field` read it
+through the context, so a TypeScript id is never compared against a TSX tree.
+The JSX kinds sit at the end of the kind enum: the TypeScript table resolves
+only the kinds below `TSK_TS_COUNT`, so its trees never yield them, while
+`tsh_ids_init` still verifies every JSX name exists in the TSX grammar. JSX
+handling is reference-only: an opening or self-closing element's name is a
+reference to the component binding (`<Foo>` an identifier reference,
+`<Ns.Foo>` a member reference); the closing tag is skipped so each element is
+counted once; intrinsic names (lowercase or dashed identifiers, and
+namespaced `a:b` names, per React's rule) are skipped even if a binding of the
+same name is in scope; attributes, children, and type arguments are walked
+as ordinary expressions. `code_lens_parse_typescript_source` (the
+convenience entry point) picks the grammar from the path's extension; the
+`_with_parser` variant always uses its parser's grammar.
 
 Syntax indexing covers classes, interfaces, type aliases, enums, namespaces,
 functions, variables, and members. A file's module namespace is its
 repository-relative **POSIX path including the extension**, for example
 `src/models.ts`, not a dotted or extensionless stem. Members use
 `module.Class` (for example `src/models.ts.Service`). Retaining the extension
-keeps `.ts`, `.mts`, `.cts`, and declaration modules collision-free.
+keeps `.ts`, `.tsx`, `.mts`, `.cts`, and declaration modules collision-free.
 
-Relative imports resolve syntactically to workspace modules. This is not
+Relative imports resolve syntactically to workspace modules. Extensionless
+specifiers probe `.ts`, `.tsx`, `.mts`, `.cts`, then declaration files, then
+the same `index.*` set (TypeScript's own `.ts` before `.tsx` before `.d.ts`
+order); `.js` spellings map to `.ts`, `.tsx`, then `.d.ts`, and `.jsx` to
+`.tsx`, then `.d.ts`. This is not
 compiler attribution: `tsconfig` path aliases and barrel/re-export chains are
 not resolved. Do not promise whole-program type inference or compiler-level
-module semantics. Adding or removing any supported TypeScript source
+module semantics. Adding or removing any supported TypeScript or TSX source
 conservatively forces a full rebuild, since import resolution in an unchanged
 file can change when a candidate module appears or disappears. Ordinary
 source edits remain eligible for incremental refresh under the usual budget.
 
-`tests/test_typescript_support.c` is linked by `TEST_SRC`; parser and test
+`tests/test_typescript_support.c` is linked by `TEST_SRC` and covers both
+grammars (`test_tsx_parser` for JSX references and grammar selection; the
+index test resolves `.ts` importers to `.tsx` modules); parser and test
 implementation live with the other language sections and suites.
 
 ## 10. Database layer and schema
@@ -1042,7 +1073,7 @@ known, and ordinary `:foo/bar` stores `foo` verbatim.
 `File.size`, `File.mtimeSec`, and `File.mtimeNsec` are a best-effort source
 snapshot recorded at index time. `list`, `query`, and `context` use it to
 warn when indexed files are missing/changed and when new supported Clojure,
-Java, C, Python, or TypeScript source files exist outside the index.
+Java, C, Python, TypeScript, or TSX source files exist outside the index.
 
 Plain indexes: `idx_symbol_name` on `Symbol(name)`, `idx_term_text` (unique)
 on `Term(text)`, `idx_ref_symbol_base` on `RefData(symbolBaseTerm)` (the
@@ -1144,7 +1175,7 @@ transaction. Before either path starts, it takes the repo's blocking writer
 lock; the lock remains held through publication and stale-artifact cleanup.
 
 ```
-walk repo for registered Clojure/Java/C/Python/TypeScript sources
+walk repo for registered Clojure/Java/C/Python/TypeScript/TSX sources
         |
         v
 parse workers (tree-sitter, per-thread parser + arena)
@@ -1280,7 +1311,7 @@ with the project's own pipe renderer (see
 Explicit CLI and public-API `list`, `query`, and `context` calls run
 `check_repo_staleness` before returning indexed data. The checker reads `File`
 rows, stats each indexed path, walks the current repo for supported Clojure,
-Java, C, Python, and TypeScript files, and reports the elapsed time in a leading `note:` or `warning:` line. These direct
+Java, C, Python, TypeScript, and TSX files, and reports the elapsed time in a leading `note:` or `warning:` line. These direct
 reads return stale results with the warning; `sql` skips the check and remains
 raw read-only DB access.
 
@@ -1449,8 +1480,9 @@ Usage:
   `sqlite <version>`, `tree-sitter-clojure abi=<n> symbols=<n>`,
   `tree-sitter-java abi=<n> symbols=<n>`,
   `tree-sitter-c abi=<n> symbols=<n>`,
-  `tree-sitter-python abi=<n> symbols=<n>`, and
-  `tree-sitter-typescript abi=<n> symbols=<n>` lines.
+  `tree-sitter-python abi=<n> symbols=<n>`,
+  `tree-sitter-typescript abi=<n> symbols=<n>`, and
+  `tree-sitter-tsx abi=<n> symbols=<n>` lines.
 - `index` requires `--repo <path>` (`--path` is accepted as a legacy
   synonym); success prints exactly
   `indexed <path>: <N> files, <N> symbols, <N> references, <N> keywords, <N> aliases in <T>s (git <B>/<N>)`
