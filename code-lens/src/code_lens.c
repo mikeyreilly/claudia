@@ -329,6 +329,7 @@ typedef enum {
     LANG_PYTHON,
     LANG_TYPESCRIPT,
     LANG_TSX,
+    LANG_JAVASCRIPT,
     LANG_COUNT,
 } LanguageId;
 
@@ -515,6 +516,9 @@ static const char *const c_extensions[] = {".c", ".h", nullptr};
 static const char *const python_extensions[] = {".py", nullptr};
 static const char *const typescript_extensions[] = {".ts", ".mts", ".cts", nullptr};
 static const char *const tsx_extensions[] = {".tsx", nullptr};
+/* JavaScript (with or without JSX) parses with the TSX grammar, its
+ * superset, through the same extractor; there is no separate JS grammar. */
+static const char *const javascript_extensions[] = {".js", ".jsx", ".mjs", ".cjs", nullptr};
 
 static const LanguageSpec languages[LANG_COUNT] = {
     [LANG_CLOJURE] = {.name = "clojure",
@@ -564,7 +568,21 @@ static const LanguageSpec languages[LANG_COUNT] = {
                   .parser_delete = typescript_parser_delete_adapter,
                   .parse = typescript_parse_adapter,
                   .forces_full_rebuild = typescript_forces_full_rebuild},
+    [LANG_JAVASCRIPT] = {.name = "javascript",
+                         .grammar = "tree-sitter-tsx",
+                         .extensions = javascript_extensions,
+                         .ts_language = tree_sitter_tsx,
+                         .parser_new = tsx_parser_new_adapter,
+                         .parser_delete = typescript_parser_delete_adapter,
+                         .parse = typescript_parse_adapter,
+                         .forces_full_rebuild = typescript_forces_full_rebuild},
 };
+
+/* Minified bundles (`app.min.js`) are build output, not navigable source. */
+static bool javascript_minified(const char *name, const char *dot)
+{
+    return ((size_t)(dot - name) >= 4U) && (strncmp(dot - 4, ".min", 4U) == 0);
+}
 
 /* The language owning path's extension, or LANG_COUNT. The extension is the
  * text from the path's last '.', and Emacs lock files (`.#name`) never
@@ -581,6 +599,9 @@ static LanguageId language_for_path(const char *path)
     for (size_t lang = 0U; lang < LANG_COUNT; lang++) {
         for (const char *const *ext = languages[lang].extensions; *ext != nullptr; ext++) {
             if (strcmp(dot, *ext) == 0) {
+                if ((lang == LANG_JAVASCRIPT) && javascript_minified(name, dot)) {
+                    return LANG_COUNT;
+                }
                 return (LanguageId)lang;
             }
         }
@@ -933,7 +954,15 @@ static bool should_skip_dir(const char *name)
            (strcmp(name, "venv") == 0) || (strcmp(name, ".tox") == 0) ||
            (strcmp(name, ".nox") == 0) || (strcmp(name, ".mypy_cache") == 0) ||
            (strcmp(name, ".pytest_cache") == 0) || (strcmp(name, ".ruff_cache") == 0) ||
-           (strcmp(name, ".eggs") == 0) || (strcmp(name, "site-packages") == 0);
+           (strcmp(name, ".eggs") == 0) || (strcmp(name, "site-packages") == 0) ||
+           /* JavaScript/TypeScript build output, coverage reports, and tool
+            * caches: generated, often minified, and otherwise duplicates of
+            * the sources they were built from. */
+           (strcmp(name, "dist") == 0) || (strcmp(name, "coverage") == 0) ||
+           (strcmp(name, "bower_components") == 0) || (strcmp(name, ".next") == 0) ||
+           (strcmp(name, ".nuxt") == 0) || (strcmp(name, ".svelte-kit") == 0) ||
+           (strcmp(name, ".turbo") == 0) || (strcmp(name, ".parcel-cache") == 0) ||
+           (strcmp(name, ".yarn") == 0) || (strcmp(name, ".angular") == 0);
 }
 
 typedef bool (*SourceExtensionPredicate)(const char *path);
@@ -2807,8 +2836,13 @@ uint32_t code_lens_tsx_language_symbol_count(void)
  * source() SQL function) and Referred.alias (local import binding names).
  * 19: same schema as 18, but .tsx files are now indexed (TSX grammar) and
  * TypeScript imports resolve to them; bumped so existing TypeScript indexes
- * rebuild in full instead of keeping stale unresolved import targets. */
-#define CODE_LENS_INDEX_FORMAT_VERSION 19
+ * rebuild in full instead of keeping stale unresolved import targets.
+ * 20: same schema as 19, but JavaScript (.js/.jsx/.mjs/.cjs) is indexed
+ * through the TSX grammar, CommonJS require() declarations are imports (also
+ * in .ts files), and JS build-output directories are skipped; bumped so
+ * unchanged files keep neither old require() output nor rows under newly
+ * skipped directories. */
+#define CODE_LENS_INDEX_FORMAT_VERSION 20
 
 static double profile_now_seconds(void);
 
@@ -13412,7 +13446,8 @@ enum {
     TSK_PAIR_PATTERN, TSK_ASSIGNMENT_PATTERN, TSK_REST_PATTERN,
     TSK_ARRAY_PATTERN, TSK_OBJECT_PATTERN, TSK_CATCH, TSK_FOR_IN, TSK_FOR,
     TSK_FUNCTION_TYPE, TSK_CONSTRUCTOR_TYPE, TSK_CONSTRUCT_SIGNATURE,
-    TSK_LABEL, TSK_BREAK, TSK_CONTINUE,
+    TSK_LABEL, TSK_BREAK, TSK_CONTINUE, TSK_CALL, TSK_ARGUMENTS,
+    TSK_OBJECT_ASSIGNMENT_PATTERN,
     /* JSX kinds exist only in the TSX grammar. The TypeScript grammar
      * resolves kinds below TSK_TS_COUNT, so its trees never yield these. */
     TSK_JSX_OPENING, TSK_JSX_SELF_CLOSING, TSK_JSX_CLOSING, TSK_COUNT,
@@ -13436,16 +13471,19 @@ static const char *const typescript_kind_names[TSK_COUNT] = {
     "pair_pattern", "assignment_pattern", "rest_pattern", "array_pattern", "object_pattern",
     "catch_clause", "for_in_statement", "for_statement", "function_type", "constructor_type",
     "construct_signature", "labeled_statement", "break_statement", "continue_statement",
+    "call_expression", "arguments", "object_assignment_pattern",
     "jsx_opening_element", "jsx_self_closing_element", "jsx_closing_element"
 };
 enum {
     TSF_NAME, TSF_BODY, TSF_TYPE, TSF_VALUE, TSF_PARAMETERS, TSF_PARAMETER,
     TSF_PATTERN, TSF_OBJECT, TSF_PROPERTY, TSF_CONSTRUCTOR, TSF_SOURCE,
-    TSF_ALIAS, TSF_DECLARATION, TSF_LEFT, TSF_MODULE, TSF_COUNT
+    TSF_ALIAS, TSF_DECLARATION, TSF_LEFT, TSF_MODULE, TSF_FUNCTION, TSF_ARGUMENTS,
+    TSF_KEY, TSF_COUNT
 };
 static const char *const typescript_field_names[TSF_COUNT] = {
     "name", "body", "type", "value", "parameters", "parameter", "pattern",
-    "object", "property", "constructor", "source", "alias", "declaration", "left", "module"
+    "object", "property", "constructor", "source", "alias", "declaration", "left", "module",
+    "function", "arguments", "key"
 };
 /* One id table per grammar: TSX numbers its symbols differently, so a
  * TypeScript id must never be compared against a TSX tree (or vice versa).
@@ -13705,13 +13743,12 @@ static bool typescript_symbol(TypeScriptContext *ctx, TSNode outer, TSNode defin
     return true;
 }
 
+/* Any file this extractor indexes (TypeScript, TSX, or non-minified
+ * JavaScript), as routed by the language registry. */
 static bool typescript_source_extension(const char *path)
 {
-    size_t len = strlen(path);
-    return ((len >= 3U) && (strcmp(path + len - 3U, ".ts") == 0)) ||
-           ((len >= 4U) && ((strcmp(path + len - 4U, ".mts") == 0) ||
-                            (strcmp(path + len - 4U, ".cts") == 0) ||
-                            (strcmp(path + len - 4U, ".tsx") == 0)));
+    LanguageId lang = language_for_path(path);
+    return (lang == LANG_TYPESCRIPT) || (lang == LANG_TSX) || (lang == LANG_JAVASCRIPT);
 }
 
 static char *typescript_probe(TypeScriptContext *ctx, const char *stem, const char *suffix)
@@ -13727,13 +13764,30 @@ static char *typescript_probe(TypeScriptContext *ctx, const char *stem, const ch
     return code_lens_typescript_module_name(ctx->parser->repo_root, path);
 }
 
+/* A JavaScript spelling resolves to the TypeScript sources it is compiled
+ * from first (TypeScript's own rule), then to the JavaScript file itself. */
+typedef struct {
+    const char *extension;
+    const char *candidates[5];
+} TypeScriptJsSpelling;
+
+static const TypeScriptJsSpelling typescript_js_spellings[] = {
+    {".js", {".ts", ".tsx", ".d.ts", ".js", nullptr}},
+    {".jsx", {".tsx", ".d.ts", ".jsx", nullptr, nullptr}},
+    {".mjs", {".mts", ".d.mts", ".mjs", nullptr, nullptr}},
+    {".cjs", {".cts", ".d.cts", ".cjs", nullptr, nullptr}},
+};
+
 static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
 {
-    /* TypeScript's own extensionless order: .ts, .tsx, .d.ts, then index. */
+    /* TypeScript's extensionless order (.ts, .tsx, .d.ts, then allowJs
+     * .js/.jsx), then the same for a directory index. */
     static const char *const suffixes[] = {
         ".ts", ".tsx", ".mts", ".cts", ".d.ts", ".d.mts", ".d.cts",
+        ".js", ".jsx", ".mjs", ".cjs",
         "/index.ts", "/index.tsx", "/index.mts", "/index.cts",
-        "/index.d.ts", "/index.d.mts", "/index.d.cts"
+        "/index.d.ts", "/index.d.mts", "/index.d.cts",
+        "/index.js", "/index.jsx", "/index.mjs", "/index.cjs"
     };
     char *spec = typescript_text(ctx, source);
     char *file;
@@ -13762,37 +13816,28 @@ static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
         return nullptr;
     }
     len = strlen(path);
-    if ((len >= 3U) && (strcmp(path + len - 3U, ".js") == 0)) {
-        char *stem = copy_bytes(path, len - 3U);
+    for (size_t i = 0U; i < sizeof(typescript_js_spellings) / sizeof(typescript_js_spellings[0]); i++) {
+        const TypeScriptJsSpelling *spelling = &typescript_js_spellings[i];
+        size_t ext_len = strlen(spelling->extension);
+        char *stem;
+        if ((len < ext_len) || (strcmp(path + len - ext_len, spelling->extension) != 0)) {
+            continue;
+        }
+        stem = copy_bytes(path, len - ext_len);
         if (stem == nullptr) {
             return nullptr;
         }
-        target = typescript_probe(ctx, stem, ".ts");
-        if (target == nullptr) {
-            target = typescript_probe(ctx, stem, ".tsx");
+        for (const char *const *candidate = spelling->candidates; *candidate != nullptr; candidate++) {
+            target = typescript_probe(ctx, stem, *candidate);
+            if (target != nullptr) {
+                return target;
+            }
         }
-        return target != nullptr ? target : typescript_probe(ctx, stem, ".d.ts");
-    }
-    if ((len >= 4U) && (strcmp(path + len - 4U, ".jsx") == 0)) {
-        char *stem = copy_bytes(path, len - 4U);
-        if (stem == nullptr) {
-            return nullptr;
-        }
-        target = typescript_probe(ctx, stem, ".tsx");
-        return target != nullptr ? target : typescript_probe(ctx, stem, ".d.ts");
-    }
-    if ((len >= 4U) && ((strcmp(path + len - 4U, ".mjs") == 0) ||
-                        (strcmp(path + len - 4U, ".cjs") == 0))) {
-        bool esm = path[len - 3U] == 'm';
-        char *stem = copy_bytes(path, len - 4U);
-        if (stem == nullptr) {
-            return nullptr;
-        }
-        target = typescript_probe(ctx, stem, esm ? ".mts" : ".cts");
-        return target != nullptr ? target : typescript_probe(ctx, stem, esm ? ".d.mts" : ".d.cts");
+        return copy_cstr("");
     }
     if (typescript_source_extension(path)) {
-        return typescript_probe(ctx, path, "");
+        target = typescript_probe(ctx, path, "");
+        return target != nullptr ? target : copy_cstr("");
     }
     /* A suffix other than a TS/JS extension is not an extensionless import. */
     slash = strrchr(path, '/');
@@ -13902,6 +13947,71 @@ static bool typescript_classlike(uint32_t kind)
     return (kind == TSK_CLASS) || (kind == TSK_CLASS_EXPRESSION) ||
            (kind == TSK_ABSTRACT_CLASS) || (kind == TSK_INTERFACE) || (kind == TSK_ENUM) ||
            (kind == TSK_NAMESPACE) || (kind == TSK_MODULE);
+}
+
+/* CommonJS `require('spec')` with exactly one plain string argument: the
+ * string node, else a null node. Dynamic or template specifiers stay
+ * ordinary calls. */
+static TSNode typescript_require_source(const TypeScriptContext *ctx, TSNode value)
+{
+    TSNode function;
+    TSNode arguments;
+    TSNode spec;
+    uint32_t start;
+    if (typescript_kind(ctx, value) != TSK_CALL) {
+        return (TSNode){0};
+    }
+    function = typescript_field(ctx, value, TSF_FUNCTION);
+    arguments = typescript_field(ctx, value, TSF_ARGUMENTS);
+    if ((typescript_kind(ctx, function) != TSK_IDENTIFIER) ||
+        (typescript_kind(ctx, arguments) != TSK_ARGUMENTS) || (tsh_named_count(arguments) != 1U)) {
+        return (TSNode){0};
+    }
+    spec = tsh_named_child(arguments, 0U);
+    start = ts_node_start_byte(function);
+    if ((typescript_kind(ctx, spec) != TSK_STRING) ||
+        (ts_node_end_byte(function) - start != 7U) ||
+        (memcmp(ctx->source + start, "require", 7U) != 0)) {
+        return (TSNode){0};
+    }
+    return spec;
+}
+
+/* `const m = require(...)` binds a module like `import * as m`, and
+ * `const { a, b: c = 1 } = require(...)` binds named imports like
+ * `import { a, b as c }`. Other pattern parts (rest, nested) stay unbound. */
+static bool typescript_require_bindings(TypeScriptContext *ctx, TSNode name,
+                                       TSNode scope, const char *target)
+{
+    if (typescript_kind(ctx, name) == TSK_IDENTIFIER) {
+        return typescript_import_binding(ctx, name, scope, "", target, true);
+    }
+    if (typescript_kind(ctx, name) != TSK_OBJECT_PATTERN) {
+        return true;
+    }
+    for (uint32_t i = 0U, i_count = tsh_named_count(name); i < i_count; i++) {
+        TSNode part = tsh_named_child(name, i);
+        if (typescript_kind(ctx, part) == TSK_OBJECT_ASSIGNMENT_PATTERN) {
+            part = typescript_field(ctx, part, TSF_LEFT);
+        }
+        if (typescript_kind(ctx, part) == TSK_SHORTHAND_PATTERN) {
+            if (!typescript_import_binding(ctx, part, scope, typescript_text(ctx, part), target, false)) {
+                return false;
+            }
+        } else if (typescript_kind(ctx, part) == TSK_PAIR_PATTERN) {
+            TSNode key = typescript_field(ctx, part, TSF_KEY);
+            TSNode local = typescript_field(ctx, part, TSF_VALUE);
+            if (typescript_kind(ctx, local) == TSK_ASSIGNMENT_PATTERN) {
+                local = typescript_field(ctx, local, TSF_LEFT);
+            }
+            if (((typescript_kind(ctx, key) == TSK_PROPERTY) || (typescript_kind(ctx, key) == TSK_STRING)) &&
+                (typescript_kind(ctx, local) == TSK_IDENTIFIER) &&
+                !typescript_import_binding(ctx, local, scope, typescript_text(ctx, key), target, false)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /* Declarations first, references second: forward types and imported aliases
@@ -14045,8 +14155,18 @@ static bool typescript_declare(TypeScriptContext *ctx, TSNode node, TSNode scope
         }
     } else if (kind == TSK_VARIABLE) {
         TSNode value = typescript_field(ctx, node, TSF_VALUE);
+        TSNode required = typescript_require_source(ctx, value);
         const char *symbol_kind = typescript_callable(typescript_kind(ctx, value)) ? "function" : "variable";
-        if (!typescript_pattern(ctx, name, scope,
+        if (!ts_node_is_null(required)) {
+            /* CommonJS imports are import bindings, not module variables. */
+            char *target = typescript_import_target(ctx, required);
+            if (target == nullptr) {
+                target = copy_cstr("");
+            }
+            if ((target == nullptr) || !typescript_require_bindings(ctx, name, scope, target)) {
+                return false;
+            }
+        } else if (!typescript_pattern(ctx, name, scope,
             (TypeScriptBinding){.target = local ? nullptr : ns, .local = local,
                                 .annotation = typescript_field(ctx, node, TSF_TYPE), .value = value},
             !local, outer, ns, symbol_kind, depth + 1U)) {
@@ -14401,6 +14521,32 @@ int code_lens_typescript_parser_set_repo_root(CodeLensTypeScriptParser *parser, 
     return 0;
 }
 
+/* Minified or bundled JavaScript (GitHub Linguist's rule: average line
+ * length over 110 characters) is build output, not navigable source; it
+ * keeps its File row but contributes no symbols or references. Bundles are
+ * often committed without a `.min.js` name (e.g. a 6 MB one-line SystemJS
+ * bundle would otherwise add ~100k references). TypeScript is never
+ * skipped. */
+#define JAVASCRIPT_MINIFIED_AVERAGE_LINE 110U
+
+static bool typescript_minified_javascript(const char *file_path, const char *source, size_t source_len)
+{
+    const char *dot = strrchr(file_path, '.');
+    size_t lines = 0U;
+    if ((dot == nullptr) || ((strcmp(dot, ".js") != 0) && (strcmp(dot, ".jsx") != 0) &&
+                             (strcmp(dot, ".mjs") != 0) && (strcmp(dot, ".cjs") != 0))) {
+        return false;
+    }
+    for (const char *at = source, *end = source + source_len;
+         (at < end) && ((at = memchr(at, '\n', (size_t)(end - at))) != nullptr); at++) {
+        lines++;
+    }
+    if ((source_len > 0U) && (source[source_len - 1U] != '\n')) {
+        lines++;
+    }
+    return (lines > 0U) && (source_len / lines > JAVASCRIPT_MINIFIED_AVERAGE_LINE);
+}
+
 int code_lens_parse_typescript_source_with_parser(CodeLensTypeScriptParser *parser,
                                                   const char *file_path, const char *source,
                                                   size_t source_len, CodeLensTypeScriptFile *out_file)
@@ -14418,6 +14564,9 @@ int code_lens_parse_typescript_source_with_parser(CodeLensTypeScriptParser *pars
     out_file->namespace_name = code_lens_typescript_module_name(parser->repo_root, file_path);
     if ((out_file->file_path == nullptr) || (out_file->namespace_name == nullptr)) {
         return -1;
+    }
+    if (typescript_minified_javascript(file_path, source, source_len)) {
+        return 0;
     }
     tree = ts_parser_parse_string(parser->parser, nullptr, source, (uint32_t)source_len);
     if (tree == nullptr) {
@@ -14445,8 +14594,12 @@ int code_lens_parse_typescript_source(const char *repo_root, const char *file_pa
                                      CodeLensTypeScriptFile *out_file)
 {
     size_t path_len = file_path == nullptr ? 0U : strlen(file_path);
-    bool tsx = (path_len >= 4U) && (strcmp(file_path + path_len - 4U, ".tsx") == 0);
-    CodeLensTypeScriptParser *parser = tsx ? code_lens_tsx_parser_new() : code_lens_typescript_parser_new();
+    /* TypeScript grammar for .ts/.mts/.cts (and declarations); TSX for
+     * .tsx and JavaScript, whose JSX only the TSX grammar parses. */
+    bool ts = ((path_len >= 3U) && (strcmp(file_path + path_len - 3U, ".ts") == 0)) ||
+              ((path_len >= 4U) && ((strcmp(file_path + path_len - 4U, ".mts") == 0) ||
+                                    (strcmp(file_path + path_len - 4U, ".cts") == 0)));
+    CodeLensTypeScriptParser *parser = ts ? code_lens_typescript_parser_new() : code_lens_tsx_parser_new();
     int rc;
     if (parser == nullptr) {
         return -1;
@@ -26183,7 +26336,8 @@ static bool append_reference_snippet(StringBuilder *out,
     "AND n.namespace = d.namespace AND n.kind = d.kind " \
     "AND n.startLine = d.startLine AND n.endLine = d.endLine AND n.content = d.content " \
     "WHERE c.namespace = n.namespace || '.' || n.name " \
-    "AND (substr(c.filePath, -3) = '.ts' OR substr(c.filePath, -4) IN ('.mts', '.cts', '.tsx'))) "
+    "AND (substr(c.filePath, -3) IN ('.ts', '.js') " \
+    "OR substr(c.filePath, -4) IN ('.mts', '.cts', '.tsx', '.jsx', '.mjs', '.cjs'))) "
 
 static char *query_reference_snippets(CodeLensDb *db,
                                       const char *repo_name,
@@ -31041,14 +31195,14 @@ static void respond_initialize(const char *id)
 {
     StringBuilder out = {0};
     static const char instructions[] =
-        "code-lens provides code intelligence for Clojure, Java, C, Python, TypeScript, and TSX repositories. "
+        "code-lens provides code intelligence for Clojure, Java, C, Python, TypeScript, and JavaScript (including TSX/JSX) repositories. "
         "When working with these languages, prefer query and context over text search: "
         "query finds symbol definitions and Clojure :keyword usages by name, while context "
         "returns a symbol's definitions and resolved call sites, or a semantic Class Dossier "
         "when the target is a Java type. It understands Clojure "
         ":as/:refer, Java imports and receiver types, C linkage and member types, Python "
-        "imports with self, constructor, and annotated receivers, and TypeScript/TSX imports, typed receivers, "
-        "and JSX component usages. Set "
+        "imports with self, constructor, and annotated receivers, and TypeScript/JavaScript imports and require(), "
+        "typed receivers, and JSX component usages. Set "
         "repo to an absolute repository root or any file or directory inside it; omit repo to "
         "use the directory where the server was started, which may not be your working "
         "directory. sql runs read-only structural queries over the "
@@ -31104,8 +31258,8 @@ static void respond_tools_list(const char *id)
         " with members, hierarchy, relevant inherited behavior, support types, overrides,"
         " and purpose-grouped representative usages. Resolves Clojure :as/:refer, Java"
         " imports and receiver types, C linkage and aggregate members, Python imports"
-        " and self/constructor/annotated receivers, and TypeScript/TSX relative imports,"
-        " typed receivers, and JSX component usages. Dependency definitions are an automatic fallback;"
+        " and self/constructor/annotated receivers, and TypeScript/JavaScript relative imports,"
+        " require(), typed receivers, and JSX component usages. Dependency definitions are an automatic fallback;"
         " workspace call sites rank first. Accepts str/join, Type.member, Type#member,"
         " package.Type, and ptr->field qualifiers. repo may be an absolute repository root"
         " or any path inside it. When omitted, it defaults to the directory the code-lens"
@@ -31121,7 +31275,7 @@ static void respond_tools_list(const char *id)
         " module or class, or TypeScript type.\"},"
         "\"namespace\":{\"type\":\"string\",\"description\":\"Exact namespace of matching"
         " definitions (Java enclosing type; C file or type scope; Python module or"
-        " module.Class; TypeScript/TSX file path with extension, or path.Type).\"},"
+        " module.Class; TypeScript/JavaScript file path with extension, or path.Type).\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"Case-insensitive substring of"
         " matching definition file paths. A workspace calling file is also accepted as"
         " dependency-resolution context.\"},"
@@ -31158,10 +31312,11 @@ static void respond_tools_list(const char *id)
         " rows are static imports. For C, global namespaces are empty, static namespaces are"
         " file paths, and field namespaces are aggregate names. For Python, File.namespace is"
         " the dotted module, Symbol.namespace is the module or module.Class, Alias rows are"
-        " import statements, and Referred rows are from-imports. For TypeScript and TSX,"
+        " import statements, and Referred rows are from-imports. For TypeScript and JavaScript,"
         " File.namespace and Symbol.namespace are the repository-relative file path"
         " including its extension (members use path.Type), Alias rows are namespace"
-        " imports, and Referred rows are named and default imports. Join File via File.rowid ="
+        " imports and `const m = require(...)`, and Referred rows are named, default, and"
+        " destructured-require imports. Join File via File.rowid ="
         " fileId. repo may be an absolute repository root or any path inside it. When"
         " omitted, it defaults to the directory the code-lens server was started in, which"
         " is not necessarily your working directory.\","
@@ -31684,8 +31839,20 @@ int code_lens_cli_main(int argc, char **argv)
             (void)printf("sqlite %s\n", code_lens_sqlite_version());
             for (size_t lang = 0U; lang < code_lens_language_count(); lang++) {
                 CodeLensLanguageInfo info;
+                bool repeated = false;
 
-                if (code_lens_language_info(lang, &info) == 0) {
+                if (code_lens_language_info(lang, &info) != 0) {
+                    continue;
+                }
+                /* Languages sharing a grammar (JavaScript uses TSX) print it once. */
+                for (size_t prior = 0U; prior < lang; prior++) {
+                    CodeLensLanguageInfo earlier;
+                    if ((code_lens_language_info(prior, &earlier) == 0) &&
+                        (strcmp(earlier.grammar, info.grammar) == 0)) {
+                        repeated = true;
+                    }
+                }
+                if (!repeated) {
                     (void)printf("%s abi=%u symbols=%u\n",
                                  info.grammar,
                                  info.abi_version,

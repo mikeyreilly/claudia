@@ -1,7 +1,7 @@
 # code-lens
 
 A native ISO C23 command-line tool and MCP server that indexes Clojure, Java,
-C, Python, TypeScript, and TSX codebases into per-repo [SQLite](https://sqlite.org)
+C, Python, TypeScript, and JavaScript (including TSX/JSX) codebases into per-repo [SQLite](https://sqlite.org)
 databases and answers symbol search (FTS5 full-text search ranked with BM25), definition/reference
 context, and raw SQL queries over the index.
 
@@ -89,9 +89,8 @@ repository, so `--repo` accepts the repo root or any file or directory within
 it.
 
 Supported source extensions are `.clj`, `.cljc`, `.cljs`, `.bb`, `.java`,
-`.c`, `.h`, `.py`, `.ts`, `.mts`, `.cts`, and `.tsx` (including `.d.ts`,
-`.d.mts`, and `.d.cts` declaration files). JavaScript (`.js`, `.jsx`, `.mjs`,
-`.cjs`) is not indexed. The Java
+`.c`, `.h`, `.py`, `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.jsx`, `.mjs`, and
+`.cjs` (including `.d.ts`, `.d.mts`, and `.d.cts` declaration files). The Java
 extractor uses tree-sitter-java and indexes packages, imports, types, members,
 Javadocs, and resolved references. The C extractor
 uses tree-sitter-c and indexes functions/prototypes, variables, typedefs,
@@ -107,10 +106,22 @@ plus JSX: `<Component ...>` and `<Namespace.Component>` elements are references
 to the component binding (closing tags are not counted twice), attribute and
 child expressions are walked like any other expression, and intrinsic elements
 (`<div>`, `<my-element>`, `<svg:rect>`) are not references.
+JavaScript and JSX (`.js`, `.jsx`, `.mjs`, `.cjs`) parse with the TSX grammar, a
+superset of both, through the same extractor. CommonJS `const m = require('./m')`
+and `const { a, b: c } = require('./m')` bind like `import * as m` and
+`import { a, b as c }`; `module.exports` assignments are not extracted as
+definitions. Minified JavaScript is excluded: `*.min.js` files are not walked,
+and a JavaScript file whose average line exceeds 110 characters (GitHub
+Linguist's minification rule) keeps its file row but yields no symbols or
+references. TypeScript files are never skipped this way.
 Repositories can mix all of these languages. Python bytecode caches and
 virtualenv/tool directories
 (`__pycache__`, `.venv`, `venv`, `.tox`, `.nox`, `.mypy_cache`,
-`.pytest_cache`, `.ruff_cache`, `.eggs`, `site-packages`) are skipped.
+`.pytest_cache`, `.ruff_cache`, `.eggs`, `site-packages`) and JavaScript
+build output and tool caches (`dist`, `coverage`, `bower_components`, `.next`,
+`.nuxt`, `.svelte-kit`, `.turbo`, `.parcel-cache`, `.yarn`, `.angular`) are
+skipped, in addition to `node_modules`, `build`, `target`, and `vendor`.
+Directories are skipped by name for every language; `.gitignore` is not read.
 
 ## Dependency sources
 
@@ -219,7 +230,7 @@ maintenance are deliberately absent from the model-facing interface; use the
 `index`, `list`, and `remove` CLI commands for administration. See `USAGE.txt`
 for client registration examples.
 
-`query` searches Clojure, Java, C, Python, TypeScript, and TSX symbol definitions plus
+`query` searches Clojure, Java, C, Python, TypeScript, and JavaScript symbol definitions plus
 Clojure keyword usage locations. Symbol results match whole words and word
 prefixes (names are split
 on `- . / _`), ranked by BM25; keyword results match keyword-name prefixes such
@@ -291,15 +302,17 @@ Python dependencies. Calls on untyped receivers keep an empty
 target; plain `from pkg import Name` references still target the re-exporting
 package rather than the defining module. Adding or removing an
 `__init__.py` renames modules, so re-indexing then performs a full rebuild.
-For TypeScript and TSX, the module namespace is the repository-relative POSIX file path
-**including its extension**, for example `src/models.ts` or `src/App.tsx`; members use
+For TypeScript and JavaScript (including TSX/JSX), the module namespace is the repository-relative POSIX file path
+**including its extension**, for example `src/models.ts`, `src/App.tsx`, or `lib/util.js`; members use
 `src/models.ts.Class`. Keeping the extension avoids collisions between `.ts`,
-`.tsx`, `.mts`, `.cts`, and declaration modules. Relative imports resolve syntactically
-to workspace modules, probing extensionless specifiers in TypeScript's order
-(`.ts`, `.tsx`, `.d.ts`, then `index.*`) and mapping `.js`/`.jsx` spellings to
-their `.ts`/`.tsx` sources; there is no compiler attribution, `tsconfig` path-alias
+`.tsx`, `.js`, `.mts`, `.cts`, and declaration modules. Relative imports and
+`require()` calls resolve syntactically to workspace modules, probing
+extensionless specifiers in TypeScript's order (`.ts`, `.tsx`, `.d.ts`, then
+`.js`/`.jsx`, then the same for `index.*`) and mapping `.js`/`.jsx`/`.mjs`/`.cjs`
+spellings to their TypeScript sources first, then to the JavaScript file itself;
+there is no compiler attribution, `tsconfig` path-alias
 resolution, or traversal of barrel/re-export chains. Adding or removing any
-TypeScript or TSX source conservatively forces a full rebuild, since it can change
+TypeScript or JavaScript source conservatively forces a full rebuild, since it can change
 relative-import resolution in unchanged files.
 `context` accepts Java `Type.member`, `Type#member`, fully qualified
 type spellings, C `ptr->field` spellings, and Python `module.func` or
@@ -319,7 +332,7 @@ d.filePath = f.path)`.
 
 `list`, `query`, and `context` check whether indexed files still match their
 recorded size/mtime snapshot and whether new Clojure, Java, C, Python,
-TypeScript, or TSX files have appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
+TypeScript, or JavaScript files have appeared. Explicit CLI and public-API reads retain their non-mutating behavior:
 they return any stale results with a warning. MCP instead guarantees that
 `query`, `context`, and `sql` operate on current worktree data or return an
 ordinary search-availability error. A current workspace-only partial index

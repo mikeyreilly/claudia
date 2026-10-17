@@ -233,17 +233,19 @@ int code_lens_parse_python_source(const char *repo_root,
 char *code_lens_python_module_name(const char *repo_root, const char *file_path);
 
 /* TypeScript module names are repository-relative POSIX paths INCLUDING
- * the source extension (.ts/.mts/.cts/.tsx, including declaration files). A
- * NULL or non-enclosing root uses the full basename, not the stem. Relative
- * imports probe source files within the root; bare packages, tsconfig paths,
- * and barrel/re-export chains are not resolved. No JavaScript grammar.
+ * the source extension (.ts/.mts/.cts/.tsx/.js/.jsx/.mjs/.cjs, including
+ * declaration files). A NULL or non-enclosing root uses the full basename,
+ * not the stem. Relative imports and CommonJS require('./x') probe source
+ * files within the root; bare packages, tsconfig paths, and barrel/re-export
+ * chains are not resolved.
  *
  * A parser is bound to one grammar for its lifetime:
  * code_lens_typescript_parser_new() parses TypeScript and
  * code_lens_tsx_parser_new() parses TSX (TypeScript plus JSX; `<T>expr`
- * assertions are not TSX syntax). Both share the delete/set_repo_root/parse
- * functions below. code_lens_parse_typescript_source() picks the grammar
- * from the file extension (.tsx -> TSX). */
+ * assertions are not TSX syntax), which is also the grammar for JavaScript
+ * and JSX. Both share the delete/set_repo_root/parse functions below.
+ * code_lens_parse_typescript_source() picks the grammar from the file
+ * extension (.ts/.mts/.cts -> TypeScript, anything else -> TSX). */
 CodeLensTypeScriptParser *code_lens_typescript_parser_new(void);
 CodeLensTypeScriptParser *code_lens_tsx_parser_new(void);
 void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser);

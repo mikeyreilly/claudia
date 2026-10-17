@@ -207,6 +207,66 @@ static int test_tsx_parser(void)
     return failed;
 }
 
+static bool ts_referred(const CodeLensTypeScriptFile *file, const char *ns,
+                        const char *symbol, const char *alias)
+{
+    for (size_t i = 0U; i < file->referred_count; i++) {
+        const CodeLensReferred *referred = &file->referred[i];
+        if ((strcmp(referred->namespace_name, ns) == 0) && (strcmp(referred->symbol, symbol) == 0) &&
+            (strcmp(referred->alias, alias) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int test_javascript_parser(void)
+{
+    static const char source[] =
+        "const { parse, format: fmt = String, ...rest } = require('fmt-lib');\n"
+        "const lib = require('render-lib');\n"
+        "const dynamic = require(name);\n"
+        "import { Button } from 'ui-kit';\n"
+        "export class Store { load() { return parse(this); } }\n"
+        "export function App(props) {\n"
+        "  const store = new Store(); store.load();\n"
+        "  return <Button onClick={() => fmt(props)}>{lib.render(rest)}</Button>;\n"
+        "}\n"
+        "module.exports = { App };\n";
+    CodeLensTypeScriptFile file = {0};
+    int failed = 0;
+
+    if (code_lens_parse_typescript_source("/project", "/project/src/app.js",
+                                          source, sizeof(source) - 1U, &file) != 0) {
+        return ts_assert(false, "JavaScript (JSX) source parse");
+    }
+    failed |= ts_assert(strcmp(file.namespace_name, "src/app.js") == 0,
+                         "JavaScript module identity keeps the .js extension");
+    failed |= ts_assert(ts_symbol(&file, "App", "function", "src/app.js") != nullptr &&
+                         ts_symbol(&file, "Store", "class", "src/app.js") != nullptr &&
+                         ts_symbol(&file, "load", "method", "src/app.js.Store") != nullptr &&
+                         ts_symbol(&file, "dynamic", "variable", "src/app.js") != nullptr,
+                         "JavaScript classes, methods, functions and ordinary variables");
+    failed |= ts_assert(ts_symbol(&file, "lib", "variable", "src/app.js") == nullptr &&
+                         ts_symbol(&file, "parse", "variable", "src/app.js") == nullptr,
+                         "require() bindings are imports, not module variables");
+    failed |= ts_assert(ts_referred(&file, "fmt-lib", "parse", "parse") &&
+                         ts_referred(&file, "fmt-lib", "format", "fmt"),
+                         "destructured require() records named imports with local aliases");
+    failed |= ts_assert(ts_reference(&file, "parse", "parse", "fmt-lib") &&
+                         ts_reference(&file, "fmt", "format", "fmt-lib") &&
+                         ts_reference(&file, "lib.render", "render", "render-lib"),
+                         "require() bindings resolve references like ES imports");
+    failed |= ts_assert(ts_reference(&file, "Button", "Button", "ui-kit") &&
+                         (ts_reference_count(&file, "Button") == 1U),
+                         "JSX in a .js file references its component once");
+    failed |= ts_assert(ts_reference(&file, "store.load", "load", "src/app.js.Store"),
+                         "constructor-inferred receivers work in JavaScript");
+    failed |= ts_assert(ts_reference_count(&file, "rest") == 0U,
+                         "unsupported require() pattern parts stay unbound");
+    return failed;
+}
+
 static int ts_write(const char *root, const char *name, const char *source)
 {
     char *path = code_lens_join_path(root, name);
@@ -261,6 +321,8 @@ static int test_typescript_index(void)
     char *repo;
     char *home;
     char *tests;
+    char *dist;
+    char *coverage;
     char *text;
     char *before;
     char *after;
@@ -290,7 +352,10 @@ static int test_typescript_index(void)
     repo = code_lens_join_path(root, "repo");
     home = code_lens_join_path(root, "home");
     tests = repo == nullptr ? nullptr : code_lens_join_path(repo, "tests");
-    if ((home == nullptr) || (tests == nullptr) || (code_lens_mkdir_p(tests) != 0) ||
+    dist = repo == nullptr ? nullptr : code_lens_join_path(repo, "dist");
+    coverage = repo == nullptr ? nullptr : code_lens_join_path(repo, "coverage");
+    if ((home == nullptr) || (tests == nullptr) || (dist == nullptr) || (coverage == nullptr) ||
+        (code_lens_mkdir_p(tests) != 0) ||
         (ts_write(repo, "named.ts", named) != 0) ||
         (ts_write(repo, "other.ts", "export default class Other { hello() { return 2; } }\n") != 0) ||
         (ts_write(repo, "anonymous.ts", "export default class { hello() { return 3; } }\n") != 0) ||
@@ -307,6 +372,17 @@ static int test_typescript_index(void)
                                      "export const Page = () => <main><Widget></Widget><Fancy /></main>;\n") != 0) ||
         (ts_write(repo, "route.ts", "import { Page } from './page';\nexport const route = Page;\n") != 0) ||
         (ts_write(repo, "ignored.js", "export const ExcludedJS = 1;\n") != 0) ||
+        (ts_write(repo, "legacy.js", "function helper() { return 1; }\nmodule.exports = { helper };\n") != 0) ||
+        (ts_write(repo, "consumer.cjs", "const { helper } = require('./legacy');\nhelper();\n") != 0) ||
+        (ts_write(repo, "esmuser.ts", "import { helper } from './legacy.js';\nhelper();\n") != 0) ||
+        (ts_write(repo, "view.jsx", "import { Widget } from './widget';\nexport const View = () => <Widget/>;\n") != 0) ||
+        (ts_write(repo, "bundle.min.js", "function helper(){return 2}\n") != 0) ||
+        (ts_write(repo, "vendor-bundle.js",
+                  "function helper(){return 5};var paddingPaddingPaddingPadding=1,morePaddingMorePadding=2,"
+                  "evenMorePaddingEvenMorePadding=3,lastPaddingLastPadding=4;helper();") != 0) ||
+        (code_lens_mkdir_p(dist) != 0) || (code_lens_mkdir_p(coverage) != 0) ||
+        (ts_write(dist, "legacy.js", "function helper() { return 3; }\n") != 0) ||
+        (ts_write(coverage, "report.js", "function helper() { return 4; }\n") != 0) ||
         (ts_write(tests, "use.ts", "import First from '../named'; const testUser = new First(); testUser.hello();\n") != 0) ||
         (setenv("CODE_LENS_HOME", home, 1) != 0) ||
         (setenv("CODE_LENS_MAVEN", "0", 1) != 0) ||
@@ -314,7 +390,23 @@ static int test_typescript_index(void)
         failed = ts_assert(false, "fixture indexing");
         goto done;
     }
-    failed |= ts_assert(stats.file_count == 13U, "TypeScript and TSX extensions discovered; JS excluded");
+    failed |= ts_assert(stats.file_count == 19U,
+                         "TypeScript, TSX and JavaScript discovered; minified and build-output JS excluded");
+    options = (CodeLensContextOptions){0};
+    text = code_lens_context_symbol_ex(repo, "helper", &options);
+    failed |= ts_assert((text != nullptr) &&
+                         (strstr(text, "helper|function|legacy.js") != nullptr) &&
+                         (strstr(text, "consumer.cjs:2:") != nullptr) &&
+                         (strstr(text, "esmuser.ts:2:") != nullptr) &&
+                         (strstr(text, "helper -> legacy.js") != nullptr) &&
+                         (strstr(text, "min.js") == nullptr) &&
+                         (strstr(text, "vendor-bundle.js") == nullptr) &&
+                         (strstr(text, "/dist/") == nullptr) &&
+                         (strstr(text, "/coverage/") == nullptr),
+                         "CommonJS require() and .js-spelled ES imports resolve to JavaScript modules");
+    text = code_lens_context_symbol_ex(repo, "Widget", &options);
+    failed |= ts_assert((text != nullptr) && (strstr(text, "view.jsx:2:") != nullptr),
+                         "JSX usages in .jsx files reference .tsx components");
     options = (CodeLensContextOptions){0};
     text = code_lens_context_symbol_ex(repo, "Widget", &options);
     failed |= ts_assert((text != nullptr) &&
@@ -440,9 +532,10 @@ int test_typescript_support(void)
 {
     int failed = test_typescript_parser();
     failed |= test_tsx_parser();
+    failed |= test_javascript_parser();
     failed |= test_typescript_index();
     if (failed == 0) {
-        (void)fprintf(stderr, "TypeScript/TSX parser and indexing tests passed\n");
+        (void)fprintf(stderr, "TypeScript/TSX/JavaScript parser and indexing tests passed\n");
     }
     return failed == 0 ? 0 : 1;
 }
