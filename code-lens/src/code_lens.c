@@ -2841,8 +2841,12 @@ uint32_t code_lens_tsx_language_symbol_count(void)
  * through the TSX grammar, CommonJS require() declarations are imports (also
  * in .ts files), and JS build-output directories are skipped; bumped so
  * unchanged files keep neither old require() output nor rows under newly
- * skipped directories. */
-#define CODE_LENS_INDEX_FORMAT_VERSION 20
+ * skipped directories.
+ * 21 added TypeScriptConfigInput: non-relative TypeScript/JavaScript imports
+ * resolve through tsconfig.json/jsconfig.json baseUrl and paths, and names
+ * like `./x.interface` probe x.interface.ts; bumped so unchanged files lose
+ * their old unresolved targets. */
+#define CODE_LENS_INDEX_FORMAT_VERSION 21
 
 static double profile_now_seconds(void);
 
@@ -13507,10 +13511,76 @@ static void init_tsx_ids(void)
                              typescript_field_names, TSF_COUNT, true);
 }
 
+/* Non-relative import specifiers resolve through the nearest enclosing
+ * tsconfig.json (else jsconfig.json): compilerOptions.paths, then baseUrl,
+ * with both inherited along relative `extends` chains. Files are only read
+ * and stat'ed; no compiler or package resolver ever runs. One cache per
+ * parser (so per worker thread); all memory is heap-owned by the cache
+ * because parse results outlive per-file arena use. */
+#define TS_CONFIG_NONE UINT32_MAX
+#define TS_CONFIG_MAX_BYTES (1024U * 1024U)
+#define TS_CONFIG_MAX_EXTENDS_DEPTH 16U
+
+typedef struct {
+    const char *prefix; /* key text before '*' (the whole key when !wildcard) */
+    const char *suffix; /* key text after '*' */
+    bool wildcard;
+    const char **targets; /* substitutions, '*' kept */
+    size_t target_count;
+} TypeScriptPathPattern;
+
+typedef struct {
+    const char *base_url;   /* absolute normalized directory, nullptr when unset */
+    const char *paths_base; /* directory of the config that declared paths */
+    const TypeScriptPathPattern *paths;
+    size_t path_count;
+    bool has_paths;
+} TypeScriptConfig;
+
+/* A probed config location and its stat signature (size -1 when absent);
+ * index builds record these so the staleness check notices edits,
+ * deletions, and newly created configs. */
+typedef struct {
+    const char *path;
+    int64_t size;
+    int64_t mtime_sec;
+    int64_t mtime_nsec;
+} TypeScriptConfigInput;
+
+typedef struct {
+    ParseMap dirs;     /* directory -> config index or TS_CONFIG_NONE */
+    ParseMap files;    /* config file -> config index or TS_CONFIG_NONE */
+    ParseMap resolved; /* (config index, specifier) -> results index */
+    const char **results; /* resolved module names; nullptr = unresolved */
+    size_t result_count;
+    size_t result_capacity;
+    TypeScriptConfig *configs;
+    size_t config_count;
+    size_t config_capacity;
+    void **owned; /* every heap block the maps and configs point into */
+    size_t owned_count;
+    size_t owned_capacity;
+    bool record_inputs;
+    ParseMap input_paths; /* path -> inputs index */
+    TypeScriptConfigInput *inputs;
+    size_t input_count;
+    size_t input_capacity;
+} TypeScriptConfigCache;
+
+/* One cache shared by every worker of a full build, so a specifier is
+ * probed once per build rather than once per worker and grammar; the
+ * build also replays it to snapshot config inputs. */
+typedef struct {
+    pthread_mutex_t mutex;
+    TypeScriptConfigCache cache;
+} TypeScriptConfigShared;
+
 struct CodeLensTypeScriptParser {
     TSParser *parser;
     char *repo_root;
     const TshIds *ids;
+    TypeScriptConfigCache configs;     /* private cache, used when unshared */
+    TypeScriptConfigShared *shared_configs; /* borrowed; nullptr when private */
 };
 
 typedef struct {
@@ -13778,7 +13848,10 @@ static const TypeScriptJsSpelling typescript_js_spellings[] = {
     {".cjs", {".cts", ".d.cts", ".cjs", nullptr, nullptr}},
 };
 
-static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
+/* Module name for an absolute, normalized candidate path: an exact source
+ * file, a JS spelling of a TS source, or an extensionless file or directory
+ * index. "" when nothing matches; nullptr only on allocation failure. */
+static char *typescript_module_target(TypeScriptContext *ctx, const char *path)
 {
     /* TypeScript's extensionless order (.ts, .tsx, .d.ts, then allowJs
      * .js/.jsx), then the same for a directory index. */
@@ -13789,33 +13862,8 @@ static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
         "/index.d.ts", "/index.d.mts", "/index.d.cts",
         "/index.js", "/index.jsx", "/index.mjs", "/index.cjs"
     };
-    char *spec = typescript_text(ctx, source);
-    char *file;
-    const char *slash;
-    char *path;
     char *target;
-    size_t len;
-    if (spec == nullptr) {
-        return nullptr;
-    }
-    if (!((strncmp(spec, "./", 2U) == 0) || (strncmp(spec, "../", 3U) == 0))) {
-        return spec; /* external package: never execute a resolver */
-    }
-    file = typescript_normalize_path(ctx->file->file_path);
-    if (file == nullptr) {
-        return nullptr;
-    }
-    slash = strrchr(file, '/');
-    path = alloc_printf("%.*s/%s", slash == nullptr ? 1 : (int)(slash - file),
-                         slash == nullptr ? "." : file, spec);
-    if (path == nullptr) {
-        return nullptr;
-    }
-    path = typescript_normalize_path(path);
-    if (path == nullptr) {
-        return nullptr;
-    }
-    len = strlen(path);
+    size_t len = strlen(path);
     for (size_t i = 0U; i < sizeof(typescript_js_spellings) / sizeof(typescript_js_spellings[0]); i++) {
         const TypeScriptJsSpelling *spelling = &typescript_js_spellings[i];
         size_t ext_len = strlen(spelling->extension);
@@ -13839,11 +13887,8 @@ static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
         target = typescript_probe(ctx, path, "");
         return target != nullptr ? target : copy_cstr("");
     }
-    /* A suffix other than a TS/JS extension is not an extensionless import. */
-    slash = strrchr(path, '/');
-    if (strchr(slash == nullptr ? path : slash + 1U, '.') != nullptr) {
-        return copy_cstr("");
-    }
+    /* Any other suffix is part of the name, as in TypeScript: `./x.interface`
+     * finds x.interface.ts and `./s.css` a generated s.css.d.ts. */
     for (size_t i = 0U; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         target = typescript_probe(ctx, path, suffixes[i]);
         if (target != nullptr) {
@@ -13851,6 +13896,611 @@ static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
         }
     }
     return copy_cstr("");
+}
+
+/* MCP-section JSON helpers, reused to read tsconfig files. */
+static const char *skip_ws(const char *p);
+static const char *json_skip_string(const char *p);
+static const char *json_skip_value(const char *p);
+static const char *json_object_value(const char *object, const char *key);
+static char *parse_json_string_at(const char *quote);
+
+static void typescript_config_cache_free(TypeScriptConfigCache *cache)
+{
+    for (size_t i = 0U; i < cache->owned_count; i++) {
+        free(cache->owned[i]);
+    }
+    free(cache->owned);
+    free(cache->dirs.slots);
+    free(cache->files.slots);
+    free(cache->resolved.slots);
+    free(cache->input_paths.slots);
+    free(cache->results);
+    free(cache->configs);
+    free(cache->inputs);
+    *cache = (TypeScriptConfigCache){0};
+}
+
+static void *typescript_config_alloc(TypeScriptConfigCache *cache, size_t size)
+{
+    void *block;
+    if ((cache->owned_count == cache->owned_capacity) &&
+        !parser_heap_grow((void **)&cache->owned, &cache->owned_capacity,
+                          sizeof(*cache->owned), 64U)) {
+        return nullptr;
+    }
+    block = malloc(size == 0U ? 1U : size);
+    if (block != nullptr) {
+        cache->owned[cache->owned_count++] = block;
+    }
+    return block;
+}
+
+static char *typescript_config_copy(TypeScriptConfigCache *cache, const char *text, size_t len)
+{
+    char *copy = typescript_config_alloc(cache, len + 1U);
+    if (copy != nullptr) {
+        (void)memcpy(copy, text, len);
+        copy[len] = '\0';
+    }
+    return copy;
+}
+
+/* Whether path is a regular file, recording the probe as an input when the
+ * cache snapshots them (a failed recording is reported through *ok). */
+static bool typescript_config_stat(TypeScriptConfigCache *cache, const char *path, bool *ok)
+{
+    TypeScriptConfigInput input = {.size = -1};
+    uint32_t ignored;
+    bool present = stat_regular_file(path, &input.size, &input.mtime_sec, &input.mtime_nsec) == 0;
+    if (!present) {
+        input = (TypeScriptConfigInput){.size = -1};
+    }
+    if (cache->record_inputs &&
+        !parse_map_find(&cache->input_paths, 0U, path, strlen(path), &ignored)) {
+        input.path = typescript_config_copy(cache, path, strlen(path));
+        if ((input.path == nullptr) || (cache->input_count >= UINT32_MAX) ||
+            ((cache->input_count == cache->input_capacity) &&
+             !parser_heap_grow((void **)&cache->inputs, &cache->input_capacity,
+                               sizeof(*cache->inputs), 64U)) ||
+            !parse_map_insert(&cache->input_paths, 0U, input.path, strlen(input.path),
+                              (uint32_t)cache->input_count)) {
+            *ok = false;
+        } else {
+            cache->inputs[cache->input_count++] = input;
+        }
+    }
+    return present;
+}
+
+/* Blanks // and block comments outside strings so the plain JSON helpers
+ * read tsconfig's JSONC; trailing commas are tolerated by the readers. */
+static void typescript_config_strip_comments(char *text, size_t len)
+{
+    bool in_string = false;
+    for (size_t i = 0U; i < len; i++) {
+        if (in_string) {
+            if ((text[i] == '\\') && (i + 1U < len)) {
+                i++;
+            } else if (text[i] == '"') {
+                in_string = false;
+            }
+        } else if (text[i] == '"') {
+            in_string = true;
+        } else if ((text[i] == '/') && (i + 1U < len) && (text[i + 1U] == '/')) {
+            while ((i < len) && (text[i] != '\n')) {
+                text[i++] = ' ';
+            }
+        } else if ((text[i] == '/') && (i + 1U < len) && (text[i + 1U] == '*')) {
+            size_t end = i + 2U;
+            while ((end + 1U < len) && !((text[end] == '*') && (text[end + 1U] == '/'))) {
+                end++;
+            }
+            end = end + 1U < len ? end + 2U : len;
+            for (size_t j = i; j < end; j++) {
+                if (text[j] != '\n') {
+                    text[j] = ' ';
+                }
+            }
+            i = end - 1U;
+        }
+    }
+}
+
+static char *typescript_config_read(const char *path)
+{
+    FILE *in = fopen(path, "rb");
+    char *text;
+    size_t len;
+    if (in == nullptr) {
+        return nullptr;
+    }
+    text = malloc(TS_CONFIG_MAX_BYTES + 1U);
+    len = text == nullptr ? 0U : fread(text, 1U, TS_CONFIG_MAX_BYTES + 1U, in);
+    (void)fclose(in);
+    if ((text == nullptr) || (len > TS_CONFIG_MAX_BYTES) || (memchr(text, '\0', len) != nullptr)) {
+        free(text);
+        return nullptr;
+    }
+    text[len] = '\0';
+    typescript_config_strip_comments(text, len);
+    return text;
+}
+
+/* Steps past one array element or object member value and its comma. */
+static const char *typescript_json_next(const char *value)
+{
+    const char *p = json_skip_value(value);
+    if (p == nullptr) {
+        return nullptr;
+    }
+    p = skip_ws(p);
+    return *p == ',' ? skip_ws(p + 1) : p;
+}
+
+static bool typescript_absolute_path(const char *path)
+{
+    return (path[0] == '/') || (path[0] == '\\') ||
+           (isalpha((unsigned char)path[0]) && (path[1] == ':'));
+}
+
+/* Arena-backed normalized `dir/relative` (or `relative` when absolute). */
+static char *typescript_config_join(const char *dir, const char *relative)
+{
+    char *joined = typescript_absolute_path(relative) ? copy_cstr(relative)
+                                                      : alloc_printf("%s/%s", dir, relative);
+    return joined == nullptr ? nullptr : typescript_normalize_path(joined);
+}
+
+static bool typescript_config_paths(TypeScriptConfigCache *cache, const char *object,
+                                    TypeScriptConfig *config)
+{
+    TypeScriptPathPattern *patterns = nullptr;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    const char *p = skip_ws(object);
+    bool ok = true;
+
+    p = skip_ws(p + 1);
+    while (ok && (p != nullptr) && (*p == '"')) {
+        char *key = parse_json_string_at(p);
+        const char *value;
+        p = json_skip_string(p);
+        if ((key == nullptr) || (p == nullptr) || (*(p = skip_ws(p)) != ':')) {
+            break;
+        }
+        value = skip_ws(p + 1);
+        p = typescript_json_next(value);
+        if (*value == '[') {
+            const char *star = strchr(key, '*');
+            /* TypeScript rejects patterns with more than one '*'. */
+            if ((star == nullptr) || (strchr(star + 1, '*') == nullptr)) {
+                TypeScriptPathPattern pattern = {.wildcard = star != nullptr};
+                const char **targets = nullptr;
+                size_t target_capacity = 0U;
+                pattern.prefix = typescript_config_copy(cache, key,
+                                                        star == nullptr ? strlen(key) : (size_t)(star - key));
+                pattern.suffix = typescript_config_copy(cache, star == nullptr ? "" : star + 1,
+                                                        star == nullptr ? 0U : strlen(star + 1));
+                ok = (pattern.prefix != nullptr) && (pattern.suffix != nullptr);
+                for (const char *item = skip_ws(value + 1); ok && (item != nullptr) && (*item != ']');
+                     item = typescript_json_next(item)) {
+                    char *target = *item == '"' ? parse_json_string_at(item) : nullptr;
+                    if (target == nullptr) {
+                        continue;
+                    }
+                    if ((pattern.target_count == target_capacity) &&
+                        !parser_heap_grow((void **)&targets, &target_capacity, sizeof(*targets), 4U)) {
+                        ok = false;
+                        break;
+                    }
+                    targets[pattern.target_count] = typescript_config_copy(cache, target, strlen(target));
+                    ok = targets[pattern.target_count++] != nullptr;
+                }
+                if (ok && (pattern.target_count > 0U)) {
+                    pattern.targets = typescript_config_alloc(cache, pattern.target_count * sizeof(*targets));
+                    ok = pattern.targets != nullptr;
+                    if (ok) {
+                        (void)memcpy(pattern.targets, targets, pattern.target_count * sizeof(*targets));
+                    }
+                }
+                free(targets);
+                if (ok && (pattern.target_count > 0U)) {
+                    if ((count == capacity) &&
+                        !parser_heap_grow((void **)&patterns, &capacity, sizeof(*patterns), 8U)) {
+                        ok = false;
+                    } else {
+                        patterns[count++] = pattern;
+                    }
+                }
+            }
+        }
+    }
+    if (ok) {
+        TypeScriptPathPattern *owned = typescript_config_alloc(cache, count * sizeof(*patterns));
+        ok = owned != nullptr;
+        if (ok && (count > 0U)) {
+            (void)memcpy(owned, patterns, count * sizeof(*patterns));
+        }
+        config->paths = owned;
+        config->path_count = count;
+        config->has_paths = true;
+    }
+    free(patterns);
+    return ok;
+}
+
+static uint32_t typescript_config_load(TypeScriptConfigCache *cache, const char *path,
+                                       uint32_t depth, bool *ok);
+
+/* Relative or absolute `extends` targets, with TypeScript's implied
+ * .json suffix. Package specifiers would need node_modules resolution and
+ * are skipped. */
+static void typescript_config_extend(TypeScriptConfigCache *cache, const char *dir,
+                                     const char *spec, uint32_t depth,
+                                     TypeScriptConfig *config, bool *ok)
+{
+    char *path;
+    uint32_t base;
+    size_t len;
+    if (!((strncmp(spec, "./", 2U) == 0) || (strncmp(spec, "../", 3U) == 0) ||
+          typescript_absolute_path(spec))) {
+        return;
+    }
+    path = typescript_config_join(dir, spec);
+    if (path == nullptr) {
+        *ok = false;
+        return;
+    }
+    len = strlen(path);
+    if (!typescript_config_stat(cache, path, ok)) {
+        if ((len >= 5U) && (strcmp(path + len - 5U, ".json") == 0)) {
+            return;
+        }
+        path = alloc_printf("%s.json", path);
+        if (path == nullptr) {
+            *ok = false;
+            return;
+        }
+        if (!typescript_config_stat(cache, path, ok)) {
+            return;
+        }
+    }
+    base = typescript_config_load(cache, path, depth + 1U, ok);
+    if (base == TS_CONFIG_NONE) {
+        return;
+    }
+    /* Later extends entries and the extending file override earlier ones;
+     * `paths` replaces rather than merges. */
+    if (cache->configs[base].base_url != nullptr) {
+        config->base_url = cache->configs[base].base_url;
+    }
+    if (cache->configs[base].has_paths) {
+        config->paths = cache->configs[base].paths;
+        config->path_count = cache->configs[base].path_count;
+        config->paths_base = cache->configs[base].paths_base;
+        config->has_paths = true;
+    }
+}
+
+/* Loads one config file (already known to exist) and its extends chain;
+ * TS_CONFIG_NONE for unreadable or malformed files and extends cycles. */
+static uint32_t typescript_config_load(TypeScriptConfigCache *cache, const char *path,
+                                       uint32_t depth, bool *ok)
+{
+    TypeScriptConfig config = {0};
+    uint32_t index = TS_CONFIG_NONE;
+    uint32_t *slot;
+    const char *key;
+    char *text;
+    char *dir;
+    const char *root;
+    const char *options;
+    const char *slash;
+
+    if (parse_map_find(&cache->files, 0U, path, strlen(path), &index)) {
+        return index;
+    }
+    if (depth > TS_CONFIG_MAX_EXTENDS_DEPTH) {
+        return TS_CONFIG_NONE;
+    }
+    /* Registered before reading so an extends cycle ends at TS_CONFIG_NONE. */
+    key = typescript_config_copy(cache, path, strlen(path));
+    if ((key == nullptr) || !parse_map_insert(&cache->files, 0U, key, strlen(key), TS_CONFIG_NONE)) {
+        *ok = false;
+        return TS_CONFIG_NONE;
+    }
+    text = typescript_config_read(path);
+    if (text == nullptr) {
+        return TS_CONFIG_NONE;
+    }
+    slash = strrchr(path, '/');
+    dir = copy_bytes(path, slash == nullptr ? 0U : (size_t)(slash - path));
+    root = skip_ws(strncmp(text, "\xEF\xBB\xBF", 3U) == 0 ? text + 3 : text);
+    if ((dir == nullptr) || (*root != '{')) {
+        *ok = *ok && (dir != nullptr);
+        free(text);
+        return TS_CONFIG_NONE;
+    }
+    {
+        const char *extends = json_object_value(root, "extends");
+        if ((extends != nullptr) && (*extends == '"')) {
+            char *spec = parse_json_string_at(extends);
+            if (spec != nullptr) {
+                typescript_config_extend(cache, dir, spec, depth, &config, ok);
+            }
+        } else if ((extends != nullptr) && (*extends == '[')) {
+            for (const char *item = skip_ws(extends + 1); (item != nullptr) && (*item != ']');
+                 item = typescript_json_next(item)) {
+                char *spec = *item == '"' ? parse_json_string_at(item) : nullptr;
+                if (spec != nullptr) {
+                    typescript_config_extend(cache, dir, spec, depth, &config, ok);
+                }
+            }
+        }
+    }
+    options = json_object_value(root, "compilerOptions");
+    if ((options != nullptr) && (*options == '{')) {
+        const char *base_url = json_object_value(options, "baseUrl");
+        const char *paths = json_object_value(options, "paths");
+        if ((base_url != nullptr) && (*base_url == '"')) {
+            char *value = parse_json_string_at(base_url);
+            char *joined = value == nullptr ? nullptr : typescript_config_join(dir, value);
+            config.base_url = joined == nullptr ? nullptr : typescript_config_copy(cache, joined, strlen(joined));
+            *ok = *ok && (config.base_url != nullptr);
+        }
+        if ((paths != nullptr) && (*paths == '{')) {
+            config.paths_base = typescript_config_copy(cache, dir, strlen(dir));
+            *ok = *ok && (config.paths_base != nullptr) && typescript_config_paths(cache, paths, &config);
+        }
+    }
+    free(text);
+    if (!*ok || (cache->config_count >= TS_CONFIG_NONE) ||
+        ((cache->config_count == cache->config_capacity) &&
+         !parser_heap_grow((void **)&cache->configs, &cache->config_capacity,
+                           sizeof(*cache->configs), 8U))) {
+        *ok = false;
+        return TS_CONFIG_NONE;
+    }
+    index = (uint32_t)cache->config_count;
+    cache->configs[cache->config_count++] = config;
+    slot = parse_map_slot(&cache->files, 0U, path, strlen(path));
+    if (slot != nullptr) {
+        *slot = index;
+    }
+    return index;
+}
+
+/* The config governing files in `dir` (absolute, normalized): the nearest
+ * tsconfig.json, else jsconfig.json, at or above dir but not above root.
+ * Every directory visited on the way is cached with the answer. */
+static uint32_t typescript_config_for_dir(TypeScriptConfigCache *cache, const char *root,
+                                          const char *dir, bool *ok)
+{
+    static const char *const names[] = {"tsconfig.json", "jsconfig.json"};
+    const char *pending[256];
+    size_t pending_count = 0U;
+    size_t root_len = strlen(root);
+    uint32_t result = TS_CONFIG_NONE;
+    char *at = copy_cstr(dir);
+
+    if (at == nullptr) {
+        *ok = false;
+        return TS_CONFIG_NONE;
+    }
+    for (;;) {
+        size_t len = strlen(at);
+        bool found = false;
+        char *slash;
+        if (parse_map_find(&cache->dirs, 0U, at, len, &result)) {
+            break;
+        }
+        /* Never consult configs outside the repository. */
+        if ((len < root_len) || (strncmp(at, root, root_len) != 0) ||
+            ((len > root_len) && (at[root_len] != '/') && (root[root_len - 1U] != '/')) ||
+            (pending_count == sizeof(pending) / sizeof(pending[0]))) {
+            result = TS_CONFIG_NONE;
+            break;
+        }
+        pending[pending_count++] = at;
+        for (size_t i = 0U; (i < sizeof(names) / sizeof(names[0])) && !found; i++) {
+            char *candidate = alloc_printf("%s%s%s", at, at[len - 1U] == '/' ? "" : "/", names[i]);
+            if (candidate == nullptr) {
+                *ok = false;
+                return TS_CONFIG_NONE;
+            }
+            if (typescript_config_stat(cache, candidate, ok)) {
+                result = typescript_config_load(cache, candidate, 0U, ok);
+                found = true;
+            }
+        }
+        slash = strrchr(at, '/');
+        if (found || (len <= root_len) || (slash == nullptr)) {
+            break;
+        }
+        at = copy_bytes(at, slash == at ? 1U : (size_t)(slash - at));
+        if (at == nullptr) {
+            *ok = false;
+            return TS_CONFIG_NONE;
+        }
+    }
+    for (size_t i = 0U; i < pending_count; i++) {
+        char *key = typescript_config_copy(cache, pending[i], strlen(pending[i]));
+        if ((key == nullptr) || !parse_map_insert(&cache->dirs, 0U, key, strlen(key), result)) {
+            *ok = false;
+            break;
+        }
+    }
+    return result;
+}
+
+/* TypeScript's matchPatternOrExact: an exact key wins, else the wildcard
+ * pattern with the longest prefix; *capture receives the '*' text. */
+static const TypeScriptPathPattern *typescript_paths_match(const TypeScriptConfig *config,
+                                                           const char *spec,
+                                                           const char **capture,
+                                                           size_t *capture_len)
+{
+    const TypeScriptPathPattern *best = nullptr;
+    size_t spec_len = strlen(spec);
+    for (size_t i = 0U; i < config->path_count; i++) {
+        const TypeScriptPathPattern *pattern = &config->paths[i];
+        size_t prefix_len = strlen(pattern->prefix);
+        size_t suffix_len = strlen(pattern->suffix);
+        if (!pattern->wildcard) {
+            if (strcmp(spec, pattern->prefix) == 0) {
+                *capture = spec;
+                *capture_len = 0U;
+                return pattern;
+            }
+            continue;
+        }
+        if ((spec_len >= prefix_len + suffix_len) &&
+            (strncmp(spec, pattern->prefix, prefix_len) == 0) &&
+            (strcmp(spec + spec_len - suffix_len, pattern->suffix) == 0) &&
+            ((best == nullptr) || (prefix_len > strlen(best->prefix)))) {
+            best = pattern;
+            *capture = spec + prefix_len;
+            *capture_len = spec_len - prefix_len - suffix_len;
+        }
+    }
+    return best;
+}
+
+/* Resolves a non-relative specifier through the importing file's config:
+ * paths substitutions in order, then baseUrl. nullptr leaves the specifier
+ * an external package; *ok turns false only on allocation failure. Results
+ * are memoized per (config, specifier), so a package imported everywhere
+ * costs its probes once per cache. A shared cache is only touched under
+ * its mutex; the probes themselves run unlocked on a by-value copy of the
+ * config, whose pointers stay valid for the cache's lifetime. */
+static const char *typescript_config_target(TypeScriptContext *ctx, const char *spec, bool *ok)
+{
+    TypeScriptConfigShared *shared = ctx->parser->shared_configs;
+    TypeScriptConfigCache *cache = shared != nullptr ? &shared->cache : &ctx->parser->configs;
+    TypeScriptConfig config = {0};
+    const char *result = nullptr;
+    uint32_t index;
+    uint32_t memo;
+    bool memoized;
+    char *file;
+    char *slash;
+    char *key;
+
+    if ((ctx->parser->repo_root == nullptr) || (spec[0] == '\0')) {
+        return nullptr;
+    }
+    file = typescript_normalize_path(ctx->file->file_path);
+    slash = file == nullptr ? nullptr : strrchr(file, '/');
+    if (slash == nullptr) {
+        *ok = file != nullptr;
+        return nullptr;
+    }
+    *slash = '\0';
+    if (shared != nullptr) {
+        (void)pthread_mutex_lock(&shared->mutex);
+    }
+    index = typescript_config_for_dir(cache, ctx->parser->repo_root, file[0] == '\0' ? "/" : file, ok);
+    memoized = (index != TS_CONFIG_NONE) &&
+               parse_map_find(&cache->resolved, index, spec, strlen(spec), &memo);
+    if (memoized) {
+        result = cache->results[memo];
+    } else if (index != TS_CONFIG_NONE) {
+        config = cache->configs[index];
+    }
+    if (shared != nullptr) {
+        (void)pthread_mutex_unlock(&shared->mutex);
+    }
+    if (memoized || (index == TS_CONFIG_NONE)) {
+        return result;
+    }
+    if (config.has_paths) {
+        const char *capture = nullptr;
+        size_t capture_len = 0U;
+        const TypeScriptPathPattern *pattern = typescript_paths_match(&config, spec, &capture, &capture_len);
+        const char *base = config.base_url != nullptr ? config.base_url : config.paths_base;
+        for (size_t i = 0U; (pattern != nullptr) && (result == nullptr) && (i < pattern->target_count); i++) {
+            const char *target = pattern->targets[i];
+            const char *star = strchr(target, '*');
+            char *substituted = star == nullptr ? copy_cstr(target)
+                                                : alloc_printf("%.*s%.*s%s", (int)(star - target), target,
+                                                               (int)capture_len, capture, star + 1);
+            char *path = substituted == nullptr ? nullptr : typescript_config_join(base, substituted);
+            char *module = path == nullptr ? nullptr : typescript_module_target(ctx, path);
+            if (module == nullptr) {
+                *ok = false;
+                return nullptr;
+            }
+            if (module[0] != '\0') {
+                result = module;
+            }
+        }
+    }
+    if ((result == nullptr) && (config.base_url != nullptr)) {
+        char *path = typescript_config_join(config.base_url, spec);
+        char *module = path == nullptr ? nullptr : typescript_module_target(ctx, path);
+        if (module == nullptr) {
+            *ok = false;
+            return nullptr;
+        }
+        if (module[0] != '\0') {
+            result = module;
+        }
+    }
+    if (shared != nullptr) {
+        (void)pthread_mutex_lock(&shared->mutex);
+    }
+    /* Another worker may have memoized the same answer meanwhile. */
+    if (!parse_map_find(&cache->resolved, index, spec, strlen(spec), &memo)) {
+        const char *owned = result == nullptr ? nullptr : typescript_config_copy(cache, result, strlen(result));
+        key = typescript_config_copy(cache, spec, strlen(spec));
+        if ((key == nullptr) || ((result != nullptr) && (owned == nullptr)) ||
+            (cache->result_count >= UINT32_MAX) ||
+            ((cache->result_count == cache->result_capacity) &&
+             !parser_heap_grow((void **)&cache->results, &cache->result_capacity,
+                               sizeof(*cache->results), 64U)) ||
+            !parse_map_insert(&cache->resolved, index, key, strlen(key), (uint32_t)cache->result_count)) {
+            *ok = false;
+        } else {
+            cache->results[cache->result_count++] = owned;
+        }
+    }
+    if (shared != nullptr) {
+        (void)pthread_mutex_unlock(&shared->mutex);
+    }
+    return *ok ? result : nullptr;
+}
+
+static char *typescript_import_target(TypeScriptContext *ctx, TSNode source)
+{
+    char *spec = typescript_text(ctx, source);
+    char *file;
+    const char *slash;
+    char *path;
+    if (spec == nullptr) {
+        return nullptr;
+    }
+    if (!((strncmp(spec, "./", 2U) == 0) || (strncmp(spec, "../", 3U) == 0))) {
+        bool ok = true;
+        const char *target = typescript_config_target(ctx, spec, &ok);
+        if (!ok) {
+            return nullptr;
+        }
+        /* Unmapped specifiers are external packages: never run a resolver. */
+        return target != nullptr ? copy_cstr(target) : spec;
+    }
+    file = typescript_normalize_path(ctx->file->file_path);
+    if (file == nullptr) {
+        return nullptr;
+    }
+    slash = strrchr(file, '/');
+    path = alloc_printf("%.*s/%s", slash == nullptr ? 1 : (int)(slash - file),
+                         slash == nullptr ? "." : file, spec);
+    if (path == nullptr) {
+        return nullptr;
+    }
+    path = typescript_normalize_path(path);
+    return path == nullptr ? nullptr : typescript_module_target(ctx, path);
 }
 
 static bool typescript_import_binding(TypeScriptContext *ctx, TSNode local,
@@ -14494,6 +15144,7 @@ void code_lens_typescript_parser_delete(CodeLensTypeScriptParser *parser)
     if (parser != nullptr) {
         ts_parser_delete(parser->parser);
         free(parser->repo_root);
+        typescript_config_cache_free(&parser->configs);
         free(parser);
     }
 }
@@ -14518,6 +15169,8 @@ int code_lens_typescript_parser_set_repo_root(CodeLensTypeScriptParser *parser, 
     }
     free(parser->repo_root);
     parser->repo_root = copy;
+    /* Cached configs and resolutions are relative to the old root. */
+    typescript_config_cache_free(&parser->configs);
     return 0;
 }
 
@@ -14631,6 +15284,20 @@ static CodeLensSourceParser *code_lens_source_parser_new(const char *repo_root)
     return parser;
 }
 
+/* Points the TypeScript-family parsers at a build-wide config cache that
+ * outlives them (see TypeScriptConfigShared). */
+static void code_lens_source_parser_share_typescript_configs(CodeLensSourceParser *parser,
+                                                            TypeScriptConfigShared *shared)
+{
+    static const LanguageId langs[] = {LANG_TYPESCRIPT, LANG_TSX, LANG_JAVASCRIPT};
+
+    for (size_t i = 0U; (parser != nullptr) && (i < sizeof(langs) / sizeof(langs[0])); i++) {
+        CodeLensTypeScriptParser *ts = parser->parsers[langs[i]];
+
+        ts->shared_configs = shared;
+    }
+}
+
 static void code_lens_source_parser_delete(CodeLensSourceParser *parser)
 {
     if (parser == nullptr) {
@@ -14734,6 +15401,9 @@ typedef struct {
     size_t new_files;
     bool maven_changed;
     bool dependency_sources_changed;
+    /* A tsconfig.json/jsconfig.json (or extends target) that governs
+     * TypeScript import resolution was edited, deleted, or created. */
+    bool typescript_config_changed;
     /* A failed/disabled dependency-only generation can be retried by an
      * explicit index without making its already-current workspace rows
      * unsafe to serve. */
@@ -14901,6 +15571,18 @@ typedef struct {
     /* TypeFact rows written by this run; a full build skips the type link
      * pass when none were. */
     size_t type_fact_count;
+    /* Full builds only: directories holding workspace TypeScript/JavaScript
+     * files, whose config probes become TypeScriptConfigInput rows.
+     * Heap-owned (index_typescript_dirs_free). */
+    bool collect_typescript_dirs;
+    ParseMap typescript_dir_set;
+    char **typescript_dirs;
+    size_t typescript_dir_count;
+    size_t typescript_dir_capacity;
+    /* Full builds only: the config cache every worker's TypeScript parsers
+     * share; it records its probes for TypeScriptConfigInput. Owned by
+     * index_repository_attempt. */
+    TypeScriptConfigShared *typescript_configs;
 } IndexContext;
 
 static double profile_now_seconds(void)
@@ -15163,6 +15845,12 @@ static const char index_schema_sql[] =
     "CREATE TABLE TypeFact (fileId INTEGER, kind INTEGER, owner TEXT, name TEXT,"
     " type TEXT, num INTEGER);"
     "CREATE INDEX idx_type_fact_file ON TypeFact(fileId);"
+    /* Every tsconfig.json/jsconfig.json location (and extends target) that
+     * governs a workspace TypeScript/JavaScript directory, with its stat
+     * signature (size -1: absent). The staleness check re-stats them, so
+     * editing, deleting, or creating a config forces a full rebuild. */
+    "CREATE TABLE TypeScriptConfigInput (repo TEXT, path TEXT, size INTEGER,"
+    " mtimeSec INTEGER, mtimeNsec INTEGER);"
     /* Secondary indexes on Symbol/Ref/Keyword are created after the bulk
      * load (see index_secondary_indexes_sql): one sort-based build beats
      * incremental b-tree maintenance across ~700k streamed inserts. */
@@ -18788,6 +19476,7 @@ typedef struct {
     bool collect_done;
     bool prepack_fts;
     const char *repo_path;
+    TypeScriptConfigShared *typescript_configs;
     size_t worker_count;
     size_t finished_workers;
     bool wall_recorded;
@@ -18964,6 +19653,123 @@ static void parsed_result_free_fts_rows(ParsedFileResult *result)
     }
 }
 
+static void index_typescript_dirs_free(IndexContext *index)
+{
+    for (size_t i = 0U; i < index->typescript_dir_count; i++) {
+        free(index->typescript_dirs[i]);
+    }
+    free(index->typescript_dirs);
+    free(index->typescript_dir_set.slots);
+    index->typescript_dirs = nullptr;
+    index->typescript_dir_set = (ParseMap){0};
+    index->typescript_dir_count = 0U;
+    index->typescript_dir_capacity = 0U;
+}
+
+/* Remembers the directory of a workspace TypeScript/JavaScript file; one
+ * hash probe per file on the emit thread, an insert per new directory. */
+static int index_note_typescript_dir(IndexContext *index, const char *path)
+{
+    LanguageId lang = language_for_path(path);
+    size_t root_len = strlen(index->repo_path);
+    const char *slash = nullptr;
+    uint32_t ignored;
+    char *dir;
+    size_t len;
+
+    if (((lang != LANG_TYPESCRIPT) && (lang != LANG_TSX) && (lang != LANG_JAVASCRIPT)) ||
+        (strncmp(path, index->repo_path, root_len) != 0) ||
+        ((path[root_len] != '/') && (path[root_len] != '\\'))) {
+        return 0; /* dependency sources have no workspace config */
+    }
+    for (const char *at = path + root_len; *at != '\0'; at++) {
+        if ((*at == '/') || (*at == '\\')) {
+            slash = at;
+        }
+    }
+    len = (size_t)(slash - path);
+    if (parse_map_find(&index->typescript_dir_set, 0U, path, len, &ignored)) {
+        return 0;
+    }
+    dir = malloc(len + 1U);
+    if ((dir == nullptr) ||
+        ((index->typescript_dir_count == index->typescript_dir_capacity) &&
+         !parser_heap_grow((void **)&index->typescript_dirs, &index->typescript_dir_capacity,
+                           sizeof(*index->typescript_dirs), 64U))) {
+        free(dir);
+        return -1;
+    }
+    (void)memcpy(dir, path, len);
+    dir[len] = '\0';
+    index->typescript_dirs[index->typescript_dir_count++] = dir;
+    return parse_map_insert(&index->typescript_dir_set, 0U, dir, len, 0U) ? 0 : -1;
+}
+
+static int typescript_config_input_compare(const void *left, const void *right)
+{
+    const TypeScriptConfigInput *a = left;
+    const TypeScriptConfigInput *b = right;
+
+    return strcmp(a->path, b->path);
+}
+
+/* Snapshots the config probes governing every collected directory: the
+ * build's shared cache already recorded the lookups the parsers made, so
+ * replaying the remaining directories only stats what nobody consulted.
+ * Every directory is probed exactly once either way, so the recorded set
+ * does not depend on worker scheduling. */
+static int insert_typescript_config_inputs(CodeLensDb *db, IndexContext *index)
+{
+    TypeScriptConfigCache *cache;
+    TypeScriptConfigInput *sorted = nullptr;
+    sqlite3_stmt *stmt = nullptr;
+    char *root;
+    bool ok = true;
+    int rc = -1;
+
+    if ((index->typescript_dir_count == 0U) || (index->typescript_configs == nullptr)) {
+        return 0;
+    }
+    cache = &index->typescript_configs->cache; /* workers have joined */
+    root = typescript_normalize_path(index->repo_path);
+    for (size_t i = 0U; ok && (root != nullptr) && (i < index->typescript_dir_count); i++) {
+        char *dir = typescript_normalize_path(index->typescript_dirs[i]);
+
+        ok = dir != nullptr;
+        if (ok) {
+            (void)typescript_config_for_dir(cache, root, dir, &ok);
+        }
+    }
+    sorted = cache->input_count == 0U ? nullptr : malloc(cache->input_count * sizeof(*sorted));
+    if ((root == nullptr) || !ok || ((cache->input_count > 0U) && (sorted == nullptr)) ||
+        (db_prepare(db,
+                    "INSERT INTO TypeScriptConfigInput (repo, path, size, mtimeSec, mtimeNsec)"
+                    " VALUES (?1, ?2, ?3, ?4, ?5)",
+                    &stmt) != 0)) {
+        goto done;
+    }
+    if (cache->input_count > 0U) {
+        (void)memcpy(sorted, cache->inputs, cache->input_count * sizeof(*sorted));
+        qsort(sorted, cache->input_count, sizeof(*sorted), typescript_config_input_compare);
+    }
+    for (size_t i = 0U; i < cache->input_count; i++) {
+        const TypeScriptConfigInput *input = &sorted[i];
+
+        if ((bind_text(stmt, 1, index->repo_path) != 0) || (bind_text(stmt, 2, input->path) != 0) ||
+            (sqlite3_bind_int64(stmt, 3, input->size) != SQLITE_OK) ||
+            (sqlite3_bind_int64(stmt, 4, input->mtime_sec) != SQLITE_OK) ||
+            (sqlite3_bind_int64(stmt, 5, input->mtime_nsec) != SQLITE_OK) ||
+            (writer_step(stmt) != 0)) {
+            goto done;
+        }
+    }
+    rc = 0;
+done:
+    (void)sqlite3_finalize(stmt);
+    free(sorted);
+    return rc;
+}
+
 static int emit_parsed_file(IndexContext *index, ParsedFileResult *result)
 {
     const CodeLensSourceFile *parsed;
@@ -18988,6 +19794,9 @@ static int emit_parsed_file(IndexContext *index, ParsedFileResult *result)
         return -1;
     }
     index->stats.file_count++;
+    if (index->collect_typescript_dirs && (index_note_typescript_dir(index, parsed->file_path) != 0)) {
+        return -1;
+    }
 
     start = profile_start(index->profile);
     rc = 0;
@@ -19236,6 +20045,7 @@ static void *parallel_parse_worker_main(void *ctx)
         parallel_parse_record_worker_finished(worker->work);
         return nullptr;
     }
+    code_lens_source_parser_share_typescript_configs(parser, worker->work->typescript_configs);
 
     while (parallel_parse_next(worker->work, &entry)) {
         if (parse_file_result(parser,
@@ -19397,6 +20207,7 @@ static int index_source_files_parallel(IndexContext *index,
     work.worker_count = thread_count;
     work.prepack_fts = index->fts_sidecar != nullptr;
     work.repo_path = index->repo_path;
+    work.typescript_configs = index->typescript_configs;
     work.wall_start_seconds = profile_now_seconds();
     if (pthread_mutex_init(&work.mutex, nullptr) != 0) {
         return -1;
@@ -24117,6 +24928,10 @@ static int index_repository_incremental(const char *repo_path,
          * index must still fall through to dependency resolution. */
         goto fallback;
     }
+    if (status.typescript_config_changed) {
+        /* baseUrl/paths decide import targets of unchanged files too. */
+        goto fallback;
+    }
 
     if (!status.stale) {
         /* Already current: report the stored totals without rebuilding. */
@@ -24407,6 +25222,7 @@ static int index_repository_attempt(const char *repo_path,
     FtsSidecar fts_sidecar;
     GitBlobReader seq_reader;
     RawIndexPrep raw_prep = {0};
+    TypeScriptConfigShared typescript_configs = {0};
     char *fts_sidecar_path = nullptr;
     bool fts_sidecar_active = false;
     double start;
@@ -24430,6 +25246,13 @@ static int index_repository_attempt(const char *repo_path,
     ctx.profile = &profile;
     ctx.raw_emit.active = raw_emitter;
     ctx.raw_mirror.active = raw_emitter || raw_indexes_enabled();
+    ctx.collect_typescript_dirs = true;
+    typescript_configs.cache.record_inputs = true;
+    if (pthread_mutex_init(&typescript_configs.mutex, nullptr) != 0) {
+        cleanup_index_paths(&paths, true);
+        return -1;
+    }
+    ctx.typescript_configs = &typescript_configs;
 
     /* Schema plus every row for the repo load inside one transaction; the
      * atomic publish rename provides all the durability that matters. */
@@ -24498,6 +25321,7 @@ static int index_repository_attempt(const char *repo_path,
     start = profile_start(&profile);
     if (thread_count <= 1U) {
         ctx.parser = code_lens_source_parser_new(repo_path);
+        code_lens_source_parser_share_typescript_configs(ctx.parser, &typescript_configs);
         rc = ctx.parser == nullptr
                  ? -1
                  : code_lens_walk_source_files(repo_path, index_file_callback, &ctx);
@@ -24545,6 +25369,9 @@ static int index_repository_attempt(const char *repo_path,
     rc = insert_repo_row(&ctx);
     if (rc == 0) {
         rc = insert_maven_metadata(&index_db, repo_path, maven_dependencies);
+    }
+    if (rc == 0) {
+        rc = insert_typescript_config_inputs(&index_db, &ctx);
     }
     profile_add(&profile, &profile.repo_write_seconds, start);
     if (rc != 0) {
@@ -24691,6 +25518,7 @@ cleanup:
     term_interner_destroy(&ctx.interner);
     raw_mirror_destroy(&ctx.raw_mirror);
     raw_emitter_destroy(&ctx.raw_emit);
+    index_typescript_dirs_free(&ctx);
     if (index_db_open) {
         code_lens_db_close(&index_db);
     }
@@ -24704,6 +25532,8 @@ cleanup:
     if (ctx.parser != nullptr) {
         code_lens_source_parser_delete(ctx.parser);
     }
+    typescript_config_cache_free(&typescript_configs.cache);
+    (void)pthread_mutex_destroy(&typescript_configs.mutex);
     if ((rc == 0) && (out_stats != nullptr)) {
         *out_stats = ctx.stats;
     }
@@ -25331,6 +26161,8 @@ typedef struct {
     int64_t mtime_sec;
     int64_t mtime_nsec;
     bool dependency;
+    /* A TypeScriptConfigInput row, not a File row; size -1 expects absence. */
+    bool config_input;
     uint8_t verdict;
 } StaleCheckEntry;
 
@@ -25597,6 +26429,54 @@ static int read_indexed_file_entries(CodeLensDb *db,
     return 0;
 }
 
+/* Appends the TypeScriptConfigInput snapshot to the stat entries, so the
+ * config probes ride the same batched, parallel stat pass as File rows. */
+static int read_typescript_config_entries(CodeLensDb *db,
+                                          const char *repo_name,
+                                          StaleCheckEntry **entries,
+                                          size_t *count)
+{
+    sqlite3_stmt *stmt = nullptr;
+    size_t capacity = *count;
+    int rc;
+
+    if ((db_prepare(db,
+                    "SELECT path, size, mtimeSec, mtimeNsec FROM TypeScriptConfigInput"
+                    " WHERE repo = ?1",
+                    &stmt) != 0) ||
+        (bind_text(stmt, 1, repo_name) != 0)) {
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const unsigned char *path_text = sqlite3_column_text(stmt, 0);
+        int path_bytes = sqlite3_column_bytes(stmt, 0);
+        char *path = (path_text == nullptr) || (path_bytes <= 0)
+                         ? nullptr
+                         : copy_bytes((const char *)path_text, (size_t)path_bytes);
+
+        if ((path == nullptr) ||
+            ((*count == capacity) &&
+             !grow_array((void **)entries, &capacity, sizeof(**entries), 64U))) {
+            (void)sqlite3_finalize(stmt);
+            return -1;
+        }
+        (*entries)[(*count)++] = (StaleCheckEntry){.path = path,
+                                                   .size = sqlite3_column_int64(stmt, 1),
+                                                   .mtime_sec = sqlite3_column_int64(stmt, 2),
+                                                   .mtime_nsec = sqlite3_column_int64(stmt, 3),
+                                                   .config_input = true,
+                                                   .verdict = STALE_VERDICT_OK};
+    }
+    if (rc != SQLITE_DONE) {
+        (void)report_sqlite_error(db->handle, "query TypeScript config inputs");
+        (void)sqlite3_finalize(stmt);
+        return -1;
+    }
+    (void)sqlite3_finalize(stmt);
+    return 0;
+}
+
 /* Folds stat verdicts in row order so counts and diff lists are identical
  * to the sequential pass this machinery replaces. */
 static int fold_stale_entries(StalenessStatus *status,
@@ -25607,6 +26487,13 @@ static int fold_stale_entries(StalenessStatus *status,
     for (size_t i = 0U; i < count; i++) {
         StaleCheckEntry *entry = &entries[i];
 
+        if (entry->config_input) {
+            if ((entry->size < 0) ? (entry->verdict != STALE_VERDICT_MISSING)
+                                  : (entry->verdict != STALE_VERDICT_OK)) {
+                status->typescript_config_changed = true;
+            }
+            continue;
+        }
         status->checked_files++;
         if (entry->dependency && (entry->verdict != STALE_VERDICT_OK)) {
             status->dependency_sources_changed = true;
@@ -25921,7 +26808,8 @@ static int check_repo_staleness_diff(CodeLensDb *db,
                                    diff,
                                    &indexed_paths,
                                    &entries,
-                                   &entry_count) == 0)) {
+                                   &entry_count) == 0) &&
+        (read_typescript_config_entries(db, repo_name, &entries, &entry_count) == 0)) {
         /* Two parallel filesystem phases, run sequentially: concurrent
          * stat and walk passes were measured to fight over the same
          * directory vnode locks and burn 5x the CPU for no wall win. */
@@ -25953,7 +26841,7 @@ static int check_repo_staleness_diff(CodeLensDb *db,
      * workspace snapshot remains safe for MCP reads. */
     status.stale = (status.missing_files > 0U) || (status.changed_files > 0U) ||
                    (status.new_files > 0U) || status.maven_changed ||
-                   status.dependency_sources_changed;
+                   status.dependency_sources_changed || status.typescript_config_changed;
     status.elapsed_seconds = profile_now_seconds() - start;
     *out_status = status;
     return rc;
@@ -25982,6 +26870,12 @@ static char *staleness_note(const char *repo_name, const StalenessStatus *status
         dependency_detail = ", dependency source cache changed";
     } else {
         dependency_detail = "";
+    }
+    if (status->typescript_config_changed) {
+        dependency_detail = alloc_printf("%s, TypeScript config changed", dependency_detail);
+        if (dependency_detail == nullptr) {
+            return nullptr;
+        }
     }
     if (!status->checked) {
         return alloc_printf("warning: repo \"%s\" staleness check failed after %.6fs\n",

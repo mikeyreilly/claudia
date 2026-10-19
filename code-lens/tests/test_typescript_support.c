@@ -528,12 +528,218 @@ done:
     return failed;
 }
 
+static bool ts_has(const char *text, const char *needle)
+{
+    return (text != nullptr) && (strstr(text, needle) != nullptr);
+}
+
+/* Non-relative specifiers resolve through the nearest tsconfig.json (else
+ * jsconfig.json): paths, then baseUrl, inherited along extends; config
+ * edits, deletions, and creations force a full rebuild. */
+static int test_typescript_config_index(void)
+{
+    static const char base_config[] =
+        "{\n"
+        "  // JSONC: comments and trailing commas\n"
+        "  \"compilerOptions\": {\n"
+        "    \"baseUrl\": \".\", /* repo root */\n"
+        "    \"paths\": {\n"
+        "      \"@lib/*\": [\"src/missing/*\", \"src/lib/*\",],\n"
+        "      \"@lib/special/*\": [\"src/special/*\"],\n"
+        "      \"@exact\": [\"src/lib/exact\"],\n"
+        "      \"two*stars*\": [\"src/lib/*\"],\n"
+        "    },\n"
+        "  },\n"
+        "}\n";
+    static const char main_source[] =
+        "import { helper } from '@lib/helper';\n"
+        "import { special } from '@lib/special/one';\n"
+        "import { exact } from '@exact';\n"
+        "import { helper as viaBase } from 'src/lib/helper';\n"
+        "import { barrel } from 'src/lib';\n"
+        "import { Thing } from '../lib/thing.interface';\n"
+        "import { useState } from 'react';\n"
+        "export const App = () => { helper(); special(); viaBase(); useState(); return exact + barrel + Thing; };\n";
+    static const char main_sql[] =
+        "SELECT r.symbol, r.targetNamespace FROM Ref r JOIN File f "
+        "ON f.rowid = r.fileId WHERE f.path LIKE '%main.tsx' ORDER BY r.symbol";
+    static const char refs_sql[] =
+        "SELECT f.path, r.symbol, r.targetNamespace FROM Ref r JOIN File f ON f.rowid = r.fileId "
+        "ORDER BY f.path, r.lineNumber, r.columnNumber, r.symbol";
+    static const char inputs_sql[] =
+        "SELECT path, size, mtimeSec, mtimeNsec FROM TypeScriptConfigInput ORDER BY path";
+    static const char *const env_names[] = {"CODE_LENS_HOME", "CODE_LENS_INCREMENTAL", "CODE_LENS_MAVEN"};
+    char *saved[3] = {0};
+    const char *tmp = getenv("TMPDIR");
+    char buffer[PATH_MAX];
+    char resolved[PATH_MAX];
+    char *root = nullptr;
+    char *repo;
+    char *home;
+    char *lib;
+    char *app;
+    char *special;
+    char *web;
+    char *legacy;
+    char *legacy_lib;
+    char *text;
+    char *before;
+    char *inputs_before;
+    CodeLensIndexStats stats = {0};
+    CodeLensContextOptions options = {0};
+    int failed = 0;
+
+    for (size_t i = 0U; i < 3U; i++) {
+        const char *value = getenv(env_names[i]);
+        if (value != nullptr) {
+            size_t len = strlen(value) + 1U;
+            saved[i] = code_lens_alloc(len);
+            if (saved[i] == nullptr) {
+                return 1;
+            }
+            (void)memcpy(saved[i], value, len);
+        }
+    }
+    if ((tmp == nullptr) || (tmp[0] == '\0')) {
+        tmp = "/tmp";
+    }
+    (void)snprintf(buffer, sizeof(buffer), "%s/code-lens-tsconfig-XXXXXX", tmp);
+    if ((mkdtemp(buffer) == nullptr) || (realpath(buffer, resolved) == nullptr)) {
+        return ts_assert(false, "temporary tsconfig repository creation");
+    }
+    root = resolved;
+    repo = code_lens_join_path(root, "repo");
+    home = code_lens_join_path(root, "home");
+    lib = repo == nullptr ? nullptr : code_lens_join_path(repo, "src/lib");
+    app = repo == nullptr ? nullptr : code_lens_join_path(repo, "src/app");
+    special = repo == nullptr ? nullptr : code_lens_join_path(repo, "src/special");
+    web = repo == nullptr ? nullptr : code_lens_join_path(repo, "packages/web/src");
+    legacy = repo == nullptr ? nullptr : code_lens_join_path(repo, "packages/legacy");
+    legacy_lib = repo == nullptr ? nullptr : code_lens_join_path(repo, "packages/legacy/lib");
+    if ((home == nullptr) || (lib == nullptr) || (app == nullptr) || (special == nullptr) ||
+        (web == nullptr) || (legacy == nullptr) || (legacy_lib == nullptr) ||
+        (code_lens_mkdir_p(lib) != 0) || (code_lens_mkdir_p(app) != 0) ||
+        (code_lens_mkdir_p(special) != 0) || (code_lens_mkdir_p(web) != 0) ||
+        (code_lens_mkdir_p(legacy_lib) != 0) ||
+        (ts_write(repo, "tsconfig.base.json", base_config) != 0) ||
+        (ts_write(repo, "tsconfig.json", "{ \"extends\": \"./tsconfig.base\", \"include\": [\"src/**/*\"] }\n") != 0) ||
+        (ts_write(lib, "helper.ts", "export function helper() { return 1; }\n") != 0) ||
+        (ts_write(lib, "exact.ts", "export const exact = 1;\n") != 0) ||
+        (ts_write(lib, "index.ts", "export const barrel = 1;\n") != 0) ||
+        (ts_write(lib, "thing.interface.ts", "export const Thing = 2;\n") != 0) ||
+        (ts_write(special, "one.ts", "export function special() { return 3; }\n") != 0) ||
+        (ts_write(app, "main.tsx", main_source) != 0) ||
+        (ts_write(web, "util.ts", "export const util = 1;\n") != 0) ||
+        (ts_write(web, "use.ts", "import { util } from 'src/util';\nutil;\n") != 0) ||
+        (ts_write(legacy, "jsconfig.json", "{ \"compilerOptions\": { \"baseUrl\": \"lib\" } }\n") != 0) ||
+        (ts_write(legacy_lib, "shared.js", "export function shared() {}\n") != 0) ||
+        (ts_write(legacy, "use.js", "import { shared } from 'shared';\nshared();\n") != 0) ||
+        (setenv("CODE_LENS_HOME", home, 1) != 0) || (setenv("CODE_LENS_MAVEN", "0", 1) != 0) ||
+        (setenv("CODE_LENS_INCREMENTAL", "force", 1) != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed = ts_assert(false, "tsconfig fixture indexing");
+        goto done;
+    }
+    text = code_lens_run_sql(repo, main_sql);
+    failed |= ts_assert(ts_has(text, "helper|src/lib/helper.ts"),
+                         "paths wildcard tries substitutions in order, inherited through extends");
+    failed |= ts_assert(ts_has(text, "special|src/special/one.ts"),
+                         "the longest matching paths prefix wins");
+    failed |= ts_assert(ts_has(text, "exact|src/lib/exact.ts"), "exact paths keys match");
+    failed |= ts_assert(ts_has(text, "viaBase|src/lib/helper.ts") && ts_has(text, "barrel|src/lib/index.ts"),
+                         "baseUrl resolves files and directory indexes");
+    failed |= ts_assert(ts_has(text, "Thing|src/lib/thing.interface.ts"),
+                         "a non-TS suffix such as .interface is part of the module name");
+    failed |= ts_assert(ts_has(text, "useState|react"), "unmapped packages keep their specifier");
+    text = code_lens_run_sql(repo, "SELECT symbol, targetNamespace FROM Ref WHERE symbol IN ('util', 'shared') "
+                                  "ORDER BY symbol");
+    failed |= ts_assert(ts_has(text, "util|src/util\n"),
+                         "the root config governs subdirectories without their own config");
+    failed |= ts_assert(ts_has(text, "shared|packages/legacy/lib/shared.js"),
+                         "a nearer jsconfig.json applies when its directory has no tsconfig.json");
+    options = (CodeLensContextOptions){0};
+    text = code_lens_context_symbol_ex(repo, "helper", &options);
+    failed |= ts_assert(ts_has(text, "main.tsx:8:") && ts_has(text, "helper -> src/lib/helper.ts") &&
+                         ts_has(text, "viaBase -> src/lib/helper.ts"),
+                         "context finds TSX references made through tsconfig paths and baseUrl");
+
+    /* A new nested tsconfig (no source file added) must be noticed. */
+    if ((ts_write(repo, "packages/web/tsconfig.json", "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n") != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed |= ts_assert(false, "reindex after adding a nested tsconfig");
+        goto done;
+    }
+    text = code_lens_run_sql(repo, "SELECT targetNamespace FROM Ref WHERE symbol = 'util'");
+    failed |= ts_assert(ts_has(text, "packages/web/src/util.ts"),
+                         "a newly created nearer tsconfig re-resolves unchanged importers");
+
+    /* Editing an extended config re-resolves too; without baseUrl, paths
+     * resolve from the declaring config's directory. */
+    if ((ts_write(repo, "tsconfig.base.json", "{ \"compilerOptions\": { \"paths\": { \"@exact\": [\"src/special/one\"] } } }\n") != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed |= ts_assert(false, "reindex after editing an extended tsconfig");
+        goto done;
+    }
+    text = code_lens_run_sql(repo, main_sql);
+    failed |= ts_assert(ts_has(text, "exact|src/special/one.ts") && ts_has(text, "helper|@lib/helper") &&
+                         ts_has(text, "viaBase|src/lib/helper") && !ts_has(text, "viaBase|src/lib/helper.ts"),
+                         "edited extended config: new paths apply, dropped baseUrl and mappings unresolve");
+
+    /* Incremental refreshes of ordinary edits agree with a full rebuild. */
+    if ((ts_write(app, "main.tsx", main_source) != 0) ||
+        (ts_write(web, "use.ts", "import { util } from 'src/util';\nutil; util;\n") != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed |= ts_assert(false, "incremental refresh with tsconfig resolution");
+        goto done;
+    }
+    before = code_lens_run_sql(repo, refs_sql);
+    inputs_before = code_lens_run_sql(repo, inputs_sql);
+    if ((setenv("CODE_LENS_INCREMENTAL", "0", 1) != 0) || (code_lens_index_repository(repo, &stats) != 0)) {
+        failed |= ts_assert(false, "full rebuild with tsconfig resolution");
+        goto done;
+    }
+    text = code_lens_run_sql(repo, refs_sql);
+    failed |= ts_assert((before != nullptr) && (text != nullptr) && (strcmp(before, text) == 0) &&
+                         ts_has(text, "util|packages/web/src/util.ts"),
+                         "incremental and full tsconfig-resolved references agree");
+    text = code_lens_run_sql(repo, inputs_sql);
+    failed |= ts_assert((inputs_before != nullptr) && (text != nullptr) && (strcmp(inputs_before, text) == 0) &&
+                         ts_has(text, "/tsconfig.base.json|") && ts_has(text, "/packages/web/tsconfig.json|") &&
+                         ts_has(text, "/src/app/tsconfig.json|-1|"),
+                         "config inputs record present and absent probes and survive incremental refreshes");
+
+    /* Deleting a config is a change as well. */
+    if ((unlink(code_lens_join_path(repo, "packages/web/tsconfig.json")) != 0) ||
+        (setenv("CODE_LENS_INCREMENTAL", "force", 1) != 0) ||
+        (code_lens_index_repository(repo, &stats) != 0)) {
+        failed |= ts_assert(false, "reindex after deleting a nested tsconfig");
+        goto done;
+    }
+    text = code_lens_run_sql(repo, "SELECT targetNamespace FROM Ref WHERE symbol = 'util'");
+    failed |= ts_assert(ts_has(text, "src/util") && !ts_has(text, "util.ts"),
+                         "deleting a governing tsconfig re-resolves unchanged importers");
+
+done:
+    for (size_t i = 0U; i < 3U; i++) {
+        if (saved[i] != nullptr) {
+            (void)setenv(env_names[i], saved[i], 1);
+        } else {
+            (void)unsetenv(env_names[i]);
+        }
+    }
+    if ((root != nullptr) && (code_lens_remove_tree(root) != 0)) {
+        (void)fprintf(stderr, "TypeScript support test warning: failed to remove %s\n", root);
+    }
+    return failed;
+}
+
 int test_typescript_support(void)
 {
     int failed = test_typescript_parser();
     failed |= test_tsx_parser();
     failed |= test_javascript_parser();
     failed |= test_typescript_index();
+    failed |= test_typescript_config_index();
     if (failed == 0) {
         (void)fprintf(stderr, "TypeScript/TSX/JavaScript parser and indexing tests passed\n");
     }

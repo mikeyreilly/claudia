@@ -100,7 +100,8 @@ modules, imports, classes, functions, methods, module variables, class and
 `self.` attributes, docstrings, and resolved references. The TypeScript extractor
 uses the native tree-sitter-typescript grammar to index classes, interfaces,
 type aliases, enums, namespaces, functions, variables, and members, with
-syntax-level references and relative imports (no TypeScript compiler required).
+syntax-level references and relative and tsconfig/jsconfig `baseUrl`/`paths`
+imports (no TypeScript compiler required).
 `.tsx` files use the sibling tree-sitter-tsx grammar with the same extractor,
 plus JSX: `<Component ...>` and `<Namespace.Component>` elements are references
 to the component binding (closing tags are not counted twice), attribute and
@@ -310,8 +311,15 @@ For TypeScript and JavaScript (including TSX/JSX), the module namespace is the r
 extensionless specifiers in TypeScript's order (`.ts`, `.tsx`, `.d.ts`, then
 `.js`/`.jsx`, then the same for `index.*`) and mapping `.js`/`.jsx`/`.mjs`/`.cjs`
 spellings to their TypeScript sources first, then to the JavaScript file itself;
-there is no compiler attribution, `tsconfig` path-alias
-resolution, or traversal of barrel/re-export chains. Adding or removing any
+other suffixes are part of the name, so `./props.interface` finds
+`props.interface.ts`. Non-relative specifiers such as `src/api/x` or `@app/x`
+resolve through the nearest `tsconfig.json` (else `jsconfig.json`) inside the
+repository: `compilerOptions.paths` first, then `baseUrl`, both inherited
+through relative `extends` chains; anything they do not map stays the
+verbatim package name. There is no compiler attribution or traversal of
+barrel/re-export chains, and package-based `extends` is not followed.
+Editing, creating, or deleting a governing tsconfig/jsconfig marks the index
+stale and the next re-index rebuilds in full. Adding or removing any
 TypeScript or JavaScript source conservatively forces a full rebuild, since it can change
 relative-import resolution in unchanged files.
 `context` accepts Java `Type.member`, `Type#member`, fully qualified

@@ -168,8 +168,10 @@ checked out next to this repository):
   their repository-relative path including the extension (src/App.tsx; members
   use src/App.tsx.Class); relative imports and CommonJS require() calls
   (extensionless, index, and .js/.jsx spellings) resolve to .ts/.tsx sources
-  first, then .js/.jsx files, while tsconfig paths/baseUrl, bare packages, and
-  re-export chains are not resolved. In .tsx/.jsx/.js files a JSX element such as
+  first, then .js/.jsx files; non-relative specifiers resolve through the
+  nearest tsconfig.json/jsconfig.json paths and baseUrl (following relative
+  extends), while bare packages and re-export chains are not resolved. In
+  .tsx/.jsx/.js files a JSX element such as
   <Button> or <Kit.Icon> is a reference to the component binding; intrinsic
   elements such as <div> are not. Qualifiers in Clojure `alias/name`, Java `Type.member`,
   `Type#member`, and fully qualified type spellings, and Python `module.func` or

@@ -967,9 +967,48 @@ workspace modules. Extensionless specifiers probe `.ts`, `.tsx`, `.mts`,
 prefer the TypeScript source they compile from, then the file itself
 (`typescript_js_spellings`): `.js` -> `.ts`, `.tsx`, `.d.ts`, `.js`; `.jsx` ->
 `.tsx`, `.d.ts`, `.jsx`; `.mjs` -> `.mts`, `.d.mts`, `.mjs`; `.cjs` -> `.cts`,
-`.d.cts`, `.cjs`. A probe only accepts files the registry indexes, so
-minified names never become targets. This is not
-compiler attribution: `tsconfig` path aliases and barrel/re-export chains are
+`.d.cts`, `.cjs`. Any other suffix is part of the module name, as in
+TypeScript: `./props.interface` probes `props.interface.ts` (and
+`./styles.css` a generated `styles.css.d.ts`). A probe only accepts files the
+registry indexes, so minified names never become targets.
+
+Non-relative specifiers (`src/api/x`, `@app/x`) resolve through tsconfig
+files, which are read but never executed (`typescript_config_target`):
+
+- **Which config.** The nearest `tsconfig.json`, else `jsconfig.json`, at or
+  above the importing file's directory and never above the repo root
+  (`typescript_config_for_dir`; every visited directory is cached with the
+  answer). This is the editor (tsserver) heuristic, not `include`/`files`
+  matching.
+- **What it maps.** `compilerOptions.paths` first: an exact key wins, else the
+  wildcard key with the longest prefix (keys with two `*` are ignored, like
+  TypeScript); its substitutions are tried in order relative to `baseUrl`,
+  or, without one, to the directory of the config that declared `paths`.
+  Then `baseUrl` itself. Each candidate goes through the same probe as a
+  relative import. Anything still unresolved keeps the verbatim specifier
+  (an external package), exactly as before.
+- **Inheritance.** `extends` (a string or an array; later entries win)
+  is followed for relative or absolute paths, with TypeScript's implied
+  `.json`; `paths` replaces rather than merges. Package `extends`
+  (`@org/tsconfig`) would need node_modules resolution and is skipped. Cycles
+  and chains deeper than `TS_CONFIG_MAX_EXTENDS_DEPTH` stop.
+- **Format.** JSONC: `typescript_config_strip_comments` blanks comments outside
+  strings, and the MCP JSON readers tolerate trailing commas. Files above
+  1 MiB or that fail to parse act as configs without mappings.
+- **Caching.** Each TypeScript parser (one per worker and grammar) owns a heap
+  `TypeScriptConfigCache`; resolutions are memoized per (config, specifier),
+  so `react` imported from 3000 files costs its probes once per worker.
+- **Freshness.** Full builds collect the directories of workspace TS/JS files
+  on the emit thread and replay the same lookups once with recording on,
+  storing every probe, present or absent (`size = -1`), plus extends targets,
+  in `TypeScriptConfigInput`. The staleness check appends those rows to its
+  batched stat pass (`StaleCheckEntry.config_input`); any mismatch sets
+  `typescript_config_changed`, which marks the index stale and sends
+  re-indexing to a full rebuild. Incremental refreshes never need to update
+  the table: the directory set only changes when a TS/JS file is added or
+  removed, which already forces a full rebuild.
+
+This is not compiler attribution: barrel/re-export chains are
 not resolved. Do not promise whole-program type inference or compiler-level
 module semantics. Adding or removing any supported TypeScript or JavaScript source
 conservatively forces a full rebuild, since import resolution in an unchanged
@@ -980,7 +1019,10 @@ source edits remain eligible for incremental refresh under the usual budget.
 grammars and all three languages (`test_tsx_parser` for JSX references and
 grammar selection, `test_javascript_parser` for JSX in `.js` and `require()`
 bindings; the index test resolves `.ts`/`.jsx`/`.cjs` importers to `.tsx` and
-`.js` modules and checks minified and build-output exclusion); parser and test
+`.js` modules and checks minified and build-output exclusion;
+`test_typescript_config_index` covers tsconfig/jsconfig `paths`, `baseUrl`,
+`extends`, JSONC, nearest-config selection, and config create/edit/delete
+staleness); parser and test
 implementation live with the other language sections and suites.
 
 ## 10. Database layer and schema
@@ -1044,6 +1086,12 @@ tables plus one FTS5 index table and two compatibility views:
 | `DependencyArtifact` | `id` | `id`, `repo`, `coordinate`, `groupId`, `artifactId`, `version`, `scope`, `sourceJar`, `sourceRoot`, `checksum` (TEXT); `direct` (INTEGER, `-1` when Maven did not expose directness) |
 | `DependencyFile` | `id` | `id`, `repo`, `filePath`, `artifactId`, `sourcePath`, `modulePath` (TEXT) |
 | `TypeFact` | (rowid) | `fileId`, `kind`, `num` (INTEGER); `owner`, `name`, `type` (TEXT); indexed by `fileId` |
+| `TypeScriptConfigInput` | (rowid) | `repo`, `path` (TEXT); `size` (INTEGER, `-1` for a probed-but-absent config), `mtimeSec`, `mtimeNsec` (INTEGER) |
+
+`TypeScriptConfigInput` is the stat snapshot of every tsconfig/jsconfig
+location that governs a workspace TypeScript/JavaScript directory (see
+[TypeScript](#typescript)); it is written once per full build with prepared
+statements and only read by the staleness check.
 
 `TypeFact` holds the per-file cross-file type facts (`CodeLensTypeFact`, see
 [Python](#python)) that the type link pass reads. It is written with ordinary
@@ -1808,6 +1856,7 @@ The condensed list of rules that must survive any change:
   version 16 for Maven main-JAR source fallbacks, so reused dependency
   generations re-resolve; version 17 for the `TypeFact` table and Python type
   linking; version 18 for `Symbol.startByte`/`endByte` and `Referred.alias`;
+  version 21 for `TypeScriptConfigInput` and tsconfig-resolved imports;
   a stamp mismatch forces the next index to rebuild in full).
 - **Type link determinism.** `type_link_run` re-evaluates every deferred
   reference from the whole `TypeFact` table before each publish, full or
