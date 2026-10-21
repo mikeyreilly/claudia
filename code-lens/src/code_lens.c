@@ -6706,6 +6706,18 @@ typedef struct {
     bool field;
 } JavaBinding;
 
+/* One pending node of a whole-tree walk plus the context its parent hands
+ * down. Each walker reads only the fields it uses: `enclosing` for type
+ * collection, `current` for declarations and references, the scope range
+ * for declarations. */
+typedef struct {
+    TSNode node;
+    JavaTypeEntry *current;
+    const char *enclosing;
+    uint32_t scope_start;
+    uint32_t scope_end;
+} JavaWalkFrame;
+
 typedef struct {
     const char *source;
     size_t source_len;
@@ -6722,6 +6734,10 @@ typedef struct {
     ParseMap member_names;        /* symbol name -> newest symbol index */
     uint32_t *member_prev;        /* earlier symbol with the same name */
     size_t member_indexed;
+    /* Explicit stack shared by the whole-tree walks (see java_walk). */
+    JavaWalkFrame *walk;
+    size_t walk_count;
+    size_t walk_capacity;
 } JavaParseContext;
 
 static pthread_once_t java_ids_once = PTHREAD_ONCE_INIT;
@@ -6853,26 +6869,86 @@ static JavaTypeEntry *java_type_entry_for_declaration(JavaParseContext *ctx, TSN
     return nullptr;
 }
 
-static bool java_collect_type_entries(JavaParseContext *ctx, TSNode node, const char *enclosing)
+/* Per-node step of a whole-tree walk: handle FRAME's node, then fill CHILD
+ * with the context its named children inherit (CHILD starts as a copy of
+ * FRAME), or clear *descend to skip them. Returns false on failure. */
+typedef bool (*JavaWalkVisit)(JavaParseContext *ctx,
+                              const JavaWalkFrame *frame,
+                              JavaWalkFrame *child,
+                              bool *descend);
+
+static bool java_walk_push(JavaParseContext *ctx, const JavaWalkFrame *frame)
 {
-    const char *kind = java_type_declaration_kind(node);
-    const char *child_enclosing = enclosing;
+    if ((ctx->walk_count == ctx->walk_capacity) &&
+        !parser_heap_grow((void **)&ctx->walk,
+                          &ctx->walk_capacity,
+                          sizeof(*ctx->walk),
+                          64U)) {
+        return false;
+    }
+    ctx->walk[ctx->walk_count++] = *frame;
+    return true;
+}
 
-    if (kind != nullptr) {
-        TSNode name = java_field(node, JF_NAME);
+/* Pre-order walk over ROOT's named subtree, visiting nodes in exactly the
+ * order a recursive walk would (children are pushed last-to-first so they
+ * pop in source order). The walk runs on a heap stack, not the C stack:
+ * generated sources (ANTLR serialized ATNs, JFlex tables, protobuf
+ * descriptors) concatenate hundreds to thousands of string literals into a
+ * single left-nested binary expression, and recursing per tree level
+ * overflowed parse-worker thread stacks (SIGBUS on macOS). */
+static bool java_walk(JavaParseContext *ctx, const JavaWalkFrame *root, JavaWalkVisit visit)
+{
+    ctx->walk_count = 0U;
+    if (!java_walk_push(ctx, root)) {
+        return false;
+    }
+    while (ctx->walk_count > 0U) {
+        JavaWalkFrame frame = ctx->walk[--ctx->walk_count];
+        JavaWalkFrame child = frame;
+        bool descend = true;
 
-        if (ts_node_is_null(name) || !java_add_type_entry(ctx, node, name, enclosing)) {
+        if (!visit(ctx, &frame, &child, &descend)) {
             return false;
         }
-        child_enclosing = ctx->types[ctx->type_count - 1U].target;
-    }
-
-    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
-        if (!java_collect_type_entries(ctx, tsh_named_child(node, i), child_enclosing)) {
-            return false;
+        if (!descend) {
+            continue;
+        }
+        for (uint32_t i = tsh_named_count(frame.node); i > 0U; i--) {
+            child.node = tsh_named_child(frame.node, i - 1U);
+            if (!java_walk_push(ctx, &child)) {
+                return false;
+            }
         }
     }
     return true;
+}
+
+static bool java_collect_type_entry(JavaParseContext *ctx,
+                                    const JavaWalkFrame *frame,
+                                    JavaWalkFrame *child,
+                                    bool *descend)
+{
+    TSNode node = frame->node;
+    const char *kind = java_type_declaration_kind(node);
+
+    (void)descend;
+    if (kind != nullptr) {
+        TSNode name = java_field(node, JF_NAME);
+
+        if (ts_node_is_null(name) || !java_add_type_entry(ctx, node, name, frame->enclosing)) {
+            return false;
+        }
+        child->enclosing = ctx->types[ctx->type_count - 1U].target;
+    }
+    return true;
+}
+
+static bool java_collect_type_entries(JavaParseContext *ctx, TSNode root)
+{
+    const JavaWalkFrame frame = {.node = root};
+
+    return java_walk(ctx, &frame, java_collect_type_entry);
 }
 
 static bool java_extract_package(JavaParseContext *ctx, TSNode root)
@@ -7487,18 +7563,22 @@ static bool java_add_field_definitions(JavaParseContext *ctx,
                                                    current);
 }
 
-static bool java_extract_declarations(JavaParseContext *ctx,
-                                      TSNode node,
-                                      JavaTypeEntry *current,
-                                      uint32_t scope_start,
-                                      uint32_t scope_end)
+static bool java_extract_declaration(JavaParseContext *ctx,
+                                     const JavaWalkFrame *frame,
+                                     JavaWalkFrame *child,
+                                     bool *descend)
 {
+    TSNode node = frame->node;
+    JavaTypeEntry *current = frame->current;
+    uint32_t scope_start = frame->scope_start;
+    uint32_t scope_end = frame->scope_end;
     JavaKind node_kind = java_kind(node);
     const char *type_kind = java_type_declaration_kind(node);
     JavaTypeEntry *child_current = current;
     uint32_t child_scope_start = scope_start;
     uint32_t child_scope_end = scope_end;
 
+    (void)descend;
     if (type_kind != nullptr) {
         TSNode name = java_field(node, JF_NAME);
         TSNode superclass = java_field(node, JF_SUPERCLASS);
@@ -7663,16 +7743,21 @@ static bool java_extract_declarations(JavaParseContext *ctx,
         child_scope_end = ts_node_end_byte(node);
     }
 
-    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
-        if (!java_extract_declarations(ctx,
-                                       tsh_named_child(node, i),
-                                       child_current,
-                                       child_scope_start,
-                                       child_scope_end)) {
-            return false;
-        }
-    }
+    child->current = child_current;
+    child->scope_start = child_scope_start;
+    child->scope_end = child_scope_end;
     return true;
+}
+
+static bool java_extract_declarations(JavaParseContext *ctx, TSNode root)
+{
+    const JavaWalkFrame frame = {
+        .node = root,
+        .scope_start = 0U,
+        .scope_end = (uint32_t)ctx->source_len,
+    };
+
+    return java_walk(ctx, &frame, java_extract_declaration);
 }
 
 static bool java_add_reference_span(JavaParseContext *ctx,
@@ -8115,19 +8200,22 @@ static bool java_add_identifier_reference(JavaParseContext *ctx,
     return java_add_reference_nodes(ctx, node, node, target);
 }
 
-static bool java_extract_references(JavaParseContext *ctx,
-                                    TSNode node,
-                                    JavaTypeEntry *current)
+static bool java_extract_reference(JavaParseContext *ctx,
+                                   const JavaWalkFrame *frame,
+                                   JavaWalkFrame *child,
+                                   bool *descend)
 {
+    TSNode node = frame->node;
+    JavaTypeEntry *current = frame->current;
     JavaKind kind = java_kind(node);
     const char *type_kind = java_type_declaration_kind(node);
-    JavaTypeEntry *child_current = current;
 
     if (type_kind != nullptr) {
-        child_current = java_type_entry_for_declaration(ctx, node);
+        child->current = java_type_entry_for_declaration(ctx, node);
     }
     if ((kind == JK_PACKAGE_DECLARATION) ||
         (kind == JK_IMPORT_DECLARATION)) {
+        *descend = false;
         return true;
     }
     if (kind == JK_METHOD_INVOCATION) {
@@ -8165,13 +8253,14 @@ static bool java_extract_references(JavaParseContext *ctx,
                !java_add_identifier_reference(ctx, node, current)) {
         return false;
     }
-
-    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
-        if (!java_extract_references(ctx, tsh_named_child(node, i), child_current)) {
-            return false;
-        }
-    }
     return true;
+}
+
+static bool java_extract_references(JavaParseContext *ctx, TSNode root)
+{
+    const JavaWalkFrame frame = {.node = root};
+
+    return java_walk(ctx, &frame, java_extract_reference);
 }
 
 CodeLensJavaParser *code_lens_java_parser_new(void)
@@ -8235,11 +8324,12 @@ int code_lens_parse_java_source_with_parser(CodeLensJavaParser *parser,
     ctx.file = out_file;
 
     ok = java_extract_package(&ctx, root) && java_extract_imports(&ctx, root) &&
-         java_collect_type_entries(&ctx, root, nullptr) &&
-         java_extract_declarations(&ctx, root, nullptr, 0U, (uint32_t)source_len) &&
+         java_collect_type_entries(&ctx, root) &&
+         java_extract_declarations(&ctx, root) &&
          java_index_bindings(&ctx) &&
-         java_extract_references(&ctx, root, nullptr);
+         java_extract_references(&ctx, root);
 
+    free(ctx.walk);
     free(ctx.types);
     free(ctx.bindings);
     scope_index_free(&ctx.binding_scopes);

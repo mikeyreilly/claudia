@@ -655,6 +655,18 @@ does not run javac or perform compiler attribution, so dynamic/chained receiver 
 require compiler attribution may retain an empty target and are not claimed as
 resolved call sites.
 
+Passes 2-4 walk the whole tree through `java_walk`, a pre-order walk on an
+explicit heap stack (`JavaParseContext.walk`) that visits nodes in exactly
+the order the earlier recursive walkers did, so output is unchanged. Each
+pass supplies a per-node visit function that handles one node and sets the
+context its children inherit. Do not add recursive whole-tree passes:
+generated sources (ANTLR serialized ATNs, JFlex tables, protobuf
+descriptors) concatenate hundreds to thousands of string literals into one
+left-nested binary expression, and recursing per tree level overflowed the
+512 KB parse-worker stack (SIGBUS) on, for example, openhtmltopdf's
+1214-term JFlex `Lexer.java`. Recursive helpers applied to small subtrees
+(`java_first_type_node`, `java_last_named_identifier`) are fine.
+
 Entry points are `code_lens_java_parser_new` / `_delete`,
 `code_lens_parse_java_source_with_parser`, and the one-shot
 `code_lens_parse_java_source`. `tests/test_java_support.c` covers extraction,

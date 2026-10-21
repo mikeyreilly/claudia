@@ -307,6 +307,56 @@ static int test_java_parser_robustness(void)
     return failed;
 }
 
+/* Generated sources (ANTLR serialized ATNs, JFlex tables, protobuf
+ * descriptors) concatenate hundreds to thousands of string literals into one
+ * left-nested binary expression. The whole-tree walkers must not recurse per
+ * tree level: openhtmltopdf's 1214-term JFlex Lexer.java overflowed a 512 KiB
+ * parse-worker stack. 100000 terms is far past the 8 MiB main-thread stack
+ * for any recursive walker, so this fails by crashing, not by assertion. */
+static int test_java_deeply_nested_expression(void)
+{
+    static const char head[] =
+        "import demo.Helper;\n"
+        "class Deep {\n"
+        "  static final String S = Helper.deepest()";
+    static const char term[] = " + \"x\"";
+    static const char tail[] =
+        ";\n"
+        "  void after() { Helper.later(); }\n"
+        "}\n";
+    const size_t terms = 100000U;
+    size_t len = (sizeof(head) - 1U) + (terms * (sizeof(term) - 1U)) + (sizeof(tail) - 1U);
+    char *source = malloc(len);
+    char *cursor = source;
+    CodeLensJavaFile file;
+    int failed = 0;
+
+    if (source == nullptr) {
+        return java_assert(false, "deep expression fixture allocates");
+    }
+    (void)memcpy(cursor, head, sizeof(head) - 1U);
+    cursor += sizeof(head) - 1U;
+    for (size_t i = 0U; i < terms; i++) {
+        (void)memcpy(cursor, term, sizeof(term) - 1U);
+        cursor += sizeof(term) - 1U;
+    }
+    (void)memcpy(cursor, tail, sizeof(tail) - 1U);
+    if (code_lens_parse_java_source("/virtual/Deep.java", source, len, &file) != 0) {
+        free(source);
+        return java_assert(false, "deeply nested expression parses");
+    }
+    failed |= java_assert(java_find_symbol(&file, "S", "field") != nullptr,
+                          "field holding a deeply nested expression is extracted");
+    failed |= java_assert(java_find_symbol(&file, "after", "method") != nullptr,
+                          "definitions after a deeply nested expression are extracted");
+    failed |= java_assert(java_find_reference(&file, "deepest", "demo.Helper") != nullptr,
+                          "reference at the bottom of a deeply nested expression is extracted");
+    failed |= java_assert(java_find_reference(&file, "later", "demo.Helper") != nullptr,
+                          "references after a deeply nested expression are extracted");
+    free(source);
+    return failed;
+}
+
 /* Javadoc is only the comment ending right before a declaration; a plain
  * block comment there must not reach back to an earlier Javadoc. */
 static int test_java_doc_boundaries(void)
@@ -1559,6 +1609,7 @@ int test_java_support(void)
 
     failed |= test_java_parser();
     failed |= test_java_parser_robustness();
+    failed |= test_java_deeply_nested_expression();
     failed |= test_java_doc_boundaries();
     failed |= test_java_index();
     failed |= test_maven_dependency_sources();
