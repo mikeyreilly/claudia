@@ -327,6 +327,59 @@ static int c_write_file(const char *directory, const char *name, const char *con
     return fclose(file) == 0 ? 0 : -1;
 }
 
+/* Long operator chains nest one tree level per operator. The whole-tree
+ * walkers must not recurse without bound (a 1214-term Java concatenation
+ * overflowed a 512 KiB parse-worker stack). 100000 terms is far past the
+ * 8 MiB main-thread stack for any unbounded recursive walker, so this fails
+ * by crashing, not by assertion. It also runs the reference pass's ancestor
+ * tracking through the explicit-stack path: `point->x` sits at the bottom. */
+static int test_c_deeply_nested_expression(void)
+{
+    static const char head[] =
+        "typedef struct Point { int x, y; } Point;\n"
+        "static int helper(int value) { return value; }\n"
+        "int deep(Point *point) {\n"
+        "  return helper(point->x)";
+    static const char term[] = " + 1";
+    static const char tail[] =
+        ";\n"
+        "}\n"
+        "int after(Point *point) { return helper(point->y); }\n";
+    const size_t terms = 100000U;
+    size_t len = (sizeof(head) - 1U) + (terms * (sizeof(term) - 1U)) + (sizeof(tail) - 1U);
+    char *source = malloc(len);
+    char *cursor = source;
+    CodeLensCFile file;
+    int failed = 0;
+
+    if (source == nullptr) {
+        return c_assert(false, "deep expression fixture allocates");
+    }
+    (void)memcpy(cursor, head, sizeof(head) - 1U);
+    cursor += sizeof(head) - 1U;
+    for (size_t i = 0U; i < terms; i++) {
+        (void)memcpy(cursor, term, sizeof(term) - 1U);
+        cursor += sizeof(term) - 1U;
+    }
+    (void)memcpy(cursor, tail, sizeof(tail) - 1U);
+    if (code_lens_parse_c_source("deep.c", source, len, &file) != 0) {
+        free(source);
+        return c_assert(false, "deeply nested expression parses");
+    }
+    failed |= c_assert(c_find_symbol(&file, "deep", "function", "") != nullptr,
+                       "function holding a deeply nested expression is extracted");
+    failed |= c_assert(c_find_symbol(&file, "after", "function", "") != nullptr,
+                       "definitions after a deeply nested expression are extracted");
+    failed |= c_assert(c_find_reference(&file, "x", "Point") != nullptr,
+                       "field reference at the bottom of a deeply nested expression is extracted");
+    failed |= c_assert(c_find_reference(&file, "y", "Point") != nullptr,
+                       "references after a deeply nested expression are extracted");
+    failed |= c_assert(c_find_reference(&file, "helper", "deep.c") != nullptr,
+                       "calls to a static function resolve to its file");
+    free(source);
+    return failed;
+}
+
 static int test_c_index(void)
 {
     char template_buffer[PATH_MAX];
@@ -506,6 +559,7 @@ int test_c_support(void)
 
     failed |= test_c_parser();
     failed |= test_c_parser_robustness();
+    failed |= test_c_deeply_nested_expression();
     failed |= test_c_scopes_and_docs();
     failed |= test_c_index();
     if (failed == 0) {

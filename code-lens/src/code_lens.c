@@ -8498,6 +8498,18 @@ typedef struct {
     uint32_t prev_same_name; /* earlier field with this name, or C_NO_INDEX */
 } CFieldType;
 
+/* One pending node of a whole-tree walk plus the context its parent hands
+ * down. `current_type`, `inside_function`, and the scope range are read
+ * only by the declarations pass. `depth` is the node's ancestor count. */
+typedef struct {
+    TSNode node;
+    const char *current_type;
+    uint32_t scope_start;
+    uint32_t scope_end;
+    uint32_t depth;
+    bool inside_function;
+} CWalkFrame;
+
 typedef struct {
     const char *source;
     size_t source_len;
@@ -8523,12 +8535,16 @@ typedef struct {
     /* name -> C_SYMBOL_* flags over file->symbols[0, value_symbols_indexed). */
     ParseMap value_symbols;
     size_t value_symbols_indexed;
-    /* Ancestors of the node c_extract_references is visiting (last =
+    /* Ancestors of the node the reference pass is visiting (last =
      * parent). ts_node_parent re-walks from the root through every sibling
      * at each level, which is quadratic on wide translation units. */
     TSNode *lineage;
     size_t lineage_count;
     size_t lineage_capacity;
+    /* Explicit stack for subtrees walked by c_walk_deep. */
+    CWalkFrame *walk;
+    size_t walk_count;
+    size_t walk_capacity;
     CFieldType *fields;
     size_t field_count;
     size_t field_capacity;
@@ -8869,8 +8885,155 @@ static char *c_type_target_from_node(CParseContext *ctx, TSNode node)
     return copy_cstr("");
 }
 
-static bool c_collect_types(CParseContext *ctx, TSNode node)
+/* Per-node step of a whole-tree walk: handle FRAME's node, then fill CHILD
+ * with the context its named children inherit (CHILD starts as a copy of
+ * FRAME), clear *descend to skip them, or set *skip to one child to leave
+ * out. Returns false on failure. */
+typedef bool (*CWalkVisit)(CParseContext *ctx,
+                           const CWalkFrame *frame,
+                           CWalkFrame *child,
+                           bool *descend,
+                           TSNode *skip);
+
+static bool c_walk_push(CParseContext *ctx, const CWalkFrame *frame)
 {
+    if ((ctx->walk_count == ctx->walk_capacity) &&
+        !parser_heap_grow((void **)&ctx->walk,
+                          &ctx->walk_capacity,
+                          sizeof(*ctx->walk),
+                          64U)) {
+        return false;
+    }
+    ctx->walk[ctx->walk_count++] = *frame;
+    return true;
+}
+
+/* Records NODE as the ancestor at DEPTH for its descendants (see
+ * c_ancestor). */
+static bool c_walk_set_lineage(CParseContext *ctx, uint32_t depth, TSNode node)
+{
+    while (ctx->lineage_capacity <= depth) {
+        if (!parser_heap_grow((void **)&ctx->lineage,
+                              &ctx->lineage_capacity,
+                              sizeof(*ctx->lineage),
+                              64U)) {
+            return false;
+        }
+    }
+    ctx->lineage[depth] = node;
+    return true;
+}
+
+/* Explicit-stack pre-order walk over ROOT's named subtree for subtrees
+ * nested deeper than C_WALK_MAX_RECURSION (see c_walk). Children are pushed
+ * last-to-first so they pop in source order, giving the recursive visit
+ * order. Lineage entries below a popped node's depth are still its
+ * ancestors: since its parent was visited, only its earlier siblings'
+ * subtrees ran, and they wrote lineage at its depth or deeper. */
+static bool c_walk_deep(CParseContext *ctx,
+                        const CWalkFrame *root,
+                        CWalkVisit visit,
+                        bool track_lineage)
+{
+    size_t base = ctx->walk_count;
+
+    if (!c_walk_push(ctx, root)) {
+        return false;
+    }
+    while (ctx->walk_count > base) {
+        CWalkFrame frame = ctx->walk[--ctx->walk_count];
+        CWalkFrame child = frame;
+        bool descend = true;
+        TSNode skip = (TSNode){0};
+        uint32_t child_count;
+
+        if (track_lineage) {
+            ctx->lineage_count = frame.depth;
+        }
+        if (!visit(ctx, &frame, &child, &descend, &skip)) {
+            return false;
+        }
+        child_count = descend ? tsh_named_count(frame.node) : 0U;
+        if (child_count == 0U) {
+            continue;
+        }
+        if (track_lineage && !c_walk_set_lineage(ctx, frame.depth, frame.node)) {
+            return false;
+        }
+        child.depth = frame.depth + 1U;
+        for (uint32_t i = child_count; i > 0U; i--) {
+            child.node = tsh_named_child(frame.node, i - 1U);
+            if (!ts_node_is_null(skip) && ts_node_eq(child.node, skip)) {
+                continue;
+            }
+            if (!c_walk_push(ctx, &child)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Recursion depth after which c_walk hands a subtree to c_walk_deep. */
+#define C_WALK_MAX_RECURSION 128U
+
+/* Pre-order walk over FRAME's named subtree. Deeply nested expressions
+ * (long operator chains in generated or macro-heavy code) must not overflow
+ * a parse worker's 512 KB stack - the SIGBUS the Java walkers hit (see
+ * java_walk) - but walking everything on an explicit stack measured ~10%
+ * slower on wide generated C (tree-sitter parser.c tables). So the walk
+ * recurses while shallow and switches to c_walk_deep for any subtree at
+ * C_WALK_MAX_RECURSION; the visit order is the same either way.
+ *
+ * With TRACK_LINEAGE, ctx->lineage holds the visited node's ancestors (see
+ * c_ancestor). */
+static bool c_walk(CParseContext *ctx, const CWalkFrame *frame, CWalkVisit visit, bool track_lineage)
+{
+    CWalkFrame child = *frame;
+    bool descend = true;
+    TSNode skip = (TSNode){0};
+    uint32_t child_count;
+
+    if (frame->depth >= C_WALK_MAX_RECURSION) {
+        return c_walk_deep(ctx, frame, visit, track_lineage);
+    }
+    if (track_lineage) {
+        ctx->lineage_count = frame->depth;
+    }
+    if (!visit(ctx, frame, &child, &descend, &skip)) {
+        return false;
+    }
+    child_count = descend ? tsh_named_count(frame->node) : 0U;
+    if (child_count == 0U) {
+        return true;
+    }
+    if (track_lineage && !c_walk_set_lineage(ctx, frame->depth, frame->node)) {
+        return false;
+    }
+    child.depth = frame->depth + 1U;
+    for (uint32_t i = 0U; i < child_count; i++) {
+        child.node = tsh_named_child(frame->node, i);
+        if (!ts_node_is_null(skip) && ts_node_eq(child.node, skip)) {
+            continue;
+        }
+        if (!c_walk(ctx, &child, visit, track_lineage)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool c_collect_type(CParseContext *ctx,
+                           const CWalkFrame *frame,
+                           CWalkFrame *child,
+                           bool *descend,
+                           TSNode *skip)
+{
+    TSNode node = frame->node;
+
+    (void)child;
+    (void)descend;
+    (void)skip;
     if (c_is(node, CK_TYPE_DEFINITION)) {
         TSNode type_node = c_field(node, CF_TYPE);
         TSNode first_alias_node = (TSNode){0};
@@ -8914,13 +9077,14 @@ static bool c_collect_types(CParseContext *ctx, TSNode node)
     } else if ((c_specifier_kind(node) != nullptr) && !c_register_type_spec(ctx, node, nullptr)) {
         return false;
     }
-
-    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
-        if (!c_collect_types(ctx, tsh_named_child(node, i))) {
-            return false;
-        }
-    }
     return true;
+}
+
+static bool c_collect_types(CParseContext *ctx, TSNode root)
+{
+    const CWalkFrame frame = {.node = root};
+
+    return c_walk(ctx, &frame, c_collect_type, false);
 }
 
 static bool c_has_storage(const CParseContext *ctx, TSNode node, const char *storage)
@@ -9303,13 +9467,17 @@ static bool c_add_typedef_symbols(CParseContext *ctx, TSNode definition)
     return true;
 }
 
-static bool c_extract_declarations(CParseContext *ctx,
-                                   TSNode node,
-                                   const char *current_type,
-                                   bool inside_function,
-                                   uint32_t scope_start,
-                                   uint32_t scope_end)
+static bool c_extract_declaration(CParseContext *ctx,
+                                  const CWalkFrame *frame,
+                                  CWalkFrame *child,
+                                  bool *descend,
+                                  TSNode *skip)
 {
+    TSNode node = frame->node;
+    const char *current_type = frame->current_type;
+    bool inside_function = frame->inside_function;
+    uint32_t scope_start = frame->scope_start;
+    uint32_t scope_end = frame->scope_end;
     CKind kind = c_kind(node);
     const char *child_type = current_type;
     bool child_inside_function = inside_function;
@@ -9317,6 +9485,8 @@ static bool c_extract_declarations(CParseContext *ctx,
     uint32_t child_scope_end = scope_end;
     const char *specifier_kind = c_specifier_kind(node);
 
+    (void)descend;
+    (void)skip;
     if (specifier_kind != nullptr) {
         CTypeSpec *spec = c_type_spec_for_node(ctx, node);
         TSNode body = c_field(node, CF_BODY);
@@ -9469,21 +9639,28 @@ static bool c_extract_declarations(CParseContext *ctx,
         child_scope_end = ts_node_end_byte(node);
     }
 
-    for (uint32_t i = 0U, i_count = tsh_named_count(node); i < i_count; i++) {
-        if (!c_extract_declarations(ctx,
-                                    tsh_named_child(node, i),
-                                    child_type,
-                                    child_inside_function,
-                                    child_scope_start,
-                                    child_scope_end)) {
-            return false;
-        }
-    }
+    child->current_type = child_type;
+    child->inside_function = child_inside_function;
+    child->scope_start = child_scope_start;
+    child->scope_end = child_scope_end;
     return true;
 }
 
+static bool c_extract_declarations(CParseContext *ctx, TSNode root)
+{
+    const CWalkFrame frame = {
+        .node = root,
+        .current_type = "",
+        .scope_start = 0U,
+        .scope_end = (uint32_t)ctx->source_len,
+        .inside_function = false,
+    };
+
+    return c_walk(ctx, &frame, c_extract_declaration, false);
+}
+
 /* Ancestor `up` levels above the node being visited (0 = parent), or a
- * null node above the root. Valid only inside c_extract_references. */
+ * null node above the root. Valid only inside the reference pass. */
 static TSNode c_ancestor(const CParseContext *ctx, size_t up)
 {
     return up < ctx->lineage_count ? ctx->lineage[ctx->lineage_count - 1U - up] : (TSNode){0};
@@ -9819,14 +9996,20 @@ static bool c_add_identifier_reference(CParseContext *ctx, TSNode node)
                                 target);
 }
 
-static bool c_extract_references(CParseContext *ctx, TSNode node)
+static bool c_extract_reference(CParseContext *ctx,
+                                const CWalkFrame *frame,
+                                CWalkFrame *child,
+                                bool *descend,
+                                TSNode *skip)
 {
+    TSNode node = frame->node;
     CKind kind = c_kind(node);
-    uint32_t child_count;
 
+    (void)child;
     if ((kind == CK_PREPROC_DEF) ||
         (kind == CK_PREPROC_FUNCTION_DEF) ||
         (kind == CK_PREPROC_INCLUDE)) {
+        *descend = false;
         return true;
     }
     if ((kind == CK_CALL_EXPRESSION) && !c_add_call_reference(ctx, node)) {
@@ -9841,32 +10024,18 @@ static bool c_extract_references(CParseContext *ctx, TSNode node)
     if ((kind == CK_IDENTIFIER) && !c_add_identifier_reference(ctx, node)) {
         return false;
     }
-
-    child_count = tsh_named_count(node);
-    if (child_count == 0U) {
-        return true;
+    if (kind == CK_FIELD_EXPRESSION) {
+        /* the member name was handled by c_add_field_reference */
+        *skip = c_field(node, CF_FIELD);
     }
-    if ((ctx->lineage_count == ctx->lineage_capacity) &&
-        !parser_heap_grow((void **)&ctx->lineage,
-                          &ctx->lineage_capacity,
-                          sizeof(*ctx->lineage),
-                          64U)) {
-        return false;
-    }
-    ctx->lineage[ctx->lineage_count++] = node;
-    for (uint32_t i = 0U; i < child_count; i++) {
-        TSNode child = tsh_named_child(node, i);
-
-        if ((kind == CK_FIELD_EXPRESSION) &&
-            c_node_field_equals(node, CF_FIELD, child)) {
-            continue;
-        }
-        if (!c_extract_references(ctx, child)) {
-            return false;
-        }
-    }
-    ctx->lineage_count--;
     return true;
+}
+
+static bool c_extract_references(CParseContext *ctx, TSNode root)
+{
+    const CWalkFrame frame = {.node = root};
+
+    return c_walk(ctx, &frame, c_extract_reference, true);
 }
 
 CodeLensCParser *code_lens_c_parser_new(void)
@@ -9931,10 +10100,11 @@ int code_lens_parse_c_source_with_parser(CodeLensCParser *parser,
     ctx.file = out_file;
 
     ok = c_collect_types(&ctx, root) &&
-         c_extract_declarations(&ctx, root, "", false, 0U, (uint32_t)source_len) &&
+         c_extract_declarations(&ctx, root) &&
          c_index_bindings(&ctx) &&
          c_extract_references(&ctx, root);
 
+    free(ctx.walk);
     free(ctx.aliases);
     free(ctx.types);
     free(ctx.bindings);

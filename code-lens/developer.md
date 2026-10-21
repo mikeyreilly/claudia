@@ -788,6 +788,18 @@ and nested field types drive member resolution. Calls through local function
 pointers and expression types requiring compiler attribution are deliberately
 left unresolved rather than guessed.
 
+The three passes walk the whole tree through `c_walk` with a per-node visit
+function, like Java's `java_walk`, but `c_walk` recurses while shallow and
+hands any subtree at `C_WALK_MAX_RECURSION` (128) levels to `c_walk_deep`,
+an explicit heap-stack walk with the same visit order. Recursing per tree
+level without a limit overflowed 512 KB parse-worker stacks on long operator
+chains; walking everything on the explicit stack measured ~10% slower wall
+on wide generated C (tree-sitter `parser.c` tables), the hybrid ~0.7%. The
+reference pass's ancestor stack (`lineage`, read by `c_ancestor`) is indexed
+by node depth so both walkers keep it exact. Setting the limit to 0 gives a
+fully explicit-stack walk with an identical dump, which is how the deep path
+was checked against the old recursion.
+
 Entry points are `code_lens_c_parser_new` / `_delete`,
 `code_lens_parse_c_source_with_parser`, and `code_lens_parse_c_source`.
 `tests/test_c_support.c` covers macros, linkage, function pointers, typedefs,
