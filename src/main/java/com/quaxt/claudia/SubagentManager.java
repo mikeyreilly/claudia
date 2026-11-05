@@ -258,8 +258,8 @@ public final class SubagentManager implements AutoCloseable {
         var task = text("task", "Task brief for the child. Include the context it needs; parent history is not shared.");
         var name = optionalText("name", "Optional display name for a new child", null);
         var id = optionalText("agent_id", "Reuse a child ID returned by this tool. Omit or leave blank to create a new child.", null);
-        var model = optionalText("model", "Model for a new child, as a model ID from the current provider or provider/model. Omit to inherit the parent's model.", null);
-        var thinkingLevel = optionalText("thinking_level", "Thinking level for a new child. Omit to inherit the parent's level.", null);
+        var model = optionalText("model", "Creation only: model ID from the current provider or provider/model. Omit to inherit the parent's model; omit when reusing agent_id.", null);
+        var thinkingLevel = optionalText("thinking_level", "Creation only: thinking level for a new child. Omit to inherit the parent's level; omit when reusing agent_id.", null);
         var baseParameters = new ToolParameters(task, name, id, model, thinkingLevel);
         var schema = baseParameters.schema();
         var properties = (com.fasterxml.jackson.databind.node.ObjectNode) schema.get("properties");

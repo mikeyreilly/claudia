@@ -3803,7 +3803,9 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
             if (!context.tools.isEmpty()) {
                 ArrayNode tools = request1.putArray("tools");
                 for (Tool tool : context.tools) {
-                    ObjectNode target = tools.addObject().put("type", "function");
+                    // Responses defaults to strict schemas when this is omitted, which
+                    // makes optional parameters required. Keep our declared contracts.
+                    ObjectNode target = tools.addObject().put("type", "function").put("strict", false);
                     target.put("name", tool.name);
                     target.put("description", tool.description);
                     target.set("parameters", tool.parameters);

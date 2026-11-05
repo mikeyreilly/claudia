@@ -95,6 +95,43 @@ class ReadMediaTest {
     }
 
     @Test
+    void omittedNullAndBlankPagesAreEquivalentForTextImagesPdfsAndArchiveEntries() throws Exception {
+        Path notes = cwd.resolve("notes.txt");
+        Files.writeString(notes, "one\ntwo\n");
+        Path image = writeImage("small.png", "png", 4, 4);
+        Path pdf = cwd.resolve("doc.pdf");
+        writePdf(pdf, 2);
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(cwd.resolve("bundle.zip")))) {
+            for (Path entry : List.of(notes, image, pdf)) {
+                zip.putNextEntry(new ZipEntry(entry.getFileName().toString()));
+                Files.copy(entry, zip);
+                zip.closeEntry();
+            }
+        }
+        for (String path : List.of("notes.txt", "small.png", "doc.pdf",
+                "bundle.zip!notes.txt", "bundle.zip!small.png", "bundle.zip!doc.pdf")) {
+            var omitted = read(jsonObject().put("path", path));
+            for (ObjectNode arguments : List.of(
+                    jsonObject().put("path", path).putNull("pages"),
+                    jsonObject().put("path", path).put("pages", ""),
+                    jsonObject().put("path", path).put("pages", " \t\n"))) {
+                var result = read(arguments);
+                assertEquals(omitted.content, result.content, path);
+                assertFalse(result.isError);
+            }
+        }
+        // A real selector is still PDF-only; blanks must not weaken validation.
+        assertThrows(IllegalArgumentException.class,
+                () -> read(jsonObject().put("path", "small.png").put("pages", "1")));
+        try (var runtime = new ClaudiaOperations()) {
+            var tool = runtime.builtInTools(cwd, ignored -> {}).stream()
+                    .filter(candidate -> ClaudiaOperations.toolName(candidate).equals("read")).findFirst().orElseThrow();
+            assertEquals(jsonObject().putArray("required").add("path"),
+                    ClaudiaOperations.toolParameters(tool).path("required"));
+        }
+    }
+
+    @Test
     void pdfsAreReadAsTextPerPage() throws Exception {
         writePdf(cwd.resolve("doc.pdf"), 3);
         String text = text(read(jsonObject().put("path", "doc.pdf")).content.getFirst());

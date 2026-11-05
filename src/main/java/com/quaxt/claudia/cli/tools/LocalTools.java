@@ -190,7 +190,7 @@ public final class LocalTools {
         var limitArg = integer("limit", "Maximum lines to read", 1, Integer.MAX_VALUE, Integer.MAX_VALUE);
         var pagesArg = optionalText("pages",
                 "PDF only: pages to return as rendered images as well as text, e.g. \"1\", \"2-4\" or \"1,3\" (at most "
-                        + MediaFiles.MAX_RENDERED_PAGES + " per call). Omit to get the text of every page.", null);
+                        + MediaFiles.MAX_RENDERED_PAGES + " per call). Omit or leave blank to get the text of every page.", null);
         return new ToolDefinition<>("read",
                 "Read a text file, an image (PNG, JPEG, GIF, WebP or BMP; returned as an image you can see), or a PDF (text of each page; with pages, those pages are also returned as images). Use offset and limit for large text files and PDF text; output is bounded to 2,000 lines or 50KB. To read inside a jar/zip, append '!entry/path' to the archive path; 'archive.jar!' lists entries.",
                 new ToolParameters(pathArg, offsetArg, limitArg, pagesArg),
@@ -270,7 +270,7 @@ public final class LocalTools {
                     return result;
                 }, raw -> {
                     String pages = textArgument(raw, "pages", null);
-                    if (pages != null) return "Reading " + textArgument(raw, "path", ".") + " (pages " + pages + ")";
+                    if (pages != null && !pages.isBlank()) return "Reading " + textArgument(raw, "path", ".") + " (pages " + pages + ")";
                     int offset = raw.path("offset").asInt(1);
                     int limit = raw.path("limit").asInt();
                     return "Reading " + textArgument(raw, "path", ".")
@@ -660,6 +660,7 @@ public final class LocalTools {
         List<String> lines;
         try {
             MediaFiles.Kind kind = MediaFiles.sniff(file);
+            if (pages != null && pages.isBlank()) pages = null;
             if (pages != null && kind != MediaFiles.Kind.PDF) {
                 throw new IllegalArgumentException("pages applies only to PDF files");
             }

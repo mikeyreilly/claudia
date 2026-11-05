@@ -133,6 +133,37 @@ class SubagentManagerTest {
         assertTrue(provider.pendingResponses.isEmpty());
     }
 
+    @Test void schemaAndReuseDoNotRequireCreationOnlyOptions() throws Exception {
+        var tool = root.subagents().tool();
+        var schema = toolParameters(tool);
+        assertEquals(jsonObject().putArray("required").add("task"), schema.path("required"));
+        assertTrue(schema.path("properties").has("model"));
+        assertTrue(schema.path("properties").path("thinking_level").path("enum").isArray());
+
+        reply("first answer");
+        var created = root.executeTool(tool, "create", jsonObject().put("task", "Investigate"),
+                new AbortSignal(), ignored -> {});
+        String id = ((com.fasterxml.jackson.databind.JsonNode) created.details).path("agent_id").asText();
+        reply("follow-up answer");
+        var reused = root.executeTool(tool, "reuse", jsonObject().put("task", "Continue").put("agent_id", id),
+                new AbortSignal(), ignored -> {});
+        assertFalse(reused.isError);
+        assertEquals("follow-up answer", ((com.fasterxml.jackson.databind.JsonNode) reused.details).path("final_answer").asText());
+        assertEquals(2, root.subagents().list().size());
+        assertEquals(ThinkingLevel.HIGH, root.subagents().snapshot(id).state().thinkingLevel());
+
+        for (var selection : List.of(
+                jsonObject().put("model", "faux-1"), jsonObject().put("thinking_level", "high"))) {
+            var args = jsonObject().put("task", "Continue").put("agent_id", id);
+            args.setAll(selection);
+            var error = assertThrows(IllegalArgumentException.class,
+                    () -> root.executeTool(tool, "invalid-reuse", args, new AbortSignal(), ignored -> {}));
+            assertTrue(error.getMessage().contains("only be selected when creating"), error.getMessage());
+        }
+        assertEquals(4, root.subagents().snapshot(id).transcript().size());
+        assertTrue(provider.pendingResponses.isEmpty());
+    }
+
     @Test void directChatsAndDelegatedRequestsHaveSeparateResultsAndSerialContexts() throws Exception {
         String id = root.subagents().create("original brief", "Worker");
         CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);

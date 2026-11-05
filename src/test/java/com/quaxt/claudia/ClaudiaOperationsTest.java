@@ -2032,6 +2032,52 @@ class ClaudiaOperationsTest {
 		}
 	}
 
+    @Test
+    void responsesToolsExplicitlyDisableStrictModeAndPreserveOptionalParameters() throws Exception {
+        configure(100_000);
+        for (var profile : List.of(OpenAiResponsesProvider.RequestProfile.STANDARD,
+                OpenAiResponsesProvider.RequestProfile.CODEX)) {
+            AtomicReference<String> request = new AtomicReference<>();
+            HttpServer server = responsesServer(exchange -> {
+                request.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                writeResponsesSse(exchange, """
+                        data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}
+
+                        """);
+            });
+            try {
+                Model model = responsesModel(responsesUrl(server));
+                var provider = new OpenAiResponsesProvider("openai", "OpenAI", List.of(model), List.of(), null, profile);
+                Context context = new Context();
+                context.messages.add(userMessage("inspect"));
+                var tools = new ArrayList<>(runtime.builtInTools(tempDir, ignored -> {}));
+                tools.add(runtime.subagents().tool());
+                for (AgentTool tool : tools) {
+                    if (List.of("read", "subagent").contains(ClaudiaOperations.toolName(tool))) {
+                        context.tools.add(new Tool(ClaudiaOperations.toolName(tool),
+                                ClaudiaOperations.toolDescription(tool), ClaudiaOperations.toolParameters(tool)));
+                    }
+                }
+                var before = context.tools.stream().map(tool -> tool.parameters.deepCopy()).toList();
+                var result = ClaudiaOperations.result(runtime.stream(provider, model, context, responsesOptions("test-key")));
+                assertEquals(StopReason.STOP, result.stopReason);
+                JsonNode wireTools = Json.MAPPER.readTree(request.get()).path("tools");
+                assertEquals(2, wireTools.size());
+                for (int i = 0; i < wireTools.size(); i++) {
+                    JsonNode tool = wireTools.get(i);
+                    assertTrue(tool.path("strict").isBoolean(), profile + ": explicit false is required");
+                    assertFalse(tool.path("strict").asBoolean());
+                    assertEquals(before.get(i), tool.path("parameters"));
+                    String required = tool.path("name").asText().equals("read") ? "path" : "task";
+                    assertEquals(jsonObject().putArray("required").add(required), tool.path("parameters").path("required"));
+                    assertEquals(before.get(i), context.tools.get(i).parameters, "request building must not mutate the schema");
+                }
+            } finally {
+                server.stop(0);
+            }
+        }
+    }
+
 	@Test
 	void requestsAndStreamsReasoningSummaries() throws Exception {
 		AtomicReference<String> request = new AtomicReference<>();
