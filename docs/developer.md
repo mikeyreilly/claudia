@@ -162,10 +162,10 @@ you type ─▶ ClaudiaCli input loop ─▶ SubagentManager queue ─▶ agent-
 ## Tools
 
 The model sees these tools on every request. Built-in tools are defined in
-[`LocalTools`](../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java)
-and [`DebugTools`](../src/main/java/com/quaxt/claudia/debug/DebugTools.java),
+[`LocalTools`](../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java)
+and [`DebugTools`](../claudia/src/main/java/com/quaxt/claudia/debug/DebugTools.java),
 and the `subagent` tool in
-[`SubagentManager`](../src/main/java/com/quaxt/claudia/SubagentManager.java).
+[`SubagentManager`](../claudia/src/main/java/com/quaxt/claudia/SubagentManager.java).
 Each definition holds the tool's typed parameters, its handler and the one-line
 summary the UI shows for a call. The parameter declarations generate the JSON
 schema sent to the model, and arguments are validated against it before the tool

@@ -116,7 +116,7 @@ a pipe that immediately ends cannot wait for a user answer.
 
 ## Implementation and verification pointers
 
-- [AgentMode](../src/main/java/com/quaxt/claudia/agent/AgentMode.java): current Plan/Build instructions and the explicitly advisory boundary.
-- [ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java) and [ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java): group-idle guards, session mode persistence, CLI flags and RPC commands.
-- [PlanModeTest](../src/test/java/com/quaxt/claudia/PlanModeTest.java): mode-only switching, unchanged tools, inheritance, compaction, resume and explicit questions.
-- [QuestionComponentTest](../src/test/java/com/quaxt/claudia/QuestionComponentTest.java) and [QuestionHeadlessTest](../src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): terminal answers/declines, RPC child questions, stale replies, EOF and unavailable print-mode questions.
+- [AgentMode](../claudia/src/main/java/com/quaxt/claudia/agent/AgentMode.java): current Plan/Build instructions and the explicitly advisory boundary.
+- [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java) and [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java): group-idle guards, session mode persistence, CLI flags and RPC commands.
+- [PlanModeTest](../claudia/src/test/java/com/quaxt/claudia/PlanModeTest.java): mode-only switching, unchanged tools, inheritance, compaction, resume and explicit questions.
+- [QuestionComponentTest](../claudia/src/test/java/com/quaxt/claudia/QuestionComponentTest.java) and [QuestionHeadlessTest](../claudia/src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): terminal answers/declines, RPC child questions, stale replies, EOF and unavailable print-mode questions.

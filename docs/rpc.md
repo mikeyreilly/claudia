@@ -205,7 +205,7 @@ question answers.
 
 ## Verification pointers
 
-- [ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java): RPC dispatcher, reset behavior, response envelope, question/event encoding and EOF handling.
-- [ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java) and [SubagentManager](../src/main/java/com/quaxt/claudia/SubagentManager.java): group-idle checks, queued prompts, cancellation and compaction.
-- [QuestionHeadlessTest](../src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): child questions, replies/declines, stale answers, abort, EOF and responsive compaction.
-- [SubagentHeadlessTest](../src/test/java/com/quaxt/claudia/SubagentHeadlessTest.java): RPC delegation without leaking child events.
+- [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java): RPC dispatcher, reset behavior, response envelope, question/event encoding and EOF handling.
+- [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java) and [SubagentManager](../claudia/src/main/java/com/quaxt/claudia/SubagentManager.java): group-idle checks, queued prompts, cancellation and compaction.
+- [QuestionHeadlessTest](../claudia/src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): child questions, replies/declines, stale answers, abort, EOF and responsive compaction.
+- [SubagentHeadlessTest](../claudia/src/test/java/com/quaxt/claudia/SubagentHeadlessTest.java): RPC delegation without leaking child events.

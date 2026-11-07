@@ -103,3 +103,10 @@ See [docs/developer.md](docs/developer.md) for how Claudia's main loop works and
 for a reference to its built-in tools.
 
 Licensed under the [MIT licence](LICENSE).
+
+## Project modules
+
+The root POM builds `agentic` (the dependency-free Java 17 agent loop) and
+`claudia` (the Java 25 CLI/runtime) in dependency order. Sources and tests live
+in their module directories. Run `mvn test` or `mvn package` at the repository
+root. The runnable JAR remains `target/claudia.jar` for existing launchers.

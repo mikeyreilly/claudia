@@ -2,7 +2,7 @@
 
 Finds files whose paths match a glob pattern.
 
-Defined in [`LocalTools.find()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
+Defined in [`LocalTools.find()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
 
 ## Parameters
 

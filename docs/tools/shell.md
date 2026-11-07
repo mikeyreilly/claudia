@@ -4,9 +4,9 @@ Runs a shell command in the agent workspace. If the command is still running
 when the tool returns, it stays alive as a *session* that
 [`shell_input`](shell_input.md) can poll or send input to.
 
-Defined in [`LocalTools.shell()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+Defined in [`LocalTools.shell()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
 processes are managed by
-[`ShellSessionManager`](../../src/main/java/com/quaxt/claudia/shell/ShellSessionManager.java).
+[`ShellSessionManager`](../../claudia/src/main/java/com/quaxt/claudia/shell/ShellSessionManager.java).
 
 ## Parameters
 

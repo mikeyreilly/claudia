@@ -44,7 +44,7 @@ class DetachedProcessWindowsTest {
             return;
         }
         assertEquals(0, collect(probe, EMPTY).exit());
-        Path source = Path.of("spawn", "claudia-spawn.c").toAbsolutePath();
+        Path source = Path.of("..", "spawn", "claudia-spawn.c").toAbsolutePath().normalize();
         assertTrue(Files.isRegularFile(source), source + " is missing");
         launcher = Files.createDirectories(buildDir.resolve("launcher space ü")).resolve("claudia-spawn.exe");
         compile(source, launcher);

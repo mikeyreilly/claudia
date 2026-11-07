@@ -192,7 +192,7 @@ workflow before relying on them in [headless automation](rpc.md).
 
 ## Verification pointers
 
-- [ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java): configuration parsing, transports, OAuth, tool exposure, filtering and saved preferences.
-- [BuiltInMcpServers](../src/main/java/com/quaxt/claudia/mcp/BuiltInMcpServers.java) and [McpClient](../src/main/java/com/quaxt/claudia/mcp/McpClient.java): binary discovery and protocol/default timeout constants.
-- [ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java): `/mcp` server/tool selector.
-- [ClaudiaOperationsTest](../src/test/java/com/quaxt/claudia/ClaudiaOperationsTest.java): substitutions, invalid configuration, built-in preferences/discovery, persisted toggles and legacy SSE calls.
+- [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java): configuration parsing, transports, OAuth, tool exposure, filtering and saved preferences.
+- [BuiltInMcpServers](../claudia/src/main/java/com/quaxt/claudia/mcp/BuiltInMcpServers.java) and [McpClient](../claudia/src/main/java/com/quaxt/claudia/mcp/McpClient.java): binary discovery and protocol/default timeout constants.
+- [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java): `/mcp` server/tool selector.
+- [ClaudiaOperationsTest](../claudia/src/test/java/com/quaxt/claudia/ClaudiaOperationsTest.java): substitutions, invalid configuration, built-in preferences/discovery, persisted toggles and legacy SSE calls.

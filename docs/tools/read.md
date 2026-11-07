@@ -2,8 +2,8 @@
 
 Reads a text file, an image, a PDF, or a file inside a jar/zip archive.
 
-Defined in [`LocalTools.read()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
-image and PDF handling is in [`cli/tools/media`](../../src/main/java/com/quaxt/claudia/cli/tools/media).
+Defined in [`LocalTools.read()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+image and PDF handling is in [`cli/tools/media`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/media).
 
 ## Parameters
 

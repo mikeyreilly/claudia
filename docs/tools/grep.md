@@ -2,7 +2,7 @@
 
 Searches file contents for a regular expression or literal text.
 
-Defined in [`LocalTools.grep()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
+Defined in [`LocalTools.grep()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
 
 ## Parameters
 

@@ -1,0 +1,3 @@
+{:paths ["target/classes"]
+ :deps/prep-lib {:alias :build :fn build/compile-java :ensure "target/classes/com/quaxt/agentic/AgentLoop.class"}
+ :aliases {:build {:extra-paths ["."]}}}

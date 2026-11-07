@@ -1,6 +1,7 @@
 # Build and run
 
-Claudia is a single Maven project targeting Java 25. Use a JDK 25 or newer
+Claudia is a Maven parent with two child modules: `agentic` (Java 17) and
+`claudia` (Java 25). The root build compiles both in dependency order. Use a JDK 25 or newer
 and Maven 3.9 or newer; set `JAVA_HOME` and put `mvn` on `PATH`. A regular
 JDK is sufficient for the JVM build; GraalVM is needed only for native images.
 
@@ -98,7 +99,7 @@ handle the locked executable, or wait for those commands to exit first.
 
 ## Build manually
 
-From the repository root:
+From the repository root (no separate library install is required):
 
 ```sh
 mvn -B test
@@ -107,7 +108,7 @@ java -jar target/claudia.jar --list-models
 java -jar target/claudia.jar
 ```
 
-`target/claudia.jar` is the runnable uber JAR; `target/claudia-thin.jar`
+`target/claudia.jar` is the runnable uber JAR; `claudia/target/claudia-thin.jar`
 contains only this project's classes. `package` runs tests unless you pass
 `-DskipTests`. Maven does not build code-lens or claudia-spawn; use the
 installer or their build instructions ([code-lens](../code-lens/README.md),
@@ -164,3 +165,11 @@ for terminal and native-access details.
 
 Build settings and installer behavior are defined in [pom.xml](../pom.xml),
 [install.sh](../install.sh), and [install.ps1](../install.ps1).
+
+### Module builds
+
+Use `mvn -pl agentic -am install` to install the shared library and its parent.
+Use `mvn -pl claudia -am package` to build the CLI with its library dependency.
+Compiler output, test reports and the thin JAR live in each module’s `target/`.
+The runnable JAR and native executable are published to the root `target/`
+so existing launchers, code-lens discovery and spawn discovery keep working.

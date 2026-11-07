@@ -76,3 +76,12 @@ automation interface.
 - [MCP configuration](mcp.md)
 - [Subagent lifecycle](subagents.md)
 - [Process tools](tools/shell.md)
+
+## Shared agent loop
+
+The provider-independent turn/tool loop now lives in `com.quaxt:agentic:0.1.0-SNAPSHOT`.
+The root Maven reactor builds `agentic` before `claudia`; no Workflow checkout
+is needed to build Claudia. Workflow points its tools.deps local dependency at
+`../claudia/agentic`. To install the library alone use `mvn -pl agentic -am install`.
+Claudia supplies its existing streaming providers, tool execution, lifecycle events,
+retry and session adapters; the shared library installs no application tools.

@@ -2,7 +2,7 @@
 
 Creates or overwrites a text file.
 
-Defined in [`LocalTools.write()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
+Defined in [`LocalTools.write()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
 
 ## Parameters
 

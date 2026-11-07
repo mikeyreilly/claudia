@@ -33,7 +33,7 @@ soon as the debugger is set up.
 
 ### Test
 
-[`MavenTestLaunch`](../../src/main/java/com/quaxt/claudia/debug/MavenTestLaunch.java)
+[`MavenTestLaunch`](../../claudia/src/main/java/com/quaxt/claudia/debug/MavenTestLaunch.java)
 runs only the Maven Surefire goal for the selected test, with its forked JVM
 debuggable. Claudia then identifies that fork's PID and attaches to it.
 

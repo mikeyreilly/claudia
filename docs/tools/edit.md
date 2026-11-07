@@ -2,7 +2,7 @@
 
 Replaces one or more exact blocks of text in a file.
 
-Defined in [`LocalTools.edit()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
+Defined in [`LocalTools.edit()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
 
 ## Parameters
 

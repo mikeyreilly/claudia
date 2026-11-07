@@ -92,7 +92,7 @@ recreated by resume. See the [shell lifecycle reference](tools/shell.md).
 
 ## Implementation and verification pointers
 
-- [ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java): slash-command guards, resume selector, fork and workspace transitions.
-- [ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java): session journal, workspace-change entries, compaction checkpoints and snapshot reconstruction.
-- [ClaudiaCliTest](../src/test/java/com/quaxt/claudia/ClaudiaCliTest.java) and [ClaudiaOperationsTest](../src/test/java/com/quaxt/claudia/ClaudiaOperationsTest.java): workspace preservation, same-file continuation, forks and latest-checkpoint resume.
-- [TaskStateTest](../src/test/java/com/quaxt/claudia/TaskStateTest.java): durable task state and independent forks.
+- [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java): slash-command guards, resume selector, fork and workspace transitions.
+- [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java): session journal, workspace-change entries, compaction checkpoints and snapshot reconstruction.
+- [ClaudiaCliTest](../claudia/src/test/java/com/quaxt/claudia/ClaudiaCliTest.java) and [ClaudiaOperationsTest](../claudia/src/test/java/com/quaxt/claudia/ClaudiaOperationsTest.java): workspace preservation, same-file continuation, forks and latest-checkpoint resume.
+- [TaskStateTest](../claudia/src/test/java/com/quaxt/claudia/TaskStateTest.java): durable task state and independent forks.

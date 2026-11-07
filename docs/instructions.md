@@ -69,8 +69,8 @@ model instructions, not tool permissions; see [planning](planning.md).
 
 ## Implementation pointers
 
-- [AgentInstructionResolver](../src/main/java/com/quaxt/claudia/AgentInstructionResolver.java): ordering, root discovery, overrides and best-effort reads.
-- [ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java): prompt refresh and descendant discovery through workspace tools.
+- [AgentInstructionResolver](../claudia/src/main/java/com/quaxt/claudia/AgentInstructionResolver.java): ordering, root discovery, overrides and best-effort reads.
+- [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java): prompt refresh and descendant discovery through workspace tools.
 
 ## See also
 

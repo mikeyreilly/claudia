@@ -94,7 +94,7 @@ There are no RPC commands for switching the selected conversation. See
 
 ## Implementation and verification pointers
 
-- [SubagentManager](../src/main/java/com/quaxt/claudia/SubagentManager.java): child creation, independent mailboxes, cancellation and lazy restoration.
-- [ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java): agent selector, selected transcript and command guards.
-- [SubagentManagerTest](../src/test/java/com/quaxt/claudia/SubagentManagerTest.java): isolated histories/resources, request-specific answers, queue cancellation, parent links and interrupted restoration.
-- [SubagentHeadlessTest](../src/test/java/com/quaxt/claudia/SubagentHeadlessTest.java) and [QuestionHeadlessTest](../src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): headless delegation and child questions over RPC.
+- [SubagentManager](../claudia/src/main/java/com/quaxt/claudia/SubagentManager.java): child creation, independent mailboxes, cancellation and lazy restoration.
+- [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java): agent selector, selected transcript and command guards.
+- [SubagentManagerTest](../claudia/src/test/java/com/quaxt/claudia/SubagentManagerTest.java): isolated histories/resources, request-specific answers, queue cancellation, parent links and interrupted restoration.
+- [SubagentHeadlessTest](../claudia/src/test/java/com/quaxt/claudia/SubagentHeadlessTest.java) and [QuestionHeadlessTest](../claudia/src/test/java/com/quaxt/claudia/QuestionHeadlessTest.java): headless delegation and child questions over RPC.

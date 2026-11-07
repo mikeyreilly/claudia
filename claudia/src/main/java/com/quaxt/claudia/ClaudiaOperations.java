@@ -5002,7 +5002,8 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                 emit(new AgentEvent.MessageEnd(prompt));
             }
 
-            while (true) {
+            com.quaxt.agentic.AgentLoop.run(new com.quaxt.agentic.AgentLoop.Host<AssistantMessage, ToolCall, ToolResultMessage>() {
+                public AssistantMessage respond() throws InterruptedException {
                 AssistantMessage[] lastAttempt = new AssistantMessage[1];
                 AssistantMessage response = retryAssistantCall(
                         () -> {
@@ -5065,21 +5066,20 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                                 }
                             }
                         }));
-                newMessages.add(response);
-                acceptMessage(response);
-                if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
-                    emit(new AgentEvent.TurnEnd(response, List.of()));
-                    break;
+                    return response;
                 }
-                Map<String, AgentTool> toolsByName = new LinkedHashMap<>();
-                for (AgentTool tool : tools) {
-                    toolsByName.put(toolName(tool), tool);
+                public void acceptResponse(AssistantMessage response) {
+                    newMessages.add(response);
+                    acceptMessage(response);
                 }
-                List<ToolResultMessage> results1 = new ArrayList<>();
-                for (ToolCall call : toolCalls(response)) {
-                    if (isAborted(activeSignal)) {
-                        break;
-                    }
+                public boolean failed(AssistantMessage response) {
+                    return response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED;
+                }
+                public List<ToolCall> calls(AssistantMessage response) { return toolCalls(response); }
+                public boolean cancelled() { return isAborted(activeSignal); }
+                public ToolResultMessage execute(ToolCall call) throws InterruptedException {
+                    Map<String, AgentTool> toolsByName = new LinkedHashMap<>();
+                    for (AgentTool tool : tools) toolsByName.put(toolName(tool), tool);
                     pendingToolCalls.add(call.id);
                     emit(new AgentEvent.ToolExecutionStart(call.id, call.name, call.arguments));
                     AgentTool.ToolResult toolResult;
@@ -5109,19 +5109,23 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
                             toolResult.details,
                             toolResult.isError,
                             System.currentTimeMillis());
+                    return resultMessage;
+                }
+                public ToolResultMessage toolError(ToolCall call, Exception error) {
+                    throw new IllegalStateException(error);
+                }
+                public void acceptResult(ToolCall call, ToolResultMessage resultMessage) {
                     messages.add(resultMessage);
-                    results1.add(resultMessage);
+                    newMessages.add(resultMessage);
                     acceptMessage(resultMessage);
                     emit(new AgentEvent.MessageStart(resultMessage));
                     emit(new AgentEvent.MessageEnd(resultMessage));
                 }
-                newMessages.addAll(results1);
-                emit(new AgentEvent.TurnEnd(response, results1));
-                if (results1.isEmpty()) {
-                    break;
+                public void turnEnded(AssistantMessage response, List<ToolResultMessage> results) {
+                    emit(new AgentEvent.TurnEnd(response, results));
                 }
-                emit(new AgentEvent.TurnStart());
-            }
+                public void nextTurn() { emit(new AgentEvent.TurnStart()); }
+            }, Integer.MAX_VALUE, Integer.MAX_VALUE);
             return List.copyOf(newMessages);
         } finally {
             isStreaming = false;

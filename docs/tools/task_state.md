@@ -4,9 +4,9 @@ Keeps a per-agent list of tasks, findings and constraints outside the
 conversation. Because it is not part of the conversation, compaction does not
 summarise it away, and it is restored when a session is resumed.
 
-Defined in [`LocalTools.taskState()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+Defined in [`LocalTools.taskState()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
 state is held in
-[`TaskState`](../../src/main/java/com/quaxt/claudia/cli/tools/TaskState.java).
+[`TaskState`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/TaskState.java).
 
 ## Parameters
 

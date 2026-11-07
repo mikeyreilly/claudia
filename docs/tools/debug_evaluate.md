@@ -4,7 +4,7 @@ Evaluates one read-only expression, or a batch of up to 20, in a stopped frame.
 See [debugger concepts](debugger.md).
 
 Expressions are parsed by
-[`ReadOnlyExpression`](../../src/main/java/com/quaxt/claudia/debug/ReadOnlyExpression.java).
+[`ReadOnlyExpression`](../../claudia/src/main/java/com/quaxt/claudia/debug/ReadOnlyExpression.java).
 It is a small inspection language, not a Java interpreter, and it never calls
 methods or changes the target.
 

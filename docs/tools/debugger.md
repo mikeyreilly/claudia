@@ -1,10 +1,10 @@
 # Java debugger tools: shared concepts
 
 The `debug_*` tools are thin wrappers around
-[`DebugManager`](../../src/main/java/com/quaxt/claudia/debug/DebugManager.java),
+[`DebugManager`](../../claudia/src/main/java/com/quaxt/claudia/debug/DebugManager.java),
 which uses JDI (the Java Debug Interface) to control Java programs. The
 model-facing definitions live in
-[`DebugTools`](../../src/main/java/com/quaxt/claudia/debug/DebugTools.java).
+[`DebugTools`](../../claudia/src/main/java/com/quaxt/claudia/debug/DebugTools.java).
 Each tool sends its raw JSON arguments to `DebugManager.call(name, …)` and
 returns the JSON response. A response with `"status": "error"` is marked as a
 tool error.

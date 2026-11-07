@@ -3,9 +3,9 @@
 Runs an executable directly, without a shell, so each argument is passed exactly
 as given.
 
-Defined in [`LocalTools.runProcess()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+Defined in [`LocalTools.runProcess()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
 implemented by `ShellSessionManager.executeProcess`, with environment handling in
-[`ProcessEnvironment`](../../src/main/java/com/quaxt/claudia/shell/ProcessEnvironment.java).
+[`ProcessEnvironment`](../../claudia/src/main/java/com/quaxt/claudia/shell/ProcessEnvironment.java).
 
 ## Parameters
 

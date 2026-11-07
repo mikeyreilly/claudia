@@ -4,7 +4,7 @@ Continues a process session started by [`shell`](shell.md) or
 [`run_process`](run_process.md). It can poll for new output, write to stdin,
 close stdin or terminate the process.
 
-Defined in [`LocalTools.shellInput()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+Defined in [`LocalTools.shellInput()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
 implemented by `ShellSessionManager.interact`.
 
 ## Parameters

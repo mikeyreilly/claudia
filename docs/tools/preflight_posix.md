@@ -3,8 +3,8 @@
 Checks a Windows MSYS2 or Git Bash installation before a native build. It only
 reads and reports; it never installs anything.
 
-Defined in [`LocalTools.preflightPosix()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
-implemented by [`PosixPreflight`](../../src/main/java/com/quaxt/claudia/shell/PosixPreflight.java).
+Defined in [`LocalTools.preflightPosix()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+implemented by [`PosixPreflight`](../../claudia/src/main/java/com/quaxt/claudia/shell/PosixPreflight.java).
 
 ## Parameters
 

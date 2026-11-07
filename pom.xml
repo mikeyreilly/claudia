@@ -2,13 +2,12 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>com.quaxt.claudia</groupId>
-	<artifactId>claudia</artifactId>
-	<version>0.1.0-SNAPSHOT</version>
-	<packaging>jar</packaging>
-	<name>claudia</name>
-	<description>Java port of the pi coding agent CLI</description>
-
+  <groupId>com.quaxt.claudia</groupId>
+  <artifactId>claudia-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>Claudia parent</name>
+  <modules><module>agentic</module><module>claudia</module></modules>
 	<properties>
 		<maven.compiler.release>25</maven.compiler.release>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -18,154 +17,11 @@
 		<native-maven-plugin.version>1.1.8</native-maven-plugin.version>
 		<pdfbox.version>3.0.8</pdfbox.version>
 	</properties>
-
-	<dependencies>
-		<dependency>
-			<groupId>com.fasterxml.jackson.core</groupId>
-			<artifactId>jackson-databind</artifactId>
-			<version>${jackson.version}</version>
-		</dependency>
-		<!--
-			PDF text extraction and page rendering for the read tool. Used only by
-			cli.tools.media.DesktopMediaReader, which is loaded reflectively so the
-			native image never includes it (or AWT).
-		-->
-		<dependency>
-			<groupId>org.apache.pdfbox</groupId>
-			<artifactId>pdfbox</artifactId>
-			<version>${pdfbox.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>org.junit.jupiter</groupId>
-			<artifactId>junit-jupiter</artifactId>
-			<version>${junit.version}</version>
-			<scope>test</scope>
-		</dependency>
-	</dependencies>
-
-	<build>
-		<!-- Keep the thin JAR away from the runnable JAR's stable path. -->
-		<finalName>claudia-thin</finalName>
-		<plugins>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.15.0</version>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-surefire-plugin</artifactId>
-				<version>3.5.6</version>
-				<configuration>
-					<!-- The POSIX terminal tests call termios through the foreign-function API. -->
-					<argLine>--enable-native-access=ALL-UNNAMED -Djava.awt.headless=true</argLine>
-				</configuration>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-shade-plugin</artifactId>
-				<version>3.6.2</version>
-				<executions>
-					<execution>
-						<phase>package</phase>
-						<goals>
-							<goal>shade</goal>
-						</goals>
-						<configuration>
-							<!--
-								Never write directly to claudia.jar: a running JVM loads classes
-								lazily, so mutating that archive can make classes disappear
-								mid-session. Shade writes a temporary file first; the following
-								execution publishes it with a rename, preserving the inode used
-								by any already-running process.
-							-->
-							<outputFile>${project.build.directory}/claudia.next.jar</outputFile>
-							<createDependencyReducedPom>false</createDependencyReducedPom>
-							<transformers>
-								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-									<mainClass>com.quaxt.claudia.ClaudiaCli</mainClass>
-									<manifestEntries>
-										<!-- The interactive terminal controls the tty through java.lang.foreign. -->
-										<Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
-									</manifestEntries>
-								</transformer>
-								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-							</transformers>
-							<filters>
-								<filter>
-									<artifact>*:*</artifact>
-									<excludes>
-										<exclude>META-INF/*.SF</exclude>
-										<exclude>META-INF/*.DSA</exclude>
-										<exclude>META-INF/*.RSA</exclude>
-									</excludes>
-								</filter>
-							</filters>
-						</configuration>
-					</execution>
-				</executions>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-antrun-plugin</artifactId>
-				<version>3.1.0</version>
-				<executions>
-					<execution>
-						<id>publish-shaded-jar</id>
-						<phase>package</phase>
-						<goals>
-							<goal>run</goal>
-						</goals>
-						<configuration>
-							<target>
-								<move
-									file="${project.build.directory}/claudia.next.jar"
-									tofile="${project.build.directory}/claudia.jar"/>
-							</target>
-						</configuration>
-					</execution>
-				</executions>
-			</plugin>
-		</plugins>
-	</build>
-
-	<profiles>
-		<profile>
-			<id>native</id>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.graalvm.buildtools</groupId>
-						<artifactId>native-maven-plugin</artifactId>
-						<version>${native-maven-plugin.version}</version>
-						<extensions>true</extensions>
-						<executions>
-							<execution>
-								<id>build-native</id>
-								<goals>
-									<goal>compile-no-fork</goal>
-								</goals>
-								<phase>package</phase>
-							</execution>
-						</executions>
-						<configuration>
-							<imageName>claudia</imageName>
-							<mainClass>com.quaxt.claudia.ClaudiaCli</mainClass>
-							<buildArgs>
-								<buildArg>--no-fallback</buildArg>
-								<buildArg>-Os</buildArg>
-								<!--
-									The interactive terminal calls termios and ioctl through java.lang.foreign,
-									which GraalVM 25 supports by default; its downcalls are registered in
-									reachability-metadata.json.
-								-->
-								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
-								<buildArg>-H:IncludeResources=quaxt/claudia/ai/models/.*\.json</buildArg>
-							</buildArgs>
-						</configuration>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
+  <build><pluginManagement><plugins>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.15.0</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-resources-plugin</artifactId><version>3.4.0</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.5.1</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-install-plugin</artifactId><version>3.1.4</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.6</version></plugin>
+  </plugins></pluginManagement></build>
 </project>

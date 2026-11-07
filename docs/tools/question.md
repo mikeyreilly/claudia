@@ -3,9 +3,9 @@
 Asks the user one question and waits for an explicit answer. Suggested answers
 are optional.
 
-Defined in [`LocalTools.question()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
+Defined in [`LocalTools.question()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java);
 pending questions are held in
-[`QuestionBroker`](../../src/main/java/com/quaxt/claudia/agent/QuestionBroker.java).
+[`QuestionBroker`](../../claudia/src/main/java/com/quaxt/claudia/agent/QuestionBroker.java).
 
 ## Parameters
 

@@ -2,7 +2,7 @@
 
 Lists the contents of a directory.
 
-Defined in [`LocalTools.ls()`](../../src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
+Defined in [`LocalTools.ls()`](../../claudia/src/main/java/com/quaxt/claudia/cli/tools/LocalTools.java).
 
 ## Parameters
 

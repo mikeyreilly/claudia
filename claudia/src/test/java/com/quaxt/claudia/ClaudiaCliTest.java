@@ -2111,7 +2111,11 @@ class ClaudiaCliTest {
 
     private static void waitUntil(java.util.function.BooleanSupplier ready) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-        while (!ready.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(5);
+        while (System.nanoTime() < deadline) {
+            // A rendered frame can change between reads: keep the first successful observation.
+            if (ready.getAsBoolean()) return;
+            Thread.sleep(5);
+        }
         assertTrue(ready.getAsBoolean(), "Timed out waiting for terminal state");
     }
 

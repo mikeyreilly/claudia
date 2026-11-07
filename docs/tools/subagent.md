@@ -3,7 +3,7 @@
 Hands a task to a separate child conversation and waits for its final answer.
 
 Defined in
-[`SubagentManager.tool()`](../../src/main/java/com/quaxt/claudia/SubagentManager.java).
+[`SubagentManager.tool()`](../../claudia/src/main/java/com/quaxt/claudia/SubagentManager.java).
 Only Main has this tool, so children cannot delegate further.
 
 ## Parameters

@@ -94,6 +94,6 @@ traffic that can disrupt subsequent proxy streaming responses; it does not
 make the entire Copilot catalog selectable.
 
 Provider registration, authentication, and proxy handling live in
-[ClaudiaOperations](../src/main/java/com/quaxt/claudia/ClaudiaOperations.java);
+[ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java);
 login and selectors live in
-[ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java).
+[ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java).

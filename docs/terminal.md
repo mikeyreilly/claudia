@@ -152,5 +152,5 @@ See [`shell`](tools/shell.md) and [`run_process`](tools/run_process.md).
 For MCP setup and interactive server/tool toggles, see
 [README configuration](../README.md#mcp-servers) and
 [code-lens](../code-lens/README.md). Terminal implementation lives in
-[ClaudiaCli](../src/main/java/com/quaxt/claudia/ClaudiaCli.java) and
-[the terminal package](../src/main/java/com/quaxt/claudia/terminal).
+[ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java) and
+[the terminal package](../claudia/src/main/java/com/quaxt/claudia/terminal).
