@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
-	<modelVersion>4.0.0</modelVersion>
-
-  <parent><groupId>com.quaxt.claudia</groupId><artifactId>claudia-parent</artifactId><version>0.1.0-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
-  <groupId>com.quaxt</groupId><artifactId>agentic</artifactId>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.quaxt.claudia</groupId>
+    <artifactId>claudia-parent</artifactId>
+    <version>0.1.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <groupId>com.quaxt</groupId>
+  <artifactId>agentic</artifactId>
   <name>Agentic</name>
-  <properties><maven.compiler.release>17</maven.compiler.release></properties>
+  <description>
+    A dependency-free Java library for building agentic AI applications.
+  </description>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+  </properties>
 </project>
