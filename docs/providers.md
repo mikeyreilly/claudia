@@ -97,3 +97,7 @@ Provider registration, authentication, and proxy handling live in
 [ClaudiaOperations](../claudia/src/main/java/com/quaxt/claudia/ClaudiaOperations.java);
 login and selectors live in
 [ClaudiaCli](../claudia/src/main/java/com/quaxt/claudia/ClaudiaCli.java).
+
+ChatGPT device authorization and refresh now use the shared `agentic` library.
+Claudia supplies its own transport, JSON codec and credential-store adapter;
+its existing login file and CLI flow remain independent of Workflow.

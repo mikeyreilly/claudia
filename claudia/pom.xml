@@ -4,7 +4,7 @@
   <parent>
     <groupId>com.quaxt.claudia</groupId>
     <artifactId>claudia-parent</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
   <relativePath>../pom.xml</relativePath></parent>
   <artifactId>claudia</artifactId>
   <packaging>jar</packaging>
@@ -17,7 +17,7 @@
     <dependency>
       <groupId>com.quaxt</groupId>
       <artifactId>agentic</artifactId>
-      <version>0.1.0</version>
+      <version>0.1.1</version>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>

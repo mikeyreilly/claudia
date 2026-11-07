@@ -79,9 +79,13 @@ automation interface.
 
 ## Shared agent loop
 
-The provider-independent turn/tool loop now lives in `com.quaxt:agentic:0.1.0-SNAPSHOT`.
+The provider-independent turn/tool loop now lives in `com.quaxt:agentic:0.1.0`.
 The root Maven reactor builds `agentic` before `claudia`; no Workflow checkout
 is needed to build Claudia. Workflow points its tools.deps local dependency at
 `../claudia/agentic`. To install the library alone use `mvn -pl agentic -am install`.
 Claudia supplies its existing streaming providers, tool execution, lifecycle events,
 retry and session adapters; the shared library installs no application tools.
+
+ChatGPT device authorization and refresh now use the shared `agentic` library.
+Claudia supplies its own transport, JSON codec and credential-store adapter;
+its existing login file and CLI flow remain independent of Workflow.

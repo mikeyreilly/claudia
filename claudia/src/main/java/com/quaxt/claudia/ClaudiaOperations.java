@@ -1910,157 +1910,56 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
     /**
      * Starts the Codex device flow. Display the URI and code before completing it.
      */
+    private com.quaxt.agentic.ChatGptAuth sharedChatGptAuth(ProviderState state) {
+        var codec = new com.quaxt.agentic.ChatGptAuth.Codec() {
+            public String encode(Object value) throws IOException { return Json.MAPPER.writeValueAsString(value); }
+            @SuppressWarnings("unchecked")
+            public Map<String, Object> decode(String json) throws IOException { return Json.MAPPER.readValue(json, Map.class); }
+        };
+        var store = new com.quaxt.agentic.ChatGptAuth.Store() {
+            public Object lock() { return CREDENTIAL_FILES; }
+            public com.quaxt.agentic.ChatGptAuth.OAuth read() throws IOException {
+                Credential value = readCredential(state.credentials, CHATGPT_PROVIDER_ID).orElse(null);
+                if (value == null) return null;
+                if (!(value instanceof Credential.OAuthCredential oauth)) throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
+                return new com.quaxt.agentic.ChatGptAuth.OAuth(oauth.access, oauth.refresh, oauth.expires, oauth.metadata.get(CHATGPT_ACCOUNT_ID));
+            }
+            public void write(com.quaxt.agentic.ChatGptAuth.OAuth value) throws IOException {
+                modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, previous -> {
+                    Map<String, String> metadata = new LinkedHashMap<>(previous instanceof Credential.OAuthCredential oauth ? oauth.metadata : Map.of());
+                    metadata.put(CHATGPT_ACCOUNT_ID, value.accountId());
+                    return new Credential.OAuthCredential(value.access(), value.refresh(), value.expires(), null, Map.copyOf(metadata));
+                });
+            }
+            public void clear() throws IOException { deleteCredential(state.credentials, CHATGPT_PROVIDER_ID); }
+        };
+        com.quaxt.agentic.ChatGptAuth.Transport transport = (uri, body, form) -> {
+            Map<String, String> fields = new LinkedHashMap<>();
+            body.forEach((key, value) -> fields.put(key, String.valueOf(value)));
+            try {
+                JsonNode response = authPost(uri, Map.of("Accept", "application/json"),
+                        form ? mcpFormEncode(fields).getBytes(StandardCharsets.UTF_8) : Json.MAPPER.writeValueAsBytes(body), form);
+                return codec.decode(Json.MAPPER.writeValueAsString(response));
+            } catch (HttpException error) { throw new com.quaxt.agentic.ChatGptAuth.HttpError(error.status); }
+        };
+        return new com.quaxt.agentic.ChatGptAuth(state.authBaseUrl, state.clientId, transport, store, codec);
+    }
+
     public ChatGptDeviceCode chatGptBeginLogin(ProviderState state) throws IOException {
-        ObjectNode request = jsonObject().put("client_id", state.clientId);
-        JsonNode response = authPost(
-                state.authBaseUrl.resolve("/api/accounts/deviceauth/usercode"),
-                Map.of("Accept", "application/json"),
-                Json.MAPPER.writeValueAsBytes(request),
-                false);
-        String deviceAuthId = requiredAuthText(response, "device_auth_id", "OpenAI");
-        String userCode = requiredAuthText(response, "user_code", "OpenAI");
-        JsonNode node = response.path("interval");
-        int interval;
-        try {
-            interval = node.isIntegralNumber() ? node.asInt() : Integer.parseInt(node.asText("5"));
-        } catch (NumberFormatException error) {
-            throw new IOException("Invalid OpenAI device response: invalid interval", error);
-        }
-        if (interval < 0) {
-            throw new IOException("Invalid OpenAI device response: interval must not be negative");
-        }
-        return new ChatGptDeviceCode(
-                deviceAuthId,
-                userCode,
-                state.authBaseUrl.resolve("/codex/device"),
-                interval,
-                System.currentTimeMillis() + CHATGPT_DEVICE_CODE_LIFETIME_MS);
+        var device = sharedChatGptAuth(state).begin();
+        return new ChatGptDeviceCode(device.deviceAuthId(), device.userCode(), device.verificationUri(), device.intervalSeconds(), device.expiresAtMs());
     }
-
-    /**
-     * Waits for browser authorization, exchanges the code, and saves refreshable tokens.
-     */
-    public Credential.OAuthCredential chatGptCompleteLogin(ProviderState state, ChatGptDeviceCode device)
-            throws IOException, InterruptedException {
-        JsonNode authorization = null;
-        ObjectNode request = jsonObject()
-                .put("device_auth_id", device.deviceAuthId)
-                .put("user_code", device.userCode);
-        while (System.currentTimeMillis() < device.expiresAtMs) {
-            try {
-                authorization = authPost(
-                        state.authBaseUrl.resolve("/api/accounts/deviceauth/token"),
-                        Map.of("Accept", "application/json"),
-                        Json.MAPPER.writeValueAsBytes(request),
-                        false);
-                break;
-            } catch (HttpException error) {
-                if (error.status != 403 && error.status != 404) {
-                    throw error;
-                }
-                sleepSeconds(device.intervalSeconds);
-            }
-        }
-        if (authorization == null) {
-            throw new IOException("ChatGPT device authorization expired before completion");
-        }
-        Map<String, String> form = new LinkedHashMap<>();
-        form.put("grant_type", "authorization_code");
-        form.put("code", requiredAuthText(authorization, "authorization_code", "OpenAI"));
-        form.put("redirect_uri", "https://auth.openai.com/deviceauth/callback");
-        form.put("client_id", state.clientId);
-        form.put("code_verifier", requiredAuthText(authorization, "code_verifier", "OpenAI"));
-        Credential.OAuthCredential credential =
-                chatGptCredentialFromTokenResponse(authPost(
-                        state.authBaseUrl.resolve("/oauth/token"),
-                        Map.of("Accept", "application/json"),
-                        mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
-                        true), null);
-        modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> credential);
-        return credential;
+    public Credential.OAuthCredential chatGptCompleteLogin(ProviderState state, ChatGptDeviceCode device) throws IOException, InterruptedException {
+        var value = sharedChatGptAuth(state).complete(new com.quaxt.agentic.ChatGptAuth.Device(
+                device.deviceAuthId, device.userCode, device.verificationUri, device.intervalSeconds, device.expiresAtMs));
+        return new Credential.OAuthCredential(value.access(), value.refresh(), value.expires(), null, Map.of(CHATGPT_ACCOUNT_ID, value.accountId()));
     }
-
-    /**
-     * Returns a usable ChatGPT bearer token, refreshing it when close to expiry.
-     */
     public ChatGptToken chatGptResolveToken(ProviderState state) throws IOException {
-        synchronized (CREDENTIAL_FILES) {
-            Credential credential = readCredential(state.credentials, CHATGPT_PROVIDER_ID)
-                    .orElseThrow(() -> new IOException("ChatGPT Plus/Pro is not logged in. Run /login."));
-            if (!(credential instanceof Credential.OAuthCredential oauth)) {
-                throw new IOException("ChatGPT credential is not an OAuth credential. Run /login.");
-            }
-            if (oauth.expires > System.currentTimeMillis() && !oauth.access.isBlank()) {
-                return chatGptToken(oauth);
-            }
-            Map<String, String> form = new LinkedHashMap<>();
-            form.put("grant_type", "refresh_token");
-            form.put("refresh_token", oauth.refresh);
-            form.put("client_id", state.clientId);
-            Credential.OAuthCredential refreshed =
-                    chatGptCredentialFromTokenResponse(authPost(
-                            state.authBaseUrl.resolve("/oauth/token"),
-                            Map.of("Accept", "application/json"),
-                            mcpFormEncode(form).getBytes(StandardCharsets.UTF_8),
-                            true), oauth);
-            modifyCredential(state.credentials, CHATGPT_PROVIDER_ID, ignored -> refreshed);
-            return chatGptToken(refreshed);
-        }
+        var token = sharedChatGptAuth(state).resolve();
+        return new ChatGptToken(token.access(), token.accountId());
     }
-
-    public boolean chatGptHasCredential(ProviderState state) throws IOException {
-        return hasRefreshCredential(state.credentials, CHATGPT_PROVIDER_ID);
-    }
-
-    public void chatGptLogout(ProviderState state) throws IOException {
-        deleteCredential(state.credentials, CHATGPT_PROVIDER_ID);
-    }
-
-    private static Credential.OAuthCredential chatGptCredentialFromTokenResponse(
-            JsonNode response, Credential.OAuthCredential previous) throws IOException {
-        String access = requiredAuthText(response, "access_token", "OpenAI");
-        String refresh = response.path("refresh_token").asText(previous == null ? "" : previous.refresh);
-        if (refresh.isBlank()) {
-            throw new IOException("Invalid OpenAI response: missing refresh_token");
-        }
-        long expiresIn = response.path("expires_in").asLong(3600);
-        long expires =
-                System.currentTimeMillis() + Math.max(1, expiresIn) * 1000 - CHATGPT_REFRESH_SKEW_MS;
-        Map<String, String> metadata = new LinkedHashMap<>(previous == null ? Map.of() : previous.metadata);
-        String idToken = response.path("id_token").asText();
-        String accountId;
-        if (idToken == null || idToken.isBlank()) {
-            accountId = "";
-        } else {
-            String[] parts = idToken.split("\\.");
-            if (parts.length < 2) {
-                throw new IOException("OpenAI returned an invalid ID token");
-            }
-            try {
-                JsonNode claims = Json.MAPPER.readTree(Base64.getUrlDecoder().decode(parts[1]));
-                accountId = claims.path("https://api.openai.com/auth")
-                        .path("chatgpt_account_id")
-                        .asText(claims.path("https://api.openai.com/auth.chatgpt_account_id").asText());
-            } catch (IllegalArgumentException error) {
-                throw new IOException("OpenAI returned an invalid ID token", error);
-            }
-        }
-        if (!accountId.isBlank()) {
-            metadata.put(CHATGPT_ACCOUNT_ID, accountId);
-        }
-        if (!metadata.containsKey(CHATGPT_ACCOUNT_ID)) {
-            throw new IOException("OpenAI login did not return a ChatGPT account id");
-        }
-        return new Credential.OAuthCredential(access, refresh, expires, null, Map.copyOf(metadata));
-    }
-
-    private static ChatGptToken chatGptToken(Credential.OAuthCredential credential) throws IOException {
-        String accountId = credential.metadata.get(CHATGPT_ACCOUNT_ID);
-        if (accountId == null || accountId.isBlank()) {
-            throw new IOException("Saved ChatGPT login is missing its account id. Run /login again.");
-        }
-        return new ChatGptToken(credential.access, accountId);
-    }
+    public boolean chatGptHasCredential(ProviderState state) throws IOException { return sharedChatGptAuth(state).signedIn(); }
+    public void chatGptLogout(ProviderState state) throws IOException { sharedChatGptAuth(state).logout(); }
 
     private JsonNode authPost(URI url, Map<String, String> headers, byte[] body, boolean form)
             throws IOException {
@@ -3769,19 +3668,8 @@ public final class ClaudiaOperations implements CredentialStore, AutoCloseable {
         }
         return providerStream(model, options, (stream, output, requestOptions) -> {
             boolean codex = provider.requestProfile == OpenAiResponsesProvider.RequestProfile.CODEX;
-            ObjectNode request1 = jsonObject();
-            request1.put("model", model.id);
-            request1.put("stream", true);
-            request1.put("store", false);
-            if (context.systemPrompt != null && !context.systemPrompt.isBlank()) {
-                request1.put("instructions", context.systemPrompt);
-            } else if (codex) {
-                request1.put("instructions", "You are a helpful assistant.");
-            }
+            ObjectNode request1 = Json.MAPPER.valueToTree(com.quaxt.agentic.Responses.envelope(model.id, context.systemPrompt, codex));
             if (codex) {
-                request1.putObject("text").put("verbosity", "low");
-                request1.put("tool_choice", "auto");
-                request1.put("parallel_tool_calls", true);
                 if (requestOptions.sessionId != null && !requestOptions.sessionId.isBlank()) {
                     request1.put("prompt_cache_key", requestOptions.sessionId);
                 }

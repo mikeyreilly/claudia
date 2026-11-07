@@ -8,13 +8,33 @@ It has no dependencies and installs no tools or credentials.
 
 From the repository root, `mvn install` builds both modules in dependency order.
 To build just this library and its parent: `mvn -pl agentic -am install`.
-Java consumers depend on `com.quaxt:agentic:0.1.0-SNAPSHOT`.
+Java consumers depend on `com.quaxt:agentic:0.1.1`.
 
-Workflow's tools.deps dependency points at `../claudia/agentic` relative to its
-checkout. Run `clojure -X:deps prep` in Workflow on a fresh checkout. To rebuild
-Java sources through Clojure, run `clojure -X:build build/compile-java` here.
+Workflow consumes the library's Maven artifact. Install the development version
+with `mvn -pl agentic -am install` from Claudia's root before starting Workflow.
+The optional tools.deps manifest also supports source consumers: to compile
+through Clojure, run `clojure -X:build build/compile-java` in this module.
 Maven and Clojure both compile into this module's `target/classes`.
 
 Provider transports, retries, persistence and application permissions stay in
 the host. Claudia retains its streaming and session adapters; Workflow stages
 booking tools and commits them in one Datomic transaction after the loop finishes.
+
+## Authentication and Responses
+
+`ChatGptAuth` owns the Codex device flow and token renewal extracted from
+ClaudiaOperations. Hosts implement `Transport`, `Codec` and `Store`.
+`begin` returns a device handle; web apps use nonblocking `poll`, while CLI
+apps use `complete`. `resolve` refreshes an expired access token under the
+store's lock. Device and OAuth carriers redact their string representations.
+
+Claudia adapts its existing credential store. Workflow supplies a separate,
+explicit-path `CredentialFile`, which writes atomically with owner permissions.
+The library never selects another application's credential location. Hosts
+must rate-limit polls and invalidate cancelled device handles before persisting
+credentials. Workflow's sign-in and cancellation checks do this server-side.
+
+`Responses.envelope` supplies the common request fields used by both hosts.
+`Responses.completed` handles bounded SSE responses for hosts that consume
+whole turns; an incomplete or failed stream is never a completed result.
+Claudia retains its incremental streaming adapter.

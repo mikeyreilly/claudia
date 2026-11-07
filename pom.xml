@@ -4,7 +4,7 @@
 
   <groupId>com.quaxt.claudia</groupId>
   <artifactId>claudia-parent</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
   <packaging>pom</packaging>
   <name>Claudia parent</name>
   <url>https://github.com/mikeyreilly/claudia</url>
